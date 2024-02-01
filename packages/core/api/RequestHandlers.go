@@ -17,7 +17,8 @@ type Core struct {
 }
 
 var core Core = Core{}
-const configPath = "config.json"
+// const configPath = "config.json"
+const configPath = "config.yaml"
 
 func getPolicyConfig(c *gin.Context) {
 	log.Println("Policy Config: Received policy config get request")
@@ -80,7 +81,9 @@ func postPolicyDeploy(c *gin.Context) {
 			}
 
 			var policies []i.PolicyConfig
-			err := utils.ReadJson(configPath, &policies)
+			// err := utils.ReadJson(configPath, &policies)
+			err := utils.ReadYaml(configPath, &policies)
+			log.Println(policies)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse JSON file"})
 				return

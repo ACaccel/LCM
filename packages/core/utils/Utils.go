@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+	"gopkg.in/yaml.v2"
 	"errors"
 	"io"
 	"os"
@@ -45,6 +46,26 @@ func WriteJson(path string, content any) error {
 	err = os.WriteFile(path, jsonFileContent, 0644)
 	if err != nil {
 		return errors.New("failed to parse JSON file")
+	}
+
+	return nil
+}
+
+func ReadYaml(path string, content *[]i.PolicyConfig) error {
+	yamlFile, err := os.Open(path)
+	if err != nil {
+		return errors.New("failed to parse YAML file")
+	}
+	defer yamlFile.Close()
+
+	yamlFileContent, err := io.ReadAll(yamlFile)
+	if err != nil {
+		return errors.New("failed to parse YAML file")
+	}
+	
+	err = yaml.Unmarshal(yamlFileContent, &content)
+	if err != nil {
+		return errors.New("failed to parse YAML file")
 	}
 
 	return nil

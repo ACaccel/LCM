@@ -19,9 +19,9 @@ type TriggerNode struct {
 }
 
 type NodeConfig struct {
-	NodeName    string
-	NodeType	string
-	Property 	any
+	NodeName    string	`json:"nodeName" yaml:"nodeName"`
+	NodeType	string	`json:"nodeType" yaml:"nodeType"`
+	Property 	any		`json:"property" yaml:"property"`
 }
 
 type NodeDescription struct {
@@ -39,16 +39,16 @@ type TriggerDescription struct {
  */
 
 type PolicyConfig struct {
-	PolicyName    string 				`json:"policyName"`
-	PolicyType    string 				`json:"policyType"`
-	PolicyTrigger []NodeConfig 			`json:"policyTrigger"`
-	PolicyNode    []NodeConfig 			`json:"policyNode"`
-	PolicyPath    []ConnectionUnit 		`json:"policyPath"`
+	PolicyName    string 				`json:"policyName" yaml:"policyName"`	
+	PolicyType    string 				`json:"policyType" yaml:"policyType"`
+	PolicyTrigger []NodeConfig 			`json:"policyTrigger" yaml:"policyTrigger"`
+	PolicyNode    []NodeConfig 			`json:"policyNode" yaml:"policyNode"`
+	PolicyPath    []ConnectionUnit 		`json:"policyPath" yaml:"policyPath"`
 }
 
 type ConnectionUnit struct {
-	NodePair [2]string 	`json:"nodePair"`
-	PortPair [2]int 	`json:"portPair"`
+	NodePair [2]string 	`json:"nodePair" yaml:"nodePair"`
+	PortPair [2]int 	`json:"portPair" yaml:"portPair"`
 }
 
 type NumPort struct {

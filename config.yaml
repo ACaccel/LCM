@@ -1,0 +1,51 @@
+- policyName: policy-1
+  policyType: default
+  policyTrigger:
+    - nodeName: webhook-0
+      nodeType: Webhook
+      property: {}
+  policyNode:
+    - nodeName: p1-func-0
+      nodeType: Function
+      property:
+        code: "description.nextPath = [0, 1]; console.log('func-0');"
+        data: {}
+    - nodeName: p1-func-00
+      nodeType: Function
+      property:
+        code: "console.log('func-00');"
+        data: {}
+    - nodeName: p1-func-000
+      nodeType: Function
+      property:
+        code: "console.log('func-000');"
+        data: {}
+    - nodeName: p1-func-0000
+      nodeType: Function
+      property:
+        code: "console.log('func-0000');"
+        data: {}
+    - nodeName: p1-func-01
+      nodeType: Function
+      property:
+        code: "console.log('func-01');"
+        data: {}
+    - nodeName: p1-func-1
+      nodeType: Function
+      property:
+        logicType: and
+  policyPath:
+    - nodePair: [webhook-0, p1-func-0]
+      portPair: [0, 0]
+    - nodePair: [p1-func-0, p1-func-00]
+      portPair: [0, 0]
+    - nodePair: [p1-func-00, p1-func-000]
+      portPair: [0, 0]
+    - nodePair: [p1-func-000, p1-func-0000]
+      portPair: [0, 0]
+    - nodePair: [p1-func-0, p1-func-01]
+      portPair: [1, 0]
+    - nodePair: [p1-func-0000, p1-func-1]
+      portPair: [0, 0]
+    - nodePair: [p1-func-01, p1-func-1]
+      portPair: [0, 1]
