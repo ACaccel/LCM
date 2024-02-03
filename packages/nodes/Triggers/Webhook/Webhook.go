@@ -1,23 +1,16 @@
-package Functions
+package Webhook
 
 import (
 	"fmt"
 	i "interfaces"
 )
 
-var description = i.TriggerDescription{
+var Description = i.TriggerDescription{
 	TriggerType: "Webhook",
 }
 
 type Webhook struct {
 	i.TriggerNode
-}
-
-func (n *Webhook) Init(config i.NodeConfig) (*Webhook) {
-	n.Description = description
-	n.Config = config
-
-	return n
 }
 
 func (n *Webhook) Execute(input []any) (*any, []int) {
