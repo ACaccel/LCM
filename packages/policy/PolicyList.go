@@ -65,6 +65,18 @@ func (node *ListNode) popPrevNode(port int) {
 	node.prev[port] = nil
 }
 
+func (node *ListNode) getInputContent() []any {
+	var inputContent []any = make([]any, node.description.NumInput)
+	for i, input := range node.packet.input {
+		inputContent[i] = input.content
+	}
+	return inputContent
+}
+
+func (node *ListNode) execute(content []any) {
+	node.packet.output.content, node.nextPath = (*node.baseNode).Execute(content)
+}
+
 /*
  * Method: PolicyList
  */

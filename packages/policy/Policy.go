@@ -63,15 +63,9 @@ func policyTask(node *ListNode, content any) {
 
 	// execute node and update the status
 	if node.description.NumInput == 0 {
-		node.packet.output.content, node.nextPath = (*node.baseNode).Execute([]any{content})
+		node.execute([]any{content})
 	} else {
-		var inputContent = make([]any, node.description.NumInput)
-		for i, input := range node.packet.input {
-			if input != nil {
-				inputContent[i] = (*input.content)
-			}
-		}
-		node.packet.output.content, node.nextPath = (*node.baseNode).Execute(inputContent)
+		node.execute(node.getInputContent())
 	}
 
 	node.packet.output.ready = true
