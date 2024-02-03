@@ -68,7 +68,9 @@ func (node *ListNode) popPrevNode(port int) {
 func (node *ListNode) getInputContent() []any {
 	var inputContent []any = make([]any, node.description.NumInput)
 	for i, input := range node.packet.input {
-		inputContent[i] = input.content
+		if input != nil {
+			inputContent[i] = (*input.content)
+		}
 	}
 	return inputContent
 }
