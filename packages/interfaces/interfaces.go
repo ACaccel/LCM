@@ -5,7 +5,12 @@ package interfaces
  */
 
 type IPolicyNode interface {
-	Execute(input []any) (*any, []int)
+	Execute(input []any) NodeExecResult
+}
+
+type NodeExecResult struct {
+	Output any
+	Ports  []int
 }
 
 type FunctionNode struct {

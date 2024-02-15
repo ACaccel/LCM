@@ -3,7 +3,12 @@ package Webhook
 import (
 	"fmt"
 	i "interfaces"
+	u "nodes/utils"
 )
+
+type Property struct {
+	
+}
 
 var Description = i.TriggerDescription{
 	TriggerType: "Webhook",
@@ -13,8 +18,15 @@ type Webhook struct {
 	i.TriggerNode
 }
 
-func (n *Webhook) Execute(input []any) (*any, []int) {
-	output := input[0]
+func (n *Webhook) Execute(input []any) i.NodeExecResult {
+	output, err := u.GetRawInputContent(input[0].(map[string]any))
+	if err != nil {
+		fmt.Println("Webhook: Execute function", n.Config.NodeName, "Error:", err)
+	}
+
 	fmt.Println("Webhook: Execute function", n.Config.NodeName)
-	return &output, []int{0}
+	return i.NodeExecResult{
+		Output: output,
+		Ports: []int{0},
+	}
 }

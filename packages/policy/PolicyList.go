@@ -31,7 +31,7 @@ type PolicyList struct {
 }
 
 type dataPacket struct {
-	content *any
+	content any
 	ready bool
 }
 
@@ -57,26 +57,28 @@ func (node *ListNode) pushNextNode(next *ListNode, portPair [2]int) {
 	next.prev[portPair[1]] = node
 }
 
-func (node *ListNode) popNextNode(port int) {
-	node.next[port] = nil
-}
+// func (node *ListNode) popNextNode(port int) {
+// 	node.next[port] = nil
+// }
 
-func (node *ListNode) popPrevNode(port int) {
-	node.prev[port] = nil
-}
+// func (node *ListNode) popPrevNode(port int) {
+// 	node.prev[port] = nil
+// }
 
 func (node *ListNode) getInputContent() []any {
 	var inputContent []any = make([]any, node.description.NumInput)
 	for i, input := range node.packet.input {
 		if input != nil {
-			inputContent[i] = (*input.content)
+			inputContent[i] = input.content
 		}
 	}
 	return inputContent
 }
 
 func (node *ListNode) execute(content []any) {
-	node.packet.output.content, node.nextPath = (*node.baseNode).Execute(content)
+	res := (*node.baseNode).Execute(content)
+	node.packet.output.content = res.Output
+	node.nextPath = res.Ports
 }
 
 /*
