@@ -42,6 +42,10 @@ type TriggerDescription struct {
 /*
  * Others
  */
+type ConfigFormat struct {
+	// Module []ModuleConfig `json:"module" yaml:"module"`
+	Policy []PolicyConfig `json:"policy" yaml:"policy"`
+}
 
 type PolicyConfig struct {
 	PolicyName    string 				`json:"policyName" yaml:"policyName"`	

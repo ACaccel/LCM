@@ -80,10 +80,9 @@ func postPolicyDeploy(c *gin.Context) {
 				}
 			}
 
-			var policies []i.PolicyConfig
-			// err := utils.ReadJson(configPath, &policies)
-			err := utils.ReadYaml(configPath, &policies)
-			log.Println(policies)
+			var config i.ConfigFormat
+			err := utils.ReadYaml(configPath, &config)
+			log.Println(config)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse JSON file"})
 				return
@@ -91,7 +90,7 @@ func postPolicyDeploy(c *gin.Context) {
 
 			// check if policy exists in database
 			var policyConfig i.PolicyConfig = i.PolicyConfig{}
-			for _, config := range policies {
+			for _, config := range config.Policy {
 				if config.PolicyName == policyName {
 					policyConfig = config
 					break
