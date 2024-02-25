@@ -8,6 +8,7 @@ import (
 	"os"
 
 	i "interfaces"
+	p "policy"
 )
 
 func ReadJson(path string, content *[]i.PolicyConfig) error {
@@ -69,4 +70,36 @@ func ReadYaml(path string, content any) error {
 	}
 
 	return nil
+}
+
+func DeployPolicy(configPath string, policyName string, corePolicies []p.Policy) (p.Policy, error) {
+	// check if policy already deployed
+	for _, deployedPolicies := range corePolicies {
+		if deployedPolicies.Description.PolicyName == policyName {
+			return p.Policy{}, errors.New("policy " + policyName + " already deployed")
+		}
+	}
+
+	var config i.ConfigFormat
+	err := ReadYaml(configPath, &config)
+	
+	if err != nil {
+		return p.Policy{}, errors.New("failed to parse JSON file")
+	}
+
+	// check if policy exists in database
+	var policyConfig i.PolicyConfig = i.PolicyConfig{}
+	for _, config := range config.Policy {
+		if config.PolicyName == policyName {
+			policyConfig = config
+			break
+		}
+	}
+	if policyConfig.PolicyName == "" {
+		return p.Policy{}, errors.New("policy " + policyName + " not found")
+	}
+
+	var newPolicy p.Policy = p.Policy{}
+	newPolicy.Init(policyConfig)
+	return newPolicy, nil
 }

@@ -72,37 +72,12 @@ func postPolicyDeploy(c *gin.Context) {
 	case "POLICY_DEPLOY":
 		var deployedPolicies []string = []string{}
 		for _, policyName := range reqBody.Policies {
-			// check if policy already deployed
-			for _, deployedPolicies := range core.policies {
-				if deployedPolicies.Description.PolicyName == policyName {
-					c.JSON(http.StatusBadRequest, gin.H{"error": "Policy" + policyName + "already deployed"})
-					return
-				}
-			}
-
-			var config i.ConfigFormat
-			err := utils.ReadYaml(configPath, &config)
-			log.Println(config)
+			newPolicy, err := utils.DeployPolicy(configPath, policyName, core.policies)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse JSON file"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
 
-			// check if policy exists in database
-			var policyConfig i.PolicyConfig = i.PolicyConfig{}
-			for _, config := range config.Policy {
-				if config.PolicyName == policyName {
-					policyConfig = config
-					break
-				}
-			}
-			if policyConfig.PolicyName == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Policy" + policyName + "not found"})
-				return
-			}
-
-			var newPolicy p.Policy = p.Policy{}
-			newPolicy.Init(policyConfig)
 			core.policies = append(core.policies, newPolicy)
 			deployedPolicies = append(deployedPolicies, policyName)
 			log.Println("Policy Deploy: Policy", policyName, "has been deployed")
