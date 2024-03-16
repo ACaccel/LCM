@@ -13,6 +13,7 @@ import (
 
 // Core stores the set of deployed policies
 type Core struct {
+	moduleConfig []i.ModuleConfig
 	policies []p.Policy
 }
 
@@ -68,11 +69,27 @@ func postPolicyDeploy(c *gin.Context) {
 	}
 	log.Println("Policy Deploy: Received policy deploy post request", reqBody)
 
+	// fetch config file
+	var config i.ConfigFormat
+	err := utils.ReadYaml(configPath, &config)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse YAML file"})
+	}
+
+	// module configurations
+	newModules, err := utils.ConfigureModule(config, core.moduleConfig)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to configure module"})
+		return
+	}
+	core.moduleConfig = newModules
+
 	switch reqBody.Type {
 	case "POLICY_DEPLOY":
 		var deployedPolicies []string = []string{}
+		// deploy policies
 		for _, policyName := range reqBody.Policies {
-			newPolicy, err := utils.DeployPolicy(configPath, policyName, core.policies)
+			newPolicy, err := utils.DeployPolicy(config, policyName, core.policies, core.moduleConfig)
 			if err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
@@ -80,6 +97,7 @@ func postPolicyDeploy(c *gin.Context) {
 
 			core.policies = append(core.policies, newPolicy)
 			deployedPolicies = append(deployedPolicies, policyName)
+
 			log.Println("Policy Deploy: Policy", policyName, "has been deployed")
 		}
 

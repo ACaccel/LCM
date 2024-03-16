@@ -5,7 +5,13 @@ package interfaces
  */
 
 type IPolicyNode interface {
-	Execute(input []any) NodeExecResult
+	Execute(input []any, info ExecInfo) NodeExecResult
+}
+
+type ExecInfo struct {
+	ActiveInPort  	int
+	UseShared 	 	bool
+	SharedContent 	any
 }
 
 type NodeExecResult struct {
@@ -40,10 +46,31 @@ type TriggerDescription struct {
 }
 
 /*
+ * Module
+ */
+
+ type ModuleConfig struct {
+	ModuleName 	string `json:"moduleName" yaml:"moduleName"`
+	NumInPort 	int `json:"numInPort" yaml:"numInPort"`
+	NumOutPort 	int `json:"numOutPort" yaml:"numOutPort"`
+	InPort      []ModulePortConfig `json:"inPort" yaml:"inPort"`
+	OutPort     []ModulePortConfig `json:"outPort" yaml:"outPort"`
+	ModuleNode	[]NodeConfig `json:"moduleNode" yaml:"moduleNode"`
+	ModulePath	[]ConnectionUnit `json:"modulePath" yaml:"modulePath"`
+}
+
+type ModulePortConfig struct {
+    ModulePort 	int `json:"modulePort" yaml:"modulePort"`
+	NodeName    string `json:"nodeName" yaml:"nodeName"`
+	NodePort	int `json:"nodePort" yaml:"nodePort"`
+}
+
+/*
  * Others
  */
+
 type ConfigFormat struct {
-	// Module []ModuleConfig `json:"module" yaml:"module"`
+	Module []ModuleConfig `json:"module" yaml:"module"`
 	Policy []PolicyConfig `json:"policy" yaml:"policy"`
 }
 

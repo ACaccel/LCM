@@ -12,16 +12,16 @@ import (
 
 type ListNode struct {
 	description struct {
-		nodeName   string
+		nodeName	string
 		i.NumPort
 	}
 	baseNode *i.IPolicyNode
-	next       []*ListNode
-	prev       []*ListNode
+	next	[]*ListNode
+	prev	[]*ListNode
 
 	packet struct {
-		input 	[]*dataPacket
-		output 	*dataPacket
+		input	[]*dataPacket
+		output	[]*dataPacket
 	}
 	nextPath []int
 }
@@ -32,7 +32,9 @@ type PolicyList struct {
 
 type dataPacket struct {
 	content any
-	ready bool
+	ready   bool
+	inPort  int
+	outPort int
 }
 
 /*
@@ -48,7 +50,10 @@ func (node *ListNode) init(name string, numInput int, numOutput int, baseNode *i
 	node.prev = make([]*ListNode, numInput)
 
 	node.packet.input = make([]*dataPacket, numInput)
-	node.packet.output = new(dataPacket)
+	node.packet.output = make([]*dataPacket, numOutput)
+	for i := 0; i < numOutput; i++ {
+		node.packet.output[i] = new(dataPacket)
+	}
 	node.nextPath = make([]int, 0)
 }
 
@@ -65,7 +70,13 @@ func (node *ListNode) pushNextNode(next *ListNode, portPair [2]int) {
 // 	node.prev[port] = nil
 // }
 
-func (node *ListNode) getInputContent() []any {
+func (node *ListNode) getInputContent(info i.ExecInfo) []any {
+	// content for trigger node
+	if info.UseShared {
+		return []any{info.SharedContent}
+	}
+
+	// extract content from input packet array
 	var inputContent []any = make([]any, node.description.NumInput)
 	for i, input := range node.packet.input {
 		if input != nil {
@@ -75,9 +86,20 @@ func (node *ListNode) getInputContent() []any {
 	return inputContent
 }
 
-func (node *ListNode) execute(content []any) {
-	res := (*node.baseNode).Execute(content)
-	node.packet.output.content = res.Output
+func (node *ListNode) execute(content []any, info i.ExecInfo) {
+	// update output packet and nextPath
+	res := (*node.baseNode).Execute(content, info)
+	output, ok := res.Output.([]any)
+	if ok {
+		for i, out := range output {
+			node.packet.output[i].content = out
+		}
+	} else {
+		for i := 0; i < node.description.NumOutput; i++ {
+			node.packet.output[i].content = res.Output
+		}
+	}
+
 	node.nextPath = res.Ports
 }
 
@@ -97,7 +119,7 @@ func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, num
 		numPort.NumOutput,
 		policyNode,
 	)
-	
+
 	list.NodeSet[node.description.nodeName] = node
 }
 
@@ -125,5 +147,7 @@ func (list *PolicyList) connectNode(policyPath i.ConnectionUnit) {
 	}
 
 	// packet connection
-	node2.packet.input[policyPath.PortPair[1]] = node1.packet.output
+	node2.packet.input[policyPath.PortPair[1]] = node1.packet.output[policyPath.PortPair[0]]
+	node1.packet.output[policyPath.PortPair[0]].inPort = policyPath.PortPair[0]
+	node1.packet.output[policyPath.PortPair[0]].outPort = policyPath.PortPair[1]
 }

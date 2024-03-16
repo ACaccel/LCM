@@ -3,9 +3,11 @@ package utils
 import (
 	"encoding/json"
 	"errors"
-	"gopkg.in/yaml.v2"
 	"io"
+	"log"
 	"os"
+
+	"gopkg.in/yaml.v2"
 
 	i "interfaces"
 	p "policy"
@@ -72,19 +74,30 @@ func ReadYaml(path string, content any) error {
 	return nil
 }
 
-func DeployPolicy(configPath string, policyName string, corePolicies []p.Policy) (p.Policy, error) {
+func ConfigureModule(config i.ConfigFormat, coreModulesConfig []i.ModuleConfig) ([]i.ModuleConfig, error) {
+	var modules []i.ModuleConfig = make([]i.ModuleConfig, 0)
+	for _, module := range config.Module {
+		var configured bool = false
+		for _, moduleConfig := range coreModulesConfig {
+			if moduleConfig.ModuleName == module.ModuleName {
+				log.Println("Module " + module.ModuleName + " already configured")
+				configured = true
+			}
+		}
+		
+		if !configured {
+			modules = append(modules, module)
+		}
+	}
+	return modules, nil
+}
+
+func DeployPolicy(config i.ConfigFormat, policyName string, corePolicies []p.Policy, coreModulesConfig []i.ModuleConfig) (p.Policy, error) {
 	// check if policy already deployed
 	for _, deployedPolicies := range corePolicies {
 		if deployedPolicies.Description.PolicyName == policyName {
 			return p.Policy{}, errors.New("policy " + policyName + " already deployed")
 		}
-	}
-
-	var config i.ConfigFormat
-	err := ReadYaml(configPath, &config)
-	
-	if err != nil {
-		return p.Policy{}, errors.New("failed to parse JSON file")
 	}
 
 	// check if policy exists in database
@@ -100,6 +113,6 @@ func DeployPolicy(configPath string, policyName string, corePolicies []p.Policy)
 	}
 
 	var newPolicy p.Policy = p.Policy{}
-	newPolicy.Init(policyConfig)
+	newPolicy.Init(policyConfig, coreModulesConfig)
 	return newPolicy, nil
 }

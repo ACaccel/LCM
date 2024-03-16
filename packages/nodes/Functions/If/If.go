@@ -25,7 +25,7 @@ type If struct {
 	i.FunctionNode
 }
 
-func (n *If) Execute(input []any) i.NodeExecResult {
+func (n *If) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	var property Property
 	var input1 InputFormat
 	u.GetProperty(n.Config.Property, &property)
@@ -35,6 +35,8 @@ func (n *If) Execute(input []any) i.NodeExecResult {
 	}
 
 	output := property
+	fmt.Println("If: Execute function", n.Config.NodeName, "Input:", input1)
+	fmt.Println("If: Execute function", n.Config.NodeName, "Output:", output)
 	
 	return i.NodeExecResult{
 		Output: output,

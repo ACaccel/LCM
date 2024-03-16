@@ -23,7 +23,7 @@ type Policy struct {
  * Method: Policy
  */
 
-func (w *Policy) Init(pConfig i.PolicyConfig) {
+func (w *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
 	w.Description.PolicyName = pConfig.PolicyName
 	w.Description.PolicyType = pConfig.PolicyType
 	w.Triggers = pConfig.PolicyTrigger
@@ -37,8 +37,21 @@ func (w *Policy) Init(pConfig i.PolicyConfig) {
 	}
 
 	for _, nodeConfig := range pConfig.PolicyNode {
-		functionNode, numPort := nodes.NewNode(nodeConfig)
-		policyList.initNode(functionNode, nodeConfig.NodeName, numPort)
+		if nodeConfig.NodeType == "Module" {
+			functionNode, numPort := initModule(nodeConfig, modulesConfig)
+			if functionNode == nil {
+				log.Println("Policy: Module not found", nodeConfig.NodeName)
+				continue
+			}
+			policyList.initNode(functionNode, nodeConfig.NodeName, numPort)
+		} else {
+			functionNode, numPort := nodes.NewNode(nodeConfig)
+			if functionNode == nil {
+				log.Println("Policy: Node not found", nodeConfig.NodeName)
+				continue
+			}
+			policyList.initNode(functionNode, nodeConfig.NodeName, numPort)
+		}
 	}
 
 	for _, path := range pConfig.PolicyPath {
@@ -50,30 +63,43 @@ func (w *Policy) Init(pConfig i.PolicyConfig) {
 
 func (w *Policy) Execute(triggerNode *ListNode, content any) {
 	log.Println("Policy: Execute policy", w.Description.PolicyName)
-	policyTask(triggerNode, content)
+
+	// Todo: call cleaner to clean all data packets
+
+	newInfo := i.ExecInfo{
+		ActiveInPort: -1,
+		UseShared: true,
+		SharedContent: content,
+	}
+	policyTask(triggerNode, newInfo)
 }
 
-func policyTask(node *ListNode, content any) {
+func policyTask(node *ListNode, info i.ExecInfo) {
 	// check if all input is ready
 	for _, input := range node.packet.input {
 		if input != nil && !input.ready {
+			// Todo: currently, I let the last subPolicy which is connected with the node to execute the node 
+			// (when all packets are ready)
+			// The poilcy Task should be replaced by something like threads or go routines
 			return
 		}
 	}
 
 	// execute node and update the status
-	if node.description.NumInput == 0 {
-		node.execute([]any{content})
-	} else {
-		node.execute(node.getInputContent())
+	node.execute(node.getInputContent(info), info)
+	for _, output := range node.packet.output {
+		output.ready = true
 	}
-
-	node.packet.output.ready = true
 
 	// execute next node
 	for _, port := range node.nextPath {
 		if node.next[port] != nil {
-			policyTask(node.next[port], content)
+			var newInfo = i.ExecInfo{
+				ActiveInPort: node.packet.output[port].outPort,
+				UseShared: false,
+				SharedContent: nil,
+			}
+			policyTask(node.next[port], newInfo)
 		}
 	}
 }
