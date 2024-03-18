@@ -77,7 +77,7 @@ func (w *Policy) Execute(triggerNode *ListNode, content any) {
 func policyTask(node *ListNode, info i.ExecInfo) {
 	// check if all input is ready
 	for _, input := range node.packet.input {
-		if input != nil && !input.ready {
+		if input != nil && !input.isReady() {
 			// Todo: currently, I let the last subPolicy which is connected with the node to execute the node 
 			// (when all packets are ready)
 			// The poilcy Task should be replaced by something like threads or go routines
@@ -87,15 +87,13 @@ func policyTask(node *ListNode, info i.ExecInfo) {
 
 	// execute node and update the status
 	node.execute(node.getInputContent(info), info)
-	for _, output := range node.packet.output {
-		output.ready = true
-	}
+	node.setPacketReady()
 
 	// execute next node
 	for _, port := range node.nextPath {
 		if node.next[port] != nil {
 			var newInfo = i.ExecInfo{
-				ActiveInPort: node.packet.output[port].outPort,
+				ActiveInPort: node.packet.output[port].outPort(),
 				UseShared: false,
 				SharedContent: nil,
 			}

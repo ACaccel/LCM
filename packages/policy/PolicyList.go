@@ -30,13 +30,6 @@ type PolicyList struct {
 	NodeSet map[string]*ListNode
 }
 
-type dataPacket struct {
-	content any
-	ready   bool
-	inPort  int
-	outPort int
-}
-
 /*
  * Method: ListNode
  */
@@ -52,7 +45,7 @@ func (node *ListNode) init(name string, numInput int, numOutput int, baseNode *i
 	node.packet.input = make([]*dataPacket, numInput)
 	node.packet.output = make([]*dataPacket, numOutput)
 	for i := 0; i < numOutput; i++ {
-		node.packet.output[i] = new(dataPacket)
+		node.packet.output[i] = newDataPacket()
 	}
 	node.nextPath = make([]int, 0)
 }
@@ -80,7 +73,11 @@ func (node *ListNode) getInputContent(info i.ExecInfo) []any {
 	var inputContent []any = make([]any, node.description.NumInput)
 	for i, input := range node.packet.input {
 		if input != nil {
-			inputContent[i] = input.content
+			err := input.transform()
+			if err != nil {
+				log.Println("Error: transform input packet,", err)
+			}
+			inputContent[i] = input.content()
 		}
 	}
 	return inputContent
@@ -92,15 +89,21 @@ func (node *ListNode) execute(content []any, info i.ExecInfo) {
 	output, ok := res.Output.([]any)
 	if ok {
 		for i, out := range output {
-			node.packet.output[i].content = out
+			node.packet.output[i].setContent(out)
 		}
 	} else {
 		for i := 0; i < node.description.NumOutput; i++ {
-			node.packet.output[i].content = res.Output
+			node.packet.output[i].setContent(res.Output)
 		}
 	}
 
 	node.nextPath = res.Ports
+}
+
+func (node *ListNode) setPacketReady() {
+	for _, output := range node.packet.output {
+		output.setReady(true)
+	}
 }
 
 /*
@@ -148,6 +151,9 @@ func (list *PolicyList) connectNode(policyPath i.ConnectionUnit) {
 
 	// packet connection
 	node2.packet.input[policyPath.PortPair[1]] = node1.packet.output[policyPath.PortPair[0]]
-	node1.packet.output[policyPath.PortPair[0]].inPort = policyPath.PortPair[0]
-	node1.packet.output[policyPath.PortPair[0]].outPort = policyPath.PortPair[1]
+	node1.packet.output[policyPath.PortPair[0]].setInPort(policyPath.PortPair[0])
+	node1.packet.output[policyPath.PortPair[0]].setOutPort(policyPath.PortPair[1])
+
+	// transformation setup
+	node1.packet.output[policyPath.PortPair[0]].setTransFormat(policyPath.TransFormat)
 }

@@ -83,8 +83,9 @@ type PolicyConfig struct {
 }
 
 type ConnectionUnit struct {
-	NodePair [2]string 	`json:"nodePair" yaml:"nodePair"`
-	PortPair [2]int 	`json:"portPair" yaml:"portPair"`
+	NodePair 	[2]string 			`json:"nodePair" yaml:"nodePair"`
+	PortPair 	[2]int 				`json:"portPair" yaml:"portPair"`
+	TransFormat map[string]string 	`json:"transFormat" yaml:"transFormat"`
 }
 
 type NumPort struct {

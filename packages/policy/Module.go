@@ -37,7 +37,7 @@ func (n *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	nextPath := n.moduleTask(n.inPort[info.ActiveInPort].node, newInfo)
 	output := make([]any, n.config.NumOutPort)
 	for i := 0; i < n.config.NumOutPort; i++ {
-		output[i] = n.outPort[i].node.packet.output[n.outPort[i].nodePort].content
+		output[i] = n.outPort[i].node.packet.output[n.outPort[i].nodePort].rawContent()
 	}
 	
 	return i.NodeExecResult{
@@ -100,7 +100,7 @@ func initModule(nodeConfig i.NodeConfig, modulesConfig []i.ModuleConfig) (*i.IPo
 func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
 	// check if all input is ready
 	for _, input := range node.packet.input {
-		if input != nil && !input.ready {
+		if input != nil && !input.isReady() {
 			return []int{}
 		}
 	}
@@ -108,12 +108,12 @@ func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
 	// execute node and update the status
 	node.execute(node.getInputContent(info), info)
 	for _, output := range node.packet.output {
-		output.ready = true
+		output.setReady(true)
 	}
 
 	// return when reaching the end of the policy
-	for i, port := range n.outPort {
-		if port.node == node {
+	for i, outport := range n.outPort {
+		if outport.node == node {
 			nextPath := []int{}
 			for _, path := range node.nextPath {
 				if path == n.outPort[i].nodePort {
@@ -129,7 +129,7 @@ func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
 	for _, port := range node.nextPath {
 		if node.next[port] != nil {
 			var newInfo = i.ExecInfo{
-				ActiveInPort: node.packet.output[port].outPort,
+				ActiveInPort: node.packet.output[port].outPort(),
 				UseShared: false,
 				SharedContent: nil,
 			}

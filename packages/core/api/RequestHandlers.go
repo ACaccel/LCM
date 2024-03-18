@@ -18,7 +18,6 @@ type Core struct {
 }
 
 var core Core = Core{}
-// const configPath = "config.json"
 const configPath = "config.yaml"
 
 func getPolicyConfig(c *gin.Context) {
