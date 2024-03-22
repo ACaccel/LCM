@@ -23,10 +23,10 @@ type Policy struct {
  * Method: Policy
  */
 
-func (w *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
-	w.Description.PolicyName = pConfig.PolicyName
-	w.Description.PolicyType = pConfig.PolicyType
-	w.Triggers = pConfig.PolicyTrigger
+func (p *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
+	p.Description.PolicyName = pConfig.PolicyName
+	p.Description.PolicyType = pConfig.PolicyType
+	p.Triggers = pConfig.PolicyTrigger
 
 	var policyList *PolicyList = new(PolicyList)
 	policyList.init()
@@ -58,11 +58,11 @@ func (w *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
 		policyList.connectNode(path)
 	}
 
-	w.PolicyList = policyList
+	p.PolicyList = policyList
 }
 
-func (w *Policy) Execute(triggerNode *ListNode, content any) {
-	log.Println("Policy: Execute policy", w.Description.PolicyName)
+func (p *Policy) Execute(triggerNode *ListNode, content any) {
+	log.Println("Policy: Execute policy", p.Description.PolicyName)
 
 	// Todo: call cleaner to clean all data packets
 
