@@ -36,7 +36,7 @@ func newDataPacket() *dataPacket {
 
 func (packet *dataPacket) transform() error {
     srcVal := reflect.ValueOf(packet.input.content)
-    dstVal, err := transformFields(srcVal, packet.transFormat)
+    dstVal, err := transformDst(srcVal, packet.transFormat)
     if err != nil {
         return err
     }
@@ -45,7 +45,7 @@ func (packet *dataPacket) transform() error {
     return nil
 }
 
-func transformFields(srcVal reflect.Value, fieldMapping map[string]string) (reflect.Value, error) {
+func transformDst(srcVal reflect.Value, fieldMapping map[string]string) (reflect.Value, error) {
     // build dst struct
     fields, err := buildStruct(fieldMapping)
     if err != nil {
