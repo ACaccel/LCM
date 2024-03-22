@@ -76,8 +76,12 @@ func (node *ListNode) getInputContent(info i.ExecInfo) []any {
 			err := input.transform()
 			if err != nil {
 				log.Println("Error: transform input packet,", err)
+				inputContent[i] = nil
+			} else {
+				inputContent[i] = input.content()
 			}
-			inputContent[i] = input.content()
+		} else {
+			inputContent[i] = nil
 		}
 	}
 	return inputContent
@@ -96,8 +100,9 @@ func (node *ListNode) execute(content []any, info i.ExecInfo) {
 			node.packet.output[i].setContent(res.Output)
 		}
 	}
-
 	node.nextPath = res.Ports
+
+	node.setPacketReady()
 }
 
 func (node *ListNode) setPacketReady() {

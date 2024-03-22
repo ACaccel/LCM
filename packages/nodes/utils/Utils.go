@@ -12,6 +12,10 @@ func GetProperty(src any, dest any) {
 }
 
 func GetInputContent(src any, dest any) error {
+	if src == nil {
+		return errors.New("GetInputContent: src is nil")
+	}
+
 	srcValue := reflect.ValueOf(src)
 	destValue := reflect.ValueOf(dest)
 	

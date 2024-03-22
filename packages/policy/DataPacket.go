@@ -35,6 +35,9 @@ func newDataPacket() *dataPacket {
  */
 
 func (packet *dataPacket) transform() error {
+    if !packet.isValid() {
+        return errors.New("input content is not valid")
+    }
     srcVal := reflect.ValueOf(packet.input.content)
     dstVal, err := transformDst(srcVal, packet.transFormat)
     if err != nil {
@@ -112,6 +115,10 @@ func getField(val reflect.Value, fieldParts []string) reflect.Value {
 /*
  * other methods
  */
+
+func (packet *dataPacket) isValid() bool {
+    return packet.input.content != nil
+}
 
 func (packet *dataPacket) clean() {
 	packet.input.content = nil

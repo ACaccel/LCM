@@ -102,7 +102,6 @@ func policyTask(node *ListNode, info i.ExecInfo) {
 
 	// execute node and update the status
 	node.execute(node.getInputContent(info), info)
-	node.setPacketReady()
 
 	// execute next node
 	for _, port := range node.nextPath {

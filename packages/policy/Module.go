@@ -107,9 +107,6 @@ func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
 
 	// execute node and update the status
 	node.execute(node.getInputContent(info), info)
-	for _, output := range node.packet.output {
-		output.setReady(true)
-	}
 
 	// return when reaching the end of the policy
 	for i, outport := range n.outPort {
