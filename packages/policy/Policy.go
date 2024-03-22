@@ -64,7 +64,7 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
 func (p *Policy) Execute(triggerNode *ListNode, content any) {
 	log.Println("Policy: Execute policy", p.Description.PolicyName)
 
-	// Todo: call cleaner to clean all data packets
+	p.Cleaner()
 
 	newInfo := i.ExecInfo{
 		ActiveInPort: -1,
@@ -72,6 +72,21 @@ func (p *Policy) Execute(triggerNode *ListNode, content any) {
 		SharedContent: content,
 	}
 	policyTask(triggerNode, newInfo)
+}
+
+func (p *Policy) Cleaner() {
+	for _, trigger := range p.Triggers {
+		policyCleaner(p.PolicyList.NodeSet[trigger.NodeName])
+	}
+}
+
+func policyCleaner(node *ListNode) {
+	node.clean()
+	for _, node := range node.next {
+		if node != nil {
+			policyCleaner(node)
+		}
+	}
 }
 
 func policyTask(node *ListNode, info i.ExecInfo) {

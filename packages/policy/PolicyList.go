@@ -106,6 +106,16 @@ func (node *ListNode) setPacketReady() {
 	}
 }
 
+func (node *ListNode) clean() {
+	for _, input := range node.packet.input {
+		input.clean()
+	}
+	for _, output := range node.packet.output {
+		output.clean()
+	}
+	node.nextPath = make([]int, 0)
+}
+
 /*
  * Method: PolicyList
  */

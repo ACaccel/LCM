@@ -113,7 +113,13 @@ func getField(val reflect.Value, fieldParts []string) reflect.Value {
  * other methods
  */
 
- func (packet *dataPacket) setInPort(port int) {
+func (packet *dataPacket) clean() {
+	packet.input.content = nil
+	packet.output.content = nil
+	packet.ready = false
+}
+
+func (packet *dataPacket) setInPort(port int) {
 	packet.input.inPort = port
 }
 
