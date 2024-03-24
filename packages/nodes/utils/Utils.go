@@ -11,28 +11,17 @@ func GetProperty(src any, dest any) {
 	mapstructure.Decode(src, &dest)
 }
 
-func GetInputContent(src any, dest any) error {
-	if src == nil {
-		return errors.New("GetInputContent: src is nil")
-	}
-
+// GetInput copy the content of src to dest.
+// Return error if the the content is nil or the src is not a struct
+func GetInput(src any, dest any) error {
 	srcValue := reflect.ValueOf(src)
 	destValue := reflect.ValueOf(dest)
 	
-	var conversionError error = nil
-	defer func() {
-		if err := recover(); err != nil {
-			conversionError = errors.New("GetInputContent: destination is not addressable")
-			println(conversionError.Error())
-		}
-	}()
-
 	if srcValue.Kind() != reflect.Struct || destValue.Kind() != reflect.Pointer {
 		return errors.New("GetInputContent: src must be a struct and dest must be a pointer to structs")
 	}
 
 	for i := 0; i < srcValue.NumField(); i++ {
-
 		srcField := srcValue.Field(i)
 		fieldName := srcValue.Type().Field(i).Name
 
@@ -49,11 +38,11 @@ func GetInputContent(src any, dest any) error {
 				destField.Set(srcField)
 			}
 		} else {
-			return errors.New("GetInputContent: destination is not assignable")
+			return errors.New("GetInputContent: dest is not assignable")
 		}
 	}
 
-	return conversionError
+	return nil
 }
 
 func GetRawInputContent(src any) (any, error) {

@@ -3,12 +3,14 @@ package Functions
 import (
 	i "interfaces"
 	"nodes/Functions/If"
+	"nodes/Functions/Logic"
 )
 
 var Description = make(map[string]i.NodeDescription)
 
 func init() {
 	Description["If"] = If.Description
+	Description["Logic"] = logic.Description
 }
 
 func InitNode(info i.FunctionNode) (*i.IPolicyNode, i.NumPort) {
@@ -18,6 +20,8 @@ func InitNode(info i.FunctionNode) (*i.IPolicyNode, i.NumPort) {
 	switch info.Description.NodeType {
 	case "If":
 		node = &If.If{FunctionNode: info}
+	case "Logic":
+		node = &logic.Logic{FunctionNode: info}
 	default:
 		node = nil
 	}
