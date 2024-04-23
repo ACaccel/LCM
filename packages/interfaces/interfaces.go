@@ -69,7 +69,7 @@ type ModulePortConfig struct {
  * Others
  */
 
-type ConfigFormat struct {
+type ServiceConfig struct {
 	Module []ModuleConfig `json:"module" yaml:"module"`
 	Policy []PolicyConfig `json:"policy" yaml:"policy"`
 }
@@ -94,6 +94,7 @@ type NumPort struct {
 }
 
 type WebhookEvent struct {
+	SvcName   string
 	EventType string
 	Content   any
 }

@@ -68,8 +68,7 @@ func (n *If) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 		port = []int{1}
 	}
 
-	fmt.Println("If: Execute function", n.Config.NodeName, "Input:", inputarr)
-	fmt.Println("If: Execute function", n.Config.NodeName, "Output:", output)
+	fmt.Println("If: Execute function", n.Config.NodeName)
 	
 	return i.NodeExecResult{
 		Output: output,

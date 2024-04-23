@@ -1,16 +1,11 @@
 package main
 
 import (
-    "github.com/gin-gonic/gin"
-    
-    "core/api"
+    "core/Api"
 )
 
 func main() {
-    router := gin.Default()
+    server := api.InitServer()
 
-	apiRouter := router.Group("/api")
-	api.InitApi(apiRouter)
-
-    router.Run("localhost:8888")
+    server.Serve()
 }
