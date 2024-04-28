@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	i "interfaces"
+	i "lcm/packages/interfaces"
 )
 
 func ReadJson(path string, content *[]i.PolicyConfig) error {

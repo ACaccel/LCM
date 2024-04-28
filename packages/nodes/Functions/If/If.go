@@ -2,8 +2,8 @@ package If
 
 import (
 	"fmt"
-	i "interfaces"
-	u "nodes/utils"
+	i "lcm/packages/interfaces"
+	u "lcm/packages/nodes/utils"
 )
 
 type InputFormat struct {

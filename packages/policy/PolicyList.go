@@ -3,7 +3,7 @@ package policy
 import (
 	"log"
 
-	i "interfaces"
+	i "lcm/packages/interfaces"
 )
 
 /*

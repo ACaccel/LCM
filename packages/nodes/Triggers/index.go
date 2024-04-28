@@ -1,8 +1,8 @@
 package Triggers
 
 import (
-	i "interfaces"
-	"nodes/Triggers/Webhook"
+	i "lcm/packages/interfaces"
+	"lcm/packages/nodes/Triggers/Webhook"
 )
 
 var Description = make(map[string]i.TriggerDescription)

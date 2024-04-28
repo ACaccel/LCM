@@ -1,9 +1,9 @@
 package Functions
 
 import (
-	i "interfaces"
-	"nodes/Functions/If"
-	"nodes/Functions/Logic"
+	i "lcm/packages/interfaces"
+	"lcm/packages/nodes/Functions/If"
+	"lcm/packages/nodes/Functions/Logic"
 )
 
 var Description = make(map[string]i.NodeDescription)

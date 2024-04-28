@@ -70,6 +70,7 @@ type ModulePortConfig struct {
  */
 
 type ServiceConfig struct {
+	SvcName string `json:"service_name" yaml:"service_name"`
 	Module []ModuleConfig `json:"module" yaml:"module"`
 	Policy []PolicyConfig `json:"policy" yaml:"policy"`
 }

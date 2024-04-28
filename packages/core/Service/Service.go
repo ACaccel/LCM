@@ -3,8 +3,8 @@ package service
 import (
 	"errors"
 
-	i "interfaces"
-	p "policy"
+	i "lcm/packages/interfaces"
+	p "lcm/packages/policy"
 )
 
 type Service struct {

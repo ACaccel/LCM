@@ -1,7 +1,7 @@
 package policy
 
 import (
-	i "interfaces"
+	i "lcm/packages/interfaces"
 )
 
 type Property struct {

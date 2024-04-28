@@ -1,19 +1,55 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path"
 
 	"github.com/gin-gonic/gin"
 
-	"core/utils"
-	i "interfaces"
-	svc "core/Service"
+	svc "lcm/packages/core/Service"
+	"lcm/packages/core/utils"
+	i "lcm/packages/interfaces"
 )
 
 const configPath = "config.yaml"
 
-func (s *Server)getPolicyConfig(c *gin.Context) {
+func (s *Server) getUpload(c *gin.Context) {
+	s.Router.LoadHTMLFiles("./packages/core/Api/upload.html")
+	c.HTML(http.StatusOK, "upload.html", nil)
+}
+
+func (s *Server) postUpload(c *gin.Context) {
+	f, err := c.FormFile("config")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+	} else {
+		dst := path.Join("./upload/", f.Filename)
+		c.SaveUploadedFile(f, dst)
+
+		// rename file with service name
+		var config i.ServiceConfig
+		err := utils.ReadYaml(configPath, &config)
+		if err != nil {
+			log.Println("Failed to parse YAML file")
+		}
+		
+		os.Rename(dst, path.Join("./upload/", fmt.Sprintf("%s.yaml", config.SvcName)))
+
+		log.Println("File uploaded: Received config file from service", config.SvcName)
+		c.JSON(200, gin.H{
+			"msg":  "success",
+			"name": f.Filename,
+			"size": f.Size,
+		})
+	}
+}
+
+func (s *Server) getPolicyConfig(c *gin.Context) {
 	log.Println("Policy Config: Received policy config get request")
 
 	var config []i.PolicyConfig
@@ -26,7 +62,7 @@ func (s *Server)getPolicyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
-func (s *Server)postPolicyConfig(c *gin.Context) {
+func (s *Server) postPolicyConfig(c *gin.Context) {
 	var reqBody any
 	if err := c.ShouldBindJSON(&reqBody); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid postPolicyConfig format"})
@@ -43,18 +79,18 @@ func (s *Server)postPolicyConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
-func (s *Server)getPolicyDeploy(c *gin.Context) {
+func (s *Server) getPolicyDeploy(c *gin.Context) {
 	var deployedPolicies struct {
 	}
 	c.IndentedJSON(http.StatusOK, deployedPolicies)
 }
 
-func (s *Server)postPolicyDeploy(c *gin.Context) {
+func (s *Server) postPolicyDeploy(c *gin.Context) {
 	// parse request
 	var req struct {
-		SvcName		string  	`json:"svcname"`
-		Type     	string   	`json:"type"`
-		Policies 	[]string 	`json:"policies"`
+		SvcName  string   `json:"svcname"`
+		Type     string   `json:"type"`
+		Policies []string `json:"policies"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid postPolicyDeploy format"})

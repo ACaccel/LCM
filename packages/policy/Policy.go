@@ -1,9 +1,9 @@
 package policy
 
 import (
-	i "interfaces"
+	i "lcm/packages/interfaces"
 	"log"
-	"nodes"
+	"lcm/packages/nodes"
 )
 
 /*

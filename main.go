@@ -1,7 +1,7 @@
 package main
 
 import (
-    "core/Api"
+    "lcm/packages/core/Api"
 )
 
 func main() {

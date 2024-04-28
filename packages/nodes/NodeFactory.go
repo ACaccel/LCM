@@ -1,9 +1,9 @@
 package nodes
 
 import (
-	f "nodes/Functions"
-	t "nodes/Triggers"
-	i "interfaces"
+	f "lcm/packages/nodes/Functions"
+	t "lcm/packages/nodes/Triggers"
+	i "lcm/packages/interfaces"
 )
 
 func NewTrigger(nodeConfig i.NodeConfig) (*i.IPolicyNode) {

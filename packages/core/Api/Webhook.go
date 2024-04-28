@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-    i "interfaces"
+    i "lcm/packages/interfaces"
 )
 
 func (s *Server)postWebhook(c *gin.Context) {
