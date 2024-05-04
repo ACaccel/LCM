@@ -1,4 +1,4 @@
-package service
+package lcmenabler
 
 import (
 	"errors"
@@ -14,9 +14,9 @@ type Service struct {
 	Policies		[]p.Policy
 }
 
-func InitService(svcName string, config i.ServiceConfig) Service {
-	return Service{
-		SvcName: svcName,
+func InitService(config i.ServiceConfig) *Service {
+	return &Service{
+		SvcName: config.SvcName,
 		Config: config,
 	}
 }
@@ -29,7 +29,7 @@ func (s *Service)Deploy(policy string) error {
 		}
 	}
 
-	// check if policy exists in database
+	// check if the policy exists in database
 	var policyConfig i.PolicyConfig = i.PolicyConfig{}
 	for _, config := range s.Config.Policy {
 		if config.PolicyName == policy {
@@ -48,7 +48,7 @@ func (s *Service)Deploy(policy string) error {
 }
 
 func (s *Service)Undeploy(policy string) error {
-	// check if policy already deployed
+	// check if the policy already deployed
 	for index, deployedPolicy := range s.Policies {
 		if deployedPolicy.Description.PolicyName == policy {
 			s.Policies = append(s.Policies[:index], s.Policies[index+1:]...)
