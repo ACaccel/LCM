@@ -1,12 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"github.com/gin-gonic/gin"
 	"log"
 	"net/http"
 	"os"
-	"path"
 
 	lcm "lcm/packages"
 	i "lcm/packages/interfaces"
@@ -31,59 +29,65 @@ func InitServer() *Server {
 func (s *Server) InitApi() {
 	s.Api = s.Router.Group("/api")
 
-	s.Api.POST("/webhook", s.postWebhook)
+	s.Api.POST("/webhook", s.Execute_Webhook)
 	s.Api.POST("/policy/deploy", s.postPolicyDeploy)
 	s.Api.GET("/upload", s.getUpload)
-	s.Api.POST("/upload", s.postUpload)
+	s.Api.POST("/upload", s.Upload_Config)
 }
 
 func (s *Server) Serve() {
 	s.InitApi()
-	s.Router.Run("localhost:8888")
+	s.Router.Run("localhost:8000")
 }
 
 /* request handlers */
 
-func (s *Server) postWebhook(c *gin.Context) {
-	var req i.WebhookEvent
-	if err := c.ShouldBindJSON(&req); err != nil {
+func (s *Server) Execute_Webhook(c *gin.Context) {
+	var webhook i.WebhookEvent
+	if err := c.ShouldBindJSON(&webhook); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook format"})
 		return
 	}
-	log.Println("Post Webhook: Received webhook", req)
+	log.Println("Post Webhook: Received webhook", webhook)
 
 	// process the Policy
-	s.LCM.Execute_Webhook(req)
+	if err := s.LCM.Execute_Webhook(
+		webhook.SvcName,
+		webhook.EventType,
+		webhook.Content,
+	); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+	} else {
+		c.JSON(http.StatusOK, nil)
+	}
 }
 
 func (s *Server) postPolicyDeploy(c *gin.Context) {
 	// parse request
-	var req struct {
-		SvcName  string   `json:"SvcName"`
-		Type     string   `json:"Type"`
-		Policies []string `json:"Policies"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var deploy_data i.DeployPolicy
+	if err := c.ShouldBindJSON(&deploy_data); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid postPolicyDeploy format"})
 		return
 	}
-	log.Println("Policy Deploy: Received policy deploy post request", req)
+	log.Println("Policy Deploy: Received policy deploy post request", deploy_data)
 
-	switch req.Type {
+	switch deploy_data.Type {
 	case "POLICY_DEPLOY":
-		err := s.LCM.Deploy_Policy(req.SvcName, req.Policies)
+		err := s.LCM.Deploy_Policy(deploy_data.SvcName, deploy_data.Policies)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"deployed Policies": req.Policies})
+		c.JSON(http.StatusOK, gin.H{"deployed Policies": deploy_data.Policies})
 	case "POLICY_UNDEPLOY":
-		err := s.LCM.Undeploy_Policy(req.SvcName, req.Policies)
+		err := s.LCM.Undeploy_Policy(deploy_data.SvcName, deploy_data.Policies)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"undeployed Policies": req.Policies})
+		c.JSON(http.StatusOK, gin.H{"undeployed Policies": deploy_data.Policies})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid postPolicyDeploy type"})
 	}
@@ -94,7 +98,7 @@ func (s *Server) getUpload(c *gin.Context) {
 	c.HTML(http.StatusOK, "upload.html", nil)
 }
 
-func (s *Server) postUpload(c *gin.Context) {
+func (s *Server) Upload_Config(c *gin.Context) {
 	file, err := c.FormFile("config")
 
 	if err != nil {
@@ -102,7 +106,7 @@ func (s *Server) postUpload(c *gin.Context) {
 			"error": err.Error(),
 		})
 	} else {
-		dst := path.Join("./upload/", file.Filename)
+		dst := "./upload/" + file.Filename
 		c.SaveUploadedFile(file, dst)
 
 		// rename file with service name
@@ -112,7 +116,8 @@ func (s *Server) postUpload(c *gin.Context) {
 			log.Println("Failed to parse YAML file")
 		}
 
-		os.Rename(dst, path.Join("./upload/", fmt.Sprintf("%s.yaml", config.SvcName)))
+		rename_dst := "./upload/" + config.SvcName + ".yaml"
+		os.Rename(dst, rename_dst)
 
 		// register service
 		s.LCM.Register_Service(config)

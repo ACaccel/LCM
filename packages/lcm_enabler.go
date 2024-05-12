@@ -15,15 +15,16 @@ type LCM_Enabler struct {
 	Services map[string]*Service
 }
 
-func (l *LCM_Enabler) Execute_Webhook(webhook i.WebhookEvent) {
-	for _, policy := range l.Services[webhook.SvcName].Policies {
+func (l *LCM_Enabler) Execute_Webhook(service_name string, event_type string, content any) error {
+	for _, policy := range l.Services[service_name].Policies {
 		for _, trigger := range policy.Triggers {
-			if trigger.NodeType == "Webhook" {
+			if trigger.NodeType == event_type {
 				headNode := policy.PolicyList.NodeSet[trigger.NodeName]
-				policy.Execute(headNode, webhook.Content)
+				policy.Execute(headNode, content)
 			}
 		}
 	}
+	return nil
 }
 
 func (l *LCM_Enabler) Register_Service(config i.ServiceConfig) error {

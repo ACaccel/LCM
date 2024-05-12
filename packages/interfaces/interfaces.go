@@ -95,7 +95,13 @@ type NumPort struct {
 }
 
 type WebhookEvent struct {
-	SvcName   string
-	EventType string
-	Content   any
+	SvcName   string `json:"SvcName"`
+	EventType string `json:"EventType"`
+	Content   any    `json:"Content"`
+}
+
+type DeployPolicy struct {
+	SvcName  string   `json:"SvcName"`
+	Type     string   `json:"Type"`
+	Policies []string `json:"Policies"`
 }
