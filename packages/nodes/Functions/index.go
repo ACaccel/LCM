@@ -4,6 +4,7 @@ import (
 	i "lcm/packages/interfaces"
 	"lcm/packages/nodes/Functions/If"
 	"lcm/packages/nodes/Functions/Logic"
+	"lcm/packages/nodes/Functions/Reqforward"
 )
 
 var Description = make(map[string]i.NodeDescription)
@@ -11,6 +12,7 @@ var Description = make(map[string]i.NodeDescription)
 func init() {
 	Description["If"] = If.Description
 	Description["Logic"] = logic.Description
+	Description["Reqforward"] = reqforward.Description
 }
 
 func InitNode(info i.FunctionNode) (*i.IPolicyNode, i.NumPort) {
@@ -22,6 +24,8 @@ func InitNode(info i.FunctionNode) (*i.IPolicyNode, i.NumPort) {
 		node = &If.If{FunctionNode: info}
 	case "Logic":
 		node = &logic.Logic{FunctionNode: info}
+	case "Reqforward":
+		node = &reqforward.Reqforward{FunctionNode: info}
 	default:
 		node = nil
 	}
