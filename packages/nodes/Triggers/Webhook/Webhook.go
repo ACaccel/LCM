@@ -19,7 +19,7 @@ type Webhook struct {
 }
 
 func (n *Webhook) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
-	output, err := u.GetRawInputContent(input[0].(map[string]any))
+	output, err := u.GetRawInputContent(input[0])
 	if err != nil {
 		fmt.Println("Webhook: Execute function", n.Config.NodeName, "Error:", err)
 	}

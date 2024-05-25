@@ -2,7 +2,6 @@ package policy
 
 import (
 	"errors"
-	"reflect"
 	"strings"
 )
 
@@ -38,78 +37,42 @@ func (packet *dataPacket) transform() error {
     if !packet.isValid() {
         return errors.New("input content is not valid")
     }
-    srcVal := reflect.ValueOf(packet.input.content)
-    dstVal, err := transformDst(srcVal, packet.transFormat)
+
+    output, err := transformContent(packet.input.content, packet.transFormat)
     if err != nil {
         return err
     }
-
-    packet.output.content = dstVal.Interface()
+    packet.output.content = output
+    
     return nil
 }
 
-func transformDst(srcVal reflect.Value, fieldMapping map[string]string) (reflect.Value, error) {
-    // build dst struct
-    fields, err := buildStruct(fieldMapping)
-    if err != nil {
-        return reflect.Value{}, err
+// transform the content based on the transformation format. The type of src must be map[string]any
+func transformContent(src any, transFormat map[string]string) (map[string]any, error) {
+    input := src.(map[string]any)
+    output := make(map[string]any)
+    for dstField, srcField := range transFormat {
+        srcFieldPath := strings.Split(srcField, ".")
+        srcFieldValue := getMapFieldValue(input, srcFieldPath)
+        if srcFieldValue == nil {
+            return nil, errors.New("field " + srcField + " not found in src")
+        }
+        output[dstField] = srcFieldValue
     }
-
-    dstType := reflect.StructOf(fields)
-    dstVal := reflect.New(dstType).Elem()
-
-    // set value for each field
-    for dstField, srcField := range fieldMapping {
-        srcFieldParts := strings.Split(srcField, ".")
-        srcFieldValue := getField(srcVal, srcFieldParts)
-        if !srcFieldValue.IsValid() {
-            return reflect.Value{}, errors.New("field " + srcField + " not found in src")
-        }
-        // dstFieldParts := strings.Split(dstField, ".")
-        // dstFieldVal := getField(dstVal, dstFieldParts)
-        dstFieldVal := dstVal.FieldByName(dstField)
-        if !dstFieldVal.IsValid() {
-            return reflect.Value{}, errors.New("field " + dstField + " not found in dst")
-        }
-        if !dstFieldVal.CanSet() {
-            return reflect.Value{}, errors.New("field " + dstField + " cannot be set")
-        }
-        if dstFieldVal.Type() != srcFieldValue.Type() {
-            srcFieldValue = srcFieldValue.Convert(dstFieldVal.Type())
-            dstFieldVal.Set(srcFieldValue)
-        } else {
-            dstFieldVal.Set(srcFieldValue)
-        }
-    }
-    return dstVal, nil
+    return output, nil
 }
 
-func buildStruct(fieldMapping map[string]string) ([]reflect.StructField, error) {
-    fields := make([]reflect.StructField, 0)
-    for dstField := range fieldMapping {
-        fieldParts := strings.Split(dstField, ".")
-        if len(fieldParts) == 1 {
-            fields = append(fields, reflect.StructField{
-                Name: fieldParts[0],
-                Type: reflect.TypeOf(0),
-            })
-        } else {
-            return nil, errors.New("nested struct not supported yet")
-        }
-    }
-    
-    return fields, nil
-}
-
-func getField(val reflect.Value, fieldParts []string) reflect.Value {
-    for _, part := range fieldParts {
-        tempVal := val.FieldByName(part)
-        if !tempVal.IsValid() {
+// get value based on the field path in the map
+func getMapFieldValue(m map[string]any, fieldPath []string) any {
+    var newMap any = m
+    for _, path := range fieldPath {
+        tempVal, err := newMap.(map[string]any)[path]
+        newMap = tempVal
+        if err || tempVal == nil {
             break
         }
-        val = tempVal
     }
-    return val
+    return newMap
 }
 
 /*
@@ -139,7 +102,7 @@ func (packet *dataPacket) outPort() int {
 }
 
 func (packet *dataPacket) setContent(content any) {
-	packet.input.content = content
+	packet.input.content = content.(map[string]any)
 }
 
 func (packet *dataPacket) content() any {
