@@ -13,7 +13,7 @@ type InputFormat struct {
 	Eij      []struct {
 		Idx_i int
 		Idx_j int
-		Value int
+		Value float64
 	}
 }
 
