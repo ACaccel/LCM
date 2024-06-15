@@ -66,3 +66,20 @@ func (s *Service)Undeploy(policy string) error {
 	}
 	return errors.New("policy " + policy + " not found")
 }
+
+func (s *Service)Configure(config i.ServiceConfig) error {
+	// check if any policy is deployed
+	if len(s.Policies) > 0 {
+		return errors.New("service has deployed policies")
+	}
+	
+	// configuration
+	s.Config = config
+	
+	s.Modules = make(map[string]i.ModuleConfig)
+	for _, module := range config.Module {
+		s.Modules[module.ModuleName] = module
+	}
+
+	return nil
+}

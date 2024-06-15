@@ -52,3 +52,11 @@ func (l *LCM_Enabler) Undeploy_Policy(svcName string, policies []string) error {
 	}
 	return nil
 }
+
+func (l *LCM_Enabler) Configure_Service(svcName string, config i.ServiceConfig) error {
+	err := l.Services[svcName].Configure(config)
+	if err != nil {
+		return err
+	}
+	return nil
+}
