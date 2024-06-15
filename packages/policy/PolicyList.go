@@ -90,15 +90,9 @@ func (node *ListNode) getInputContent(info i.ExecInfo) []any {
 func (node *ListNode) execute(content []any, info i.ExecInfo) {
 	// update output packet and nextPath
 	res := (*node.baseNode).Execute(content, info)
-	output, ok := res.Output.([]any)
-	if ok {
-		for i, out := range output {
-			node.packet.output[i].setContent(out)
-		}
-	} else {
-		for i := 0; i < node.description.NumOutput; i++ {
-			node.packet.output[i].setContent(res.Output)
-		}
+
+	for i, output := range res.Output {
+		node.packet.output[i].setContent(output)
 	}
 	node.nextPath = res.Ports
 

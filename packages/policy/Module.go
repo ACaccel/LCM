@@ -35,7 +35,7 @@ func (n *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	}
 
 	nextPath := n.moduleTask(n.inPort[info.ActiveInPort].node, newInfo)
-	output := make([]any, n.config.NumOutPort)
+	output := make(i.NodeOutput, n.config.NumOutPort)
 	for i := 0; i < n.config.NumOutPort; i++ {
 		output[i] = n.outPort[i].node.packet.output[n.outPort[i].nodePort].rawContent()
 	}
@@ -46,12 +46,12 @@ func (n *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	}
 }
 
-func initModule(nodeConfig i.NodeConfig, modulesConfig []i.ModuleConfig) (*i.IPolicyNode, i.NumPort) {
+func initModule(nodeConfig i.NodeConfig, modules map[string]i.ModuleConfig) (*i.IPolicyNode, i.NumPort) {
 	var module = Module{}
 
 	// check if the node is a module
-	for _, moduleConfig := range modulesConfig {
-		if nodeConfig.NodeName == moduleConfig.ModuleName {
+	for moduleName, moduleConfig := range modules {
+		if nodeConfig.NodeName == moduleName {
 			module.config = moduleConfig
 			break
 		}
@@ -69,7 +69,7 @@ func initModule(nodeConfig i.NodeConfig, modulesConfig []i.ModuleConfig) (*i.IPo
 		PolicyNode: module.config.ModuleNode,
 		PolicyPath: module.config.ModulePath,
 	}
-	modulePolicy.Init(policyConfig, modulesConfig)
+	modulePolicy.Init(policyConfig, modules)
 	module.policy = modulePolicy
 	
 	// module port setup

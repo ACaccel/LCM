@@ -34,7 +34,7 @@ func (n *Logic) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	
 	var newInput []InputFormat = make([]InputFormat, len(input))
 	for i := 0; i < len(input); i++ {
-		err := u.EncodeOutput(input[i], &newInput[i])
+		err := u.DecodeInput(input[i], &newInput[i])
 		if err != nil {
 			fmt.Println("Logic: Get input error,", err)
 		}
@@ -66,14 +66,13 @@ func (n *Logic) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 		port = []int{1}
 	}
 
-	var output_map map[string]any = make(map[string]any)
-	err := u.EncodeOutput(output, &output_map)
+	encoded_output, err := u.EncodeOutput(output, Description)
 	if err != nil {
 		fmt.Println("Logic: Encode output error,", err)
 	}
 
 	return i.NodeExecResult{
-		Output: output_map,
+		Output: encoded_output,
 		Ports: port,
 	}
 }

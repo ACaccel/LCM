@@ -36,7 +36,7 @@ func (n *If) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	
 	var inputarr []InputFormat = make([]InputFormat, len(input))
 	for i := 0; i < len(input); i++ {
-		err := u.EncodeOutput(input[i], &inputarr[i])
+		err := u.DecodeInput(input[i], &inputarr[i])
 		if err != nil {
 			fmt.Println("If: Get input error,", err)
 		}
@@ -68,8 +68,7 @@ func (n *If) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 		port = []int{1}
 	}
 
-	var output_map map[string]any = make(map[string]any)
-	err := u.EncodeOutput(output, &output_map)
+	encoded_output, err := u.EncodeOutput(output, Description)
 	if err != nil {
 		fmt.Println("If: Encode output error,", err)
 	}
@@ -77,7 +76,7 @@ func (n *If) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	fmt.Println("If: Execute function", n.Config.NodeName)
 	
 	return i.NodeExecResult{
-		Output: output_map,
+		Output: encoded_output,
 		Ports: port,
 	}
 }

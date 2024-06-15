@@ -15,9 +15,13 @@ type ExecInfo struct {
 }
 
 type NodeExecResult struct {
-	Output any
+	Output NodeOutput
 	Ports  []int
 }
+
+type NodeOutput []DataPacketContent
+
+type DataPacketContent map[string]any
 
 type FunctionNode struct {
 	Description NodeDescription

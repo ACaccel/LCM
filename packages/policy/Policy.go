@@ -23,7 +23,7 @@ type Policy struct {
  * Method: Policy
  */
 
-func (p *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
+func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig) {
 	p.Description.PolicyName = pConfig.PolicyName
 	p.Description.PolicyType = pConfig.PolicyType
 	p.Triggers = pConfig.PolicyTrigger
@@ -38,7 +38,7 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modulesConfig []i.ModuleConfig) {
 
 	for _, nodeConfig := range pConfig.PolicyNode {
 		if nodeConfig.NodeType == "Module" {
-			functionNode, numPort := initModule(nodeConfig, modulesConfig)
+			functionNode, numPort := initModule(nodeConfig, modules)
 			if functionNode == nil {
 				log.Println("Policy: Module not found", nodeConfig.NodeName)
 				continue

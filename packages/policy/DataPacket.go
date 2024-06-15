@@ -3,16 +3,17 @@ package policy
 import (
 	"errors"
 	"strings"
+	i "lcm/packages/interfaces"
 )
 
 type dataPacket struct {
 	input	struct {
 		inPort		int
-		content		any
+		content		i.DataPacketContent
 	}
 	output	struct {
 		outPort		int
-		content		any
+		content		i.DataPacketContent
 	}
 	transFormat		map[string]string
 	ready   		bool
@@ -47,9 +48,9 @@ func (packet *dataPacket) transform() error {
     return nil
 }
 
-// transform the content based on the transformation format. The type of src must be map[string]any
-func transformContent(src any, transFormat map[string]string) (map[string]any, error) {
-    input := src.(map[string]any)
+// transform the content based on the transformation format.
+func transformContent(src i.DataPacketContent, transFormat map[string]string) (i.DataPacketContent, error) {
+    input := src
     output := make(map[string]any)
     for dstField, srcField := range transFormat {
         srcFieldPath := strings.Split(srcField, ".")
@@ -101,15 +102,18 @@ func (packet *dataPacket) outPort() int {
 	return packet.output.outPort
 }
 
-func (packet *dataPacket) setContent(content any) {
-	packet.input.content = content.(map[string]any)
+func (packet *dataPacket) setContent(content i.DataPacketContent) {
+	packet.input.content = content
 }
 
-func (packet *dataPacket) content() any {
+func (packet *dataPacket) content() i.DataPacketContent {
 	return packet.output.content
 }
 
-func (packet *dataPacket) rawContent() any {
+func (packet *dataPacket) rawContent() i.DataPacketContent {
+	if packet.input.content == nil {
+		return i.DataPacketContent{}
+	}
 	return packet.input.content
 }
 

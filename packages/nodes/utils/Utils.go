@@ -2,8 +2,7 @@ package utils
 
 import (
 	"errors"
-	// "fmt"
-	// "reflect"
+	i "lcm/packages/interfaces"
 
 	"github.com/mitchellh/mapstructure"
 )
@@ -27,19 +26,28 @@ func DecodeInput(src any, dest any) error {
 	return nil
 }
 
-// Encode the src (struct) to dest (pointer to map[string]any).
-func EncodeOutput(src any, dest any) error {
-	err := mapstructure.Decode(src, &dest)
+// Encode the src (struct) to dest (pointer to i.NodeOutput type).
+func EncodeOutput(src any, desc i.NodeDescription) (i.NodeOutput, error) {
+	var encoded_output i.NodeOutput = make(i.NodeOutput, desc.NumOutputPort)
+	var output map[string]any = make(map[string]any)
+	err := mapstructure.Decode(src, &output)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+
+	for i := 0; i < desc.NumOutputPort; i++ {
+		encoded_output[i] = output
+	}
+	return encoded_output, nil
 }
 
-func GetRawInputContent(src any) (any, error) {
-	m, err := src.(map[string]any)
+func GetRawInputContent(src any) (i.NodeOutput, error) {
+	rawOutput, err := src.(map[string]any)
 	if !err {
 		return nil, errors.New("GetRawInputContent: src must be a map")
 	}
-	return m, nil
+
+	var output i.NodeOutput = make(i.NodeOutput, 1)
+	output[0] = rawOutput
+	return output, nil
 }
