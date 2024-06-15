@@ -57,9 +57,7 @@ func (s *Server) Execute_Webhook(c *gin.Context) {
 		webhook.EventType,
 		webhook.Content,
 	); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 	} else {
 		c.JSON(http.StatusOK, nil)
 	}
@@ -76,15 +74,13 @@ func (s *Server) postPolicyDeploy(c *gin.Context) {
 
 	switch deploy_data.Type {
 	case "POLICY_DEPLOY":
-		err := s.LCM.Deploy_Policy(deploy_data.SvcName, deploy_data.Policies)
-		if err != nil {
+		if err := s.LCM.Deploy_Policy(deploy_data.SvcName, deploy_data.Policies); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"deployed Policies": deploy_data.Policies})
 	case "POLICY_UNDEPLOY":
-		err := s.LCM.Undeploy_Policy(deploy_data.SvcName, deploy_data.Policies)
-		if err != nil {
+		if err := s.LCM.Undeploy_Policy(deploy_data.SvcName, deploy_data.Policies); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -101,33 +97,37 @@ func (s *Server) getUpload(c *gin.Context) {
 
 func (s *Server) Upload_Config(c *gin.Context) {
 	file, err := c.FormFile("config")
-
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
-	} else {
-		dst := "./upload/" + file.Filename
-		c.SaveUploadedFile(file, dst)
-
-		// rename file with service name
-		var config i.ServiceConfig
-		err := utils.ReadYaml(dst, &config)
-		if err != nil {
-			log.Println("Failed to parse YAML file")
-		}
-
-		rename_dst := "./upload/" + config.SvcName + ".yaml"
-		os.Rename(dst, rename_dst)
-
-		// register service
-		s.LCM.Register_Service(config)
-
-		log.Println("File uploaded: Received config file from service", config.SvcName)
-		c.JSON(200, gin.H{
-			"msg": "success",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
 	}
+	dst := "./upload/" + file.Filename
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	// rename file with service name
+	var config i.ServiceConfig
+	if err := utils.ReadYaml(dst, &config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+	rename_dst := "./upload/" + config.SvcName + ".yaml"
+	if err := os.Rename(dst, rename_dst); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	if err := s.LCM.Register_Service(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	log.Println("File uploaded: Received config file from service", config.SvcName)
+	c.JSON(200, gin.H{
+		"msg": "success",
+	})
 }
 
 func (s *Server) Configure_Service(c *gin.Context) {
@@ -136,32 +136,25 @@ func (s *Server) Configure_Service(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 		return
 	}
-
 	dst := "./upload/" + file.Filename
-	err = c.SaveUploadedFile(file, dst)
-	if err != nil {
+	if err := c.SaveUploadedFile(file, dst); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 		return
 	}
 
 	// rename file with service name
 	var config i.ServiceConfig
-	err = utils.ReadYaml(dst, &config)
-	if err != nil {
+	if err := utils.ReadYaml(dst, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 		return
 	}
-
 	rename_dst := "./upload/" + config.SvcName + ".yaml"
-	err = os.Rename(dst, rename_dst)
-	if err != nil {
+	if err := os.Rename(dst, rename_dst); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 		return
 	}
 
-	// register service
-	err = s.LCM.Configure_Service(config.SvcName, config)
-	if err != nil {
+	if err := s.LCM.Configure_Service(config.SvcName, config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 		return
 	}
