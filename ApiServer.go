@@ -30,10 +30,10 @@ func (s *Server) InitApi() {
 	s.Api = s.Router.Group("/api")
 
 	s.Api.POST("/webhook", s.Execute_Webhook)
-	s.Api.POST("/policy/deploy", s.postPolicyDeploy)
-	s.Api.GET("/upload", s.getUpload)
-	s.Api.POST("/upload", s.Upload_Config)
-	s.Api.POST("/configure", s.Configure_Service)
+	s.Api.POST("/service/policy/deploy", s.postPolicyDeploy)
+	s.Api.GET("/service/upload", s.getUpload)
+	s.Api.POST("/service/upload", s.Upload_Config)
+	s.Api.POST("/service/configure", s.Configure_Service)
 }
 
 func (s *Server) Serve() {
