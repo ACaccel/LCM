@@ -5,10 +5,11 @@ import (
 )
 
 type ILCM_Enabler interface {
+	Execute_Webhook()
 	Register_Service()
-	Upload_Config()
 	Deploy_Policy()
 	Undeploy_Policy()
+	Configure_Service()
 }
 
 type LCM_Enabler struct {

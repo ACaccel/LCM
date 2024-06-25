@@ -1,15 +1,18 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/gin-gonic/gin"
+	jsoniter "github.com/json-iterator/go"
 
 	lcm "lcm/packages"
 	i "lcm/packages/interfaces"
 	utils "lcm/packages/utils"
 )
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type Server struct {
 	Router *gin.Engine
@@ -30,7 +33,9 @@ func (s *Server) InitApi() {
 	s.Api = s.Router.Group("/api")
 
 	s.Api.POST("/webhook", s.Execute_Webhook)
+	s.Api.GET("/service/policy", s.Service_Information)
 	s.Api.POST("/service/policy/deploy", s.postPolicyDeploy)
+	s.Api.GET("/service/module", s.Service_Information)
 	s.Api.GET("/service/upload", s.getUpload)
 	s.Api.POST("/service/upload", s.Upload_Config)
 	s.Api.POST("/service/configure", s.Configure_Service)
@@ -60,6 +65,54 @@ func (s *Server) Execute_Webhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
 	} else {
 		c.JSON(http.StatusOK, nil)
+	}
+}
+
+func (s *Server) Service_Information(c *gin.Context) {
+	service := c.Query("service")
+	resource := c.Query("resource")
+
+	switch resource {
+		case "policy":
+			if svc, ok := s.LCM.Services[service]; ok {
+				policies := svc.Config.Policy
+				bytePolicies, err := json.Marshal(policies)
+				if err != nil {
+					log.Printf("Error marshalling policies: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+					return
+				}
+				var jsonPolicies interface{}
+				if err := json.Unmarshal(bytePolicies, &jsonPolicies); err != nil {
+					log.Printf("Error unmarshalling policies: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"policies": jsonPolicies})
+			} else {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Service not found"})
+			}
+		case "module":
+			if svc, ok := s.LCM.Services[service]; ok {
+				modules := svc.Config.Module
+				byteModules, err := json.Marshal(modules)
+				if err != nil {
+					log.Printf("Error marshalling modules: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+					return
+				}
+				var jsonModules interface{}
+				if err := json.Unmarshal(byteModules, &jsonModules); err != nil {
+					log.Printf("Error unmarshalling modules: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"modules": jsonModules})
+			} else {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Service not found"})
+			}
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid resource type"})
 	}
 }
 
