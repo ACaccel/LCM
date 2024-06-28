@@ -13,6 +13,7 @@ import (
 type ListNode struct {
 	description struct {
 		nodeName	string
+		nodeType	string
 		i.NumPort
 	}
 	baseNode *i.IPolicyNode
@@ -34,8 +35,9 @@ type PolicyList struct {
  * Method: ListNode
  */
 
-func (node *ListNode) init(name string, numInput int, numOutput int, baseNode *i.IPolicyNode) {
-	node.description.nodeName = name
+func (node *ListNode) init(nodeName string, nodeType string, numInput int, numOutput int, baseNode *i.IPolicyNode) {
+	node.description.nodeName = nodeName
+	node.description.nodeType = nodeType
 	node.description.NumInput = numInput
 	node.description.NumOutput = numOutput
 	node.baseNode = baseNode
@@ -101,7 +103,7 @@ func (node *ListNode) execute(content []any, info i.ExecInfo) {
 
 func (node *ListNode) setPacketReady() {
 	for _, output := range node.packet.output {
-		output.setReady(true)
+		output.setReady()
 	}
 }
 
@@ -123,10 +125,11 @@ func (list *PolicyList) init() {
 	list.NodeSet = make(map[string]*ListNode)
 }
 
-func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, numPort i.NumPort) {
+func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, nodeType string, numPort i.NumPort) {
 	var node *ListNode = new(ListNode)
 	node.init(
 		nodeName,
+		nodeType,
 		numPort.NumInput,
 		numPort.NumOutput,
 		policyNode,
@@ -135,10 +138,11 @@ func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, num
 	list.NodeSet[node.description.nodeName] = node
 }
 
-func (list *PolicyList) initTrigger(policyNode *i.IPolicyNode, triggerName string) {
+func (list *PolicyList) initTrigger(policyNode *i.IPolicyNode, triggerName string, triggerType string) {
 	var node *ListNode = new(ListNode)
 	node.init(
 		triggerName,
+		triggerType,
 		0,
 		1,
 		policyNode,

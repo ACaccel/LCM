@@ -9,7 +9,7 @@ type Property struct {
 }
 
 var Description = i.NodeDescription{
-	NodeType: "If",
+	NodeType: "Module",
 	NumInputPort: 1,
 	NumOutputPort: 2,
 }
@@ -24,25 +24,6 @@ type Module struct {
 	outPort []struct {
 		nodePort int
 		node *ListNode
-	}
-}
-
-func (n *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
-	var newInfo = i.ExecInfo{
-		ActiveInPort: n.inPort[info.ActiveInPort].nodePort,
-		UseShared: true,
-		SharedContent: input[info.ActiveInPort],
-	}
-
-	nextPath := n.moduleTask(n.inPort[info.ActiveInPort].node, newInfo)
-	output := make(i.NodeOutput, n.config.NumOutPort)
-	for i := 0; i < n.config.NumOutPort; i++ {
-		output[i] = n.outPort[i].node.packet.output[n.outPort[i].nodePort].rawContent()
-	}
-	
-	return i.NodeExecResult{
-		Output: output,
-		Ports: nextPath,
 	}
 }
 
@@ -97,11 +78,36 @@ func initModule(nodeConfig i.NodeConfig, modules map[string]i.ModuleConfig) (*i.
 	return &node, numPort
 }
 
-func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
+func (m *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
+	m.policy.Cleaner()
+
+	var newInfo = i.ExecInfo{
+		ActiveInPort: m.inPort[info.ActiveInPort].nodePort,
+		UseShared: true,
+		SharedContent: input[info.ActiveInPort],
+	}
+	chnextPath := make(chan []int)
+	go m.moduleTask(m.inPort[info.ActiveInPort].node, newInfo, chnextPath)
+
+	nextPath := <-chnextPath
+	output := make(i.NodeOutput, m.config.NumOutPort)
+	for i := 0; i < m.config.NumOutPort; i++ {
+		output[i] = m.outPort[i].node.packet.output[m.outPort[i].nodePort].rawContent()
+	}
+	
+	return i.NodeExecResult{
+		Output: output,
+		Ports: nextPath,
+	}
+}
+
+// change moduleTask to goroutine
+func (m *Module) moduleTask(node *ListNode, info i.ExecInfo, chnextPath chan []int) {
 	// check if all input is ready
 	for _, input := range node.packet.input {
 		if input != nil && !input.isReady() {
-			return []int{}
+			chnextPath <- []int{}
+			return
 		}
 	}
 
@@ -109,15 +115,17 @@ func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
 	node.execute(node.getInputContent(info), info)
 
 	// return when reaching the end of the policy
-	for i, outport := range n.outPort {
+	for i, outport := range m.outPort {
 		if outport.node == node {
 			nextPath := []int{}
 			for _, path := range node.nextPath {
-				if path == n.outPort[i].nodePort {
+				if path == m.outPort[i].nodePort {
 					nextPath = append(nextPath, i)
 				}
 			}
-			return nextPath
+
+			chnextPath <- nextPath
+			return
 		}
 	}
 	
@@ -130,9 +138,11 @@ func (n *Module) moduleTask(node *ListNode, info i.ExecInfo) ([]int) {
 				UseShared: false,
 				SharedContent: nil,
 			}
-			nextPath = append(nextPath, n.moduleTask(node.next[port], newInfo)...)
+			var newChnextPath = make(chan []int)
+			go m.moduleTask(node.next[port], newInfo, newChnextPath)
+			nextPath = append(nextPath, <-newChnextPath...)
 		}
 	}
 
-	return nextPath
+	chnextPath <- nextPath
 }

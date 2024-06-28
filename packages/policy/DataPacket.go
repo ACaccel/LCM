@@ -16,7 +16,7 @@ type dataPacket struct {
 		content		i.DataPacketContent
 	}
 	transFormat		map[string]string
-	ready   		bool
+	ready   		chan bool
 }
 
 func newDataPacket() *dataPacket {
@@ -26,7 +26,7 @@ func newDataPacket() *dataPacket {
 	packet.output.outPort = -1
 	packet.output.content = nil
 	packet.transFormat = nil
-	packet.ready = false
+	packet.ready = make(chan bool, 1)
 	return &packet
 }
 
@@ -87,7 +87,8 @@ func (packet *dataPacket) isValid() bool {
 func (packet *dataPacket) clean() {
 	packet.input.content = nil
 	packet.output.content = nil
-	packet.ready = false
+	close(packet.ready)
+	packet.ready = make(chan bool, 1)
 }
 
 func (packet *dataPacket) setInPort(port int) {
@@ -121,10 +122,15 @@ func (packet *dataPacket) setTransFormat(transFormat map[string]string) {
 	packet.transFormat = transFormat
 }
 
-func (packet *dataPacket) setReady(ready bool){
-	packet.ready = ready
+func (packet *dataPacket) setReady(){
+	packet.ready <- true
 }
 
 func (packet *dataPacket) isReady() bool {
-	return packet.ready
+	select {
+	case <-packet.ready:
+		return true
+	default:
+		return false
+	}
 }

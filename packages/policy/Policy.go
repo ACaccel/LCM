@@ -33,7 +33,7 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 
 	for _, triggerConfig := range pConfig.PolicyTrigger {
 		trigger := nodes.NewTrigger(triggerConfig)
-		policyList.initTrigger(trigger, triggerConfig.NodeName)
+		policyList.initTrigger(trigger, triggerConfig.NodeName, triggerConfig.NodeType)
 	}
 
 	for _, nodeConfig := range pConfig.PolicyNode {
@@ -43,14 +43,14 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 				log.Println("Policy: Module not found", nodeConfig.NodeName)
 				continue
 			}
-			policyList.initNode(functionNode, nodeConfig.NodeName, numPort)
+			policyList.initNode(functionNode, nodeConfig.NodeName, nodeConfig.NodeType, numPort)
 		} else {
 			functionNode, numPort := nodes.NewNode(nodeConfig)
 			if functionNode == nil {
 				log.Println("Policy: Node not found", nodeConfig.NodeName)
 				continue
 			}
-			policyList.initNode(functionNode, nodeConfig.NodeName, numPort)
+			policyList.initNode(functionNode, nodeConfig.NodeName, nodeConfig.NodeType, numPort)
 		}
 	}
 
@@ -71,7 +71,7 @@ func (p *Policy) Execute(triggerNode *ListNode, content any) {
 		UseShared: true,
 		SharedContent: content,
 	}
-	policyTask(triggerNode, newInfo)
+	go policyTask(triggerNode, newInfo)
 }
 
 func (p *Policy) Cleaner() {
@@ -93,9 +93,6 @@ func policyTask(node *ListNode, info i.ExecInfo) {
 	// check if all input is ready
 	for _, input := range node.packet.input {
 		if input != nil && !input.isReady() {
-			// Todo: currently, I let the last subPolicy which is connected with the node to execute the node 
-			// (when all packets are ready)
-			// The poilcy Task should be replaced by something like threads or go routines
 			return
 		}
 	}
@@ -111,7 +108,7 @@ func policyTask(node *ListNode, info i.ExecInfo) {
 				UseShared: false,
 				SharedContent: nil,
 			}
-			policyTask(node.next[port], newInfo)
+			go policyTask(node.next[port], newInfo)
 		}
 	}
 }
