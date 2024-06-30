@@ -67,8 +67,8 @@ func (node *ListNode) pushNextNode(next *ListNode, portPair [2]int) {
 
 func (node *ListNode) getInputContent(info i.ExecInfo) []any {
 	// content for trigger node
-	if info.UseShared {
-		return []any{info.SharedContent}
+	if info.UseContent {
+		return []any{info.Content}
 	}
 
 	// extract content from input packet array

@@ -53,6 +53,17 @@ func (s *Service)Deploy(policy string) error {
 	var newPolicy p.Policy = p.Policy{}
 	newPolicy.Init(policyConfig, s.Modules)
 	s.Policies[policy] = newPolicy
+
+	// execute the policy
+	for _, trigger := range newPolicy.Triggers {
+		if trigger.NodeType == "Webhook" {
+			
+		} else if trigger.NodeType == "Interval" {
+
+		} else {
+
+		}
+	}
 	return nil
 }
 

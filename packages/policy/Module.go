@@ -83,8 +83,8 @@ func (m *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 
 	var newInfo = i.ExecInfo{
 		ActiveInPort: m.inPort[info.ActiveInPort].nodePort,
-		UseShared: true,
-		SharedContent: input[info.ActiveInPort],
+		UseContent: true,
+		Content: input[info.ActiveInPort],
 	}
 	chnextPath := make(chan []int)
 	go m.moduleTask(m.inPort[info.ActiveInPort].node, newInfo, chnextPath)
@@ -135,8 +135,7 @@ func (m *Module) moduleTask(node *ListNode, info i.ExecInfo, chnextPath chan []i
 		if node.next[port] != nil {
 			var newInfo = i.ExecInfo{
 				ActiveInPort: node.packet.output[port].outPort(),
-				UseShared: false,
-				SharedContent: nil,
+				UseContent: false,
 			}
 			var newChnextPath = make(chan []int)
 			go m.moduleTask(node.next[port], newInfo, newChnextPath)

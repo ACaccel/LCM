@@ -21,7 +21,8 @@ func (l *LCM_Enabler) Execute_Webhook(service_name string, event_type string, co
 		for _, trigger := range policy.Triggers {
 			if trigger.NodeType == "Webhook" && policy.Description.PolicyType == event_type {
 				headNode := policy.PolicyList.NodeSet[trigger.NodeName]
-				policy.Execute(headNode, content)
+				policy.Execute(headNode, nil)
+				policy.WebhookChMap[trigger.NodeName] <- content
 			}
 		}
 	}

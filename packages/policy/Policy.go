@@ -15,8 +15,9 @@ type Policy struct {
 		PolicyName string
 		PolicyType string
 	}
-	Triggers   []i.NodeConfig
-	PolicyList *PolicyList
+	Triggers   		[]i.NodeConfig
+	WebhookChMap 	map[string]chan any
+	PolicyList 		*PolicyList
 }
 
 /*
@@ -27,6 +28,7 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 	p.Description.PolicyName = pConfig.PolicyName
 	p.Description.PolicyType = pConfig.PolicyType
 	p.Triggers = pConfig.PolicyTrigger
+	p.WebhookChMap = make(map[string]chan any)
 
 	var policyList *PolicyList = new(PolicyList)
 	policyList.init()
@@ -34,6 +36,9 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 	for _, triggerConfig := range pConfig.PolicyTrigger {
 		trigger := nodes.NewTrigger(triggerConfig)
 		policyList.initTrigger(trigger, triggerConfig.NodeName, triggerConfig.NodeType)
+		if triggerConfig.NodeType == "Webhook" {
+			p.WebhookChMap[triggerConfig.NodeName] = make(chan any)
+		}
 	}
 
 	for _, nodeConfig := range pConfig.PolicyNode {
@@ -66,10 +71,16 @@ func (p *Policy) Execute(triggerNode *ListNode, content any) {
 
 	p.Cleaner()
 
-	newInfo := i.ExecInfo{
-		ActiveInPort: -1,
-		UseShared: true,
-		SharedContent: content,
+	var newInfo i.ExecInfo
+	if triggerNode.description.nodeType == "Webhook" {
+		newInfo = i.ExecInfo{
+			UseContent: false,
+			WebhookChannel: p.WebhookChMap[triggerNode.description.nodeName],
+		}
+	} else {
+		newInfo = i.ExecInfo{
+			UseContent: false,
+		}
 	}
 	go policyTask(triggerNode, newInfo)
 }
@@ -105,8 +116,7 @@ func policyTask(node *ListNode, info i.ExecInfo) {
 		if node.next[port] != nil {
 			var newInfo = i.ExecInfo{
 				ActiveInPort: node.packet.output[port].outPort(),
-				UseShared: false,
-				SharedContent: nil,
+				UseContent: false,
 			}
 			go policyTask(node.next[port], newInfo)
 		}
