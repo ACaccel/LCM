@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"log"
 
 	i "lcm/packages/interfaces"
@@ -11,13 +12,13 @@ import (
  */
 
 type ListNode struct {
-	description struct {
-		nodeName	string
-		nodeType	string
+	Description struct {
+		NodeName	string
+		NodeType	string
 		i.NumPort
 	}
 	baseNode *i.IPolicyNode
-	next	[]*ListNode
+	Next	[]*ListNode
 	prev	[]*ListNode
 
 	packet struct {
@@ -36,43 +37,35 @@ type PolicyList struct {
  */
 
 func (node *ListNode) init(nodeName string, nodeType string, numInput int, numOutput int, baseNode *i.IPolicyNode) {
-	node.description.nodeName = nodeName
-	node.description.nodeType = nodeType
-	node.description.NumInput = numInput
-	node.description.NumOutput = numOutput
+	node.Description.NodeName = nodeName
+	node.Description.NodeType = nodeType
+	node.Description.NumInput = numInput
+	node.Description.NumOutput = numOutput
 	node.baseNode = baseNode
-	node.next = make([]*ListNode, numOutput)
+	node.Next = make([]*ListNode, numOutput)
 	node.prev = make([]*ListNode, numInput)
 
 	node.packet.input = make([]*dataPacket, numInput)
 	node.packet.output = make([]*dataPacket, numOutput)
 	for i := 0; i < numOutput; i++ {
-		node.packet.output[i] = newDataPacket()
+		node.packet.output[i] = newDataPacket(fmt.Sprintf("%s-output-%d", nodeName, i))
 	}
 	node.nextPath = make([]int, 0)
 }
 
 func (node *ListNode) pushNextNode(next *ListNode, portPair [2]int) {
-	node.next[portPair[0]] = next
+	node.Next[portPair[0]] = next
 	next.prev[portPair[1]] = node
 }
 
-// func (node *ListNode) popNextNode(port int) {
-// 	node.next[port] = nil
-// }
-
-// func (node *ListNode) popPrevNode(port int) {
-// 	node.prev[port] = nil
-// }
-
 func (node *ListNode) getInputContent(info i.ExecInfo) []any {
 	// content for trigger node
-	if info.UseContent {
+	if info.Content != nil {
 		return []any{info.Content}
 	}
 
 	// extract content from input packet array
-	var inputContent []any = make([]any, node.description.NumInput)
+	var inputContent []any = make([]any, node.Description.NumInput)
 	for i, input := range node.packet.input {
 		if input != nil {
 			err := input.transform()
@@ -89,15 +82,25 @@ func (node *ListNode) getInputContent(info i.ExecInfo) []any {
 	return inputContent
 }
 
-func (node *ListNode) execute(content []any, info i.ExecInfo) {
-	// update output packet and nextPath
-	res := (*node.baseNode).Execute(content, info)
+func (node *ListNode) TriggerExecute(info i.ExecInfo) {
+	(*node.baseNode).Execute([]any{}, info)
+}
 
+func (node *ListNode) execute(info i.ExecInfo) {
+	content := node.getInputContent(info)
+	res := (*node.baseNode).Execute(content, info)
+	
+	// update output packet and nextPath
 	for i, output := range res.Output {
 		node.packet.output[i].setContent(output)
 	}
 	node.nextPath = res.Ports
 
+	node.setPacketReady()
+}
+
+func (node *ListNode) setTriggerReady(content i.NodeOutput) {
+	node.packet.output[0].setContent(content[0])
 	node.setPacketReady()
 }
 
@@ -135,10 +138,10 @@ func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, nod
 		policyNode,
 	)
 
-	list.NodeSet[node.description.nodeName] = node
+	list.NodeSet[node.Description.NodeName] = node
 }
 
-func (list *PolicyList) initTrigger(policyNode *i.IPolicyNode, triggerName string, triggerType string) {
+func (list *PolicyList) initTrigger(policyNode *i.IPolicyNode, triggerName string, triggerType string) *ListNode {
 	var node *ListNode = new(ListNode)
 	node.init(
 		triggerName,
@@ -148,7 +151,8 @@ func (list *PolicyList) initTrigger(policyNode *i.IPolicyNode, triggerName strin
 		policyNode,
 	)
 
-	list.NodeSet[node.description.nodeName] = node
+	list.NodeSet[node.Description.NodeName] = node
+	return node
 }
 
 func (list *PolicyList) connectNode(policyPath i.ConnectionUnit) {

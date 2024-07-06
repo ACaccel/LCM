@@ -11,7 +11,7 @@ type Service struct {
 	SvcName			string
 
 	Config 			i.ServiceConfig
-	Policies		map[string]p.Policy
+	Policies		map[string]*p.Policy
 	Modules			map[string]i.ModuleConfig
 }
 
@@ -19,7 +19,7 @@ func InitService(config i.ServiceConfig) *Service {
 	var service Service = Service{
 		SvcName: config.SvcName,
 		Config: config,
-		Policies: make(map[string]p.Policy),
+		Policies: make(map[string]*p.Policy),
 		Modules: make(map[string]i.ModuleConfig),
 	}
 
@@ -52,18 +52,21 @@ func (s *Service)Deploy(policy string) error {
 
 	var newPolicy p.Policy = p.Policy{}
 	newPolicy.Init(policyConfig, s.Modules)
-	s.Policies[policy] = newPolicy
+	s.Policies[policy] = &newPolicy
 
-	// execute the policy
+	// execute the trigger node and the policy
 	for _, trigger := range newPolicy.Triggers {
-		if trigger.NodeType == "Webhook" {
-			
-		} else if trigger.NodeType == "Interval" {
-
-		} else {
-
+		info := i.ExecInfo{
+			WebhookCh: newPolicy.WebhookChMap[trigger.Description.NodeName],
+			TriggerCh: newPolicy.TriggerCh,
+			StatusCh: newPolicy.StatusCh,
 		}
+		go trigger.TriggerExecute(info)
+
+		newPolicy.Status = true
+		go newPolicy.Execute(trigger)
 	}
+
 	return nil
 }
 

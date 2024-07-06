@@ -83,7 +83,6 @@ func (m *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 
 	var newInfo = i.ExecInfo{
 		ActiveInPort: m.inPort[info.ActiveInPort].nodePort,
-		UseContent: true,
 		Content: input[info.ActiveInPort],
 	}
 	chnextPath := make(chan []int)
@@ -112,7 +111,7 @@ func (m *Module) moduleTask(node *ListNode, info i.ExecInfo, chnextPath chan []i
 	}
 
 	// execute node and update the status
-	node.execute(node.getInputContent(info), info)
+	node.execute(info)
 
 	// return when reaching the end of the policy
 	for i, outport := range m.outPort {
@@ -132,13 +131,12 @@ func (m *Module) moduleTask(node *ListNode, info i.ExecInfo, chnextPath chan []i
 	// execute next node
 	nextPath := []int{}
 	for _, port := range node.nextPath {
-		if node.next[port] != nil {
+		if node.Next[port] != nil {
 			var newInfo = i.ExecInfo{
 				ActiveInPort: node.packet.output[port].outPort(),
-				UseContent: false,
 			}
 			var newChnextPath = make(chan []int)
-			go m.moduleTask(node.next[port], newInfo, newChnextPath)
+			go m.moduleTask(node.Next[port], newInfo, newChnextPath)
 			nextPath = append(nextPath, <-newChnextPath...)
 		}
 	}

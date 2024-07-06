@@ -19,10 +19,8 @@ type LCM_Enabler struct {
 func (l *LCM_Enabler) Execute_Webhook(service_name string, event_type string, content any) error {
 	for _, policy := range l.Services[service_name].Policies {
 		for _, trigger := range policy.Triggers {
-			if trigger.NodeType == "Webhook" && policy.Description.PolicyType == event_type {
-				headNode := policy.PolicyList.NodeSet[trigger.NodeName]
-				policy.Execute(headNode, nil)
-				policy.WebhookChMap[trigger.NodeName] <- content
+			if trigger.Description.NodeType == "Webhook" && policy.Description.PolicyType == event_type {
+				policy.WebhookChMap[trigger.Description.NodeName] <- content
 			}
 		}
 	}

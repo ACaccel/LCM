@@ -10,9 +10,10 @@ type IPolicyNode interface {
 
 type ExecInfo struct {
 	ActiveInPort  	int
-	UseContent 	 	bool
 	Content 		any
-	WebhookChannel 	chan any
+	WebhookCh 		chan any
+	TriggerCh  		chan NodeOutput
+	StatusCh chan bool
 }
 
 type NodeExecResult struct {

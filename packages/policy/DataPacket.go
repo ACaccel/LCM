@@ -2,11 +2,12 @@ package policy
 
 import (
 	"errors"
-	"strings"
 	i "lcm/packages/interfaces"
+	"strings"
 )
 
 type dataPacket struct {
+	name 			string
 	input	struct {
 		inPort		int
 		content		i.DataPacketContent
@@ -19,8 +20,9 @@ type dataPacket struct {
 	ready   		chan bool
 }
 
-func newDataPacket() *dataPacket {
+func newDataPacket(name string) *dataPacket {
 	packet := dataPacket{}
+	packet.name = name
 	packet.input.inPort = -1
 	packet.input.content = nil
 	packet.output.outPort = -1
@@ -127,10 +129,6 @@ func (packet *dataPacket) setReady(){
 }
 
 func (packet *dataPacket) isReady() bool {
-	select {
-	case <-packet.ready:
-		return true
-	default:
-		return false
-	}
+	ready := <-packet.ready
+	return ready
 }

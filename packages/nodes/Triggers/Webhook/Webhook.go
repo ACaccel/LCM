@@ -19,15 +19,23 @@ type Webhook struct {
 }
 
 func (n *Webhook) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
-	content := <-info.WebhookChannel
-	output, err := u.GetRawInputContent(content)
-	if err != nil {
-		fmt.Println("Webhook: Execute function", n.Config.NodeName, "Error:", err)
+	status := true
+	for status {
+		select {
+			case policyStatus := <-info.StatusCh:
+				status = policyStatus
+			case content := <-info.WebhookCh:
+				output, err := u.GetRawInputContent(content)
+				if err != nil {
+					fmt.Println("Webhook: Execute function", n.Config.NodeName, "Error:", err)
+				}
+				fmt.Println("Webhook: Execute function", n.Config.NodeName)
+				info.TriggerCh <- output
+		}
 	}
 
-	fmt.Println("Webhook: Execute function", n.Config.NodeName)
 	return i.NodeExecResult{
-		Output: output,
+		Output: i.NodeOutput{},
 		Ports: []int{0},
 	}
 }
