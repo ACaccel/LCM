@@ -82,7 +82,10 @@ func (p *Policy) Execute(triggerNode *ListNode) {
 			p.Cleaner()	// todo: 1. clean channel and start cleaning after triggers; 2. clean ticker inside interval trigger
 			triggerNode.setTriggerReady(content)
 			info := i.ExecInfo{}
-			go policyTask(triggerNode.Next[0], info)
+			
+			if triggerNode.Next[0] != nil {
+				go policyTask(triggerNode.Next[0], info)
+			}
 		}
 	}
 }

@@ -34,8 +34,5 @@ func (n *Webhook) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 		}
 	}
 
-	return i.NodeExecResult{
-		Output: i.NodeOutput{},
-		Ports: []int{0},
-	}
+	return i.NodeExecResult{}
 }
