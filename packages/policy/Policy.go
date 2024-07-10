@@ -79,7 +79,7 @@ func (p *Policy) Execute(triggerNode *ListNode) {
 		case status := <-p.StatusCh: // todo: broadcast to all triggers to terminate
 			p.Status = status
 		case content := <-p.TriggerCh:
-			p.Cleaner()	// todo: 1. clean channel and start cleaning after triggers; 2. clean ticker inside interval trigger
+			p.Clean()
 			triggerNode.setTriggerReady(content)
 			info := i.ExecInfo{}
 			
@@ -90,18 +90,9 @@ func (p *Policy) Execute(triggerNode *ListNode) {
 	}
 }
 
-func (p *Policy) Cleaner() {
-	for _, trigger := range p.Triggers {
-		policyCleaner(p.PolicyList.NodeSet[trigger.Description.NodeName])
-	}
-}
-
-func policyCleaner(node *ListNode) {
-	node.clean()
-	for _, node := range node.Next {
-		if node != nil {
-			policyCleaner(node)
-		}
+func (p *Policy) Clean() {
+	for _, node := range p.PolicyList.NodeSet {
+		node.clean()
 	}
 }
 

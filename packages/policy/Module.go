@@ -4,10 +4,6 @@ import (
 	i "lcm/packages/interfaces"
 )
 
-type Property struct {
-	
-}
-
 var Description = i.NodeDescription{
 	NodeType: "Module",
 	NumInputPort: 1,
@@ -16,7 +12,7 @@ var Description = i.NodeDescription{
 
 type Module struct {
 	config i.ModuleConfig
-	policy Policy
+	policy *Policy
 	inPort []struct {
 		nodePort int
 		node *ListNode
@@ -51,7 +47,7 @@ func initModule(nodeConfig i.NodeConfig, modules map[string]i.ModuleConfig) (*i.
 		PolicyPath: module.config.ModulePath,
 	}
 	modulePolicy.Init(policyConfig, modules)
-	module.policy = modulePolicy
+	module.policy = &modulePolicy
 	
 	// module port setup
 	module.inPort = make([]struct{nodePort int; node *ListNode}, module.config.NumInPort)
@@ -79,7 +75,7 @@ func initModule(nodeConfig i.NodeConfig, modules map[string]i.ModuleConfig) (*i.
 }
 
 func (m *Module) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
-	m.policy.Cleaner()
+	m.policy.Clean()
 
 	var newInfo = i.ExecInfo{
 		ActiveInPort: m.inPort[info.ActiveInPort].nodePort,
