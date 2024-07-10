@@ -18,9 +18,11 @@ type Policy struct {
 	Triggers   		[] *ListNode
 	WebhookChMap 	map[string]chan any
 	TriggerCh 		chan i.NodeOutput
-	Status 			bool
 	StatusCh 		chan bool
+	TriggerStatusCh map[string]chan bool
 	PolicyList 		*PolicyList
+	
+	status 			bool
 }
 
 /*
@@ -32,8 +34,9 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 	p.Description.PolicyType = pConfig.PolicyType
 	p.WebhookChMap = make(map[string]chan any)
 	p.TriggerCh = make(chan i.NodeOutput)
-	p.Status = false
+	p.status = false
 	p.StatusCh = make(chan bool)
+	p.TriggerStatusCh = make(map[string]chan bool)
 	var policyList *PolicyList = new(PolicyList)
 	policyList.init()
 
@@ -43,6 +46,7 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 		if triggerConfig.NodeType == "Webhook" {
 			p.WebhookChMap[triggerConfig.NodeName] = make(chan any)
 		}
+		p.TriggerStatusCh[triggerConfig.NodeName] = make(chan bool)
 		p.Triggers = append(p.Triggers, triggerNode)
 	}
 
@@ -74,10 +78,15 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 func (p *Policy) Execute(triggerNode *ListNode) {
 	log.Println("Policy: Execute policy", p.Description.PolicyName)
 
-	for p.Status {
+	p.status = <-p.StatusCh
+	for p.status {
 		select {
 		case status := <-p.StatusCh: // todo: broadcast to all triggers to terminate
-			p.Status = status
+			for _, trigger := range p.Triggers {
+				p.TriggerStatusCh[trigger.Description.NodeName] <- status
+			}
+			p.status = status
+			p.Clean()
 		case content := <-p.TriggerCh:
 			p.Clean()
 			triggerNode.setTriggerReady(content)
@@ -88,6 +97,8 @@ func (p *Policy) Execute(triggerNode *ListNode) {
 			}
 		}
 	}
+
+	log.Println("Policy: Terminate policy", p.Description.PolicyName)
 }
 
 func (p *Policy) Clean() {

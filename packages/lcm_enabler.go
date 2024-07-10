@@ -44,7 +44,6 @@ func (l *LCM_Enabler) Deploy_Policy(svcName string, policies []string) error {
 
 func (l *LCM_Enabler) Undeploy_Policy(svcName string, policies []string) error {
 	for _, policyName := range policies {
-		// check if policy already deployed
 		err := l.Services[svcName].Undeploy(policyName)
 		if err != nil {
 			return err

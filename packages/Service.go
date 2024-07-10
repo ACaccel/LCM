@@ -8,19 +8,19 @@ import (
 )
 
 type Service struct {
-	SvcName			string
+	SvcName string
 
-	Config 			i.ServiceConfig
-	Policies		map[string]*p.Policy
-	Modules			map[string]i.ModuleConfig
+	Config   i.ServiceConfig
+	Policies map[string]*p.Policy
+	Modules  map[string]i.ModuleConfig
 }
 
 func InitService(config i.ServiceConfig) *Service {
 	var service Service = Service{
-		SvcName: config.SvcName,
-		Config: config,
+		SvcName:  config.SvcName,
+		Config:   config,
 		Policies: make(map[string]*p.Policy),
-		Modules: make(map[string]i.ModuleConfig),
+		Modules:  make(map[string]i.ModuleConfig),
 	}
 
 	for _, module := range config.Module {
@@ -30,7 +30,7 @@ func InitService(config i.ServiceConfig) *Service {
 	return &service
 }
 
-func (s *Service)Deploy(policy string) error {
+func (s *Service) Deploy(policy string) error {
 	// check if policy already deployed
 	for policyName, _ := range s.Policies {
 		if policyName == policy {
@@ -59,37 +59,36 @@ func (s *Service)Deploy(policy string) error {
 		info := i.ExecInfo{
 			WebhookCh: newPolicy.WebhookChMap[trigger.Description.NodeName],
 			TriggerCh: newPolicy.TriggerCh,
-			StatusCh: newPolicy.StatusCh,
+			StatusCh:  newPolicy.TriggerStatusCh[trigger.Description.NodeName],
 		}
 		go trigger.TriggerExecute(info)
 
-		newPolicy.Status = true
 		go newPolicy.Execute(trigger)
+		newPolicy.StatusCh <- true
 	}
 
 	return nil
 }
 
-func (s *Service)Undeploy(policy string) error {
-	// check if the policy already deployed
-	for policyName, _ := range s.Policies {
-		if policyName == policy {
-			delete(s.Policies, policy)
-			return nil
-		}
+func (s *Service) Undeploy(policy string) error {
+	p, ok := s.Policies[policy]
+	if !ok {
+		return errors.New("policy " + policy + " not found")
 	}
-	return errors.New("policy " + policy + " not found")
+	p.StatusCh <- false
+	delete(s.Policies, policy)
+	return nil
 }
 
-func (s *Service)Configure(config i.ServiceConfig) error {
+func (s *Service) Configure(config i.ServiceConfig) error {
 	// check if any policy is deployed
 	if len(s.Policies) > 0 {
 		return errors.New("service has deployed policies")
 	}
-	
+
 	// configuration
 	s.Config = config
-	
+
 	s.Modules = make(map[string]i.ModuleConfig)
 	for _, module := range config.Module {
 		s.Modules[module.ModuleName] = module

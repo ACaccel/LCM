@@ -25,16 +25,18 @@ func (n *Interval) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	output := i.NodeOutput{nil}
 
 	ticker := time.NewTicker(time.Duration(property.Interval * int(time.Second)))
-	quit := make(chan struct{})
 	go func() {
-		for {
+		status := true
+		for status {
 			select {
-				case <- ticker.C:
+				case <-ticker.C:
 					fmt.Println("Interval: Execute function", n.Config.NodeName)
 					info.TriggerCh <- output
-				case <- quit:
-					ticker.Stop()
-					return
+				case policyStatus := <-info.StatusCh:
+					status = policyStatus
+					if !status {
+						ticker.Stop()
+					}
 			}
 		}
 	}()
