@@ -1,4 +1,4 @@
-package Webhook
+package webhook
 
 import (
 	"fmt"
@@ -25,7 +25,7 @@ func (n *Webhook) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 			case policyStatus := <-info.StatusCh:
 				status = policyStatus
 			case content := <-info.WebhookCh:
-				output, err := u.GetRawInputContent(content)
+				output, err := u.EncodeMapNodeOutput(content)
 				if err != nil {
 					fmt.Println("Webhook: Execute function", n.Config.NodeName, "Error:", err)
 				}

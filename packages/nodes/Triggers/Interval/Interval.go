@@ -1,4 +1,4 @@
-package Interval
+package interval
 
 import (
 	"fmt"
@@ -24,7 +24,7 @@ func (n *Interval) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	u.GetProperty(n.Config.Property, &property)
 	output := i.NodeOutput{nil}
 
-	ticker := time.NewTicker(time.Duration(property.Interval * int(time.Second)))
+	ticker := time.NewTicker(time.Duration(time.Duration(property.Interval) * time.Second))
 	go func() {
 		status := true
 		for status {
