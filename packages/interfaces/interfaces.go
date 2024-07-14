@@ -36,8 +36,8 @@ type TriggerNode struct {
 }
 
 type NodeConfig struct {
-	NodeName    string	`json:"nodeName" yaml:"nodeName"`
-	NodeType	string	`json:"nodeType" yaml:"nodeType"`
+	NodeName    string	`json:"name" yaml:"name"`
+	NodeType	string	`json:"type" yaml:"type"`
 	Property 	any		`json:"property" yaml:"property"`
 }
 
@@ -56,13 +56,13 @@ type TriggerDescription struct {
  */
 
  type ModuleConfig struct {
-	ModuleName 	string `json:"moduleName" yaml:"moduleName"`
+	ModuleName 	string `json:"name" yaml:"name"`
 	NumInPort 	int `json:"numInPort" yaml:"numInPort"`
 	NumOutPort 	int `json:"numOutPort" yaml:"numOutPort"`
 	InPort      []ModulePortConfig `json:"inPort" yaml:"inPort"`
 	OutPort     []ModulePortConfig `json:"outPort" yaml:"outPort"`
-	ModuleNode	[]NodeConfig `json:"moduleNode" yaml:"moduleNode"`
-	ModulePath	[]ConnectionUnit `json:"modulePath" yaml:"modulePath"`
+	ModuleNode	[]NodeConfig `json:"node" yaml:"node"`
+	ModulePath	[]ConnectionUnit `json:"path" yaml:"path"`
 }
 
 type ModulePortConfig struct {
@@ -82,11 +82,11 @@ type ServiceConfig struct {
 }
 
 type PolicyConfig struct {
-	PolicyName    string 				`json:"policyName" yaml:"policyName"`	
-	PolicyType    string 				`json:"policyType" yaml:"policyType"`
-	PolicyTrigger []NodeConfig 			`json:"policyTrigger" yaml:"policyTrigger"`
-	PolicyNode    []NodeConfig 			`json:"policyNode" yaml:"policyNode"`
-	PolicyPath    []ConnectionUnit 		`json:"policyPath" yaml:"policyPath"`
+	PolicyName    string 				`json:"name" yaml:"name"`	
+	PolicyType    string 				`json:"type" yaml:"type"`
+	PolicyTrigger []NodeConfig 			`json:"trigger" yaml:"trigger"`
+	PolicyNode    []NodeConfig 			`json:"node" yaml:"node"`
+	PolicyPath    []ConnectionUnit 		`json:"path" yaml:"path"`
 }
 
 type ConnectionUnit struct {
