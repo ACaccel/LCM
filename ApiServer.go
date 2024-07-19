@@ -33,8 +33,8 @@ func (s *Server) InitApi() {
 	s.Api = s.Router.Group("/api")
 
 	s.Api.POST("/webhook", s.Execute_Webhook)
-	s.Api.GET("/service/resource", s.Service_Information)
-	s.Api.POST("/service/policy/deploy", s.postPolicyDeploy)
+	s.Api.GET("/service/:svc/resource/:rsc", s.Service_Information)
+	s.Api.POST("/service/policy/deploy", s.PolicyDeploy)
 	s.Api.GET("/service/upload", s.getUpload)
 	s.Api.POST("/service/upload", s.Upload_Config)
 	s.Api.POST("/service/configure", s.Configure_Service)
@@ -68,8 +68,8 @@ func (s *Server) Execute_Webhook(c *gin.Context) {
 }
 
 func (s *Server) Service_Information(c *gin.Context) {
-	service := c.Query("svc")
-	resource := c.Query("rsc")
+	service := c.Param("svc")
+	resource := c.Param("rsc")
 
 	switch resource {
 		case "policy":
@@ -115,14 +115,14 @@ func (s *Server) Service_Information(c *gin.Context) {
 	}
 }
 
-func (s *Server) postPolicyDeploy(c *gin.Context) {
+func (s *Server) PolicyDeploy(c *gin.Context) {
 	// parse request
 	var deploy_data i.DeployPolicy
 	if err := c.ShouldBindJSON(&deploy_data); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid postPolicyDeploy format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid PolicyDeploy format"})
 		return
 	}
-	log.Println("Policy Deploy: Received policy deploy post request", deploy_data)
+	log.Println("Policy Deploy: Received policy deploy request", deploy_data)
 
 	switch deploy_data.Type {
 	case "POLICY_DEPLOY":
@@ -138,7 +138,7 @@ func (s *Server) postPolicyDeploy(c *gin.Context) {
 		}
 		c.JSON(http.StatusOK, gin.H{"undeployed Policies": deploy_data.Policies})
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid postPolicyDeploy type"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid PolicyDeploy type"})
 	}
 }
 
