@@ -23,9 +23,7 @@ type Server struct {
 func InitServer() *Server {
 	return &Server{
 		Router: gin.Default(),
-		LCM:    &lcm.LCM_Enabler{
-			Services: make(map[string]*lcm.Service),
-		},
+		LCM:    lcm.Build_LCM(),
 	}
 }
 
@@ -35,7 +33,6 @@ func (s *Server) InitApi() {
 	s.Api.POST("/webhook", s.Execute_Webhook)
 	s.Api.GET("/service/:svc/resource/:rsc", s.Service_Information)
 	s.Api.POST("/service/policy/deploy", s.PolicyDeploy)
-	s.Api.GET("/service/upload", s.getUpload)
 	s.Api.POST("/service/upload", s.Upload_Config)
 	s.Api.POST("/service/configure", s.Configure_Service)
 }
@@ -140,11 +137,6 @@ func (s *Server) PolicyDeploy(c *gin.Context) {
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid PolicyDeploy type"})
 	}
-}
-
-func (s *Server) getUpload(c *gin.Context) {
-	s.Router.LoadHTMLFiles("./upload.html")
-	c.HTML(http.StatusOK, "upload.html", nil)
 }
 
 func (s *Server) Upload_Config(c *gin.Context) {

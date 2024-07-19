@@ -16,6 +16,12 @@ type LCM_Enabler struct {
 	Services map[string]*Service
 }
 
+func Build_LCM() *LCM_Enabler {
+	return &LCM_Enabler{
+		Services: make(map[string]*Service),
+	}
+}
+
 func (l *LCM_Enabler) Execute_Webhook(service_name string, event_type string, content any) error {
 	for _, policy := range l.Services[service_name].Policies {
 		for _, trigger := range policy.Triggers {
