@@ -55,7 +55,7 @@ type TriggerDescription struct {
  * Module
  */
 
- type ModuleConfig struct {
+type ModuleConfig struct {
 	ModuleName 	string `json:"name" yaml:"name"`
 	NumInPort 	int `json:"numInPort" yaml:"numInPort"`
 	NumOutPort 	int `json:"numOutPort" yaml:"numOutPort"`
@@ -92,7 +92,12 @@ type PolicyConfig struct {
 type ConnectionUnit struct {
 	NodePair 	[2]string 			`json:"nodePair" yaml:"nodePair"`
 	PortPair 	[2]int 				`json:"portPair" yaml:"portPair"`
-	TransFormat map[string]string 	`json:"transFormat" yaml:"transFormat"`
+	TransFormat TransFormat 		`json:"transFormat" yaml:"transFormat"`
+}
+
+type TransFormat []struct {
+	Src string
+	Dst string
 }
 
 type NumPort struct {

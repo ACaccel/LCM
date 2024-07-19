@@ -72,8 +72,6 @@ func (n *If) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 	if err != nil {
 		fmt.Println("If: Encode output error,", err)
 	}
-
-	fmt.Println("If: Execute function", n.Config.NodeName)
 	
 	return i.NodeExecResult{
 		Output: encoded_output,

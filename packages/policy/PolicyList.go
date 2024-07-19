@@ -87,6 +87,8 @@ func (node *ListNode) TriggerExecute(info i.ExecInfo) {
 }
 
 func (node *ListNode) execute(info i.ExecInfo) {
+	log.Println("Policy: Execute node", node.Description.NodeName)
+	
 	content := node.getInputContent(info)
 	res := (*node.baseNode).Execute(content, info)
 	

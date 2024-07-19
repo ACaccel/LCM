@@ -16,7 +16,7 @@ type dataPacket struct {
 		outPort		int
 		content		i.DataPacketContent
 	}
-	transFormat		map[string]string
+	transFormat		i.TransFormat
 	ready   		chan bool
 }
 
@@ -51,17 +51,25 @@ func (packet *dataPacket) transform() error {
 }
 
 // transform the content based on the transformation format.
-func transformContent(src i.DataPacketContent, transFormat map[string]string) (i.DataPacketContent, error) {
+func transformContent(src i.DataPacketContent, transFormat i.TransFormat) (i.DataPacketContent, error) {
     input := src
     output := make(map[string]any)
-    for dstField, srcField := range transFormat {
-        srcFieldPath := strings.Split(srcField, ".")
-        srcFieldValue := getMapFieldValue(input, srcFieldPath)
-        if srcFieldValue == nil {
-            return nil, errors.New("field " + srcField + " not found in src")
-        }
-        output[dstField] = srcFieldValue
-    }
+    // for dstField, srcField := range transFormat {
+    //     srcFieldPath := strings.Split(srcField, ".")
+    //     srcFieldValue := getMapFieldValue(input, srcFieldPath)
+    //     if srcFieldValue == nil {
+    //         return nil, errors.New("field " + srcField + " not found in src")
+    //     }
+    //     output[dstField] = srcFieldValue
+    // }
+	for _, format := range transFormat {
+		srcFieldPath := strings.Split(format.Src, ".")
+		srcFieldValue := getMapFieldValue(input, srcFieldPath)
+		if srcFieldValue == nil {
+			return nil, errors.New("field " + format.Src + " not found in src")
+		}
+		output[format.Dst] = srcFieldValue
+	}
     return output, nil
 }
 
@@ -120,7 +128,7 @@ func (packet *dataPacket) rawContent() i.DataPacketContent {
 	return packet.input.content
 }
 
-func (packet *dataPacket) setTransFormat(transFormat map[string]string) {
+func (packet *dataPacket) setTransFormat(transFormat i.TransFormat) {
 	packet.transFormat = transFormat
 }
 

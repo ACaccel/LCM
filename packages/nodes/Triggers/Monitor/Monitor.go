@@ -9,8 +9,6 @@ import (
 
 	i "lcm/packages/interfaces"
 	u "lcm/packages/nodes/utils"
-
-	"github.com/fatih/structs"
 )
 
 type InputFormat struct {
@@ -60,7 +58,7 @@ func (n *Monitor) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 		for status {
 			select {
 			case <-ticker.C:
-				fmt.Println("MonitorEvent: Execute function", n.Config.NodeName)
+				fmt.Println("MonitorEvent: Execute node", n.Config.NodeName)
 
 				// send request to monitoring tool
 				res, err := http.Get("http://localhost:4000/realTime")
@@ -75,6 +73,7 @@ func (n *Monitor) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 				if err := json.Unmarshal(resBody, &input); err != nil {
 					fmt.Println("MonitorEvent: Decode response body error,", err)
 				}
+
 
 				// event trigger
 				event := true
@@ -101,10 +100,9 @@ func (n *Monitor) Execute(input []any, info i.ExecInfo) i.NodeExecResult {
 				}
 
 				if event {
-					mapOutput := structs.Map(input)
-					output, err := u.EncodeMapNodeOutput(mapOutput)
+					output, err := u.EncodeTriggerOutput(input)
 					if err != nil {
-						fmt.Println("MonitorEvent: Execute function", n.Config.NodeName, "Error:", err)
+						fmt.Println("MonitorEvent: Encode output error,", err)
 					}
 					fmt.Println("MonitorEvent: output", output)
 					info.TriggerCh <- output

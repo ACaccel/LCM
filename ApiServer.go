@@ -33,9 +33,8 @@ func (s *Server) InitApi() {
 	s.Api = s.Router.Group("/api")
 
 	s.Api.POST("/webhook", s.Execute_Webhook)
-	s.Api.GET("/service/policy", s.Service_Information)
+	s.Api.GET("/service/resource", s.Service_Information)
 	s.Api.POST("/service/policy/deploy", s.postPolicyDeploy)
-	s.Api.GET("/service/module", s.Service_Information)
 	s.Api.GET("/service/upload", s.getUpload)
 	s.Api.POST("/service/upload", s.Upload_Config)
 	s.Api.POST("/service/configure", s.Configure_Service)
@@ -69,8 +68,8 @@ func (s *Server) Execute_Webhook(c *gin.Context) {
 }
 
 func (s *Server) Service_Information(c *gin.Context) {
-	service := c.Query("service")
-	resource := c.Query("resource")
+	service := c.Query("svc")
+	resource := c.Query("rsc")
 
 	switch resource {
 		case "policy":

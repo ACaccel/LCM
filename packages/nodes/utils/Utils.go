@@ -5,6 +5,7 @@ import (
 	i "lcm/packages/interfaces"
 
 	"github.com/mitchellh/mapstructure"
+	"github.com/fatih/structs"
 )
 
 // Get the node's property from src to dest (pointer to struct).
@@ -40,6 +41,17 @@ func EncodeOutput(src any, desc i.NodeDescription) (i.NodeOutput, error) {
 		encoded_output[i] = output
 	}
 	return encoded_output, nil
+}
+
+// Encode src (struct) to dest (i.NodeOutput type).
+// Only used in Trigger nodes.
+func EncodeTriggerOutput(src any) (i.NodeOutput, error) {
+	mapOutput := structs.Map(src)
+	output, err := EncodeMapNodeOutput(mapOutput)
+	if err != nil {
+		return nil, err
+	}
+	return output, nil
 }
 
 // Encode src (map) to dest (i.NodeOutput type).
