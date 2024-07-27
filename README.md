@@ -5,7 +5,7 @@
   - GET     /api/service/:service_Name
     - get the information of a service
     - `curl -X GET "localhost:8000/api/service/service-1"`
-  - POST    /api/service/ 
+  - POST    /api/service
     - register a service with post json body
     - `curl -X POST -H "Content-Type: application/json" -d '{"service_name":"service-1","module":[],"policy":[{"name":"policy-1","type":"default","trigger":[{"name":"interval-0","type":"Interval","property":{"Interval":1}}],"node":[],"path":[]}]}' localhost:8000/api/service`
   - PUT     /api/service
@@ -25,8 +25,6 @@
   - GET /api/service/:service_Name/policy/:policy_Name
     - get the information of a policy
     - `curl -X GET "localhost:8000/api/service/service-1/policy/policy-1"`
-  - POST /api/service/policy (todo)
-    - configure a service's policies
   - POST /api/service/policy/deploy
     - deploy/undeploy a service's policies
     - `curl -X POST -H "Content-Type: application/json" -d '{"SvcName":"service-1", "Type": "POLICY_DEPLOY", "Policies": ["policy-1"]}' localhost:8000/api/service/policy/deploy`
