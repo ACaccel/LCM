@@ -2,32 +2,25 @@ package policy
 
 import (
 	"errors"
-	i "lcm/packages/interfaces"
+	"fmt"
 	"strings"
+	i "lcm/packages/interfaces"
 )
 
 type dataPacket struct {
-	name 			string
-	input	struct {
-		inPort		int
-		content		i.DataPacketContent
-	}
-	output	struct {
-		outPort		int
-		content		i.DataPacketContent
-	}
-	transFormat		i.TransFormat
+	i.DataPacketInfo
+
 	ready   		chan bool
 }
 
-func newDataPacket(name string) *dataPacket {
+func newDataPacket(nodeName string, port int) *dataPacket {
 	packet := dataPacket{}
-	packet.name = name
-	packet.input.inPort = -1
-	packet.input.content = nil
-	packet.output.outPort = -1
-	packet.output.content = nil
-	packet.transFormat = nil
+	packet.Name = fmt.Sprintf("%s-output-%d", nodeName, port)
+	packet.Input.InPort = -1
+	packet.Input.Content = nil
+	packet.Output.OutPort = -1
+	packet.Output.Content = nil
+	packet.TransFormat = nil
 	packet.ready = make(chan bool, 1)
 	return &packet
 }
@@ -41,11 +34,11 @@ func (packet *dataPacket) transform() error {
         return errors.New("input content is not valid")
     }
 
-    output, err := transformContent(packet.input.content, packet.transFormat)
+    output, err := transformContent(packet.Input.Content, packet.TransFormat)
     if err != nil {
         return err
     }
-    packet.output.content = output
+    packet.Output.Content = output
     
     return nil
 }
@@ -54,14 +47,6 @@ func (packet *dataPacket) transform() error {
 func transformContent(src i.DataPacketContent, transFormat i.TransFormat) (i.DataPacketContent, error) {
     input := src
     output := make(map[string]any)
-    // for dstField, srcField := range transFormat {
-    //     srcFieldPath := strings.Split(srcField, ".")
-    //     srcFieldValue := getMapFieldValue(input, srcFieldPath)
-    //     if srcFieldValue == nil {
-    //         return nil, errors.New("field " + srcField + " not found in src")
-    //     }
-    //     output[dstField] = srcFieldValue
-    // }
 	for _, format := range transFormat {
 		srcFieldPath := strings.Split(format.Src, ".")
 		srcFieldValue := getMapFieldValue(input, srcFieldPath)
@@ -91,45 +76,45 @@ func getMapFieldValue(m map[string]any, fieldPath []string) any {
  */
 
 func (packet *dataPacket) isValid() bool {
-    return packet.input.content != nil
+    return packet.Input.Content != nil
 }
 
 func (packet *dataPacket) clean() {
-	packet.input.content = nil
-	packet.output.content = nil
+	packet.Input.Content = nil
+	packet.Output.Content = nil
 	close(packet.ready)
 	packet.ready = make(chan bool, 1)
 }
 
 func (packet *dataPacket) setInPort(port int) {
-	packet.input.inPort = port
+	packet.Input.InPort = port
 }
 
 func (packet *dataPacket) setOutPort(port int) {
-	packet.output.outPort = port
+	packet.Output.OutPort = port
 }
 
 func (packet *dataPacket) outPort() int {
-	return packet.output.outPort
+	return packet.Output.OutPort
 }
 
 func (packet *dataPacket) setContent(content i.DataPacketContent) {
-	packet.input.content = content
+	packet.Input.Content = content
 }
 
 func (packet *dataPacket) content() i.DataPacketContent {
-	return packet.output.content
+	return packet.Output.Content
 }
 
 func (packet *dataPacket) rawContent() i.DataPacketContent {
-	if packet.input.content == nil {
+	if packet.Input.Content == nil {
 		return i.DataPacketContent{}
 	}
-	return packet.input.content
+	return packet.Input.Content
 }
 
 func (packet *dataPacket) setTransFormat(transFormat i.TransFormat) {
-	packet.transFormat = transFormat
+	packet.TransFormat = transFormat
 }
 
 func (packet *dataPacket) setReady(){
@@ -139,4 +124,8 @@ func (packet *dataPacket) setReady(){
 func (packet *dataPacket) isReady() bool {
 	ready := <-packet.ready
 	return ready
+}
+
+func (packet *dataPacket) info() i.DataPacketInfo {
+	return packet.DataPacketInfo
 }

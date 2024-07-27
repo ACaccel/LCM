@@ -4,9 +4,11 @@ import (
 	"errors"
 	"io"
 	"os"
-	"encoding/json"
+	// "encoding/json"
 	"gopkg.in/yaml.v2"
+	jsoniter "github.com/json-iterator/go"
 )
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 func ReadJson(path string, content any) error {
 	jsonFile, err := os.Open(path)
@@ -47,4 +49,16 @@ func ReadYaml(path string, content any) error {
 	}
 
 	return nil
+}
+
+func SendMapData(data any) (any, error) {
+	byteData, err := json.Marshal(data)
+	if err != nil {
+		return nil, errors.New("SendMapData error: " + err.Error())
+	}
+	var jsonData interface{}
+	if err := json.Unmarshal(byteData, &jsonData); err != nil {
+		return nil, errors.New("SendMapData error: " + err.Error())
+	}
+	return jsonData, nil
 }

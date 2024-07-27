@@ -1,18 +1,16 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
-	jsoniter "github.com/json-iterator/go"
 
 	lcm "lcm/packages"
 	i "lcm/packages/interfaces"
 	utils "lcm/packages/utils"
 )
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type Server struct {
 	Router *gin.Engine
@@ -30,11 +28,20 @@ func InitServer() *Server {
 func (s *Server) InitApi() {
 	s.Api = s.Router.Group("/api")
 
+	s.Api.GET("/service/:service_Name", s.Service_Information)
+	s.Api.POST("/service", s.Register_Service)
+	s.Api.PUT("/service", s.Configure_Service)
+	s.Api.POST("/service/file", s.Register_Service_File)
+	s.Api.PUT("/service/file", s.Configure_Service_File)
+	s.Api.DELETE("/service/:service_Name", s.Terminate_Service)
+
+	s.Api.GET("/service/:service_Name/policy/:policy_Name", s.Policy_Information)
+	s.Api.POST("/service/policy/deploy", s.Policy_Deployment)
+
+	s.Api.GET("/service/:service_Name/policy/:policy_Name/datapacket", s.DataPacket_Information) 
+	s.Api.POST("/service/:service_Name/policy/:policy_Name/datapacket", s.Configure_DataPacket)
+
 	s.Api.POST("/webhook", s.Execute_Webhook)
-	s.Api.GET("/service/:svc/resource/:rsc", s.Service_Information)
-	s.Api.POST("/service/policy/deploy", s.PolicyDeploy)
-	s.Api.POST("/service/upload", s.Upload_Config)
-	s.Api.POST("/service/configure", s.Configure_Service)
 }
 
 func (s *Server) Serve() {
@@ -43,83 +50,122 @@ func (s *Server) Serve() {
 }
 
 /* request handlers */
+func (s *Server) Service_Information(c *gin.Context) {
+	service := c.Param("service_Name")
 
-func (s *Server) Execute_Webhook(c *gin.Context) {
-	var webhook i.WebhookEvent
-	if err := c.ShouldBindJSON(&webhook); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook format"})
+	info, err := s.LCM.Service_Information(service)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	log.Println("Post Webhook: Received webhook", webhook)
 
-	// process the Policy
-	if err := s.LCM.Execute_Webhook(
-		webhook.SvcName,
-		webhook.EventType,
-		webhook.Content,
-	); err != nil {
+	c.JSON(http.StatusOK, info)
+}
+
+func (s *Server) Register_Service(c *gin.Context) {
+	var config i.ServiceConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-	} else {
-		c.JSON(http.StatusOK, nil)
+		return
 	}
+
+	if err := s.LCM.Register_Service(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{ "msg": "register service success" })
 }
 
-func (s *Server) Service_Information(c *gin.Context) {
-	service := c.Param("svc")
-	resource := c.Param("rsc")
-
-	switch resource {
-		case "policy":
-			if svc, ok := s.LCM.Services[service]; ok {
-				policies := svc.Config.Policy
-				bytePolicies, err := json.Marshal(policies)
-				if err != nil {
-					log.Printf("Error marshalling policies: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-					return
-				}
-				var jsonPolicies interface{}
-				if err := json.Unmarshal(bytePolicies, &jsonPolicies); err != nil {
-					log.Printf("Error unmarshalling policies: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"policies": jsonPolicies})
-			} else {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Service not found"})
-			}
-		case "module":
-			if svc, ok := s.LCM.Services[service]; ok {
-				modules := svc.Config.Module
-				byteModules, err := json.Marshal(modules)
-				if err != nil {
-					log.Printf("Error marshalling modules: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-					return
-				}
-				var jsonModules interface{}
-				if err := json.Unmarshal(byteModules, &jsonModules); err != nil {
-					log.Printf("Error unmarshalling modules: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"modules": jsonModules})
-			} else {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "Service not found"})
-			}
-		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid resource type"})
+func (s *Server) Configure_Service(c *gin.Context) {
+	var config i.ServiceConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
 	}
+
+	if err := s.LCM.Configure_Service(config.SvcName, config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{ "msg": "configure service success" })
 }
 
-func (s *Server) PolicyDeploy(c *gin.Context) {
+func (s *Server) Register_Service_File(c *gin.Context) {
+	dst, err := upload_config(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	config, err := rename_config(dst, c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	if err := s.LCM.Register_Service(config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{ "msg": "register service success" })
+}
+
+func (s *Server) Configure_Service_File(c *gin.Context) {
+	dst, err := upload_config(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	config, err := rename_config(dst, c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	if err := s.LCM.Configure_Service(config.SvcName, config); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{ "msg": "configure service success" })
+}
+
+func (s *Server) Terminate_Service(c *gin.Context) {
+	service := c.Param("service_Name")
+
+	err := s.LCM.Terminate_Service(service)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		return
+	}
+	
+	c.JSON(http.StatusOK, gin.H{ "msg": "terminate service success" })
+}
+
+func (s *Server) Policy_Information(c *gin.Context) {
+	service := c.Param("service_Name")
+	policy := c.Param("policy_Name")
+
+	info, err := s.LCM.Policy_Information(service, policy)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, info)
+}
+
+func (s *Server) Policy_Deployment(c *gin.Context) {
 	// parse request
 	var deploy_data i.DeployPolicy
 	if err := c.ShouldBindJSON(&deploy_data); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid PolicyDeploy format"})
 		return
 	}
-	log.Println("Policy Deploy: Received policy deploy request", deploy_data)
 
 	switch deploy_data.Type {
 	case "POLICY_DEPLOY":
@@ -139,72 +185,88 @@ func (s *Server) PolicyDeploy(c *gin.Context) {
 	}
 }
 
-func (s *Server) Upload_Config(c *gin.Context) {
-	file, err := c.FormFile("config")
+func (s *Server) DataPacket_Information(c *gin.Context) {
+	service := c.Param("service_Name")
+	policy := c.Param("policy_Name")
+	node := c.Query("node")
+	port_str := c.Query("port")
+
+	port, err := strconv.Atoi(port_str)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	dst := "./upload/" + file.Filename
-	if err := c.SaveUploadedFile(file, dst); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
-	}
-
-	// rename file with service name
-	var config i.ServiceConfig
-	if err := utils.ReadYaml(dst, &config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
-	}
-	rename_dst := "./upload/" + config.SvcName + ".yaml"
-	if err := os.Rename(dst, rename_dst); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+	info, err := s.LCM.DataPacket_Information(service, policy, node, port)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := s.LCM.Register_Service(config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
-	}
-
-	log.Println("File uploaded: Received config file from service", config.SvcName)
-	c.JSON(200, gin.H{
-		"msg": "success",
-	})
+	c.JSON(http.StatusOK, info)
 }
 
-func (s *Server) Configure_Service(c *gin.Context) {
+func (s *Server) Configure_DataPacket(c *gin.Context) {
+	service := c.Param("service_Name")
+	policy := c.Param("policy_Name")
+
+	var data_packet i.ConfigureDataPacket
+	if err := c.ShouldBindJSON(&data_packet); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid DataPacket format"})
+		return
+	}
+
+	if err := s.LCM.Configure_DataPacket(service, policy, data_packet); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"msg": "configure DataPacket success"})
+}
+
+func (s *Server) Execute_Webhook(c *gin.Context) {
+	var webhook i.WebhookEvent
+	if err := c.ShouldBindJSON(&webhook); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid webhook format"})
+		return
+	}
+
+	// process the Policy
+	if err := s.LCM.Execute_Webhook(
+		webhook.SvcName,
+		webhook.EventType,
+		webhook.Content,
+	); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+	} else {
+		c.JSON(http.StatusOK, gin.H{ "msg": "webhook executed" })
+	}
+}
+
+/* utility functions */
+func upload_config(c *gin.Context) (string, error) {
 	file, err := c.FormFile("config")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
+		return "", err
 	}
 	dst := "./upload/" + file.Filename
 	if err := c.SaveUploadedFile(file, dst); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
+		return "", err
 	}
+	return dst, nil
+}
 
-	// rename file with service name
+func rename_config(dst string, c *gin.Context) (i.ServiceConfig, error) {
 	var config i.ServiceConfig
 	if err := utils.ReadYaml(dst, &config); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
+		return config, err
 	}
 	rename_dst := "./upload/" + config.SvcName + ".yaml"
 	if err := os.Rename(dst, rename_dst); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
+		return config, err
 	}
-
-	if err := s.LCM.Configure_Service(config.SvcName, config); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
-		return
-	}
-
-	log.Println("File uploaded: Received config file from service", config.SvcName)
-	c.JSON(200, gin.H{
-		"msg": "success",
-	})
+	return config, nil
 }

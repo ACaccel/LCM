@@ -30,6 +30,29 @@ func InitService(config i.ServiceConfig) *Service {
 	return &service
 }
 
+func (s *Service) Configure(config i.ServiceConfig) error {
+	s.Config = config
+
+	s.Modules = make(map[string]i.ModuleConfig)
+	for _, module := range config.Module {
+		s.Modules[module.ModuleName] = module
+	}
+
+	return nil
+}
+
+func (s *Service) Terminate() error {
+	if len(s.Policies) > 0 {
+		for policyName, _ := range s.Policies {
+			err := s.Undeploy(policyName)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Service) Deploy(policy string) error {
 	// check if policy already deployed
 	for policyName, _ := range s.Policies {
@@ -80,19 +103,28 @@ func (s *Service) Undeploy(policy string) error {
 	return nil
 }
 
-func (s *Service) Configure(config i.ServiceConfig) error {
-	// check if any policy is deployed
-	if len(s.Policies) > 0 {
-		return errors.New("service has deployed policies")
+func (s *Service) SetDataPacket(policyName string, nodeName string, port int, transformat i.TransFormat) error {
+	setup := false
+	newConfig := s.Config
+	for i, policy := range newConfig.Policy {
+		if policy.PolicyName == policyName {
+			for j, path := range newConfig.Policy[i].PolicyPath {
+				if path.NodePair[0] == nodeName && 
+					path.PortPair[0] == port {
+					newConfig.Policy[i].PolicyPath[j].TransFormat = transformat
+					setup = true
+				}
+			}
+		}
 	}
+	
+	// todo: modify module config
 
-	// configuration
-	s.Config = config
-
-	s.Modules = make(map[string]i.ModuleConfig)
-	for _, module := range config.Module {
-		s.Modules[module.ModuleName] = module
+	if !setup {
+		return errors.New("configure data packet failed")
 	}
+	
+	s.Configure(newConfig)
 
 	return nil
 }

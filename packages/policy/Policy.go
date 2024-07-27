@@ -1,9 +1,10 @@
 package policy
 
 import (
+	"errors"
 	i "lcm/packages/interfaces"
-	"log"
 	"lcm/packages/nodes"
+	"log"
 )
 
 /*
@@ -22,7 +23,7 @@ type Policy struct {
 	TriggerStatusCh map[string]chan bool
 	PolicyList 		*PolicyList
 	
-	status 			bool
+	Status 			bool
 }
 
 /*
@@ -34,7 +35,7 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 	p.Description.PolicyType = pConfig.PolicyType
 	p.WebhookChMap = make(map[string]chan any)
 	p.TriggerCh = make(chan i.NodeOutput)
-	p.status = false
+	p.Status = false
 	p.StatusCh = make(chan bool)
 	p.TriggerStatusCh = make(map[string]chan bool)
 	var policyList *PolicyList = new(PolicyList)
@@ -76,16 +77,14 @@ func (p *Policy) Init(pConfig i.PolicyConfig, modules map[string]i.ModuleConfig)
 }
 
 func (p *Policy) Execute(triggerNode *ListNode) {
-	log.Println("Policy: Execute policy", p.Description.PolicyName)
-
-	p.status = <-p.StatusCh
-	for p.status {
+	p.Status = <-p.StatusCh
+	for p.Status {
 		select {
 		case status := <-p.StatusCh: // todo: broadcast to all triggers to terminate
 			for _, trigger := range p.Triggers {
 				p.TriggerStatusCh[trigger.Description.NodeName] <- status
 			}
-			p.status = status
+			p.Status = status
 			p.Clean()
 		case content := <-p.TriggerCh:
 			p.Clean()
@@ -97,14 +96,21 @@ func (p *Policy) Execute(triggerNode *ListNode) {
 			}
 		}
 	}
-
-	log.Println("Policy: Terminate policy", p.Description.PolicyName)
 }
 
 func (p *Policy) Clean() {
 	for _, node := range p.PolicyList.NodeSet {
 		node.clean()
 	}
+}
+
+func (p *Policy) DataPacketInfo(nodeName string, port int) (i.DataPacketInfo, error) {
+	if _, found := p.PolicyList.NodeSet[nodeName]; !found {
+		return i.DataPacketInfo{}, errors.New("node " + nodeName + " not found")
+	}
+	
+	info := p.PolicyList.NodeSet[nodeName].packet.output[port].info()
+	return info, nil
 }
 
 func policyTask(node *ListNode, info i.ExecInfo) {

@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"fmt"
 	"log"
 
 	i "lcm/packages/interfaces"
@@ -48,7 +47,8 @@ func (node *ListNode) init(nodeName string, nodeType string, numInput int, numOu
 	node.packet.input = make([]*dataPacket, numInput)
 	node.packet.output = make([]*dataPacket, numOutput)
 	for i := 0; i < numOutput; i++ {
-		node.packet.output[i] = newDataPacket(fmt.Sprintf("%s-output-%d", nodeName, i))
+		newPacket := newDataPacket(nodeName, i)
+		node.packet.output[i] = newPacket
 	}
 	node.nextPath = make([]int, 0)
 }
@@ -88,7 +88,7 @@ func (node *ListNode) TriggerExecute(info i.ExecInfo) {
 
 func (node *ListNode) execute(info i.ExecInfo) {
 	log.Println("Policy: Execute node", node.Description.NodeName)
-	
+
 	content := node.getInputContent(info)
 	res := (*node.baseNode).Execute(content, info)
 	
@@ -135,6 +135,10 @@ func (list *PolicyList) init() {
 }
 
 func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, nodeType string, numPort i.NumPort) {
+	if _, found := list.NodeSet[nodeName]; found {
+		log.Println("Error: Node already exists", nodeName)
+		return
+	}
 	var node *ListNode = new(ListNode)
 	node.init(
 		nodeName,
@@ -148,6 +152,10 @@ func (list *PolicyList) initNode(policyNode *i.IPolicyNode, nodeName string, nod
 }
 
 func (list *PolicyList) initTrigger(policyNode *i.IPolicyNode, triggerName string, triggerType string) *ListNode {
+	if _, found := list.NodeSet[triggerName]; found {
+		log.Println("Error: Node already exists", triggerName)
+		return nil
+	}
 	var node *ListNode = new(ListNode)
 	node.init(
 		triggerName,

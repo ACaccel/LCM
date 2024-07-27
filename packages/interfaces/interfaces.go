@@ -116,3 +116,22 @@ type DeployPolicy struct {
 	Type     string   `json:"Type"`
 	Policies []string `json:"Policies"`
 }
+
+type DataPacketInfo struct {
+	Name 			string
+	Input	struct {
+		InPort		int
+		Content		DataPacketContent
+	}
+	Output	struct {
+		OutPort		int
+		Content		DataPacketContent
+	}
+	TransFormat		TransFormat
+}
+
+type ConfigureDataPacket struct {
+	NodeName 	string		`json:"NodeName"`
+	Port 		int			`json:"Port"`
+	TransFormat TransFormat	`json:"TransFormat"`
+}
