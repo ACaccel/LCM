@@ -1,5 +1,5 @@
 # LCM
-
+![lcm_architecture](./assets/LCM_api.png)
 ## APIs to test LCM
 - Service
   - GET     /api/service/:service_Name
