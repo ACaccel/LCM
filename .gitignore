@@ -1,8 +1,3 @@
-/template
-/upload
-config.json
-config.yaml
-reconfig.yaml
-todo.md
-test.sh
-1935_test.sh
+/**/templates/*
+/**/upload/*
+

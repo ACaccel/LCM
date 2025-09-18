@@ -1,6 +1,9 @@
 # LCM
-![lcm_architecture](./assets/LCM_api.png)
+
+![lcm_architecture](./efo/LCM_Enabler/assets/LCM_api.png)
+
 ## APIs to test LCM
+
 - Service
   - GET     /api/service/:service_Name
     - get the information of a service
