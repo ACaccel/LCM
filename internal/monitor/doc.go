@@ -14,7 +14,7 @@
 // concurrency limit. A check changes status (up, down) only after Threshold
 // consecutive results in the new direction. A service is healthy, degraded
 // (a non-critical check is down), down (a critical check is down) or
-// unknown (no results yet).
+// unknown (a critical check has no result yet, or no check has a result).
 //
 // # Signals and persistence
 //

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,12 +35,11 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{
-		Listen: "127.0.0.1:7800", DataDir: "./data", LogFormat: "text",
-		LogLevel: "info", CookieSecure: false, SessionTTL: 7 * 24 * time.Hour,
-	}
-	if c != want {
+	if want := Default(); !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
+	}
+	if c.Listen != "127.0.0.1:7800" || c.DataDir != "./data" || c.SessionTTL != 7*24*time.Hour {
+		t.Errorf("unexpected core defaults: %+v", c)
 	}
 	if !c.IsLoopback() {
 		t.Error("default listen address must be loopback")
@@ -57,11 +57,10 @@ func TestEnvOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{
-		Listen: "0.0.0.0:9000", DataDir: "/tmp/x", LogFormat: "json",
-		LogLevel: "debug", CookieSecure: true, SessionTTL: time.Hour, EngineWorkers: 8,
-	}
-	if c != want {
+	want := Default()
+	want.Listen, want.DataDir, want.LogFormat, want.LogLevel = "0.0.0.0:9000", "/tmp/x", "json", "debug"
+	want.CookieSecure, want.SessionTTL, want.EngineWorkers = true, time.Hour, 8
+	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
 	if c.IsLoopback() {
@@ -77,11 +76,10 @@ func TestFlagOverridesEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{
-		Listen: "localhost:1234", DataDir: "/tmp/y", LogFormat: "json",
-		LogLevel: "warn", CookieSecure: false, SessionTTL: 30 * time.Minute, EngineWorkers: 3,
-	}
-	if c != want {
+	want := Default()
+	want.Listen, want.DataDir, want.LogFormat, want.LogLevel = "localhost:1234", "/tmp/y", "json", "warn"
+	want.SessionTTL, want.EngineWorkers = 30*time.Minute, 3
+	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v, want %+v", c, want)
 	}
 	if !c.IsLoopback() {
@@ -109,6 +107,20 @@ func TestInvalidValues(t *testing.T) {
 		{"bad workers", map[string]string{EnvEngineWorkers: "many"}, nil, EnvEngineWorkers},
 		{"negative workers", nil, []string{"--engine-workers", "-1"}, "engine workers"},
 		{"too many workers", nil, []string{"--engine-workers", "5000"}, "engine workers"},
+		{"bad lock ttl", map[string]string{EnvLockTTL: "forever"}, nil, EnvLockTTL},
+		{"zero lock ttl", nil, []string{"--lock-ttl", "0s"}, "lock ttl"},
+		{"huge lock ttl", nil, []string{"--lock-ttl", "9999h"}, "lock ttl"},
+		{"bad concurrency", map[string]string{EnvMonitorConcurrency: "lots"}, nil, EnvMonitorConcurrency},
+		{"zero concurrency", nil, []string{"--monitor-concurrency", "0"}, "monitor concurrency"},
+		{"rollup shorter than raw", nil, []string{"--monitor-raw-retention", "48h", "--monitor-rollup-retention", "24h"}, "rollup retention"},
+		{"negative raw retention", nil, []string{"--monitor-raw-retention=-1h"}, "raw retention"},
+		{"empty alert labels", map[string]string{EnvAlertServiceLabels: " , "}, nil, "alert service labels"},
+		{"zero timeline retention", nil, []string{"--timeline-retention", "0s"}, "timeline retention"},
+		{"zero run keep", nil, []string{"--run-retention-keep", "0"}, "run retention keep"},
+		{"zero run age", map[string]string{EnvRunRetentionAge: "0s"}, nil, "run retention age"},
+		{"zero prune interval", nil, []string{"--prune-interval", "0s"}, "prune interval"},
+		{"zero action timeout", nil, []string{"--runtime-action-timeout", "0s"}, "runtime action timeout"},
+		{"empty git", nil, []string{"--git", " "}, "git binary"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,5 +177,93 @@ func TestNewLoggerFormats(t *testing.T) {
 	out := sb.String()
 	if strings.Contains(out, "hidden") || !strings.Contains(out, `"msg":"shown"`) {
 		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestComponentSettings(t *testing.T) {
+	c, err := load(t, map[string]string{
+		EnvSecretsDir: "/s", EnvCalendarDir: "/c", EnvSystemctl: "/bin/sc", EnvDocker: "/bin/dk", EnvGit: "/bin/git",
+		EnvSystemctlPrivilege: "doas", EnvRuntimeStatusTimeout: "3s", EnvRuntimeActionTimeout: "2m", EnvLockTTL: "30m",
+		EnvMonitorConcurrency: "2", EnvMonitorRawRetention: "24h", EnvMonitorRollupRetention: "48h",
+		EnvAlertServiceLabels: "svc, app ,", EnvTimelineRetention: "720h", EnvRunRetentionKeep: "5",
+		EnvRunRetentionAge: "48h", EnvPruneInterval: "10m",
+	}, "--git", "/usr/bin/git", "--alert-service-labels", "a,b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SecretsPath() != "/s" || c.CalendarPath() != "/c" || c.Systemctl != "/bin/sc" || c.Docker != "/bin/dk" {
+		t.Errorf("paths: %+v", c)
+	}
+	if c.Git != "/usr/bin/git" {
+		t.Errorf("flag must override env, git = %q", c.Git)
+	}
+	if !reflect.DeepEqual(c.AlertServiceLabels, []string{"a", "b"}) {
+		t.Errorf("alert labels = %v", c.AlertServiceLabels)
+	}
+	if !reflect.DeepEqual(c.Privilege(), []string{"doas"}) {
+		t.Errorf("privilege = %v", c.Privilege())
+	}
+	if c.LockTTL != 30*time.Minute || c.MonitorConcurrency != 2 || c.RunRetentionKeep != 5 || c.PruneInterval != 10*time.Minute {
+		t.Errorf("values: %+v", c)
+	}
+
+	env, err := FromEnv(func(k string) string {
+		if k == EnvAlertServiceLabels {
+			return "x,y"
+		}
+		return ""
+	})
+	if err != nil || !reflect.DeepEqual(env.AlertServiceLabels, []string{"x", "y"}) {
+		t.Errorf("env alert labels = %v, %v", env.AlertServiceLabels, err)
+	}
+}
+
+func TestPrivilege(t *testing.T) {
+	tests := []struct {
+		in   string
+		want []string
+	}{
+		{"sudo -n", []string{"sudo", "-n"}},
+		{"", []string{}},
+		{"  ", []string{}},
+		{"none", []string{}},
+		{"NONE", []string{}},
+	}
+	for _, tc := range tests {
+		got := Config{SystemctlPrivilege: tc.in}.Privilege()
+		if got == nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("Privilege(%q) = %#v, want %#v", tc.in, got, tc.want)
+		}
+	}
+	if got := Default().Privilege(); !reflect.DeepEqual(got, []string{"sudo", "-n"}) {
+		t.Errorf("default privilege = %v", got)
+	}
+}
+
+func TestServeDirs(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "d")
+	c := Default()
+	c.DataDir = data
+	if c.SecretsPath() != filepath.Join(data, "secrets") || c.CalendarPath() != filepath.Join(data, "calendars") {
+		t.Fatalf("defaults: %q %q", c.SecretsPath(), c.CalendarPath())
+	}
+	if err := c.EnsureServeDirs(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(c.SecretsPath())
+	if err != nil || st.Mode().Perm() != 0o700 {
+		t.Errorf("secrets dir: %v %v", st, err)
+	}
+	if _, err := os.Stat(c.CalendarPath()); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestMissingBinaries(t *testing.T) {
+	c := Default()
+	c.Systemctl, c.Docker, c.Git = "/nonexistent/systemctl", "/bin/sh", "/nonexistent/git"
+	missing := c.MissingBinaries()
+	if len(missing) != 2 || !strings.HasPrefix(missing[0], "systemctl") || !strings.HasPrefix(missing[1], "git") {
+		t.Errorf("missing = %v", missing)
 	}
 }

@@ -70,6 +70,9 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 	if err != nil {
 		return err
 	}
+	if from == StateRetired || to == StateRetired {
+		c.changed()
+	}
 	if c.bus != nil {
 		sev := signal.SeverityInfo
 		if to == StateFailed {

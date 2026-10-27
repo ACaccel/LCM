@@ -1,6 +1,6 @@
 # LCM
 
-Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation and policy engine phases done). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
+Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers and integration done; HTTP API v1 and web UI remain). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
 
 ## Stack
 
@@ -22,21 +22,33 @@ make check   # fmt-check, vet, lint, test: run before finishing any change
 
 | Path | Contents |
 |---|---|
-| `cmd/lcm/` | Entry point and subcommands (`serve`, `admin`, `token`, `version`) |
+| `cmd/lcm/` | Entry point and subcommands (`serve`, `admin`, `token`, `version`); `serve` is a thin wrapper over `internal/app` |
+| `internal/app/` | Composition root: builds every component in dependency order, adapters (lock -> catalog, execx -> monitor), monitor sync, retention jobs, `Run`/`Close` |
 | `internal/config/` | Env and flag configuration, validation, slog setup |
 | `internal/store/` | SQLite handles (writer + reader pool), migrator, `storetest.Open(t)` test helper |
 | `internal/auth/` | Password hashing, sessions, API tokens, `Actor` and its context helpers |
 | `internal/audit/` | Audit log writer and reader |
 | `internal/clock/` | Injectable clock (`clock.Real`, `clock.Fake` for tests) and clock-driven context timeouts |
-| `internal/model/` | `lcm/v1` Policy and Module documents: strict decoding, value normalization, structural validation |
+| `internal/signal/` | In-process signal bus (check, health, lifecycle, alert); lossy by design |
+| `internal/model/` | `lcm/v1` Policy, Module and Service documents: strict decoding, value normalization, structural validation |
 | `internal/expr/` | Expression and `{{ }}` template compiler over expr-lang, with static reference extraction |
 | `internal/node/` | Node SDK: `Spec[P]`, registry, props schema reflection and validation, `RunContext` |
 | `internal/nodes/core/` | Built-in flow, data and module nodes |
+| `internal/nodes/lifecycle/` | `lifecycle.*` nodes over the catalog manager |
+| `internal/nodes/{flow,guard,network,notify,stateful}/` | Waiting and polling, time windows, HTTP and CI requests, notifications, state and lock nodes |
 | `internal/engine/` | Compiler, scheduler, run state, checkpoints, recovery, concurrency modes, observers; semantics in `doc.go`; `enginetest/` harness |
+| `internal/catalog/` | Service documents and versions, lifecycle state machine, deployments, timeline, and the `Manager` that performs lifecycle actions |
+| `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external) |
+| `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |
+| `internal/monitor/` | Health checks, history, rollups, health aggregation, alert ingestion; `alert/` parses Alertmanager, Uptime Kuma, Gatus and generic payloads |
+| `internal/trigger/` | `trigger.*` nodes and the manager running signal, git, cron and webhook watchers |
+| `internal/lock/` | Durable named locks with expiry |
+| `internal/state/` | Per-policy key-value state and the `state` expression variable |
+| `internal/secret/` | Secret resolution from files and environment; values never logged |
 | `internal/api/` | HTTP handlers, middleware chain, error envelope |
 | `internal/buildinfo/` | Version metadata |
 
-Later phases add `catalog`, `runtime`, `monitor`, `scheduler`, more `nodes/` packages and `web/` as laid out in the design spec.
+Not built yet: `web/`, the full API v1 surface (services, policies, runs, monitor, webhooks, alert ingest) and replay.
 
 ## Repo rules
 
@@ -44,6 +56,7 @@ Later phases add `catalog`, `runtime`, `monitor`, `scheduler`, more `nodes/` pac
 - Every state-changing action writes an audit entry through `audit.Log.Record` with the actor taken from the context (`auth.WithActor`). CLI commands use `auth.CLI`. Never put secrets in audit details or logs.
 - Writes go through `store.DB.Write`; reads use `store.DB.Reader()`. Times are stored as Unix milliseconds.
 - Code with expiry or time-window logic takes an injected clock (`internal/clock`); tests must not sleep.
+- Components are constructed and connected only in `internal/app`; a new component gets wired there, with an end-to-end test in `internal/app`.
 - New node types register through `node.Register` in a package under `internal/nodes/`; the engine core does not change for new nodes.
 - Tests use a real temp-dir SQLite file (`storetest.Open`); there is no in-memory store implementation.
 - API errors use the JSON envelope via `writeError`; JSON fields are camelCase; routes are registered in `internal/api/server.go`.

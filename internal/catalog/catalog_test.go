@@ -255,3 +255,56 @@ func TestListAndHosts(t *testing.T) {
 		t.Fatalf("hosts = %+v %v", hosts, err)
 	}
 }
+
+func TestOnChangeFiresForObservedSetChanges(t *testing.T) {
+	e := newEnv(t)
+	changes := 0
+	cat, err := catalog.New(catalog.Config{
+		DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Log: testLogger(t), OnChange: func() { changes++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect := func(step string, want int) {
+		t.Helper()
+		if changes != want {
+			t.Fatalf("%s: OnChange calls = %d, want %d", step, changes, want)
+		}
+	}
+	put := func(doc string, expected int) {
+		t.Helper()
+		if _, err := cat.Put(e.ctx, []byte(doc), expected); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	put(svcDoc("app", ""), 0)
+	expect("create", 1)
+	put(svcDoc("app", ""), 1)
+	expect("identical save", 1)
+	put(svcDoc("app", "  dependsOn: [db]\n"), 1)
+	expect("update", 2)
+	if _, err := cat.Restore(e.ctx, "app", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	expect("restore", 3)
+
+	ctx := context.Background()
+	if err := cat.Transition(ctx, "app", catalog.StateRegistered, catalog.StateRunning, catalog.TransitionInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	expect("ordinary transition", 3)
+	if err := cat.Transition(ctx, "app", catalog.StateRunning, catalog.StateRetired, catalog.TransitionInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	expect("retire", 4)
+
+	if err := cat.Delete(e.ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	expect("delete", 5)
+	if err := cat.Delete(e.ctx, "app"); err == nil {
+		t.Fatal("second delete succeeded")
+	}
+	expect("failed delete", 5)
+}

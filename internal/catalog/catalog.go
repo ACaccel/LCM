@@ -61,15 +61,21 @@ type Config struct {
 	// Clock defaults to the real clock.
 	Clock clock.Clock
 	Log   *slog.Logger
+	// OnChange, when set, is called after a committed change to the set of
+	// services LCM should observe: a saved or deleted document, or a
+	// service entering or leaving the retired state. It runs on the
+	// caller's goroutine and must not block or call back into the Catalog.
+	OnChange func()
 }
 
 // Catalog stores services and their history.
 type Catalog struct {
-	db    *store.DB
-	audit *audit.Log
-	bus   *signal.Bus
-	clk   clock.Clock
-	log   *slog.Logger
+	db       *store.DB
+	audit    *audit.Log
+	bus      *signal.Bus
+	clk      clock.Clock
+	log      *slog.Logger
+	onChange func()
 }
 
 // New returns a Catalog.
@@ -77,7 +83,7 @@ func New(cfg Config) (*Catalog, error) {
 	if cfg.DB == nil || cfg.Audit == nil {
 		return nil, errors.New("catalog: DB and Audit are required")
 	}
-	c := &Catalog{db: cfg.DB, audit: cfg.Audit, bus: cfg.Bus, clk: cfg.Clock, log: cfg.Log}
+	c := &Catalog{db: cfg.DB, audit: cfg.Audit, bus: cfg.Bus, clk: cfg.Clock, log: cfg.Log, onChange: cfg.OnChange}
 	if c.clk == nil {
 		c.clk = clock.Real()
 	}
@@ -144,6 +150,12 @@ func requireActor(ctx context.Context) (auth.Actor, error) {
 }
 
 func (c *Catalog) now() time.Time { return c.clk.Now() }
+
+func (c *Catalog) changed() {
+	if c.onChange != nil {
+		c.onChange()
+	}
+}
 
 // Put saves a service document given as YAML or JSON. expected is the
 // version the change is based on: 0 creates the service, a positive value
@@ -254,6 +266,7 @@ func (c *Catalog) put(ctx context.Context, svc *model.Service, expected, restore
 	}
 
 	if res.Changed {
+		c.changed()
 		action := "service.update"
 		switch {
 		case restoredFrom > 0:
@@ -319,6 +332,7 @@ func (c *Catalog) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+	c.changed()
 	return c.audit.Record(ctx, "service.delete", name, audit.OutcomeOK, nil)
 }
 
