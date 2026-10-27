@@ -22,6 +22,7 @@ var (
 	ErrNotFound           = errors.New("auth: not found")
 	ErrWeakPassword       = fmt.Errorf("auth: password must be at least %d characters", MinPasswordLength)
 	ErrInvalidName        = errors.New("auth: name must be 1-64 characters")
+	ErrInvalidScope       = errors.New("auth: scope must be admin or ingest")
 	ErrInvalidUsername    = errors.New("auth: username must be 1-64 characters")
 )
 
@@ -200,20 +201,43 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return nil
 }
 
+// Scope limits what an API token may do. Sessions are always ScopeAdmin.
+type Scope string
+
+// Token scopes.
+const (
+	// ScopeAdmin allows the whole API except token and user management.
+	ScopeAdmin Scope = "admin"
+	// ScopeIngest allows only the endpoints that feed LCM from outside:
+	// alert hooks, heartbeats and webhook triggers.
+	ScopeIngest Scope = "ingest"
+)
+
+// Valid reports whether s is a known scope.
+func (s Scope) Valid() bool { return s == ScopeAdmin || s == ScopeIngest }
+
 // Token describes an API token without its secret.
 type Token struct {
 	ID         int64
 	Name       string
+	Scope      Scope
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
 }
 
-// CreateToken issues a new API token. The secret is returned only here.
-func (s *Service) CreateToken(ctx context.Context, name string) (Token, string, error) {
+// CreateToken issues a new API token. The secret is returned only here. An
+// empty scope selects ScopeAdmin.
+func (s *Service) CreateToken(ctx context.Context, name string, scope Scope) (Token, string, error) {
 	name = strings.TrimSpace(name)
 	if l := len(name); l == 0 || l > maxNameLen {
 		return Token{}, "", ErrInvalidName
+	}
+	if scope == "" {
+		scope = ScopeAdmin
+	}
+	if !scope.Valid() {
+		return Token{}, "", ErrInvalidScope
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -221,11 +245,11 @@ func (s *Service) CreateToken(ctx context.Context, name string) (Token, string, 
 	}
 	secret := tokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	now := s.now()
-	t := Token{Name: name, CreatedAt: now.UTC().Truncate(time.Millisecond)}
+	t := Token{Name: name, Scope: scope, CreatedAt: now.UTC().Truncate(time.Millisecond)}
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO api_tokens (name, token_hash, created_at) VALUES (?, ?, ?)`,
-			name, hashToken(secret), now.UnixMilli())
+			`INSERT INTO api_tokens (name, token_hash, scope, created_at) VALUES (?, ?, ?, ?)`,
+			name, hashToken(secret), string(scope), now.UnixMilli())
 		if err != nil {
 			return err
 		}
@@ -241,7 +265,7 @@ func (s *Service) CreateToken(ctx context.Context, name string) (Token, string, 
 // ListTokens returns all tokens, newest first.
 func (s *Service) ListTokens(ctx context.Context) ([]Token, error) {
 	rows, err := s.db.Reader().QueryContext(ctx,
-		`SELECT id, name, created_at, last_used_at, revoked_at FROM api_tokens ORDER BY id DESC`)
+		`SELECT id, name, scope, created_at, last_used_at, revoked_at FROM api_tokens ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("auth: list tokens: %w", err)
 	}
@@ -250,12 +274,14 @@ func (s *Service) ListTokens(ctx context.Context) ([]Token, error) {
 	for rows.Next() {
 		var (
 			t                 Token
+			scope             string
 			created           int64
 			lastUsed, revoked sql.NullInt64
 		)
-		if err := rows.Scan(&t.ID, &t.Name, &created, &lastUsed, &revoked); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &scope, &created, &lastUsed, &revoked); err != nil {
 			return nil, fmt.Errorf("auth: list tokens: %w", err)
 		}
+		t.Scope = Scope(scope)
 		t.CreatedAt = time.UnixMilli(created).UTC()
 		t.LastUsedAt = optTime(lastUsed)
 		t.RevokedAt = optTime(revoked)
@@ -301,26 +327,33 @@ func (s *Service) RevokeToken(ctx context.Context, id int64) error {
 // VerifyToken authenticates an API token and returns its actor. The last-used
 // timestamp is refreshed at most once per minute.
 func (s *Service) VerifyToken(ctx context.Context, secret string) (Actor, error) {
+	actor, _, err := s.VerifyTokenScope(ctx, secret)
+	return actor, err
+}
+
+// VerifyTokenScope is VerifyToken that also returns the token's scope.
+func (s *Service) VerifyTokenScope(ctx context.Context, secret string) (Actor, Scope, error) {
 	if !strings.HasPrefix(secret, tokenPrefix) {
-		return Actor{}, ErrUnauthenticated
+		return Actor{}, "", ErrUnauthenticated
 	}
 	var (
 		id       int64
 		name     string
+		scope    string
 		lastUsed sql.NullInt64
 		revoked  sql.NullInt64
 	)
 	err := s.db.Reader().QueryRowContext(ctx,
-		`SELECT id, name, last_used_at, revoked_at FROM api_tokens WHERE token_hash = ?`,
-		hashToken(secret)).Scan(&id, &name, &lastUsed, &revoked)
+		`SELECT id, name, scope, last_used_at, revoked_at FROM api_tokens WHERE token_hash = ?`,
+		hashToken(secret)).Scan(&id, &name, &scope, &lastUsed, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Actor{}, ErrUnauthenticated
+		return Actor{}, "", ErrUnauthenticated
 	}
 	if err != nil {
-		return Actor{}, fmt.Errorf("auth: look up token: %w", err)
+		return Actor{}, "", fmt.Errorf("auth: look up token: %w", err)
 	}
 	if revoked.Valid {
-		return Actor{}, ErrUnauthenticated
+		return Actor{}, "", ErrUnauthenticated
 	}
 	now := s.now()
 	if !lastUsed.Valid || now.Sub(time.UnixMilli(lastUsed.Int64)) >= lastUsedGranularity {
@@ -329,10 +362,10 @@ func (s *Service) VerifyToken(ctx context.Context, secret string) (Actor, error)
 			return err
 		})
 		if err != nil {
-			return Actor{}, fmt.Errorf("auth: update token usage: %w", err)
+			return Actor{}, "", fmt.Errorf("auth: update token usage: %w", err)
 		}
 	}
-	return Actor{Kind: KindToken, ID: strconv.FormatInt(id, 10), Name: name}, nil
+	return Actor{Kind: KindToken, ID: strconv.FormatInt(id, 10), Name: name}, Scope(scope), nil
 }
 
 func optTime(n sql.NullInt64) *time.Time {

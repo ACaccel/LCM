@@ -652,6 +652,31 @@ func TestWebhookHMAC(t *testing.T) {
 	}
 }
 
+func TestDeliverSignedSkipsUnsignedListeners(t *testing.T) {
+	x := newEnv(t, fixedSecrets{"hook-key": "s3cret"}, "")
+	x.h.Deploy(x.e, policy("signed", trig("trigger.webhook", `{ name: github, hmacSecret: hook-key }`)))
+	x.h.Deploy(x.e, policy("open", trig("trigger.webhook", `{ name: other }`)))
+	x.sync(t)
+	ctx := context.Background()
+	body := []byte(`{}`)
+	sig := http.Header{}
+	sig.Set("X-Hub-Signature-256", "sha256="+sign("s3cret", body))
+
+	if _, err := x.m.DeliverSigned(ctx, "other", sig, body); !errors.Is(err, trigger.ErrBadSignature) {
+		t.Fatalf("unsigned listener: %v", err)
+	}
+	x.noRuns(t, "open", map[string]bool{})
+	if _, err := x.m.DeliverSigned(ctx, "github", http.Header{}, body); !errors.Is(err, trigger.ErrBadSignature) {
+		t.Fatalf("missing signature: %v", err)
+	}
+	if ids, err := x.m.DeliverSigned(ctx, "github", sig, body); err != nil || len(ids) != 1 {
+		t.Fatalf("valid signature: %v %v", ids, err)
+	}
+	if _, err := x.m.DeliverSigned(ctx, "nobody", sig, body); !errors.Is(err, trigger.ErrNoListener) {
+		t.Fatalf("unknown hook: %v", err)
+	}
+}
+
 func TestWebhookMissingSecretFailsClosed(t *testing.T) {
 	x := newEnv(t, fixedSecrets{}, "")
 	x.h.Deploy(x.e, policy("signed", trig("trigger.webhook", `{ name: hook, hmacSecret: nope }`)))

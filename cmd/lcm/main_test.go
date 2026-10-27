@@ -170,6 +170,22 @@ func TestTokenCommands(t *testing.T) {
 	}
 }
 
+func TestTokenCreateScope(t *testing.T) {
+	a, out, errb, _ := newApp(t, "")
+
+	r := runCLI(t, a, out, errb, "token", "create", "--name", "hook", "--scope", "ingest")
+	if r.code != 0 {
+		t.Fatalf("create ingest: %+v", r)
+	}
+	r = runCLI(t, a, out, errb, "token", "list")
+	if r.code != 0 || !strings.Contains(r.stdout, "SCOPE") || !strings.Contains(r.stdout, "ingest") {
+		t.Fatalf("list: %+v", r)
+	}
+	if r := runCLI(t, a, out, errb, "token", "create", "--name", "x", "--scope", "root"); r.code != 2 {
+		t.Errorf("invalid scope exit code = %d, want 2: %+v", r.code, r)
+	}
+}
+
 func TestInvalidConfigFailsFast(t *testing.T) {
 	a, out, errb, _ := newApp(t, "")
 	for _, args := range [][]string{

@@ -37,6 +37,7 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 	}
 	now := c.now()
 	var labels map[string]string
+	var entry Entry
 	err := c.db.Write(ctx, func(tx *sql.Tx) error {
 		var cur, rawLabels string
 		err := tx.QueryRowContext(ctx,
@@ -62,14 +63,16 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 		if info.Action != "" {
 			summary += " (" + info.Action + ")"
 		}
-		return insertTimeline(ctx, tx, Entry{
+		entry = Entry{
 			Service: name, Time: now, Kind: KindLifecycle, Summary: summary, Ref: info.Ref,
 			Data: map[string]any{"state": string(to), "previous": string(from), "action": info.Action, "reason": info.Reason},
-		})
+		}
+		return insertTimeline(ctx, tx, entry)
 	})
 	if err != nil {
 		return err
 	}
+	c.timelineAdded(entry)
 	if from == StateRetired || to == StateRetired {
 		c.changed()
 	}

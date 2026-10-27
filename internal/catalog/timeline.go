@@ -67,7 +67,12 @@ func (c *Catalog) AppendTimeline(ctx context.Context, e Entry) error {
 	if e.Time.IsZero() {
 		e.Time = c.now()
 	}
-	return c.db.Write(ctx, func(tx *sql.Tx) error { return insertTimeline(ctx, tx, e) })
+	err := c.db.Write(ctx, func(tx *sql.Tx) error { return insertTimeline(ctx, tx, e) })
+	if err != nil {
+		return err
+	}
+	c.timelineAdded(e)
+	return nil
 }
 
 // TimelineQuery selects timeline entries. All filters are optional.

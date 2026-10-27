@@ -151,3 +151,35 @@ spec:
 		t.Errorf("expired locks left = %d", n)
 	}
 }
+
+// Policies compile against the module store, and the deployed version keeps
+// the module it was compiled with.
+func TestPolicyUsesModuleStore(t *testing.T) {
+	h := newHarness(t)
+	const policy = `
+apiVersion: lcm/v1
+kind: Policy
+metadata: { name: uses-module }
+spec:
+  nodes:
+    - { id: t, type: trigger.manual, next: { out: [m] } }
+    - { id: m, type: module, props: { module: pass-through } }
+`
+	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy)); err == nil {
+		t.Fatal("deploy succeeded without the module")
+	}
+	if _, err := h.app.Modules.Put(h.ctx, []byte(`
+apiVersion: lcm/v1
+kind: Module
+metadata: { name: pass-through }
+spec:
+  nodes:
+    - { id: in, type: module.input, next: { out: [o] } }
+    - { id: o, type: module.output, props: { port: out } }
+`), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy)); err != nil {
+		t.Fatalf("deploy with module: %v", err)
+	}
+}

@@ -126,13 +126,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 type tokenDTO struct {
 	ID         int64      `json:"id"`
 	Name       string     `json:"name"`
+	Scope      string     `json:"scope"`
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt"`
 	RevokedAt  *time.Time `json:"revokedAt"`
 }
 
 func toTokenDTO(t auth.Token) tokenDTO {
-	return tokenDTO{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, RevokedAt: t.RevokedAt}
+	return tokenDTO{ID: t.ID, Name: t.Name, Scope: string(t.Scope), CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, RevokedAt: t.RevokedAt}
 }
 
 func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
@@ -150,14 +151,19 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Scope string `json:"scope"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	tok, secret, err := s.auth.CreateToken(r.Context(), req.Name)
+	tok, secret, err := s.auth.CreateToken(r.Context(), req.Name, auth.Scope(req.Scope))
 	if errors.Is(err, auth.ErrInvalidName) {
 		writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error(), map[string]any{"field": "name"})
+		return
+	}
+	if errors.Is(err, auth.ErrInvalidScope) {
+		writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error(), map[string]any{"field": "scope"})
 		return
 	}
 	if err != nil {
@@ -165,7 +171,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r.Context(), "token.create", "token:"+strconv.FormatInt(tok.ID, 10), audit.OutcomeOK,
-		map[string]any{"name": tok.Name})
+		map[string]any{"name": tok.Name, "scope": string(tok.Scope)})
 	resp := struct {
 		tokenDTO
 		Token string `json:"token"`

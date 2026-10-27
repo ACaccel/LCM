@@ -1,8 +1,10 @@
 package app_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ACaccel/lcm/internal/app"
+	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/config"
 )
 
@@ -106,5 +109,47 @@ func TestNewFailsWhenAddressTaken(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(cfg.DataDir, config.DBFileName)); statErr == nil {
 		t.Error("database was created although the port was taken")
+	}
+}
+
+// An open event stream must not hold up a graceful shutdown until its
+// timeout.
+func TestShutdownEndsEventStreams(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t)
+	_, secret, err := h.app.Auth.CreateToken(h.ctx, "stream", auth.ScopeAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := h.run()
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	req, err := http.NewRequest("GET", "http://"+h.app.Addr().String()+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+secret)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, ": connected") {
+		t.Fatalf("first line = %q, %v", line, err)
+	}
+
+	if err := stop(); err != nil {
+		t.Fatalf("Run did not shut down gracefully: %v", err)
+	}
+	// The server ended the stream.
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Logf("stream ended with %v", err)
+	}
+	client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	if err := h.app.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }

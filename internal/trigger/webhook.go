@@ -44,6 +44,18 @@ var secretHeaders = map[string]bool{
 // Event: name, headers (lower-case names, first value) and body (parsed when
 // it is JSON, otherwise a string).
 func (m *Manager) Deliver(ctx context.Context, name string, headers http.Header, body []byte) ([]string, error) {
+	return m.deliver(ctx, name, headers, body, false)
+}
+
+// DeliverSigned is Deliver for callers that could not authenticate the
+// request otherwise: listeners without an HMAC secret are skipped, so only
+// a valid signature starts a run. ErrBadSignature is returned when no
+// listener accepted the request, including when none requires a signature.
+func (m *Manager) DeliverSigned(ctx context.Context, name string, headers http.Header, body []byte) ([]string, error) {
+	return m.deliver(ctx, name, headers, body, true)
+}
+
+func (m *Manager) deliver(ctx context.Context, name string, headers http.Header, body []byte, signedOnly bool) ([]string, error) {
 	if len(body) > MaxWebhookBody {
 		return nil, ErrBodyTooLarge
 	}
@@ -71,6 +83,10 @@ func (m *Manager) Deliver(ctx context.Context, name string, headers http.Header,
 		authorized int
 	)
 	for _, l := range ls {
+		if signedOnly && l.props.HMACSecret == "" {
+			badSig++
+			continue
+		}
 		if l.props.HMACSecret != "" {
 			ok, err := m.verifyHMAC(l.props, headers, body)
 			if err != nil {

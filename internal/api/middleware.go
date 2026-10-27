@@ -26,6 +26,7 @@ type ctxKey int
 const (
 	requestIDKey ctxKey = iota
 	requestStateKey
+	scopeKey
 )
 
 // requestState lets inner middleware report facts to the access log.
@@ -163,7 +164,7 @@ func (s *Server) crossOrigin(next http.Handler) http.Handler {
 // leave the request anonymous; handlers decide whether that is acceptable.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		actor, ok, err := s.resolveActor(r)
+		actor, scope, ok, err := s.resolveActor(r)
 		if err != nil {
 			s.internalError(w, r, err)
 			return
@@ -172,45 +173,72 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			if st, _ := r.Context().Value(requestStateKey).(*requestState); st != nil {
 				st.actor, st.known = actor, true
 			}
-			r = r.WithContext(auth.WithActor(r.Context(), actor))
+			ctx := context.WithValue(r.Context(), scopeKey, scope)
+			r = r.WithContext(auth.WithActor(ctx, actor))
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (s *Server) resolveActor(r *http.Request) (auth.Actor, bool, error) {
+// resolveActor also reports the scope of the credential: sessions are
+// always admin, tokens carry their own.
+func (s *Server) resolveActor(r *http.Request) (auth.Actor, auth.Scope, bool, error) {
 	if h := r.Header.Get("Authorization"); h != "" {
 		scheme, token, found := strings.Cut(h, " ")
 		if !found || !strings.EqualFold(scheme, "Bearer") {
-			return auth.Actor{}, false, nil
+			return auth.Actor{}, "", false, nil
 		}
-		actor, err := s.auth.VerifyToken(r.Context(), strings.TrimSpace(token))
+		actor, scope, err := s.auth.VerifyTokenScope(r.Context(), strings.TrimSpace(token))
 		switch {
 		case err == nil:
-			return actor, true, nil
+			return actor, scope, true, nil
 		case errors.Is(err, auth.ErrUnauthenticated):
-			return auth.Actor{}, false, nil
+			return auth.Actor{}, "", false, nil
 		}
-		return auth.Actor{}, false, err
+		return auth.Actor{}, "", false, err
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		user, err := s.auth.Session(r.Context(), c.Value)
 		switch {
 		case err == nil:
-			return user.Actor(), true, nil
+			return user.Actor(), auth.ScopeAdmin, true, nil
 		case errors.Is(err, auth.ErrUnauthenticated):
-			return auth.Actor{}, false, nil
+			return auth.Actor{}, "", false, nil
 		}
-		return auth.Actor{}, false, err
+		return auth.Actor{}, "", false, err
 	}
-	return auth.Actor{}, false, nil
+	return auth.Actor{}, "", false, nil
 }
 
-// requireAny allows any authenticated actor.
+// scopeFrom returns the scope of the authenticated caller.
+func scopeFrom(ctx context.Context) (auth.Scope, bool) {
+	sc, ok := ctx.Value(scopeKey).(auth.Scope)
+	return sc, ok
+}
+
+// requireAny allows any authenticated actor, whatever the token scope. It
+// guards the ingest endpoints, which ingest-scoped tokens exist for.
 func (s *Server) requireAny(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := auth.ActorFrom(r.Context()); !ok {
 			writeError(w, http.StatusUnauthorized, codeUnauthenticated, "authentication required", nil)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// requireAdmin allows sessions and admin-scoped tokens. Ingest-scoped
+// tokens get 403: they authenticated, but may not use this endpoint.
+func (s *Server) requireAdmin(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.ActorFrom(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, codeUnauthenticated, "authentication required", nil)
+			return
+		}
+		if sc, _ := scopeFrom(r.Context()); sc != auth.ScopeAdmin {
+			writeError(w, http.StatusForbidden, codeForbidden, "this token's scope does not permit this endpoint",
+				map[string]any{"scope": string(sc)})
 			return
 		}
 		h(w, r)

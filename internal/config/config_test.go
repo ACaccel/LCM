@@ -121,6 +121,7 @@ func TestInvalidValues(t *testing.T) {
 		{"zero prune interval", nil, []string{"--prune-interval", "0s"}, "prune interval"},
 		{"zero action timeout", nil, []string{"--runtime-action-timeout", "0s"}, "runtime action timeout"},
 		{"empty git", nil, []string{"--git", " "}, "git binary"},
+		{"bad github secret name", map[string]string{EnvGitHubWebhookSecret: "../etc"}, nil, "github webhook secret"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,7 +187,7 @@ func TestComponentSettings(t *testing.T) {
 		EnvSystemctlPrivilege: "doas", EnvRuntimeStatusTimeout: "3s", EnvRuntimeActionTimeout: "2m", EnvLockTTL: "30m",
 		EnvMonitorConcurrency: "2", EnvMonitorRawRetention: "24h", EnvMonitorRollupRetention: "48h",
 		EnvAlertServiceLabels: "svc, app ,", EnvTimelineRetention: "720h", EnvRunRetentionKeep: "5",
-		EnvRunRetentionAge: "48h", EnvPruneInterval: "10m",
+		EnvRunRetentionAge: "48h", EnvPruneInterval: "10m", EnvGitHubWebhookSecret: "gh-hook",
 	}, "--git", "/usr/bin/git", "--alert-service-labels", "a,b")
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +200,9 @@ func TestComponentSettings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(c.AlertServiceLabels, []string{"a", "b"}) {
 		t.Errorf("alert labels = %v", c.AlertServiceLabels)
+	}
+	if c.GitHubWebhookSecret != "gh-hook" {
+		t.Errorf("github webhook secret = %q", c.GitHubWebhookSecret)
 	}
 	if !reflect.DeepEqual(c.Privilege(), []string{"doas"}) {
 		t.Errorf("privilege = %v", c.Privilege())

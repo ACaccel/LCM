@@ -191,7 +191,7 @@ func TestTokenLifecycle(t *testing.T) {
 	svc, clock := newService(t)
 	ctx := context.Background()
 
-	tok, secret, err := svc.CreateToken(ctx, "  ci  ")
+	tok, secret, err := svc.CreateToken(ctx, "  ci  ", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,6 +258,33 @@ func TestTokenLifecycle(t *testing.T) {
 	}
 }
 
+func TestTokenScope(t *testing.T) {
+	svc, _ := newService(t)
+	ctx := context.Background()
+
+	def, defSecret, err := svc.CreateToken(ctx, "default", "")
+	if err != nil || def.Scope != auth.ScopeAdmin {
+		t.Fatalf("default token = %+v, %v", def, err)
+	}
+	ing, ingSecret, err := svc.CreateToken(ctx, "hook", auth.ScopeIngest)
+	if err != nil || ing.Scope != auth.ScopeIngest {
+		t.Fatalf("ingest token = %+v, %v", ing, err)
+	}
+	if _, _, err := svc.CreateToken(ctx, "bad", "root"); !errors.Is(err, auth.ErrInvalidScope) {
+		t.Fatalf("invalid scope: %v", err)
+	}
+
+	for secret, want := range map[string]auth.Scope{defSecret: auth.ScopeAdmin, ingSecret: auth.ScopeIngest} {
+		if _, got, err := svc.VerifyTokenScope(ctx, secret); err != nil || got != want {
+			t.Errorf("VerifyTokenScope = %q, %v; want %q", got, err, want)
+		}
+	}
+	list, err := svc.ListTokens(ctx)
+	if err != nil || len(list) != 2 || list[0].Scope != auth.ScopeIngest || list[1].Scope != auth.ScopeAdmin {
+		t.Fatalf("list = %+v, %v", list, err)
+	}
+}
+
 func TestVerifyTokenRejectsGarbage(t *testing.T) {
 	svc, _ := newService(t)
 	ctx := context.Background()
@@ -272,7 +299,7 @@ func TestCreateTokenNameValidation(t *testing.T) {
 	svc, _ := newService(t)
 	ctx := context.Background()
 	for _, n := range []string{"", "   ", strings.Repeat("x", 65)} {
-		if _, _, err := svc.CreateToken(ctx, n); !errors.Is(err, auth.ErrInvalidName) {
+		if _, _, err := svc.CreateToken(ctx, n, ""); !errors.Is(err, auth.ErrInvalidName) {
 			t.Errorf("CreateToken(%q) = %v", n, err)
 		}
 	}

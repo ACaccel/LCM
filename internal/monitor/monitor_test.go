@@ -539,3 +539,22 @@ func checkSignals(sigs []signal.Signal, check string) []signal.Signal {
 	}
 	return out
 }
+
+func TestValidateChecksAndTypes(t *testing.T) {
+	h := newHarness(t)
+	if got := h.m.CheckTypes(); len(got) != 2 || got[0].Type != "fake" || got[1].Type != "heartbeat" {
+		t.Fatalf("CheckTypes = %+v", got)
+	}
+	checks := []model.Check{
+		{Name: "ok", Type: "fake", Props: map[string]any{"key": "a"}},
+		{Name: "bad-props", Type: "fake", Props: map[string]any{"nope": 1}},
+		{Name: "bad-type", Type: "ghost"},
+	}
+	is := h.m.ValidateChecks(checks, "spec.checks")
+	if len(is) != 2 || is[0].Path != "spec.checks[1].props" || is[1].Path != "spec.checks[2].type" {
+		t.Fatalf("issues = %+v", is)
+	}
+	if is := h.m.ValidateChecks(checks[:1], "spec.checks"); len(is) != 0 {
+		t.Fatalf("valid checks reported: %+v", is)
+	}
+}

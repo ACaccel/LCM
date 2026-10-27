@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/lock"
+	"github.com/ACaccel/lcm/internal/secret"
 )
 
 // Environment variable names.
@@ -48,6 +49,7 @@ const (
 	EnvRunRetentionKeep       = "LCM_RUN_RETENTION_KEEP"
 	EnvRunRetentionAge        = "LCM_RUN_RETENTION_AGE"
 	EnvPruneInterval          = "LCM_PRUNE_INTERVAL"
+	EnvGitHubWebhookSecret    = "LCM_GITHUB_WEBHOOK_SECRET" //nolint:gosec // names an environment variable, not a credential
 )
 
 // Defaults.
@@ -141,6 +143,11 @@ type Config struct {
 	RunRetentionAge  time.Duration
 	// PruneInterval is how often the retention jobs run.
 	PruneInterval time.Duration
+
+	// GitHubWebhookSecret is the name (not the value) of the secret that
+	// verifies GitHub push webhooks. Empty means pushes must authenticate
+	// with an API token like any other ingest call.
+	GitHubWebhookSecret string
 }
 
 // Default returns the configuration used when nothing is set.
@@ -262,6 +269,7 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	num(&c.RunRetentionKeep, EnvRunRetentionKeep)
 	dur(&c.RunRetentionAge, EnvRunRetentionAge)
 	dur(&c.PruneInterval, EnvPruneInterval)
+	str(&c.GitHubWebhookSecret, EnvGitHubWebhookSecret)
 	return errors.Join(errs...)
 }
 
@@ -321,6 +329,8 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.RunRetentionKeep, "run-retention-keep", c.RunRetentionKeep, "finished runs kept per policy regardless of age ("+EnvRunRetentionKeep+")")
 	fs.DurationVar(&c.RunRetentionAge, "run-retention-age", c.RunRetentionAge, "finished runs younger than this are kept ("+EnvRunRetentionAge+")")
 	fs.DurationVar(&c.PruneInterval, "prune-interval", c.PruneInterval, "how often retention jobs run ("+EnvPruneInterval+")")
+	fs.StringVar(&c.GitHubWebhookSecret, "github-webhook-secret", c.GitHubWebhookSecret,
+		"name of the secret that verifies GitHub push webhooks ("+EnvGitHubWebhookSecret+")")
 }
 
 // RegisterDataDirFlag registers only the data directory flag, for commands
@@ -390,6 +400,9 @@ func (c Config) validateComponents() []error {
 	}
 	positive("run retention age", c.RunRetentionAge)
 	positive("prune interval", c.PruneInterval)
+	if c.GitHubWebhookSecret != "" && !secret.ValidName(c.GitHubWebhookSecret) {
+		errs = append(errs, fmt.Errorf("github webhook secret %q: not a valid secret name", c.GitHubWebhookSecret))
+	}
 	return errs
 }
 

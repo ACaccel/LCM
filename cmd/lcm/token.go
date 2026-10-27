@@ -21,10 +21,11 @@ func (a *app) token(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	var name *string
+	var name, scope *string
 	switch sub {
 	case "create":
 		name = fs.String("name", "", "token name (required)")
+		scope = fs.String("scope", string(auth.ScopeAdmin), "token scope: admin or ingest (alert hooks, heartbeats and webhooks only)")
 	case "list", "revoke":
 	default:
 		return usagef("token: unknown subcommand %q", sub)
@@ -49,12 +50,15 @@ func (a *app) token(ctx context.Context, args []string) error {
 		if *name == "" {
 			return usagef("token create: --name is required")
 		}
-		tok, secret, err := svc.CreateToken(ctx, *name)
+		tok, secret, err := svc.CreateToken(ctx, *name, auth.Scope(*scope))
+		if errors.Is(err, auth.ErrInvalidScope) {
+			return usagef("token create: --scope must be admin or ingest")
+		}
 		if err != nil {
 			return err
 		}
 		if err := log.Record(ctx, "token.create", "token:"+strconv.FormatInt(tok.ID, 10), audit.OutcomeOK,
-			map[string]any{"name": tok.Name}); err != nil {
+			map[string]any{"name": tok.Name, "scope": string(tok.Scope)}); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(a.stderr, "Token %d (%s) created. Store it now; it cannot be shown again.\n", tok.ID, tok.Name)
@@ -70,13 +74,13 @@ func (a *app) token(ctx context.Context, args []string) error {
 			return err
 		}
 		tw := tabwriter.NewWriter(a.stdout, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "ID\tNAME\tCREATED\tLAST USED\tSTATUS")
+		_, _ = fmt.Fprintln(tw, "ID\tNAME\tSCOPE\tCREATED\tLAST USED\tSTATUS")
 		for _, t := range tokens {
 			status := "active"
 			if t.RevokedAt != nil {
 				status = "revoked"
 			}
-			_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", t.ID, t.Name, fmtTime(&t.CreatedAt), fmtTime(t.LastUsedAt), status)
+			_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Name, t.Scope, fmtTime(&t.CreatedAt), fmtTime(t.LastUsedAt), status)
 		}
 		return tw.Flush()
 

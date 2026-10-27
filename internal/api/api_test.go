@@ -23,6 +23,7 @@ const testPassword = "correct horse battery"
 
 type env struct {
 	t       *testing.T
+	srv     *Server
 	handler http.Handler
 	auth    *auth.Service
 	audit   *audit.Log
@@ -48,7 +49,8 @@ func newEnv(t *testing.T, mutate ...func(*Deps)) *env {
 	if _, err := svc.SetPassword(context.Background(), "admin", testPassword); err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, handler: New(d).Handler(), auth: svc, audit: d.Audit, logs: logs}
+	srv := New(d)
+	return &env{t: t, srv: srv, handler: srv.Handler(), auth: svc, audit: d.Audit, logs: logs}
 }
 
 type reqOpt func(*http.Request)

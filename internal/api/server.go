@@ -5,13 +5,22 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"sort"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/events"
+	"github.com/ACaccel/lcm/internal/lock"
+	"github.com/ACaccel/lcm/internal/modules"
+	"github.com/ACaccel/lcm/internal/monitor"
+	"github.com/ACaccel/lcm/internal/node"
+	"github.com/ACaccel/lcm/internal/secret"
+	"github.com/ACaccel/lcm/internal/state"
 	"github.com/ACaccel/lcm/internal/store"
+	"github.com/ACaccel/lcm/internal/trigger"
 )
 
 // Defaults for the login hardening settings.
@@ -40,6 +49,36 @@ type Deps struct {
 	LoginFailDelay   time.Duration
 	LoginMaxFailures int
 	LoginWindow      time.Duration
+
+	// Components behind the resource endpoints. Handlers of a resource
+	// need its component; the foundation endpoints (health, auth, tokens,
+	// audit) work without them.
+	Catalog  *catalog.Catalog
+	Manager  *catalog.Manager
+	Monitor  *monitor.Monitor
+	Engine   *engine.Engine
+	Triggers *trigger.Manager
+	Modules  *modules.Store
+	State    *state.Store
+	Locks    *lock.Manager
+	Registry *node.Registry
+	Secrets  secret.Source
+	Events   *events.Hub
+
+	// Context is the application lifetime. Service actions started through
+	// the API run on it rather than on the request, so they outlive the
+	// HTTP call and stop when the application closes.
+	Context context.Context
+
+	// EventHeartbeat is the interval of keep-alive comments on the event
+	// stream; zero selects 15 seconds.
+	EventHeartbeat time.Duration
+	// EventBuffer is the per-client event queue; zero selects 256.
+	EventBuffer int
+
+	// GitHubWebhookSecret names the secret that verifies GitHub push
+	// webhooks; empty requires an API token for them instead.
+	GitHubWebhookSecret string
 }
 
 // Server is the HTTP API.
@@ -55,6 +94,30 @@ type Server struct {
 	loginFailDelay time.Duration
 	limiter        *failureLimiter
 	cop            *http.CrossOriginProtection
+
+	catalog  *catalog.Catalog
+	manager  *catalog.Manager
+	monitor  *monitor.Monitor
+	engine   *engine.Engine
+	triggers *trigger.Manager
+	modules  *modules.Store
+	state    *state.Store
+	locks    *lock.Manager
+	registry *node.Registry
+	secrets  secret.Source
+	hub      *events.Hub
+	ctx      context.Context
+
+	eventHeartbeat time.Duration
+	eventBuffer    int
+	githubSecret   string
+	actions        *actionTracker
+	// docMu serializes policy and module writes so that the If-Match check
+	// and the save form one step.
+	docMu sync.Mutex
+	// patterns lists the registered route patterns, for the OpenAPI
+	// coverage test.
+	patterns []string
 }
 
 // New builds a Server.
@@ -62,7 +125,22 @@ func New(d Deps) *Server {
 	s := &Server{
 		db: d.DB, auth: d.Auth, audit: d.Audit, log: d.Logger, version: d.Version,
 		cookieSecure: d.CookieSecure, now: d.Now, loginFailDelay: d.LoginFailDelay,
-		cop: http.NewCrossOriginProtection(),
+		cop:     http.NewCrossOriginProtection(),
+		catalog: d.Catalog, manager: d.Manager, monitor: d.Monitor, engine: d.Engine, triggers: d.Triggers,
+		modules: d.Modules, state: d.State, locks: d.Locks, registry: d.Registry, secrets: d.Secrets,
+		hub: d.Events, ctx: d.Context, githubSecret: d.GitHubWebhookSecret,
+		actions: newActionTracker(maxTrackedActions),
+	}
+	s.eventBuffer = d.EventBuffer
+	if s.eventBuffer <= 0 {
+		s.eventBuffer = defaultEventBuffer
+	}
+	s.eventHeartbeat = d.EventHeartbeat
+	if s.eventHeartbeat <= 0 {
+		s.eventHeartbeat = defaultEventHeartbeat
+	}
+	if s.ctx == nil {
+		s.ctx = context.Background()
 	}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
@@ -92,36 +170,6 @@ func (s *Server) Handler() http.Handler {
 	h = s.recoverPanic(h)
 	h = s.accessLog(h)
 	return withRequestID(h)
-}
-
-func (s *Server) routes() http.Handler {
-	mux := http.NewServeMux()
-	methods := map[string][]string{}
-	handle := func(method, path string, h http.HandlerFunc) {
-		mux.HandleFunc(method+" "+path, h)
-		methods[path] = append(methods[path], method)
-	}
-
-	handle("GET", "/api/v1/health", s.handleHealth)
-	handle("POST", "/api/v1/auth/login", s.handleLogin)
-	handle("POST", "/api/v1/auth/logout", s.requireSession("", s.handleLogout))
-	handle("GET", "/api/v1/auth/me", s.requireAny(s.handleMe))
-	handle("GET", "/api/v1/tokens", s.requireSession("", s.handleListTokens))
-	handle("POST", "/api/v1/tokens", s.requireSession("token.create", s.handleCreateToken))
-	handle("DELETE", "/api/v1/tokens/{id}", s.requireSession("token.revoke", s.handleRevokeToken))
-	handle("GET", "/api/v1/audit", s.requireAny(s.handleListAudit))
-
-	// A method-less pattern on the same path is less specific than the
-	// method patterns above, so it only catches the remaining methods.
-	for path, ms := range methods {
-		if contains(ms, "GET") {
-			ms = append(ms, "HEAD")
-		}
-		sort.Strings(ms)
-		mux.HandleFunc(path, methodNotAllowedHandler(strings.Join(ms, ", ")))
-	}
-	mux.HandleFunc("/api/v1/", notFoundHandler)
-	return mux
 }
 
 func contains(list []string, s string) bool {

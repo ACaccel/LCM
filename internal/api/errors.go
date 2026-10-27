@@ -21,6 +21,13 @@ const (
 	codeRateLimited        = "rate_limited"
 	codeUnavailable        = "unavailable"
 	codeInternal           = "internal"
+
+	codeAlreadyExists   = "already_exists"
+	codeVersionConflict = "version_conflict"
+	codeLockHeld        = "lock_held"
+	codeInvalidState    = "invalid_state"
+	codePrecondition    = "precondition_failed"
+	codeConflict        = "conflict"
 )
 
 // maxBodyBytes caps JSON request bodies.

@@ -308,3 +308,66 @@ func TestOnChangeFiresForObservedSetChanges(t *testing.T) {
 	}
 	expect("failed delete", 5)
 }
+
+func TestOnDocumentReportsDocumentChanges(t *testing.T) {
+	e := newEnv(t)
+	var got []string
+	cat, err := catalog.New(catalog.Config{
+		DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Log: testLogger(t),
+		OnDocument: func(service, change string) { got = append(got, service+":"+change) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.Put(e.ctx, []byte(svcDoc("app", "")), 0); err != nil {
+		t.Fatal(err)
+	}
+	// An identical save changes nothing and reports nothing.
+	if _, err := cat.Put(e.ctx, []byte(svcDoc("app", "")), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.Put(e.ctx, []byte(svcDoc("app", "  dependsOn: [db]\n")), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.Restore(e.ctx, "app", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Delete(e.ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"app:created", "app:updated", "app:restored", "app:deleted"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("changes = %v, want %v", got, want)
+	}
+}
+
+func TestOnTimelineReportsEveryStoredEntry(t *testing.T) {
+	e := newEnv(t)
+	var kinds []string
+	cat, err := catalog.New(catalog.Config{
+		DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Log: testLogger(t),
+		OnTimeline: func(en catalog.Entry) { kinds = append(kinds, en.Kind+":"+en.Service) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.Put(e.ctx, []byte(svcDoc("app", "")), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Transition(context.Background(), "app", catalog.StateRegistered, catalog.StateRunning, catalog.TransitionInfo{Action: "start"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AppendTimeline(context.Background(), catalog.Entry{Service: "app", Kind: catalog.KindAction, Summary: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Transition(context.Background(), "app", catalog.StateRunning, catalog.StateStopped, catalog.TransitionInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Delete(e.ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	want := "config.changed:app,lifecycle.changed:app,action:app,lifecycle.changed:app,config.changed:app"
+	if got := strings.Join(kinds, ","); got != want {
+		t.Fatalf("entries = %s, want %s", got, want)
+	}
+}

@@ -66,7 +66,24 @@ type Config struct {
 	// service entering or leaving the retired state. It runs on the
 	// caller's goroutine and must not block or call back into the Catalog.
 	OnChange func()
+	// OnDocument, when set, is called after a committed document change
+	// with the service name and one of ChangeCreated, ChangeUpdated,
+	// ChangeRestored or ChangeDeleted. The same restrictions as for
+	// OnChange apply.
+	OnDocument func(service, change string)
+	// OnTimeline, when set, is called after a timeline entry was stored,
+	// whatever wrote it. Entries written together with a state or document
+	// change have ID 0. The same restrictions as for OnChange apply.
+	OnTimeline func(Entry)
 }
+
+// Document changes reported to Config.OnDocument.
+const (
+	ChangeCreated  = "created"
+	ChangeUpdated  = "updated"
+	ChangeRestored = "restored"
+	ChangeDeleted  = "deleted"
+)
 
 // Catalog stores services and their history.
 type Catalog struct {
@@ -76,6 +93,8 @@ type Catalog struct {
 	clk      clock.Clock
 	log      *slog.Logger
 	onChange func()
+	onDoc    func(service, change string)
+	onTL     func(Entry)
 }
 
 // New returns a Catalog.
@@ -83,7 +102,7 @@ func New(cfg Config) (*Catalog, error) {
 	if cfg.DB == nil || cfg.Audit == nil {
 		return nil, errors.New("catalog: DB and Audit are required")
 	}
-	c := &Catalog{db: cfg.DB, audit: cfg.Audit, bus: cfg.Bus, clk: cfg.Clock, log: cfg.Log, onChange: cfg.OnChange}
+	c := &Catalog{db: cfg.DB, audit: cfg.Audit, bus: cfg.Bus, clk: cfg.Clock, log: cfg.Log, onChange: cfg.OnChange, onDoc: cfg.OnDocument, onTL: cfg.OnTimeline}
 	if c.clk == nil {
 		c.clk = clock.Real()
 	}
@@ -157,6 +176,18 @@ func (c *Catalog) changed() {
 	}
 }
 
+func (c *Catalog) timelineAdded(e Entry) {
+	if c.onTL != nil {
+		c.onTL(e)
+	}
+}
+
+func (c *Catalog) documentChanged(service, change string) {
+	if c.onDoc != nil {
+		c.onDoc(service, change)
+	}
+}
+
 // Put saves a service document given as YAML or JSON. expected is the
 // version the change is based on: 0 creates the service, a positive value
 // updates it and must equal the current version.
@@ -184,7 +215,9 @@ func (c *Catalog) put(ctx context.Context, svc *model.Service, expected, restore
 	now := c.now().UnixMilli()
 
 	var res PutResult
+	var entry Entry
 	err = c.db.Write(ctx, func(tx *sql.Tx) error {
+		res, entry = PutResult{}, Entry{}
 		var hostKind string
 		switch err := tx.QueryRowContext(ctx, `SELECT kind FROM hosts WHERE name = ?`, svc.Spec.EffectiveHost()).Scan(&hostKind); {
 		case errors.Is(err, sql.ErrNoRows):
@@ -252,10 +285,11 @@ func (c *Catalog) put(ctx context.Context, svc *model.Service, expected, restore
 		if restoredFrom > 0 {
 			summary = fmt.Sprintf("configuration version %d restored from version %d by %s", next, restoredFrom, actor.Name)
 		}
-		if err := insertTimeline(ctx, tx, Entry{
+		entry = Entry{
 			Service: name, Time: time.UnixMilli(now), Kind: KindConfig, Summary: summary,
 			Data: map[string]any{"version": next, "restoredFrom": restoredFrom, "actor": actor.Name},
-		}); err != nil {
+		}
+		if err := insertTimeline(ctx, tx, entry); err != nil {
 			return err
 		}
 		res = PutResult{Version: next, Created: !found, Changed: true}
@@ -267,13 +301,15 @@ func (c *Catalog) put(ctx context.Context, svc *model.Service, expected, restore
 
 	if res.Changed {
 		c.changed()
-		action := "service.update"
+		action, change := "service.update", ChangeUpdated
 		switch {
 		case restoredFrom > 0:
-			action = "service.restore"
+			action, change = "service.restore", ChangeRestored
 		case res.Created:
-			action = "service.create"
+			action, change = "service.create", ChangeCreated
 		}
+		c.timelineAdded(entry)
+		c.documentChanged(name, change)
 		details := map[string]any{"version": res.Version}
 		if restoredFrom > 0 {
 			details["restoredFrom"] = restoredFrom
@@ -307,6 +343,7 @@ func (c *Catalog) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	now := c.now()
+	var entry Entry
 	err = c.db.Write(ctx, func(tx *sql.Tx) error {
 		var state State
 		switch err := tx.QueryRowContext(ctx, `SELECT state FROM services WHERE name = ?`, name).Scan(&state); {
@@ -324,15 +361,18 @@ func (c *Catalog) Delete(ctx context.Context, name string) error {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM action_completions WHERE service = ?`, name); err != nil {
 			return err
 		}
-		return insertTimeline(ctx, tx, Entry{
+		entry = Entry{
 			Service: name, Time: now, Kind: KindConfig,
 			Summary: "service deleted by " + actor.Name, Data: map[string]any{"deleted": true},
-		})
+		}
+		return insertTimeline(ctx, tx, entry)
 	})
 	if err != nil {
 		return err
 	}
 	c.changed()
+	c.timelineAdded(entry)
+	c.documentChanged(name, ChangeDeleted)
 	return c.audit.Record(ctx, "service.delete", name, audit.OutcomeOK, nil)
 }
 

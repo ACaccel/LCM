@@ -1,0 +1,2463 @@
+openapi: 3.1.0
+info:
+  title: LCM API
+  version: "1"
+  description: |
+    HTTP API of LCM, the self-hosted service lifecycle control plane.
+
+    **Conventions**
+
+    - Base path `/api/v1`; JSON field names are camelCase; times are RFC 3339 in UTC.
+    - Errors use one envelope, `{"error": {"code", "message", "details"}}`.
+      Status codes: 400 malformed request, 401 not authenticated, 403 not allowed
+      (including a token scope that does not permit the endpoint), 404 unknown
+      resource, 409 conflict (version mismatch, lock held, invalid state), 413 body
+      too large, 422 validation failed (`details.issues` lists `{path, message}`),
+      429 rate limited, 500 internal error, 503 shutting down.
+    - Documents (Service, Policy, Module) are sent as `application/yaml` or
+      `application/json` and returned as JSON: `{document, version, updatedAt,
+      updatedBy}` plus resource-specific fields. The `ETag` response header carries
+      the version.
+    - Optimistic locking: `PUT` needs `If-Match: <version>` (quoted or not). A stale
+      version answers 409 `version_conflict` with `details.currentVersion`.
+      Policies and modules are created by `PUT` without `If-Match` (or with `*`);
+      services are created by `POST /services`.
+    - Lists take `limit` (default 50, maximum 500) and an opaque `cursor`, and
+      answer `{items, nextCursor}`; `nextCursor` is null on the last page. Short
+      enumerations (`/hosts`, `/node-types`, `/check-types`) answer `{items}` only.
+      `/audit` predates this convention and pages with `before` and `nextBefore`.
+    - Actions on services run in the background: they answer 202 with an
+      `actionId` that `GET /actions/{id}` reports on. Their outcome also appears on
+      the timeline and in the event stream.
+
+    **Authentication**
+
+    A browser session cookie (`POST /auth/login`) or `Authorization: Bearer <token>`.
+    Sessions and `admin` tokens may use the whole API except token management,
+    which is session-only. `ingest` tokens may only call the alert, heartbeat and
+    webhook endpoints (and `GET /auth/me`).
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+tags:
+  - name: Meta
+  - name: Auth
+  - name: Services
+  - name: Actions
+  - name: Monitoring
+  - name: Policies
+  - name: Modules
+  - name: Runs
+  - name: Locks
+  - name: Ingest
+  - name: Events
+
+paths:
+  /health:
+    get:
+      tags: [Meta]
+      operationId: getHealth
+      summary: Liveness and database check
+      security: []
+      responses:
+        "200":
+          description: Healthy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServerHealth" }
+        "503":
+          description: The database is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  /openapi.yaml:
+    get:
+      tags: [Meta]
+      operationId: getOpenAPI
+      summary: This document
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Start a session
+      description: Sets the `lcm_session` cookie. Failures are rate limited per client address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Logged in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: End the session
+      description: Session only.
+      responses:
+        "204": { description: Logged out. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getMe
+      summary: The authenticated caller
+      description: Available to every authenticated caller, including ingest tokens.
+      responses:
+        "200":
+          description: The caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actor]
+                properties:
+                  actor: { $ref: "#/components/schemas/Actor" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /tokens:
+    get:
+      tags: [Auth]
+      operationId: listTokens
+      summary: List API tokens
+      description: Session only. Secrets are never listed.
+      responses:
+        "200":
+          description: Tokens, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Token" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Auth]
+      operationId: createToken
+      summary: Create an API token
+      description: Session only. The secret is returned once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenCreateRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /tokens/{id}:
+    delete:
+      tags: [Auth]
+      operationId: revokeToken
+      summary: Revoke an API token
+      description: Session only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "204": { description: Revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /audit:
+    get:
+      tags: [Auth]
+      operationId: listAudit
+      summary: Audit log
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: before
+          in: query
+          description: Return entries with an id below this one.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: Entries, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextBefore]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+                  nextBefore:
+                    type: [integer, "null"]
+                    format: int64
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /hosts:
+    get:
+      tags: [Services]
+      operationId: listHosts
+      summary: Hosts services run on
+      responses:
+        "200":
+          description: Hosts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Host" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /services:
+    get:
+      tags: [Services]
+      operationId: listServices
+      summary: List services
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: label
+          in: query
+          description: "Keep services with this label, as `key=value`. May be repeated; all must match."
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: true
+        - name: state
+          in: query
+          schema: { $ref: "#/components/schemas/ServiceState" }
+        - name: health
+          in: query
+          schema: { $ref: "#/components/schemas/Health" }
+      responses:
+        "200":
+          description: Services ordered by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Services]
+      operationId: createService
+      summary: Create a service
+      requestBody: { $ref: "#/components/requestBodies/ServiceDocument" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDoc" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /services/{svc}:
+    parameters:
+      - $ref: "#/components/parameters/Service"
+    get:
+      tags: [Services]
+      operationId: getService
+      summary: A service with its state, health, checks and alerts
+      responses:
+        "200":
+          description: The service.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Services]
+      operationId: updateService
+      summary: Replace a service document
+      description: The name in the document must match the URL. `If-Match` is required.
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody: { $ref: "#/components/requestBodies/ServiceDocument" }
+      responses:
+        "200":
+          description: Saved. An unchanged document keeps its version.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDoc" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [Services]
+      operationId: deleteService
+      summary: Delete a service
+      description: Only services that are registered, stopped, failed or retired can be deleted. History is kept.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /services/{svc}/versions:
+    parameters:
+      - $ref: "#/components/parameters/Service"
+    get:
+      tags: [Services]
+      operationId: listServiceVersions
+      summary: Stored versions of a service document
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Versions, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceVersionList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{svc}/versions/{v}:
+    parameters:
+      - $ref: "#/components/parameters/Service"
+      - $ref: "#/components/parameters/Version"
+    get:
+      tags: [Services]
+      operationId: getServiceVersion
+      summary: One stored version of a service document
+      responses:
+        "200":
+          description: The version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceVersion" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{svc}/restore:
+    post:
+      tags: [Services]
+      operationId: restoreService
+      summary: Restore an old version as a new one
+      parameters:
+        - $ref: "#/components/parameters/Service"
+        - name: If-Match
+          in: header
+          required: false
+          description: The current version; the current one is used when omitted.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              additionalProperties: false
+              properties:
+                version: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: The new current version.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceDoc" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /services/{svc}/actions/{action}:
+    post:
+      tags: [Actions]
+      operationId: runServiceAction
+      summary: Run a lifecycle action
+      description: |
+        Starts the action in the background and answers 202 with an action id.
+        Preconditions that can be checked up front (unknown service, wrong state,
+        missing configuration, busy service) fail synchronously. With
+        `dryRun=true` nothing is started and the plan is returned.
+      parameters:
+        - $ref: "#/components/parameters/Service"
+        - name: action
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/ActionName" }
+        - name: dryRun
+          in: query
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActionRequest" }
+      responses:
+        "200":
+          description: The plan (only with `dryRun=true`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionPlan" }
+        "202":
+          description: Started.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [actionId, status]
+                properties:
+                  actionId: { type: string }
+                  status: { type: string, enum: [running] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /actions/{id}:
+    get:
+      tags: [Actions]
+      operationId: getAction
+      summary: Progress and outcome of an action
+      description: Only the most recent 500 actions are remembered, and not across restarts.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: The action.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Action" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{svc}/deployments:
+    get:
+      tags: [Actions]
+      operationId: listDeployments
+      summary: Deployment history of a service
+      parameters:
+        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Deployments, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /services/{svc}/timeline:
+    get:
+      tags: [Services]
+      operationId: listServiceTimeline
+      summary: Timeline of one service
+      parameters:
+        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/TimelineKinds"
+        - $ref: "#/components/parameters/TimelineFrom"
+        - $ref: "#/components/parameters/TimelineTo"
+      responses:
+        "200":
+          description: Entries, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimelineList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /timeline:
+    get:
+      tags: [Services]
+      operationId: listTimeline
+      summary: Timeline of all services
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/TimelineKinds"
+        - $ref: "#/components/parameters/TimelineFrom"
+        - $ref: "#/components/parameters/TimelineTo"
+      responses:
+        "200":
+          description: Entries, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimelineList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /services/{svc}/checks:
+    get:
+      tags: [Monitoring]
+      operationId: listChecks
+      summary: Current status of a service's health checks
+      parameters:
+        - $ref: "#/components/parameters/Service"
+      responses:
+        "200":
+          description: Checks; empty for a service without checks.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Checks" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{svc}/checks/{check}/series:
+    get:
+      tags: [Monitoring]
+      operationId: getCheckSeries
+      summary: Result history of one check
+      description: Ranges up to six hours inside raw retention use raw results; anything else uses one-minute rollups.
+      parameters:
+        - $ref: "#/components/parameters/Service"
+        - name: check
+          in: path
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          description: Start of the range; one hour before `to` when omitted.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: End of the range (exclusive); now when omitted.
+          schema: { type: string, format: date-time }
+        - name: points
+          in: query
+          description: Maximum number of points.
+          schema: { type: integer, minimum: 1, maximum: 2000, default: 120 }
+      responses:
+        "200":
+          description: The series.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Series" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /services/{svc}/summary:
+    get:
+      tags: [Monitoring]
+      operationId: getServiceSummary
+      summary: Uptime and latency over a window
+      parameters:
+        - $ref: "#/components/parameters/Service"
+        - name: window
+          in: query
+          schema: { type: string, enum: [24h, 7d, 30d], default: 24h }
+      responses:
+        "200":
+          description: Totals for the service and per check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceSummaryStats" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /check-types:
+    get:
+      tags: [Monitoring]
+      operationId: listCheckTypes
+      summary: Registered check types
+      responses:
+        "200":
+          description: Check types.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CheckType" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /alerts:
+    get:
+      tags: [Monitoring]
+      operationId: listAlerts
+      summary: Firing external alerts
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: service
+          in: query
+          description: Only alerts of this service.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Alerts, oldest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /policies:
+    get:
+      tags: [Policies]
+      operationId: listPolicies
+      summary: List policies
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Policies ordered by name, deployed or not.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /policies/{p}:
+    parameters:
+      - $ref: "#/components/parameters/Policy"
+    get:
+      tags: [Policies]
+      operationId: getPolicy
+      summary: A policy with its triggers and compile warnings
+      description: Returns the deployed version, or the latest stored one when the policy is not deployed.
+      responses:
+        "200":
+          description: The policy.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Policies]
+      operationId: deployPolicy
+      summary: Validate, store and deploy a policy
+      description: |
+        Creates the policy (no `If-Match`, or `*`) or deploys a new version of an
+        existing one (`If-Match: <current version>`). Modules are resolved from the
+        module store and embedded in the stored version. A document equal to the
+        latest version creates no new version but deploys it again.
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody: { $ref: "#/components/requestBodies/PolicyDocument" }
+      responses:
+        "200":
+          description: Deployed a new or unchanged version of an existing policy.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyDetail" }
+        "201":
+          description: Created and deployed.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /policies/{p}/deployment:
+    delete:
+      tags: [Policies]
+      operationId: undeployPolicy
+      summary: Undeploy a policy
+      description: New events are no longer accepted and queued runs are cancelled; active runs finish. Stored versions are kept.
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+      responses:
+        "204": { description: Undeployed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/pause:
+    post:
+      tags: [Policies]
+      operationId: pausePolicy
+      summary: Pause a deployed policy
+      description: A paused policy rejects new runs; active runs continue.
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+      responses:
+        "200":
+          description: Paused.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PauseState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/resume:
+    post:
+      tags: [Policies]
+      operationId: resumePolicy
+      summary: Resume a paused policy
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+      responses:
+        "200":
+          description: Resumed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PauseState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/versions:
+    get:
+      tags: [Policies]
+      operationId: listPolicyVersions
+      summary: Stored versions of a policy
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Versions, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocVersionList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/versions/{v}:
+    get:
+      tags: [Policies]
+      operationId: getPolicyVersion
+      summary: One stored version of a policy
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+        - $ref: "#/components/parameters/Version"
+      responses:
+        "200":
+          description: The version.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyDoc" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/state:
+    get:
+      tags: [Policies]
+      operationId: listPolicyState
+      summary: Persistent state of a policy
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Entries ordered by key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StateList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/state/{key}:
+    delete:
+      tags: [Policies]
+      operationId: deletePolicyState
+      summary: Delete one state key
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /policies/{p}/runs:
+    post:
+      tags: [Runs]
+      operationId: startRun
+      summary: Start a run by hand
+      description: |
+        Starts a run of the deployed policy at the named trigger node, or at the
+        policy's only `trigger.manual` node. The request body supplies the trigger
+        event. A run dropped by the policy's `drop` concurrency mode answers 409 with
+        the stored run's id in `details.runId`.
+      parameters:
+        - $ref: "#/components/parameters/Policy"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartRunRequest" }
+      responses:
+        "202":
+          description: The run is stored and starts (or queues) in the background.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunStarted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /validate:
+    post:
+      tags: [Policies]
+      operationId: validateDocument
+      summary: Validate any single document without side effects
+      description: |
+        Decodes and checks a Policy, Module or Service. Problems are a normal result
+        and answer 200 with `valid: false`; only a request that cannot be read is an
+        error. Policies are compiled against the module store, and services are
+        checked against the hosts and the check types.
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { type: string }
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: The verdict.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+
+  /modules:
+    get:
+      tags: [Modules]
+      operationId: listModules
+      summary: List modules
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Modules ordered by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /modules/{m}:
+    parameters:
+      - $ref: "#/components/parameters/Module"
+    get:
+      tags: [Modules]
+      operationId: getModule
+      summary: A module document
+      responses:
+        "200":
+          description: The module.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleDoc" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Modules]
+      operationId: saveModule
+      summary: Create or update a module
+      description: |
+        Creates the module (no `If-Match`, or `*`) or saves a new version of an
+        existing one (`If-Match: <current version>`). Deployed policies keep the
+        version of the module they were compiled with until they are deployed again.
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody: { $ref: "#/components/requestBodies/ModuleDocument" }
+      responses:
+        "200":
+          description: Saved.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleDoc" }
+        "201":
+          description: Created.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModuleDoc" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /modules/{m}/versions:
+    get:
+      tags: [Modules]
+      operationId: listModuleVersions
+      summary: Stored versions of a module
+      parameters:
+        - $ref: "#/components/parameters/Module"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Versions, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocVersionList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /node-types:
+    get:
+      tags: [Policies]
+      operationId: listNodeTypes
+      summary: Schemas of all node types
+      description: The source of truth for node palettes, property forms and ports.
+      responses:
+        "200":
+          description: Node types sorted by type.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/NodeType" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /runs:
+    get:
+      tags: [Runs]
+      operationId: listRuns
+      summary: List runs
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: policy
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          description: One or more statuses, repeated or comma separated.
+          schema: { type: array, items: { $ref: "#/components/schemas/RunStatus" } }
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: Runs, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /runs/{id}:
+    get:
+      tags: [Runs]
+      operationId: getRun
+      summary: A run with its per-node decision trace
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Run" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /runs/{id}/cancel:
+    post:
+      tags: [Runs]
+      operationId: cancelRun
+      summary: Cancel a queued or active run
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+      responses:
+        "202":
+          description: Cancellation requested; the run ends as `cancelled`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunRef" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /runs/{id}/nodes/{node}/resume:
+    post:
+      tags: [Runs]
+      operationId: resumeNode
+      summary: Resume a suspended node
+      description: The node's `suspendKey` from the run trace must be sent as `key`. A node id inside a module contains slashes and must be percent-encoded.
+      parameters:
+        - $ref: "#/components/parameters/RunID"
+        - name: node
+          in: path
+          required: true
+          description: Scoped node id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResumeRequest" }
+      responses:
+        "202":
+          description: Resumed; the node continues in the background.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runId, node]
+                properties:
+                  runId: { type: string }
+                  node: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /locks:
+    get:
+      tags: [Locks]
+      operationId: listLocks
+      summary: Held locks
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Locks ordered by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LockList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /locks/{name}:
+    delete:
+      tags: [Locks]
+      operationId: forceReleaseLock
+      summary: Force-release a lock
+      description: Frees the lock whoever holds it; audited. Lock names may contain slashes, which must be percent-encoded.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204": { description: Released. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /hooks/alerts/{source}:
+    post:
+      tags: [Ingest]
+      operationId: ingestAlert
+      summary: Receive alerts from a monitoring system
+      description: |
+        Accepts Alertmanager, Uptime Kuma, Gatus and generic payloads. Allowed for
+        `admin` and `ingest` tokens. Bodies are limited to 1 MiB.
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema: { type: string, enum: [alertmanager, uptime-kuma, gatus, generic] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { description: The source's native payload. }
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [signals]
+                properties:
+                  signals:
+                    type: integer
+                    description: Alerts that started or stopped firing and were published as signals.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /heartbeats/{svc}/{check}:
+    parameters:
+      - $ref: "#/components/parameters/Service"
+      - name: check
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Ingest]
+      operationId: postHeartbeat
+      summary: Report a heartbeat
+      description: The body, if any, is kept as a short message. Allowed for `admin` and `ingest` tokens.
+      requestBody:
+        required: false
+        content:
+          "*/*":
+            schema: { type: string }
+      responses:
+        "202": { $ref: "#/components/responses/HeartbeatAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+    get:
+      tags: [Ingest]
+      operationId: getHeartbeat
+      summary: Report a heartbeat without a body
+      description: For senders that can only issue GET, such as `curl` in a cron line.
+      responses:
+        "202": { $ref: "#/components/responses/HeartbeatAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /hooks/github:
+    post:
+      tags: [Ingest]
+      operationId: githubPush
+      summary: Receive a GitHub push event
+      description: |
+        Notifies the `trigger.git` nodes that watch the pushed repository and branch.
+        When `LCM_GITHUB_WEBHOOK_SECRET` names a secret, a valid
+        `X-Hub-Signature-256` header authenticates the request and no token is
+        needed; otherwise an `admin` or `ingest` token is required. Other events
+        are acknowledged and ignored. The name `github` is reserved: a
+        `trigger.webhook` node cannot be reached under it.
+      security:
+        - bearerAuth: []
+        - signature: []
+      parameters:
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: GitHub's webhook payload. }
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitHubAck" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+  /hooks/{name}:
+    post:
+      tags: [Ingest]
+      operationId: deliverWebhook
+      summary: Deliver a webhook to `trigger.webhook` nodes
+      description: |
+        Starts a run for every deployed `trigger.webhook` node with this name. A
+        listener that has an `hmacSecret` requires a valid signature in its header
+        (default `X-Hub-Signature-256`) and then needs no token; a listener without
+        one requires an `admin` or `ingest` token. Callers without a token cannot
+        tell an unknown name from a bad signature. Bodies larger than 128 KiB are
+        refused.
+      security:
+        - bearerAuth: []
+        - signature: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          "*/*":
+            schema: { description: Any body; JSON is parsed. }
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    description: Ids of the runs that were started.
+                    items: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+
+  /events:
+    get:
+      tags: [Events]
+      operationId: streamEvents
+      summary: Live events (server-sent events)
+      description: |
+        A `text/event-stream` of what happens in LCM. Each frame has an `id`, an
+        `event` name (the event type) and `data` holding an `EventEnvelope`. Comment
+        lines (`: heartbeat`) keep idle connections open every 15 seconds. A client
+        that cannot keep up receives `event: overflow` and is disconnected; it must
+        reload its data from the REST API and reconnect. `Last-Event-ID` is not
+        supported: reload after reconnecting.
+
+        Event types and their `data` payloads:
+
+        - `signal`: a signal from the bus (check, health, lifecycle, alert).
+        - `run`: a run event (`run.queued`, `run.started`, `run.suspended`,
+          `run.resumed`, `run.finished`).
+        - `node`: a node event (`node.started`, `node.finished`, `node.retrying`,
+          `node.suspended`, `node.dead`).
+        - `timeline`: a stored timeline entry.
+        - `action`: progress of an action started through the API.
+        - `catalog`: a service document was created, updated, restored or deleted,
+          or a policy was deployed or undeployed.
+      parameters:
+        - name: service
+          in: query
+          description: Only events about this service.
+          schema: { type: string }
+        - name: policy
+          in: query
+          description: Only events about this policy.
+          schema: { type: string }
+        - name: run
+          in: query
+          description: Only events of this run.
+          schema: { type: string }
+        - name: types
+          in: query
+          description: Event types to receive, repeated or comma separated; all when omitted.
+          schema: { type: array, items: { $ref: "#/components/schemas/EventType" } }
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { $ref: "#/components/schemas/EventEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: An API token (`lcm_...`), created with `lcm token create` or `POST /tokens`.
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: lcm_session
+    signature:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: Hex HMAC-SHA256 of the body, optionally prefixed `sha256=`.
+
+  headers:
+    ETag:
+      description: The document version, quoted.
+      schema: { type: string }
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      description: Page size.
+      schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: The `nextCursor` of the previous page.
+      schema: { type: string }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: The version the change is based on, or `*` to create.
+      schema: { type: string }
+    Service:
+      name: svc
+      in: path
+      required: true
+      schema: { type: string }
+    Policy:
+      name: p
+      in: path
+      required: true
+      schema: { type: string }
+    Module:
+      name: m
+      in: path
+      required: true
+      schema: { type: string }
+    Version:
+      name: v
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    RunID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    TimelineKinds:
+      name: kinds
+      in: query
+      description: Entry kinds to keep, repeated or comma separated.
+      schema: { type: array, items: { type: string } }
+      style: form
+      explode: true
+    TimelineFrom:
+      name: from
+      in: query
+      description: Entries at or after this time.
+      schema: { type: string, format: date-time }
+    TimelineTo:
+      name: to
+      in: query
+      description: Entries before this time.
+      schema: { type: string, format: date-time }
+
+  requestBodies:
+    ServiceDocument:
+      required: true
+      content:
+        application/yaml:
+          schema: { type: string }
+        application/json:
+          schema: { $ref: "#/components/schemas/ServiceDocument" }
+    PolicyDocument:
+      required: true
+      content:
+        application/yaml:
+          schema: { type: string }
+        application/json:
+          schema: { $ref: "#/components/schemas/PolicyDocument" }
+    ModuleDocument:
+      required: true
+      content:
+        application/yaml:
+          schema: { type: string }
+        application/json:
+          schema: { $ref: "#/components/schemas/ModuleDocument" }
+
+  responses:
+    BadRequest:
+      description: The request is malformed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unauthorized:
+      description: Not authenticated.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Forbidden:
+      description: Authenticated but not allowed, for example a token scope that does not permit the endpoint.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    NotFound:
+      description: The resource does not exist.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Conflict:
+      description: |
+        Conflict. `error.code` tells which: `version_conflict` (details carry
+        `currentVersion`), `already_exists`, `lock_held`, `invalid_state`,
+        `precondition_failed` or `conflict`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    TooLarge:
+      description: The request body exceeds the limit.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    Unprocessable:
+      description: Validation failed; `error.details.issues` locates the problems.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ValidationErrorEnvelope" }
+    TooManyRequests:
+      description: Too many failed attempts.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+    HeartbeatAccepted:
+      description: Recorded.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [accepted]
+            properties:
+              accepted: { type: boolean }
+
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code:
+              type: string
+              description: Machine-readable code such as `not_found` or `version_conflict`.
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: true
+    ValidationErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details]
+          properties:
+            code: { type: string, enum: [validation_failed] }
+            message: { type: string }
+            details:
+              type: object
+              required: [issues]
+              properties:
+                issues:
+                  type: array
+                  items: { $ref: "#/components/schemas/Issue" }
+    Issue:
+      type: object
+      required: [path, message]
+      properties:
+        path:
+          type: string
+          description: Location in the document, such as `spec.nodes[3].next.true[0]`.
+        message: { type: string }
+    Actor:
+      type: object
+      required: [kind, id, name]
+      properties:
+        kind: { type: string, enum: [user, token, ai, system] }
+        id: { type: string }
+        name: { type: string }
+    ServerHealth:
+      type: object
+      required: [status, version]
+      properties:
+        status: { type: string }
+        version: { type: string }
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+    LoginResponse:
+      type: object
+      required: [actor, expiresAt]
+      properties:
+        actor: { $ref: "#/components/schemas/Actor" }
+        expiresAt: { type: string, format: date-time }
+    TokenScope:
+      type: string
+      enum: [admin, ingest]
+    TokenCreateRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64 }
+        scope:
+          $ref: "#/components/schemas/TokenScope"
+          default: admin
+    Token:
+      type: object
+      required: [id, name, scope, createdAt, lastUsedAt, revokedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        scope: { $ref: "#/components/schemas/TokenScope" }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        revokedAt: { type: [string, "null"], format: date-time }
+    TokenCreated:
+      allOf:
+        - $ref: "#/components/schemas/Token"
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+              description: The secret. It is shown only here.
+    AuditEntry:
+      type: object
+      required: [id, time, actor, action, target, details, outcome]
+      properties:
+        id: { type: integer, format: int64 }
+        time: { type: string, format: date-time }
+        actor: { $ref: "#/components/schemas/Actor" }
+        action: { type: string }
+        target: { type: string }
+        details: { type: object, additionalProperties: true }
+        outcome: { type: string, enum: [ok, denied, error] }
+    Host:
+      type: object
+      required: [name, kind, address]
+      properties:
+        name: { type: string }
+        kind: { type: string, enum: [local, ssh] }
+        address: { type: string }
+
+    Duration:
+      type: string
+      description: Go duration such as `30s` or `5m`.
+      examples: ["30s"]
+    Labels:
+      type: object
+      additionalProperties: { type: string }
+    Metadata:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        labels: { $ref: "#/components/schemas/Labels" }
+    DocMeta:
+      type: object
+      required: [version, updatedAt, updatedBy]
+      properties:
+        version: { type: integer, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: "#/components/schemas/Actor" }
+    Command:
+      type: object
+      required: [command]
+      properties:
+        command: { type: string, description: Run with `sh -c`. }
+        timeout: { $ref: "#/components/schemas/Duration" }
+    Check:
+      type: object
+      required: [name, type]
+      properties:
+        name: { type: string }
+        type: { type: string, description: See `GET /check-types`. }
+        interval: { $ref: "#/components/schemas/Duration" }
+        timeout: { $ref: "#/components/schemas/Duration" }
+        critical: { type: boolean, description: "Default true." }
+        threshold: { type: integer, minimum: 1 }
+        props: { type: object, additionalProperties: true }
+    ServiceDocument:
+      type: object
+      description: A `lcm/v1` Service.
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [lcm/v1] }
+        kind: { type: string, enum: [Service] }
+        metadata: { $ref: "#/components/schemas/Metadata" }
+        spec:
+          type: object
+          required: [runtime]
+          properties:
+            host: { type: string }
+            runtime:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [systemd, docker, compose, command] }
+                unit: { type: string }
+                scope: { type: string }
+                container: { type: string }
+                project: { type: string }
+                file: { type: string }
+                start: { type: string }
+                stop: { type: string }
+                restart: { type: string }
+                status: { type: string }
+            source:
+              type: object
+              required: [repo, branch]
+              properties:
+                repo: { type: string }
+                remote: { type: string }
+                branch: { type: string }
+                build: { type: string }
+                install: { type: string }
+                timeout: { $ref: "#/components/schemas/Duration" }
+            backup: { $ref: "#/components/schemas/Command" }
+            jobs:
+              type: object
+              additionalProperties: { $ref: "#/components/schemas/Command" }
+            dependsOn:
+              type: array
+              items: { type: string }
+            checks:
+              type: array
+              items: { $ref: "#/components/schemas/Check" }
+            configSource: { type: string, enum: [gui, git] }
+    PolicyNode:
+      type: object
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type: { type: string, description: See `GET /node-types`. }
+        props: { type: object, additionalProperties: true }
+        next:
+          type: object
+          description: Output port to the ids of the nodes it feeds.
+          additionalProperties:
+            type: array
+            items: { type: string }
+        timeout: { $ref: "#/components/schemas/Duration" }
+        retry:
+          type: object
+          required: [max]
+          properties:
+            max: { type: integer }
+            backoff: { $ref: "#/components/schemas/Duration" }
+            maxBackoff: { $ref: "#/components/schemas/Duration" }
+        joinMode: { type: string, enum: [all, any] }
+    PolicyDocument:
+      type: object
+      description: A `lcm/v1` Policy.
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [lcm/v1] }
+        kind: { type: string, enum: [Policy] }
+        metadata: { $ref: "#/components/schemas/Metadata" }
+        spec:
+          type: object
+          required: [nodes]
+          properties:
+            concurrency:
+              type: object
+              properties:
+                mode: { type: string, enum: [queue, drop, replace, parallel] }
+                limit: { type: integer, minimum: 1 }
+            timeout: { $ref: "#/components/schemas/Duration" }
+            onInterrupt: { type: string }
+            params: { type: object, additionalProperties: true }
+            nodes:
+              type: array
+              items: { $ref: "#/components/schemas/PolicyNode" }
+    ModuleDocument:
+      type: object
+      description: A `lcm/v1` Module.
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [lcm/v1] }
+        kind: { type: string, enum: [Module] }
+        metadata: { $ref: "#/components/schemas/Metadata" }
+        spec:
+          type: object
+          required: [nodes]
+          properties:
+            params:
+              type: array
+              items: { $ref: "#/components/schemas/ModuleParam" }
+            nodes:
+              type: array
+              items: { $ref: "#/components/schemas/PolicyNode" }
+    ModuleParam:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        default: {}
+        description: { type: string }
+
+    ServiceState:
+      type: string
+      enum: [registered, deploying, running, updating, rolling_back, stopped, failed, retired]
+    Health:
+      type: string
+      enum: [unknown, healthy, degraded, down]
+    ServiceSummary:
+      type: object
+      required: [name, host, labels, state, stateSince, health, version, configSource, updatedAt, deployedVersion]
+      properties:
+        name: { type: string }
+        host: { type: string }
+        labels: { $ref: "#/components/schemas/Labels" }
+        state: { $ref: "#/components/schemas/ServiceState" }
+        stateSince: { type: string, format: date-time }
+        health: { $ref: "#/components/schemas/Health" }
+        version:
+          type: integer
+          description: Version of the configuration document.
+        configSource: { type: string, enum: [gui, git] }
+        updatedAt: { type: string, format: date-time }
+        deployedVersion:
+          type: string
+          description: Commit of the last successful deployment; empty if none.
+    ServiceList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceSummary" }
+        nextCursor: { type: [string, "null"] }
+    ServiceDoc:
+      allOf:
+        - $ref: "#/components/schemas/DocMeta"
+        - type: object
+          required: [document]
+          properties:
+            document: { $ref: "#/components/schemas/ServiceDocument" }
+    ServiceVersion:
+      allOf:
+        - $ref: "#/components/schemas/ServiceDoc"
+        - type: object
+          required: [restoredFrom]
+          properties:
+            restoredFrom:
+              type: [integer, "null"]
+              description: The version this one was restored from.
+    ServiceDetail:
+      allOf:
+        - $ref: "#/components/schemas/ServiceDoc"
+        - type: object
+          required: [name, host, state, stateSince, createdAt, health, healthSince, checks, alerts, deployedVersion, lastDeployment]
+          properties:
+            name: { type: string }
+            host: { type: string }
+            state: { $ref: "#/components/schemas/ServiceState" }
+            stateSince: { type: string, format: date-time }
+            createdAt: { type: string, format: date-time }
+            health: { $ref: "#/components/schemas/Health" }
+            healthSince: { type: [string, "null"], format: date-time }
+            checks:
+              type: array
+              items: { $ref: "#/components/schemas/CheckStatus" }
+            alerts:
+              type: array
+              items: { $ref: "#/components/schemas/Alert" }
+            deployedVersion: { type: string }
+            lastDeployment:
+              oneOf:
+                - $ref: "#/components/schemas/Deployment"
+                - type: "null"
+    ServiceVersionInfo:
+      type: object
+      required: [version, createdAt, createdBy, restoredFrom]
+      properties:
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        createdBy: { $ref: "#/components/schemas/Actor" }
+        restoredFrom: { type: [integer, "null"] }
+    ServiceVersionList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceVersionInfo" }
+        nextCursor: { type: [string, "null"] }
+
+    ActionName:
+      type: string
+      enum: [deploy, rollback, start, stop, restart, backup, run-job, retire]
+    ActionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+          description: Commit to deploy (7 to 64 hex digits); deploy only. The head of the configured branch when omitted.
+        job:
+          type: string
+          description: Name of the job; run-job only, and required there.
+    ActionPlan:
+      type: object
+      required: [service, action, from, to, steps]
+      properties:
+        service: { type: string }
+        action: { $ref: "#/components/schemas/ActionName" }
+        from: { $ref: "#/components/schemas/ServiceState" }
+        to: { $ref: "#/components/schemas/ServiceState" }
+        steps:
+          type: array
+          items: { type: string }
+    ActionResult:
+      type: object
+      required: [service, action, from, to, durationMs]
+      properties:
+        service: { type: string }
+        action: { $ref: "#/components/schemas/ActionName" }
+        from: { $ref: "#/components/schemas/ServiceState" }
+        to: { $ref: "#/components/schemas/ServiceState" }
+        version: { type: string, description: The deployed commit. }
+        previousVersion: { type: string }
+        deploymentId: { type: integer, format: int64 }
+        durationMs: { type: integer, format: int64 }
+        output: { type: string, description: Tail of a backup or job command's output. }
+        replayed: { type: boolean }
+    Action:
+      type: object
+      required: [id, service, action, status, actor, startedAt, finishedAt, result, error]
+      properties:
+        id: { type: string }
+        service: { type: string }
+        action: { $ref: "#/components/schemas/ActionName" }
+        status: { type: string, enum: [running, succeeded, failed] }
+        actor: { $ref: "#/components/schemas/Actor" }
+        version: { type: string }
+        job: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/ActionResult"
+            - type: "null"
+        error: { type: string }
+    Deployment:
+      type: object
+      required: [id, service, action, version, previousVersion, startedAt, finishedAt, outcome, actor, runId, error, logExcerpt]
+      properties:
+        id: { type: integer, format: int64 }
+        service: { type: string }
+        action: { type: string, enum: [deploy, rollback] }
+        version: { type: string }
+        previousVersion: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        outcome: { type: string, enum: [running, succeeded, failed, interrupted] }
+        actor: { $ref: "#/components/schemas/Actor" }
+        runId: { type: string }
+        error: { type: string }
+        logExcerpt: { type: string }
+    DeploymentList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Deployment" }
+        nextCursor: { type: [string, "null"] }
+    TimelineEntry:
+      type: object
+      required: [id, service, time, kind, summary, data, ref]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Row id; 0 in `timeline` events for entries whose id is not known.
+        service: { type: string }
+        time: { type: string, format: date-time }
+        kind:
+          type: string
+          description: "For example `config.changed`, `lifecycle.changed`, `deployment`, `action`, `backup`, `job`, `check.changed`, `health.changed`, `alert`."
+        summary: { type: string }
+        data: { type: object, additionalProperties: true }
+        ref:
+          type: string
+          description: Run id, deployment id or signal id the entry relates to.
+    TimelineList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TimelineEntry" }
+        nextCursor: { type: [string, "null"] }
+
+    CheckStatus:
+      type: object
+      required: [name, type, critical, intervalMs, status, stale, since, message, lastResult, lastLatencyMs, consecutiveFailures]
+      properties:
+        name: { type: string }
+        type: { type: string }
+        critical: { type: boolean }
+        intervalMs: { type: integer, format: int64 }
+        status: { type: string, enum: [unknown, up, down] }
+        stale:
+          type: boolean
+          description: The stored status is older than twice the interval; `status` reads unknown until a fresh result.
+        since: { type: [string, "null"], format: date-time }
+        message: { type: string }
+        lastResult: { type: [string, "null"], format: date-time }
+        lastLatencyMs: { type: integer, format: int64 }
+        consecutiveFailures: { type: integer }
+    Checks:
+      type: object
+      required: [service, health, since, checks]
+      properties:
+        service: { type: string }
+        health: { $ref: "#/components/schemas/Health" }
+        since: { type: [string, "null"], format: date-time }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/CheckStatus" }
+    SeriesPoint:
+      type: object
+      required: [time, count, failures, avgLatencyMs, minLatencyMs, maxLatencyMs]
+      properties:
+        time: { type: string, format: date-time }
+        count: { type: integer, format: int64 }
+        failures: { type: integer, format: int64 }
+        avgLatencyMs: { type: number }
+        minLatencyMs: { type: number }
+        maxLatencyMs: { type: number }
+    Series:
+      type: object
+      required: [service, check, from, to, source, stepMs, points]
+      properties:
+        service: { type: string }
+        check: { type: string }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        source: { type: string, enum: [raw, rollup] }
+        stepMs:
+          type: integer
+          format: int64
+          description: Bucket width; 0 when every point is one raw result.
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/SeriesPoint" }
+    SummaryStats:
+      type: object
+      required: [count, failures, uptime, avgLatencyMs, minLatencyMs, maxLatencyMs]
+      properties:
+        count: { type: integer, format: int64 }
+        failures: { type: integer, format: int64 }
+        uptime:
+          type: number
+          description: Share of successful runs, 0 to 1; 0 with `count` 0 means no data.
+        avgLatencyMs: { type: number }
+        minLatencyMs: { type: number }
+        maxLatencyMs: { type: number }
+    ServiceSummaryStats:
+      allOf:
+        - $ref: "#/components/schemas/SummaryStats"
+        - type: object
+          required: [service, window, checks]
+          properties:
+            service: { type: string }
+            window: { type: string, enum: [24h, 7d, 30d] }
+            checks:
+              type: object
+              additionalProperties: { $ref: "#/components/schemas/SummaryStats" }
+    CheckType:
+      type: object
+      required: [type, description]
+      properties:
+        type: { type: string }
+        description: { type: string }
+    Alert:
+      type: object
+      required: [source, fingerprint, name, severity, startedAt, updatedAt]
+      properties:
+        source: { type: string }
+        fingerprint: { type: string }
+        service: { type: string }
+        name: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+        labels: { $ref: "#/components/schemas/Labels" }
+        message: { type: string }
+        startedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        resolvedAt: { type: string, format: date-time }
+    AlertList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Alert" }
+        nextCursor: { type: [string, "null"] }
+
+    Trigger:
+      type: object
+      required: [id, type, props]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        props: { type: object, additionalProperties: true }
+    LastRun:
+      type: object
+      required: [id, status, mode, createdAt]
+      properties:
+        id: { type: string }
+        status: { $ref: "#/components/schemas/RunStatus" }
+        mode: { $ref: "#/components/schemas/RunMode" }
+        createdAt: { type: string, format: date-time }
+    PolicySummary:
+      type: object
+      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, lastRun]
+      properties:
+        name: { type: string }
+        labels: { $ref: "#/components/schemas/Labels" }
+        latestVersion: { type: integer }
+        deployedVersion: { type: [integer, "null"] }
+        deployed: { type: boolean }
+        paused: { type: boolean }
+        deployedAt: { type: [string, "null"], format: date-time }
+        updatedAt: { type: string, format: date-time }
+        triggers:
+          type: array
+          items: { $ref: "#/components/schemas/Trigger" }
+        lastRun:
+          oneOf:
+            - $ref: "#/components/schemas/LastRun"
+            - type: "null"
+    PolicyList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/PolicySummary" }
+        nextCursor: { type: [string, "null"] }
+    PolicyDoc:
+      allOf:
+        - $ref: "#/components/schemas/DocMeta"
+        - type: object
+          required: [document]
+          properties:
+            document: { $ref: "#/components/schemas/PolicyDocument" }
+    PolicyDetail:
+      allOf:
+        - $ref: "#/components/schemas/PolicyDoc"
+        - type: object
+          required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, triggers, lastRun, warnings]
+          properties:
+            name: { type: string }
+            labels: { $ref: "#/components/schemas/Labels" }
+            latestVersion: { type: integer }
+            deployedVersion: { type: [integer, "null"] }
+            deployed: { type: boolean }
+            paused: { type: boolean }
+            deployedAt: { type: [string, "null"], format: date-time }
+            triggers:
+              type: array
+              items: { $ref: "#/components/schemas/Trigger" }
+            lastRun:
+              oneOf:
+                - $ref: "#/components/schemas/LastRun"
+                - type: "null"
+            warnings:
+              type: array
+              description: Non-fatal compiler findings such as unreachable nodes.
+              items: { $ref: "#/components/schemas/Issue" }
+    PauseState:
+      type: object
+      required: [name, paused]
+      properties:
+        name: { type: string }
+        paused: { type: boolean }
+    DocVersionInfo:
+      type: object
+      required: [version, createdAt, createdBy]
+      properties:
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        createdBy: { $ref: "#/components/schemas/Actor" }
+    DocVersionList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/DocVersionInfo" }
+        nextCursor: { type: [string, "null"] }
+    StateEntry:
+      type: object
+      required: [key, value, version, updatedAt]
+      properties:
+        key: { type: string }
+        value: {}
+        version: { type: integer, format: int64 }
+        updatedAt: { type: string, format: date-time }
+    StateList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/StateEntry" }
+        nextCursor: { type: [string, "null"] }
+    ValidationResult:
+      type: object
+      required: [kind, name, valid, issues, warnings]
+      properties:
+        kind:
+          type: string
+          description: Empty when the document does not say.
+        name: { type: string }
+        valid: { type: boolean }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/Issue" }
+        warnings:
+          type: array
+          items: { $ref: "#/components/schemas/Issue" }
+
+    ModuleSummary:
+      type: object
+      required: [name, labels, params, version, updatedAt, updatedBy]
+      properties:
+        name: { type: string }
+        labels: { $ref: "#/components/schemas/Labels" }
+        params:
+          type: array
+          items: { $ref: "#/components/schemas/ModuleParam" }
+        version: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: "#/components/schemas/Actor" }
+    ModuleList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ModuleSummary" }
+        nextCursor: { type: [string, "null"] }
+    ModuleDoc:
+      allOf:
+        - $ref: "#/components/schemas/DocMeta"
+        - type: object
+          required: [document]
+          properties:
+            document: { $ref: "#/components/schemas/ModuleDocument" }
+    NodeProp:
+      type: object
+      required: [name, type]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [string, integer, number, boolean, duration, array, object, any] }
+        required: { type: boolean }
+        expr:
+          type: boolean
+          description: The value is a bare expression.
+        enum:
+          type: array
+          items: { type: string }
+        default: {}
+        description: { type: string }
+        items: { $ref: "#/components/schemas/NodeProp" }
+        props:
+          type: array
+          items: { $ref: "#/components/schemas/NodeProp" }
+    NodeType:
+      type: object
+      required: [type, category, effect, ports, props]
+      properties:
+        type: { type: string }
+        category: { type: string }
+        description: { type: string }
+        effect: { type: string, enum: [none, read, write] }
+        ports:
+          type: array
+          description: Output ports; `error` is implicit.
+          items: { type: string }
+        dynamicPorts:
+          type: boolean
+          description: Ports depend on the props; `ports` lists only the fixed ones.
+        props:
+          type: array
+          items: { $ref: "#/components/schemas/NodeProp" }
+        additionalProps:
+          type: boolean
+          description: The props are a free-form object.
+
+    RunStatus:
+      type: string
+      enum: [queued, running, suspended, succeeded, failed, cancelled, interrupted, dropped]
+    RunMode:
+      type: string
+      enum: [live, dry]
+    NodeStatus:
+      type: string
+      enum: [pending, ready, running, retrying, suspended, completed, failed, dead]
+    StartRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        trigger:
+          type: string
+          description: Trigger node id; the only `trigger.manual` node when omitted.
+        event:
+          description: Becomes `trigger` in the run's expressions.
+        mode:
+          allOf:
+            - $ref: "#/components/schemas/RunMode"
+          default: live
+    RunStarted:
+      type: object
+      required: [runId, policy, trigger, mode]
+      properties:
+        runId: { type: string }
+        policy: { type: string }
+        trigger: { type: string }
+        mode: { $ref: "#/components/schemas/RunMode" }
+    RunRef:
+      type: object
+      required: [runId]
+      properties:
+        runId: { type: string }
+    ResumeRequest:
+      type: object
+      required: [key]
+      additionalProperties: false
+      properties:
+        key: { type: string, description: The node's `suspendKey`. }
+        payload: { description: Handed to the node as the resume payload. }
+    RunSummary:
+      type: object
+      required: [id, policy, version, status, mode, triggerNode, createdAt]
+      properties:
+        id: { type: string }
+        policy: { type: string }
+        version: { type: integer }
+        status: { $ref: "#/components/schemas/RunStatus" }
+        mode: { $ref: "#/components/schemas/RunMode" }
+        triggerNode: { type: string }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+    RunList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/RunSummary" }
+        nextCursor: { type: [string, "null"] }
+    RunNode:
+      type: object
+      required: [id, type, status]
+      properties:
+        id: { type: string, description: Scoped id such as `outer/inner/check` for module nodes. }
+        type: { type: string }
+        status: { $ref: "#/components/schemas/NodeStatus" }
+        port: { type: string, description: The output port the node took. }
+        props: { description: Resolved props. }
+        output: {}
+        attempts: { type: integer }
+        error: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }
+        suspendKey: { type: string }
+        resumeAt: { type: string, format: date-time }
+    Run:
+      allOf:
+        - $ref: "#/components/schemas/RunSummary"
+        - type: object
+          required: [event, nodes]
+          properties:
+            event:
+              description: The trigger event.
+            nodes:
+              type: array
+              description: In topological order.
+              items: { $ref: "#/components/schemas/RunNode" }
+
+    LockInfo:
+      type: object
+      required: [name, owner, acquiredAt, expiresAt]
+      properties:
+        name: { type: string }
+        owner: { type: string }
+        acquiredAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    LockList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LockInfo" }
+        nextCursor: { type: [string, "null"] }
+
+    GitHubAck:
+      type: object
+      required: [event]
+      properties:
+        event: { type: string }
+        ignored:
+          type: boolean
+          description: True for events that start nothing (pings, tags, deleted branches).
+        repository: { type: string }
+        branch: { type: string }
+        commit: { type: string }
+        matched:
+          type: integer
+          description: Number of `trigger.git` nodes notified.
+
+    EventType:
+      type: string
+      enum: [signal, run, node, timeline, action, catalog]
+    EngineEvent:
+      type: object
+      description: Payload of `run` and `node` events, and of policy deployments in `catalog` events.
+      required: [kind, time, policy]
+      properties:
+        kind:
+          type: string
+          enum:
+            - policy.deployed
+            - policy.undeployed
+            - run.queued
+            - run.started
+            - run.suspended
+            - run.resumed
+            - run.finished
+            - node.started
+            - node.finished
+            - node.retrying
+            - node.suspended
+            - node.dead
+        time: { type: string, format: date-time }
+        policy: { type: string }
+        version: { type: integer }
+        runId: { type: string }
+        mode: { $ref: "#/components/schemas/RunMode" }
+        status: { type: string, description: Run status for run events, node status for node events. }
+        nodeId: { type: string }
+        nodeType: { type: string }
+        port: { type: string }
+        attempt: { type: integer }
+        error: { type: string }
+        retryAt: { type: string, format: date-time }
+    Signal:
+      type: object
+      description: Payload of `signal` events.
+      required: [id, kind, time, source]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [check.changed, health.changed, lifecycle.changed, alert] }
+        time: { type: string, format: date-time }
+        service: { type: string }
+        source: { type: string }
+        severity: { type: string }
+        labels: { $ref: "#/components/schemas/Labels" }
+        data: { type: object, additionalProperties: true }
+    CatalogChange:
+      type: object
+      description: Payload of `catalog` events about services.
+      required: [service, change]
+      properties:
+        service: { type: string }
+        change: { type: string, enum: [created, updated, restored, deleted] }
+    EventEnvelope:
+      type: object
+      description: The `data` of every server-sent event.
+      required: [id, type, time, data]
+      properties:
+        id: { type: integer, format: int64, description: Increases with every event. }
+        type: { $ref: "#/components/schemas/EventType" }
+        time: { type: string, format: date-time }
+        service: { type: string }
+        policy: { type: string }
+        run: { type: string }
+        data:
+          description: Depends on `type`.
+          oneOf:
+            - $ref: "#/components/schemas/Signal"
+            - $ref: "#/components/schemas/EngineEvent"
+            - $ref: "#/components/schemas/TimelineEntry"
+            - $ref: "#/components/schemas/Action"
+            - $ref: "#/components/schemas/CatalogChange"

@@ -2,7 +2,7 @@
 
 LCM is a lifecycle control plane for self-hosted services. It tracks each service you operate (where it runs, its version, health and lifecycle stage) and, driven by policy, performs deployment, recovery and backup actions. Every action is guarded, and every decision is auditable and replayable. It targets 1-10 hosts running services under systemd, docker or plain processes, ships as a single binary backed by SQLite, and does not target Kubernetes.
 
-> **Status: rewrite in progress.** The server runs the policy engine, service catalog with lifecycle actions, health monitoring and triggers (signal, git, cron, webhook), but the HTTP API only exposes login, tokens, audit and health so far; services, policies and runs are not reachable over HTTP yet, and there is no web UI. The previous implementation is preserved at commit `18a24f6`.
+> **Status: rewrite in progress.** The server runs the policy engine, service catalog with lifecycle actions, health monitoring and triggers (signal, git, cron, webhook), and serves the full REST and event-stream API. Git config sync, `apply`/`export`, the API client commands and the web UI are not built yet. The previous implementation is preserved at commit `18a24f6`.
 
 ## Build
 
@@ -37,7 +37,7 @@ curl -H "Authorization: Bearer <token>" localhost:7800/api/v1/auth/me
 |---|---|
 | `lcm serve` | Run the HTTP server |
 | `lcm admin set-password [--username admin]` | Create the admin user or change its password; reads from the terminal without echo, or from stdin when piped |
-| `lcm token create --name <name>` | Create an API token and print it once |
+| `lcm token create --name <name> [--scope admin\|ingest]` | Create an API token and print it once; the default scope is `admin` |
 | `lcm token list` / `lcm token revoke <id>` | List or revoke API tokens |
 | `lcm version` | Print version information |
 
@@ -71,20 +71,23 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |
 | `LCM_RUN_RETENTION_AGE` | `--run-retention-age` | `720h` | Finished runs younger than this are kept; older ones beyond the newest N are deleted |
 | `LCM_PRUNE_INTERVAL` | `--prune-interval` | `1h` | How often the retention jobs run |
+| `LCM_GITHUB_WEBHOOK_SECRET` | `--github-webhook-secret` | empty | Name (not value) of the secret that verifies GitHub push webhooks on `POST /api/v1/hooks/github`; when empty that endpoint needs an API token |
 
 A service is reported `healthy` only when every critical check has passed; until a critical check has its first result the service is `unknown`.
 
 ## API v1
 
-JSON uses camelCase. Errors use `{"error":{"code","message","details"}}`. Browsers authenticate with the `lcm_session` cookie; scripts use `Authorization: Bearer <token>`. Token management requires a browser session, so a token cannot create tokens.
+The API is described by a hand-written OpenAPI 3.1 document, `internal/api/openapi.yaml`, which the server also serves at `GET /api/v1/openapi.yaml`. It is the reference for endpoints, request and response shapes, and error codes; a test fails when it and the registered routes disagree, and the integration tests check every response against it.
 
-| Endpoint | Auth | Description |
-|---|---|---|
-| `GET /api/v1/health` | none | Status and version; checks the database |
-| `POST /api/v1/auth/login` | none | Start a session; failed attempts are delayed and limited per IP |
-| `POST /api/v1/auth/logout` | session | End the session |
-| `GET /api/v1/auth/me` | any | Current actor |
-| `GET /api/v1/tokens`, `POST /api/v1/tokens`, `DELETE /api/v1/tokens/{id}` | session | List, create, revoke tokens |
-| `GET /api/v1/audit` | any | Audit log, newest first; `limit` (default 100, max 1000) and `before` cursor |
+Overview:
+
+- JSON uses camelCase; errors use `{"error":{"code","message","details"}}` with status codes 400, 401, 403, 404, 409, 422, 429 and 500. A 422 lists `details.issues` as `{path, message}`.
+- Services, policies and modules are documents sent as YAML or JSON. Every save adds a version; updates need `If-Match: <version>` and a stale one answers 409.
+- Lists take `limit` and an opaque `cursor` and answer `{items, nextCursor}`.
+- Lifecycle actions on services run in the background (`202` and an action id for `GET /api/v1/actions/{id}`); `?dryRun=true` returns the plan instead.
+- `GET /api/v1/events` streams signals, run and node progress, timeline entries, action progress and catalog changes as server-sent events, filtered by `service`, `policy`, `run` and `types`.
+- Alerts (`/hooks/alerts/{source}`), heartbeats (`/heartbeats/{svc}/{check}`) and webhooks (`/hooks/{name}`, `/hooks/github`) feed LCM from outside.
+
+Authentication: browsers use the `lcm_session` cookie from `POST /api/v1/auth/login`; scripts use `Authorization: Bearer <token>`. Sessions and `admin` tokens may use the whole API except token management, which is session-only, so a token can never create or revoke tokens. `ingest` tokens (for example `lcm token create --name alertmanager --scope ingest`) may only post alerts, heartbeats and webhooks, and call `GET /api/v1/auth/me`. A webhook listener that has an `hmacSecret`, and the GitHub endpoint when `LCM_GITHUB_WEBHOOK_SECRET` is set, accept a valid HMAC signature instead of a token.
 
 The server speaks plain HTTP. To expose it beyond localhost, put a TLS-terminating reverse proxy in front and set `LCM_COOKIE_SECURE=true`.

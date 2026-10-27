@@ -24,8 +24,10 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/lock"
+	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/nodes/core"
@@ -90,6 +92,7 @@ type App struct {
 	Audit    *audit.Log
 	Auth     *auth.Service
 	Bus      *signal.Bus
+	Events   *events.Hub
 	Secrets  *secret.Resolver
 	State    *state.Store
 	Locks    *lock.Manager
@@ -97,6 +100,7 @@ type App struct {
 	Catalog  *catalog.Catalog
 	Manager  *catalog.Manager
 	Monitor  *monitor.Monitor
+	Modules  *modules.Store
 	Registry *node.Registry
 	Engine   *engine.Engine
 	Triggers *trigger.Manager
@@ -105,6 +109,7 @@ type App struct {
 	log      *slog.Logger
 	listener net.Listener
 	server   *http.Server
+	api      *api.Server
 	syncer   *monitorSyncer
 	follower *catalog.Follower
 	releaser *stateful.Releaser
@@ -186,6 +191,8 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		return nil, err
 	}
 	a.Bus = signal.NewBus(log.With("component", "signal"), clk.Now)
+	a.Events = events.NewHub(log.With("component", "events"), clk.Now)
+	a.Events.FollowBus(a.Bus)
 	a.Secrets = secret.New(cfg.SecretsPath(), secret.WithLogger(log.With("component", "secret")))
 	a.State = state.New(a.DB, state.WithClock(clk.Now))
 	a.Locks = lock.New(a.DB, lock.WithClock(clk), lock.WithAudit(a.Audit))
@@ -208,6 +215,8 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 				s.Kick()
 			}
 		},
+		OnDocument: a.Events.Document,
+		OnTimeline: a.Events.Timeline,
 	})
 	if err != nil {
 		return nil, err
@@ -237,6 +246,9 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.syncer = newMonitorSyncer(a.Catalog, a.Monitor, log.With("component", "monitor"))
 	kick.Store(a.syncer)
 
+	if a.Modules, err = modules.New(a.DB, a.Audit, clk); err != nil {
+		return nil, err
+	}
 	a.Registry = node.NewRegistry()
 	core.Register(a.Registry)
 	lifecycle.Register(a.Registry, a.Manager)
@@ -254,9 +266,9 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	// first sync.
 	var triggers lateObserver
 	a.Engine, err = engine.New(engine.Config{
-		DB: a.DB, Registry: a.Registry, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
+		DB: a.DB, Registry: a.Registry, Modules: a.Modules, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
 		Logger:    log.With("component", "engine"),
-		Observers: append([]engine.Observer{a.releaser, &triggers}, o.observers...),
+		Observers: append([]engine.Observer{a.releaser, &triggers, a.Events.Observer()}, o.observers...),
 		Vars:      []engine.Var{a.State.Var()},
 	})
 	if err != nil {
@@ -290,19 +302,30 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	}
 
 	info := buildinfo.Get()
+	a.api = api.New(api.Deps{
+		DB: a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
+		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now,
+		Catalog: a.Catalog, Manager: a.Manager, Monitor: a.Monitor, Engine: a.Engine, Triggers: a.Triggers,
+		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
+		Events: a.Events, Context: a.ctx, GitHubWebhookSecret: cfg.GitHubWebhookSecret,
+	})
 	a.server = &http.Server{
-		Handler: api.New(api.Deps{
-			DB: a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
-			Version: info.Version, CookieSecure: cfg.CookieSecure,
-		}).Handler(),
+		Handler:           a.api.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
+	// Event streams never go idle on their own, so a graceful shutdown would
+	// wait for them until its timeout; closing the hub ends them at once.
+	a.server.RegisterOnShutdown(a.Events.Close)
 	return a, nil
 }
+
+// Handler returns the HTTP handler of the API, for tests that drive it
+// without a listener.
+func (a *App) Handler() http.Handler { return a.server.Handler }
 
 // Addr returns the bound listen address.
 func (a *App) Addr() net.Addr { return a.listener.Addr() }
@@ -405,6 +428,15 @@ func (a *App) Close(ctx context.Context) error {
 			// Serve closes the listener; closing it again is only needed when
 			// Run never started, and its error then is harmless.
 			_ = a.listener.Close()
+		}
+		// Service actions started through the API were cancelled with a.ctx;
+		// wait for them while the database is still open. Event streams end
+		// when the hub closes.
+		if a.api != nil {
+			a.api.Close()
+		}
+		if a.Events != nil {
+			a.Events.Close()
 		}
 		if a.Triggers != nil {
 			a.Triggers.Close()

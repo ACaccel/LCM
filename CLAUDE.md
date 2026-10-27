@@ -1,6 +1,6 @@
 # LCM
 
-Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers and integration done; HTTP API v1 and web UI remain). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
+Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration and the HTTP API v1 done; apply/export/config sync, the CLI client and the web UI remain). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
 
 ## Stack
 
@@ -45,7 +45,9 @@ make check   # fmt-check, vet, lint, test: run before finishing any change
 | `internal/lock/` | Durable named locks with expiry |
 | `internal/state/` | Per-policy key-value state and the `state` expression variable |
 | `internal/secret/` | Secret resolution from files and environment; values never logged |
-| `internal/api/` | HTTP handlers, middleware chain, error envelope |
+| `internal/events/` | In-process event hub behind the SSE stream: bounded, filtered subscriptions fed by the bus, engine observers and catalog hooks |
+| `internal/modules/` | Versioned module store; also the engine's module resolver |
+| `internal/api/` | HTTP handlers (one file per resource), middleware chain, error envelope, `openapi.yaml` |
 | `internal/buildinfo/` | Version metadata |
 
 Not built yet: `web/`, the full API v1 surface (services, policies, runs, monitor, webhooks, alert ingest) and replay.
@@ -59,6 +61,9 @@ Not built yet: `web/`, the full API v1 surface (services, policies, runs, monito
 - Components are constructed and connected only in `internal/app`; a new component gets wired there, with an end-to-end test in `internal/app`.
 - New node types register through `node.Register` in a package under `internal/nodes/`; the engine core does not change for new nodes.
 - Tests use a real temp-dir SQLite file (`storetest.Open`); there is no in-memory store implementation.
-- API errors use the JSON envelope via `writeError`; JSON fields are camelCase; routes are registered in `internal/api/server.go`.
+- API errors use the JSON envelope via `writeError`; component errors are mapped in one place (`fail` in `internal/api/mapping.go`); JSON fields are camelCase.
+- Routes are registered in `internal/api/routes.go` and every one must be described in `internal/api/openapi.yaml` (tests enforce both directions and check responses against the schemas). Handlers stay thin: parse, call a component, map errors.
+- Documents (Service, Policy, Module) are versioned; `PUT` takes `If-Match` and a mismatch is 409. Lists page with `limit` and an opaque `cursor`.
+- API tokens carry a scope (`admin` or `ingest`); routes use `requireAdmin` unless they are ingest endpoints (`requireAny`) or session-only (`requireSession`).
 - Token and user management stays session-only: an API token must never be able to mint or revoke tokens.
 - Lint findings are fixed, not disabled; a justified `//nolint:<linter> // reason` is the only exception.
