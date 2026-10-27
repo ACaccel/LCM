@@ -1,8 +1,5 @@
-/**/templates/*
-!/efo/LCM_Enabler/templates/
-!/efo/LCM_Enabler/templates/test.yaml
-/**/upload/*
-node_modules/
-dist/
-efo/LCM_Enabler/upload/
 .plan/
+/data/
+/bin/
+web/node_modules/
+web/dist/
