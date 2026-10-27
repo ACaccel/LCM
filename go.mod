@@ -3,6 +3,9 @@ module github.com/ACaccel/lcm
 go 1.26.0
 
 require (
+	github.com/expr-lang/expr v1.17.8
+	go.uber.org/goleak v1.3.0
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.58.0
 	golang.org/x/term v0.47.0
 	modernc.org/sqlite v1.61.0

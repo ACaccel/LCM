@@ -14,6 +14,9 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/buildinfo"
 	"github.com/ACaccel/lcm/internal/config"
+	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/node"
+	"github.com/ACaccel/lcm/internal/nodes/core"
 	"github.com/ACaccel/lcm/internal/store"
 )
 
@@ -64,9 +67,34 @@ func (a *app) serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	auditLog := audit.New(db)
+
+	reg := node.NewRegistry()
+	core.Register(reg)
+	eng, err := engine.New(engine.Config{
+		DB: db, Registry: reg, Workers: cfg.EngineWorkers, Audit: auditLog,
+		Logger: log.With("component", "engine"),
+	})
+	if err != nil {
+		return err
+	}
+	// Deferred after the database close, so it runs first.
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := eng.Close(closeCtx); err != nil {
+			log.Error("engine shutdown", "error", err)
+		}
+	}()
+	// A policy or run that cannot be restored must not keep the server
+	// down; the rest is recovered and the failure is logged.
+	if err := eng.Recover(ctx); err != nil {
+		log.Error("engine recovery incomplete", "error", err)
+	}
+
 	info := buildinfo.Get()
 	handler := api.New(api.Deps{
-		DB: db, Auth: authSvc, Audit: audit.New(db), Logger: log,
+		DB: db, Auth: authSvc, Audit: auditLog, Logger: log,
 		Version: info.Version, CookieSecure: cfg.CookieSecure,
 	}).Handler()
 

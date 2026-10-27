@@ -19,12 +19,13 @@ import (
 
 // Environment variable names.
 const (
-	EnvListen       = "LCM_LISTEN"
-	EnvDataDir      = "LCM_DATA_DIR"
-	EnvLogFormat    = "LCM_LOG_FORMAT"
-	EnvLogLevel     = "LCM_LOG_LEVEL"
-	EnvCookieSecure = "LCM_COOKIE_SECURE"
-	EnvSessionTTL   = "LCM_SESSION_TTL"
+	EnvListen        = "LCM_LISTEN"
+	EnvDataDir       = "LCM_DATA_DIR"
+	EnvLogFormat     = "LCM_LOG_FORMAT"
+	EnvLogLevel      = "LCM_LOG_LEVEL"
+	EnvCookieSecure  = "LCM_COOKIE_SECURE"
+	EnvSessionTTL    = "LCM_SESSION_TTL"
+	EnvEngineWorkers = "LCM_ENGINE_WORKERS"
 )
 
 // Defaults.
@@ -34,6 +35,9 @@ const (
 	DefaultLogFormat  = "text"
 	DefaultLogLevel   = "info"
 	DefaultSessionTTL = 7 * 24 * time.Hour
+
+	// MaxEngineWorkers bounds the policy engine worker pool.
+	MaxEngineWorkers = 1024
 
 	// DBFileName is the SQLite file inside the data directory.
 	DBFileName = "lcm.db"
@@ -47,6 +51,9 @@ type Config struct {
 	LogLevel     string
 	CookieSecure bool
 	SessionTTL   time.Duration
+	// EngineWorkers is the policy engine worker pool size; 0 selects
+	// max(GOMAXPROCS*2, 4).
+	EngineWorkers int
 }
 
 // FromEnv builds a Config from defaults overridden by environment variables.
@@ -86,6 +93,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		}
 		c.SessionTTL = d
 	}
+	if v := getenv(EnvEngineWorkers); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s: invalid integer %q", EnvEngineWorkers, v)
+		}
+		c.EngineWorkers = n
+	}
 	return c, nil
 }
 
@@ -98,6 +112,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log level: debug, info, warn or error ("+EnvLogLevel+")")
 	fs.BoolVar(&c.CookieSecure, "cookie-secure", c.CookieSecure, "set the Secure attribute on the session cookie ("+EnvCookieSecure+")")
 	fs.DurationVar(&c.SessionTTL, "session-ttl", c.SessionTTL, "session lifetime ("+EnvSessionTTL+")")
+	fs.IntVar(&c.EngineWorkers, "engine-workers", c.EngineWorkers, "policy engine worker pool size, 0 for automatic ("+EnvEngineWorkers+")")
 }
 
 // RegisterDataDirFlag registers only the data directory flag, for commands
@@ -123,6 +138,9 @@ func (c Config) Validate() error {
 	}
 	if c.SessionTTL <= 0 {
 		errs = append(errs, fmt.Errorf("session ttl %s: must be positive", c.SessionTTL))
+	}
+	if c.EngineWorkers < 0 || c.EngineWorkers > MaxEngineWorkers {
+		errs = append(errs, fmt.Errorf("engine workers %d: must be between 0 and %d", c.EngineWorkers, MaxEngineWorkers))
 	}
 	return errors.Join(errs...)
 }

@@ -52,14 +52,14 @@ func TestDefaults(t *testing.T) {
 func TestEnvOverride(t *testing.T) {
 	c, err := load(t, map[string]string{
 		EnvListen: "0.0.0.0:9000", EnvDataDir: "/tmp/x", EnvLogFormat: "json",
-		EnvLogLevel: "debug", EnvCookieSecure: "true", EnvSessionTTL: "1h",
+		EnvLogLevel: "debug", EnvCookieSecure: "true", EnvSessionTTL: "1h", EnvEngineWorkers: "8",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Config{
 		Listen: "0.0.0.0:9000", DataDir: "/tmp/x", LogFormat: "json",
-		LogLevel: "debug", CookieSecure: true, SessionTTL: time.Hour,
+		LogLevel: "debug", CookieSecure: true, SessionTTL: time.Hour, EngineWorkers: 8,
 	}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)
@@ -73,13 +73,13 @@ func TestFlagOverridesEnv(t *testing.T) {
 	c, err := load(t,
 		map[string]string{EnvListen: "0.0.0.0:9000", EnvLogLevel: "debug", EnvCookieSecure: "true"},
 		"--listen", "localhost:1234", "--log-level", "warn", "--cookie-secure=false",
-		"--data-dir", "/tmp/y", "--log-format", "json", "--session-ttl", "30m")
+		"--data-dir", "/tmp/y", "--log-format", "json", "--session-ttl", "30m", "--engine-workers", "3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Config{
 		Listen: "localhost:1234", DataDir: "/tmp/y", LogFormat: "json",
-		LogLevel: "warn", CookieSecure: false, SessionTTL: 30 * time.Minute,
+		LogLevel: "warn", CookieSecure: false, SessionTTL: 30 * time.Minute, EngineWorkers: 3,
 	}
 	if c != want {
 		t.Fatalf("got %+v, want %+v", c, want)
@@ -106,6 +106,9 @@ func TestInvalidValues(t *testing.T) {
 		{"bad duration", map[string]string{EnvSessionTTL: "soon"}, nil, EnvSessionTTL},
 		{"non-positive ttl", nil, []string{"--session-ttl", "0s"}, "session ttl"},
 		{"bad flag level", nil, []string{"--log-level", "loud"}, "log level"},
+		{"bad workers", map[string]string{EnvEngineWorkers: "many"}, nil, EnvEngineWorkers},
+		{"negative workers", nil, []string{"--engine-workers", "-1"}, "engine workers"},
+		{"too many workers", nil, []string{"--engine-workers", "5000"}, "engine workers"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
