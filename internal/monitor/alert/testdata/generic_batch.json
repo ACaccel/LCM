@@ -1,0 +1,4 @@
+[
+  {"service":"worker","alert":"QueueBacklog","status":"firing","severity":"page","labels":{"queue":"mail","env":"prod"},"message":"1200 jobs waiting"},
+  {"alert":"CertExpiry","status":"resolved","labels":{"service":"proxy"},"message":"renewed"}
+]

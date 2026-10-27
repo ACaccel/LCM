@@ -1,0 +1,46 @@
+{
+  "receiver": "lcm",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HighErrorRate",
+        "instance": "10.0.0.5:9100",
+        "job": "api",
+        "severity": "critical",
+        "lcm_service": "api"
+      },
+      "annotations": {
+        "summary": "Error rate above 5% for 5m",
+        "description": "5xx ratio on api is 7.2%"
+      },
+      "startsAt": "2026-10-28T03:11:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus:9090/graph?g0.expr=up",
+      "fingerprint": "3a5f1c0e7b9d2c41"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "DiskAlmostFull",
+        "job": "node",
+        "severity": "warning"
+      },
+      "annotations": {
+        "description": "/ is 91% full"
+      },
+      "startsAt": "2026-10-28T03:12:30.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus:9090/graph?g0.expr=disk",
+      "fingerprint": "9d41c7e0aa5b3f12"
+    }
+  ],
+  "groupLabels": {"alertname": "HighErrorRate"},
+  "commonLabels": {"job": "api", "env": "prod"},
+  "commonAnnotations": {},
+  "externalURL": "http://alertmanager:9093",
+  "version": "4",
+  "groupKey": "{}:{alertname=\"HighErrorRate\"}",
+  "truncatedAlerts": 0
+}

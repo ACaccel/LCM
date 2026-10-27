@@ -1,0 +1,29 @@
+{
+  "heartbeat": {
+    "monitorID": 7,
+    "status": 0,
+    "time": "2026-10-28 03:11:02.123",
+    "msg": "connect ECONNREFUSED 127.0.0.1:8080",
+    "important": true,
+    "duration": 0,
+    "timezone": "Asia/Taipei",
+    "timezoneOffset": "+08:00",
+    "localDateTime": "2026-10-28 11:11:02"
+  },
+  "monitor": {
+    "id": 7,
+    "name": "Blog",
+    "description": null,
+    "url": "http://127.0.0.1:8080/",
+    "method": "GET",
+    "hostname": null,
+    "port": null,
+    "maxretries": 0,
+    "interval": 60,
+    "type": "http",
+    "tags": [
+      {"monitor_id": 7, "tag_id": 2, "value": "blog", "name": "service", "color": "#059669"}
+    ]
+  },
+  "msg": "[Blog] [🔴 Down] connect ECONNREFUSED 127.0.0.1:8080"
+}

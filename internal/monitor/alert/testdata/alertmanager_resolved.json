@@ -1,0 +1,22 @@
+{
+  "receiver": "lcm",
+  "status": "resolved",
+  "alerts": [
+    {
+      "status": "resolved",
+      "labels": {"alertname": "HighErrorRate", "severity": "critical", "service": "api"},
+      "annotations": {"summary": "Error rate above 5% for 5m"},
+      "startsAt": "2026-10-28T03:11:00.000Z",
+      "endsAt": "2026-10-28T03:20:00.000Z",
+      "generatorURL": "http://prometheus:9090/graph?g0.expr=up",
+      "fingerprint": "3a5f1c0e7b9d2c41"
+    }
+  ],
+  "groupLabels": {},
+  "commonLabels": {},
+  "commonAnnotations": {},
+  "externalURL": "http://alertmanager:9093",
+  "version": "4",
+  "groupKey": "{}",
+  "truncatedAlerts": 0
+}

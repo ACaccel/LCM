@@ -1,0 +1,1 @@
+{"endpoint":"api-health","group":"core","url":"https://example.com/health","description":"health endpoint down","status":"TRIGGERED","service":"api"}
