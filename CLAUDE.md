@@ -1,6 +1,6 @@
 # LCM
 
-Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration and the HTTP API v1 done; apply/export/config sync, the CLI client and the web UI remain). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
+Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration, the HTTP API v1, config sync and the CLI client done; the web UI remains). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
 
 ## Stack
 
@@ -22,7 +22,7 @@ make check   # fmt-check, vet, lint, test: run before finishing any change
 
 | Path | Contents |
 |---|---|
-| `cmd/lcm/` | Entry point and subcommands (`serve`, `admin`, `token`, `version`); `serve` is a thin wrapper over `internal/app` |
+| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, and the API client commands `apply`, `export`, `validate`, `get`, `run`, `action` (`client.go` holds the shared token and document handling) |
 | `internal/app/` | Composition root: builds every component in dependency order, adapters (lock -> catalog, execx -> monitor), monitor sync, retention jobs, `Run`/`Close` |
 | `internal/config/` | Env and flag configuration, validation, slog setup |
 | `internal/store/` | SQLite handles (writer + reader pool), migrator, `storetest.Open(t)` test helper |
@@ -48,9 +48,11 @@ make check   # fmt-check, vet, lint, test: run before finishing any change
 | `internal/events/` | In-process event hub behind the SSE stream: bounded, filtered subscriptions fed by the bus, engine observers and catalog hooks |
 | `internal/modules/` | Versioned module store; also the engine's module resolver |
 | `internal/api/` | HTTP handlers (one file per resource), middleware chain, error envelope, `openapi.yaml` |
+| `internal/configsync/` | Policy-as-code: apply and export of Service, Policy and Module documents, config sources (LCM's own git clones), ownership, drift and conflicts, sync loop; semantics in `configsync.go` |
+| `internal/client/` | HTTP client of the API behind the `lcm` client commands; sends the token to the configured server only |
 | `internal/buildinfo/` | Version metadata |
 
-Not built yet: `web/`, the full API v1 surface (services, policies, runs, monitor, webhooks, alert ingest) and replay.
+Not built yet: `web/`, replay, and opening pull requests from the UI (export is the way back to git).
 
 ## Repo rules
 
@@ -65,5 +67,6 @@ Not built yet: `web/`, the full API v1 surface (services, policies, runs, monito
 - Routes are registered in `internal/api/routes.go` and every one must be described in `internal/api/openapi.yaml` (tests enforce both directions and check responses against the schemas). Handlers stay thin: parse, call a component, map errors.
 - Documents (Service, Policy, Module) are versioned; `PUT` takes `If-Match` and a mismatch is 409. Lists page with `limit` and an opaque `cursor`.
 - API tokens carry a scope (`admin` or `ingest`); routes use `requireAdmin` unless they are ingest endpoints (`requireAny`) or session-only (`requireSession`).
+- Config sync never overwrites a drifted resource and never deletes one; documents carry no privileges (allowlists and unit scopes stay in host config). Git runs only through `execx` with a fixed environment and the repository after `--`.
 - Token and user management stays session-only: an API token must never be able to mint or revoke tokens.
 - Lint findings are fixed, not disabled; a justified `//nolint:<linter> // reason` is the only exception.

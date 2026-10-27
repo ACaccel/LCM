@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/buildinfo"
 )
@@ -26,8 +27,19 @@ Commands:
   token revoke <id>           Revoke an API token
   version                     Print version information
 
+Commands that talk to a running server (see the README):
+  apply -f <file|dir> [--dry-run] [--force]   Apply Service, Policy and Module documents
+  export [kind[/name]]                        Print resources as YAML
+  validate -f <file|dir>                      Check documents on the server
+  get services|policies|runs|locks|sources [name] [-o table|json|yaml]
+  run <policy> [--trigger id] [--event json] [--dry-run] [--wait]
+  action <service> <action> [--version v] [--job j] [--dry-run] [--wait]
+
 Run "lcm <command> -h" for the flags of a command.
 Configuration is read from LCM_* environment variables; flags override them.
+The server commands use LCM_SERVER (default http://127.0.0.1:7800) and an API
+token from LCM_TOKEN, or from the file named by --token-file or LCM_TOKEN_FILE.
+Exit status: 0 success, 1 error, 2 usage, 3 documents with problems.
 `
 
 // usageError marks mistakes in the command line, which exit with status 2.
@@ -49,6 +61,9 @@ type app struct {
 	// onListen, when set, is called with the bound address once the server
 	// accepts connections.
 	onListen func(net.Addr)
+
+	// poll is the interval of --wait; zero selects one second.
+	poll time.Duration
 }
 
 func main() {
@@ -60,10 +75,16 @@ func main() {
 
 func (a *app) run(ctx context.Context, args []string) int {
 	err := a.dispatch(ctx, args)
-	var ue usageError
+	var (
+		ue usageError
+		pe problemError
+	)
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):
 		return 0
+	case errors.As(err, &pe):
+		_, _ = fmt.Fprintf(a.stderr, "lcm: %v\n", err)
+		return 3
 	case errors.As(err, &ue):
 		_, _ = fmt.Fprintf(a.stderr, "lcm: %v\n\n%s", err, usage)
 		return 2
@@ -85,6 +106,18 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.admin(ctx, rest)
 	case "token":
 		return a.token(ctx, rest)
+	case "apply":
+		return a.apply(ctx, rest)
+	case "export":
+		return a.export(ctx, rest)
+	case "validate":
+		return a.validate(ctx, rest)
+	case "get":
+		return a.get(ctx, rest)
+	case "run":
+		return a.runPolicy(ctx, rest)
+	case "action":
+		return a.action(ctx, rest)
 	case "version", "--version":
 		_, err := fmt.Fprintf(a.stdout, "lcm %s\n", buildinfo.Get())
 		return err

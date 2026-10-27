@@ -168,7 +168,7 @@ func TestServiceListFiltersAndPaging(t *testing.T) {
 		t.Fatalf("second page = %v", second)
 	}
 	item := first["items"].([]any)[0].(map[string]any)
-	if item["state"] != "registered" || item["configSource"] != "gui" || item["version"] != float64(1) || item["deployedVersion"] != "" {
+	if item["state"] != "registered" || item["version"] != float64(1) || item["deployedVersion"] != "" {
 		t.Fatalf("item = %v", item)
 	}
 

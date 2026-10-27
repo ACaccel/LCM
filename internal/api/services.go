@@ -56,12 +56,13 @@ type serviceSummaryDTO struct {
 	StateSince time.Time         `json:"stateSince"`
 	Health     string            `json:"health"`
 	// Version is the configuration document version.
-	Version      int       `json:"version"`
-	ConfigSource string    `json:"configSource"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	Version   int       `json:"version"`
+	UpdatedAt time.Time `json:"updatedAt"`
 	// DeployedVersion is the commit of the last successful deployment, or
 	// empty.
 	DeployedVersion string `json:"deployedVersion"`
+	// ManagedBy is null when only the web UI and API manage the service.
+	ManagedBy *managedByDTO `json:"managedBy"`
 }
 
 func (s *Server) healthOf(name string) (monitor.ServiceStatus, bool) {
@@ -73,13 +74,6 @@ func labelsOf(rec *catalog.Record) map[string]string {
 		return map[string]string{}
 	}
 	return rec.Spec.Metadata.Labels
-}
-
-func configSourceOf(rec *catalog.Record) string {
-	if rec.Spec.Spec.ConfigSource == "" {
-		return string(model.ConfigSourceGUI)
-	}
-	return string(rec.Spec.Spec.ConfigSource)
 }
 
 // deployedVersion returns the commit of the newest successful deployment.
@@ -160,6 +154,7 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	managed := s.managedIndex(r, model.KindService)
 	items := make([]serviceSummaryDTO, 0, len(page))
 	for i := range page {
 		rec := &page[i]
@@ -170,8 +165,8 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, serviceSummaryDTO{
 			Name: rec.Name, Host: rec.Host, Labels: labelsOf(rec), State: string(rec.State), StateSince: rec.StateSince,
-			Health: string(healthOf(rec.Name)), Version: rec.Version, ConfigSource: configSourceOf(rec),
-			UpdatedAt: rec.UpdatedAt, DeployedVersion: deployedVersion(deps),
+			Health: string(healthOf(rec.Name)), Version: rec.Version,
+			UpdatedAt: rec.UpdatedAt, DeployedVersion: deployedVersion(deps), ManagedBy: managed[rec.Name],
 		})
 	}
 	writeList(w, items, next)
@@ -260,6 +255,7 @@ type serviceDetailDTO struct {
 	Alerts          []monitor.Alert  `json:"alerts"`
 	DeployedVersion string           `json:"deployedVersion"`
 	LastDeployment  *deploymentDTO   `json:"lastDeployment"`
+	ManagedBy       *managedByDTO    `json:"managedBy"`
 }
 
 func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +283,7 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 	out := serviceDetailDTO{
 		serviceDocDTO: doc, Name: rec.Name, Host: rec.Host, State: string(rec.State), StateSince: rec.StateSince,
 		CreatedAt: rec.CreatedAt, Health: string(monitor.HealthUnknown), Checks: []checkStatusDTO{}, Alerts: alerts,
-		DeployedVersion: deployedVersion(deps),
+		DeployedVersion: deployedVersion(deps), ManagedBy: s.managedFor(r, model.KindService, name),
 	}
 	if out.Alerts == nil {
 		out.Alerts = []monitor.Alert{}

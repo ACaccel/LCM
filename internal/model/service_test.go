@@ -38,7 +38,7 @@ func TestDecodeService(t *testing.T) {
 		t.Fatalf("header: %v %v", s.DocKind(), s.DocName())
 	}
 	sp := s.Spec
-	if sp.Host != "local" || sp.Runtime.Scope != "system" || sp.ConfigSource != model.ConfigSourceGUI {
+	if sp.Host != "local" || sp.Runtime.Scope != "system" {
 		t.Fatalf("defaults not applied: %+v", sp)
 	}
 	if sp.Source.Remote != "origin" || sp.Source.EffectiveTimeout() != 20*time.Minute {
@@ -142,7 +142,6 @@ func TestValidateServiceFields(t *testing.T) {
 		{"check dup", serviceHead + rt + "  checks: [{ name: a, type: tcp }, { name: a, type: tcp }]\n", "spec.checks[1].name", "duplicate"},
 		{"check timeout", serviceHead + rt + "  checks: [{ name: a, type: tcp, interval: 5s, timeout: 10s }]\n", "spec.checks[0].timeout", "shorter"},
 		{"check props keys", serviceHead + rt + "  checks: [{ name: a, type: tcp, props: { x: { true: 1 } } }]\n", "spec.checks[0].props", "string keys"},
-		{"config source", serviceHead + rt + "  configSource: ftp\n", "spec.configSource", "gui or git"},
 		{"too many jobs", serviceHead + rt + "  jobs: {" + manyJobs() + "}\n", "spec.jobs", "at most"},
 	}
 	for _, tt := range bad {

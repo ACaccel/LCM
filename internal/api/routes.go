@@ -90,6 +90,19 @@ func (s *Server) routes() http.Handler {
 	handle("GET", v1+"/modules/{m}/versions", admin(s.handleModuleVersions))
 	handle("GET", v1+"/node-types", admin(s.handleNodeTypes))
 
+	// Policy-as-code.
+	handle("POST", v1+"/apply", admin(s.handleApply))
+	handle("GET", v1+"/export", admin(s.handleExport))
+	handle("GET", v1+"/config/sources", admin(s.handleListSources))
+	handle("POST", v1+"/config/sources", admin(s.handleCreateSource))
+	handle("GET", v1+"/config/sources/{name}", admin(s.handleGetSource))
+	handle("PUT", v1+"/config/sources/{name}", admin(s.handlePutSource))
+	handle("DELETE", v1+"/config/sources/{name}", admin(s.handleDeleteSource))
+	handle("POST", v1+"/config/sources/{name}/sync", admin(s.handleSyncSource))
+	handle("GET", v1+"/config/ownership", admin(s.handleListOwnership))
+	handle("POST", v1+"/config/ownership/{kind}/{name}/resolve", admin(s.handleResolveOwnership))
+	handle("DELETE", v1+"/config/ownership/{kind}/{name}", admin(s.handleReleaseOwnership))
+
 	// Runs and locks.
 	handle("GET", v1+"/runs", admin(s.handleListRuns))
 	handle("GET", v1+"/runs/{id}", admin(s.handleGetRun))

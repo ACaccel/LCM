@@ -30,7 +30,7 @@ func TestPutCreatesAndVersions(t *testing.T) {
 	}
 
 	// An identical document, however it is spelled, changes nothing.
-	res = e.put(svcDoc("app", "  host: local\n  configSource: gui\n"), 1)
+	res = e.put(svcDoc("app", "  host: local\n"), 1)
 	if res.Changed || res.Version != 1 {
 		t.Fatalf("unchanged save = %+v", res)
 	}

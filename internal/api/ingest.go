@@ -202,7 +202,14 @@ func (s *Server) handleGitHub(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err, nil)
 		return
 	}
+	sources := 0
+	if s.sync != nil {
+		if sources, err = s.sync.NotifyPush(r.Context(), repo, branch); err != nil {
+			s.fail(w, r, err, nil)
+			return
+		}
+	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"event": event, "repository": repo, "branch": branch, "commit": push.After, "matched": n,
+		"event": event, "repository": repo, "branch": branch, "commit": push.After, "matched": n, "sources": sources,
 	})
 }

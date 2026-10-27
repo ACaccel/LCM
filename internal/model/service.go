@@ -28,16 +28,6 @@ const (
 	ScopeUser   = "user"
 )
 
-// ConfigSource says where the service document is authored.
-type ConfigSource string
-
-// Configuration sources. LCM only stores and validates the value; the
-// synchronization itself belongs to a later phase.
-const (
-	ConfigSourceGUI ConfigSource = "gui"
-	ConfigSourceGit ConfigSource = "git"
-)
-
 // HostLocal is the only host supported so far.
 const HostLocal = "local"
 
@@ -63,14 +53,13 @@ func (s *Service) DocName() string { return s.Metadata.Name }
 
 // ServiceSpec is the body of a Service.
 type ServiceSpec struct {
-	Host         string             `yaml:"host,omitempty" json:"host,omitempty"`
-	Runtime      Runtime            `yaml:"runtime" json:"runtime"`
-	Source       *Source            `yaml:"source,omitempty" json:"source,omitempty"`
-	Backup       *Command           `yaml:"backup,omitempty" json:"backup,omitempty"`
-	Jobs         map[string]Command `yaml:"jobs,omitempty" json:"jobs,omitempty"`
-	DependsOn    []string           `yaml:"dependsOn,omitempty" json:"dependsOn,omitempty"`
-	Checks       []Check            `yaml:"checks,omitempty" json:"checks,omitempty"`
-	ConfigSource ConfigSource       `yaml:"configSource,omitempty" json:"configSource,omitempty"`
+	Host      string             `yaml:"host,omitempty" json:"host,omitempty"`
+	Runtime   Runtime            `yaml:"runtime" json:"runtime"`
+	Source    *Source            `yaml:"source,omitempty" json:"source,omitempty"`
+	Backup    *Command           `yaml:"backup,omitempty" json:"backup,omitempty"`
+	Jobs      map[string]Command `yaml:"jobs,omitempty" json:"jobs,omitempty"`
+	DependsOn []string           `yaml:"dependsOn,omitempty" json:"dependsOn,omitempty"`
+	Checks    []Check            `yaml:"checks,omitempty" json:"checks,omitempty"`
 }
 
 // Runtime configures the adapter. Only the fields of the chosen type may be
@@ -212,11 +201,6 @@ func ValidateService(s *Service) error {
 		seen[d] = true
 	}
 	validateChecks(sp.Checks, "spec.checks", &is)
-	switch sp.ConfigSource {
-	case "", ConfigSourceGUI, ConfigSourceGit:
-	default:
-		is.addf("spec.configSource", "must be gui or git")
-	}
 	return is.Err()
 }
 
@@ -368,9 +352,6 @@ func (s *Service) normalize() error {
 	}
 	if s.Spec.Host == "" {
 		s.Spec.Host = HostLocal
-	}
-	if s.Spec.ConfigSource == "" {
-		s.Spec.ConfigSource = ConfigSourceGUI
 	}
 	if s.Spec.Runtime.Type == RuntimeSystemd && s.Spec.Runtime.Scope == "" {
 		s.Spec.Runtime.Scope = ScopeSystem

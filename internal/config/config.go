@@ -70,6 +70,8 @@ const (
 	// the data directory.
 	SecretsDirName  = "secrets"
 	CalendarDirName = "calendars"
+	// SourcesDirName holds LCM's own clones of config sources.
+	SourcesDirName = "sources"
 
 	// NoPrivilege disables the systemctl privilege prefix. An empty value
 	// does the same in a flag, but an empty environment variable counts as
@@ -433,10 +435,18 @@ func (c Config) CalendarPath() string {
 	return filepath.Join(c.DataDir, CalendarDirName)
 }
 
-// EnsureServeDirs creates the secrets directory (mode 0700) and the
-// calendar directory when missing.
+// SourcesPath returns the directory of config source clones. It is always
+// inside the data directory: clones are LCM's own state and must never
+// share a directory with a user's working copy.
+func (c Config) SourcesPath() string {
+	return filepath.Join(c.DataDir, SourcesDirName)
+}
+
+// EnsureServeDirs creates the secrets, calendar and config source
+// directories (mode 0700) when missing.
 func (c Config) EnsureServeDirs() error {
-	for name, dir := range map[string]string{"secrets dir": c.SecretsPath(), "calendar dir": c.CalendarPath()} {
+	dirs := map[string]string{"secrets dir": c.SecretsPath(), "calendar dir": c.CalendarPath(), "sources dir": c.SourcesPath()}
+	for name, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("%s %q: %w", name, dir, err)
 		}

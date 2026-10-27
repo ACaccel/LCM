@@ -182,11 +182,18 @@ func (e *Engine) compileOptions(mods ModuleResolver) CompileOptions {
 // Validate decodes and compiles a policy without side effects and returns
 // its warnings.
 func (e *Engine) Validate(ctx context.Context, doc []byte) (model.Issues, error) {
+	return e.ValidateWith(ctx, doc, e.modules)
+}
+
+// ValidateWith is Validate against another module source. A dry-run of a
+// batch that creates a module and a policy using it passes a resolver that
+// knows the pending module.
+func (e *Engine) ValidateWith(ctx context.Context, doc []byte, mods ModuleResolver) (model.Issues, error) {
 	p, err := decodeDeployable(doc)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := Compile(ctx, p, e.compileOptions(e.modules))
+	plan, err := Compile(ctx, p, e.compileOptions(mods))
 	if err != nil {
 		return nil, err
 	}

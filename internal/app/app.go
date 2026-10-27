@@ -23,6 +23,7 @@ import (
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/config"
+	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/execx"
@@ -104,7 +105,9 @@ type App struct {
 	Registry *node.Registry
 	Engine   *engine.Engine
 	Triggers *trigger.Manager
-	Clock    clock.Clock
+	// ConfigSync applies documents and syncs config sources (policy-as-code).
+	ConfigSync *configsync.Syncer
+	Clock      clock.Clock
 
 	log      *slog.Logger
 	listener net.Listener
@@ -288,6 +291,18 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	triggers.set(a.Triggers)
 	ready("engine", "policies", len(a.Engine.Plans()))
 
+	// The sync loop starts in Run, after recovery, so that a pulled
+	// document never races a recovering run.
+	a.ConfigSync, err = configsync.New(configsync.Config{
+		DB: a.DB, Audit: a.Audit, Catalog: a.Catalog, Modules: a.Modules, Engine: a.Engine,
+		Checks: a.Monitor, Bus: a.Bus, Runner: o.runner, Git: cfg.Git, Dir: cfg.SourcesPath(),
+		Clock: clk, Log: log.With("component", "configsync"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	ready("configsync", "dir", cfg.SourcesPath())
+
 	// Reconcile first: it corrects lifecycle states that a crash left
 	// untrue, and runs recovered by the engine act on those states at once.
 	// Neither failure keeps the server down; both are logged and the rest
@@ -307,7 +322,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now,
 		Catalog: a.Catalog, Manager: a.Manager, Monitor: a.Monitor, Engine: a.Engine, Triggers: a.Triggers,
 		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
-		Events: a.Events, Context: a.ctx, GitHubWebhookSecret: cfg.GitHubWebhookSecret,
+		ConfigSync: a.ConfigSync, Events: a.Events, Context: a.ctx, GitHubWebhookSecret: cfg.GitHubWebhookSecret,
 	})
 	a.server = &http.Server{
 		Handler:           a.api.Handler(),
@@ -368,12 +383,13 @@ func (a *App) Run(ctx context.Context) error {
 			fn()
 		}()
 	}
-	a.log.Info("starting background loops", "loops", []string{"triggers", "lock releaser", "monitor sync", "retention"})
+	a.log.Info("starting background loops", "loops", []string{"triggers", "lock releaser", "monitor sync", "config sync", "retention"})
 	spawn("triggers", func() { a.Triggers.Run(runCtx) })
 	spawn("lock releaser", func() { a.releaser.Run(runCtx, a.Engine) })
 	spawn("monitor sync", func() {
 		every(runCtx, a.Clock, monitorSyncInterval, a.syncer.kick, a.syncer.syncQuietly)
 	})
+	spawn("config sync", func() { a.ConfigSync.Run(runCtx) })
 	spawn("retention", func() {
 		every(runCtx, a.Clock, a.Config.PruneInterval, nil, a.retentionJobs)
 	})
@@ -440,6 +456,9 @@ func (a *App) Close(ctx context.Context) error {
 		}
 		if a.Triggers != nil {
 			a.Triggers.Close()
+		}
+		if a.ConfigSync != nil {
+			a.ConfigSync.Close()
 		}
 		if a.Engine != nil {
 			if err := a.Engine.Close(ctx); err != nil {

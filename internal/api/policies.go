@@ -49,6 +49,8 @@ type policySummaryDTO struct {
 	UpdatedAt       time.Time    `json:"updatedAt"`
 	Triggers        []triggerDTO `json:"triggers"`
 	LastRun         *lastRunDTO  `json:"lastRun"`
+	// ManagedBy is null when only the web UI and API manage the policy.
+	ManagedBy *managedByDTO `json:"managedBy"`
 }
 
 func (s *Server) policySummary(r *http.Request, info engine.PolicyInfo) (policySummaryDTO, error) {
@@ -91,6 +93,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	managed := s.managedIndex(r, model.KindPolicy)
 	items := make([]policySummaryDTO, 0, len(page))
 	for _, info := range page {
 		item, err := s.policySummary(r, info)
@@ -98,6 +101,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, r, err)
 			return
 		}
+		item.ManagedBy = managed[info.Name]
 		items = append(items, item)
 	}
 	writeList(w, items, next)
@@ -119,6 +123,7 @@ type policyDetailDTO struct {
 	DeployedAt      *time.Time        `json:"deployedAt"`
 	Triggers        []triggerDTO      `json:"triggers"`
 	LastRun         *lastRunDTO       `json:"lastRun"`
+	ManagedBy       *managedByDTO     `json:"managedBy"`
 	// Warnings are non-fatal findings of the compiler, such as unreachable
 	// nodes.
 	Warnings []issueBody `json:"warnings"`
@@ -165,7 +170,7 @@ func (s *Server) policyDetail(r *http.Request, name string) (policyDetailDTO, er
 	out := policyDetailDTO{
 		policyDocDTO: toPolicyDoc(pv), Name: sum.Name, Labels: sum.Labels, LatestVersion: sum.LatestVersion,
 		DeployedVersion: sum.DeployedVersion, Deployed: sum.Deployed, Paused: sum.Paused, DeployedAt: sum.DeployedAt,
-		Triggers: sum.Triggers, LastRun: sum.LastRun, Warnings: []issueBody{},
+		Triggers: sum.Triggers, LastRun: sum.LastRun, Warnings: []issueBody{}, ManagedBy: s.managedFor(r, model.KindPolicy, name),
 	}
 	if plan, ok := s.engine.Plan(name); ok && info.DeployedVersion > 0 {
 		out.Warnings = issuesBody(plan.Warnings())

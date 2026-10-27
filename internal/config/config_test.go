@@ -261,6 +261,10 @@ func TestServeDirs(t *testing.T) {
 	if _, err := os.Stat(c.CalendarPath()); err != nil {
 		t.Error(err)
 	}
+	// Clones of config sources stay inside the data directory.
+	if st, err := os.Stat(c.SourcesPath()); err != nil || c.SourcesPath() != filepath.Join(data, "sources") || st.Mode().Perm() != 0o700 {
+		t.Errorf("sources dir: %q %v %v", c.SourcesPath(), st, err)
+	}
 }
 
 func TestMissingBinaries(t *testing.T) {

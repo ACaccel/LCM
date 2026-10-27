@@ -187,6 +187,10 @@ func (m *Manager) NotifyPush(ctx context.Context, repo, branch, sha string) (int
 	return len(targets), nil
 }
 
+// SameRepo reports whether a and b name the same repository, ignoring the
+// scheme, credentials, case and a trailing ".git".
+func SameRepo(a, b string) bool { return normalizeRepo(a) == normalizeRepo(b) }
+
 // normalizeRepo reduces the common spellings of one repository (https and
 // ssh URLs, with or without .git) to a comparable form.
 func normalizeRepo(s string) string {

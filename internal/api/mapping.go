@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/model"
@@ -53,10 +54,10 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		errors.Is(err, engine.ErrPolicyNotFound), errors.Is(err, engine.ErrRunNotFound),
 		errors.Is(err, engine.ErrPolicyNotDeployed), errors.Is(err, lock.ErrNotHeld),
 		errors.Is(err, monitor.ErrUnknownCheck), errors.Is(err, alert.ErrUnknownSource),
-		errors.Is(err, trigger.ErrNoListener):
+		errors.Is(err, trigger.ErrNoListener), errors.Is(err, configsync.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
 
-	case errors.Is(err, catalog.ErrExists), errors.Is(err, modules.ErrExists):
+	case errors.Is(err, catalog.ErrExists), errors.Is(err, modules.ErrExists), errors.Is(err, configsync.ErrExists):
 		writeError(w, http.StatusConflict, codeAlreadyExists, publicMessage(err), details(nil))
 	case errors.Is(err, catalog.ErrConflict), errors.Is(err, modules.ErrConflict):
 		writeError(w, http.StatusConflict, codeVersionConflict, publicMessage(err), details(nil))

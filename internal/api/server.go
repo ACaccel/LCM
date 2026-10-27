@@ -11,6 +11,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/lock"
@@ -64,6 +65,8 @@ type Deps struct {
 	Registry *node.Registry
 	Secrets  secret.Source
 	Events   *events.Hub
+	// ConfigSync serves apply, export and the config source endpoints.
+	ConfigSync *configsync.Syncer
 
 	// Context is the application lifetime. Service actions started through
 	// the API run on it rather than on the request, so they outlive the
@@ -106,6 +109,7 @@ type Server struct {
 	registry *node.Registry
 	secrets  secret.Source
 	hub      *events.Hub
+	sync     *configsync.Syncer
 	ctx      context.Context
 
 	eventHeartbeat time.Duration
@@ -128,7 +132,7 @@ func New(d Deps) *Server {
 		cop:     http.NewCrossOriginProtection(),
 		catalog: d.Catalog, manager: d.Manager, monitor: d.Monitor, engine: d.Engine, triggers: d.Triggers,
 		modules: d.Modules, state: d.State, locks: d.Locks, registry: d.Registry, secrets: d.Secrets,
-		hub: d.Events, ctx: d.Context, githubSecret: d.GitHubWebhookSecret,
+		hub: d.Events, sync: d.ConfigSync, ctx: d.Context, githubSecret: d.GitHubWebhookSecret,
 		actions: newActionTracker(maxTrackedActions),
 	}
 	s.eventBuffer = d.EventBuffer

@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -82,8 +83,18 @@ func TestGitHubPush(t *testing.T) {
 	deploy := policyDoc("on-push", "    - { id: git, type: trigger.git, props: { repo: \""+repo+"\", branch: main, interval: 1h }, next: { out: [echo] } }\n"+
 		"    - { id: echo, type: data.set, props: { values: { commit: \"{{ trigger.commit }}\" } } }\n")
 	x.call("PUT", v1+"/policies/on-push", deploy, yamlBody()).want(http.StatusCreated)
+	timers := x.clk.Pending()
 	if err := x.app.Triggers.Sync(x.ctx); err != nil {
 		t.Fatal(err)
+	}
+	// The watcher polls once in its own goroutine and then sleeps on the
+	// fake clock. Waiting for that timer guarantees the first sight of the
+	// branch is recorded before the push arrives; otherwise a late first
+	// poll would observe the old head after the push and start a run for it.
+	waitCtx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	if err := x.clk.WaitForTimers(waitCtx, timers+1); err != nil {
+		t.Fatalf("git watcher did not finish its first poll: %v", err)
 	}
 	runs := x.collect(events.TypeRun)
 

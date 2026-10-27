@@ -48,6 +48,7 @@ tags:
   - name: Actions
   - name: Monitoring
   - name: Policies
+  - name: Config
   - name: Modules
   - name: Runs
   - name: Locks
@@ -1011,6 +1012,280 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /apply:
+    post:
+      tags: [Config]
+      operationId: applyDocuments
+      summary: Apply Service, Policy and Module documents
+      description: |
+        Applies a multi-document YAML stream (documents separated by `---`): modules
+        first, then services, then policies, whatever the order in the body. It is not
+        transactional; every document gets its own result and a failing one does not
+        stop the others, so the response is 200 even when documents failed. Only a
+        body without any usable document is a 422.
+
+        `dryRun=true` validates and diffs without writing anything. A resource that a
+        config source owns is not applied (`skipped`) unless `force=true`; a forced
+        apply leaves the resource owned, so it shows as drifted from the repository.
+      parameters:
+        - name: dryRun
+          in: query
+          schema: { type: boolean, default: false }
+        - name: force
+          in: query
+          schema: { type: boolean, default: false }
+      requestBody:
+        required: true
+        content:
+          application/yaml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: One result per document.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplyResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /export:
+    get:
+      tags: [Config]
+      operationId: exportDocuments
+      summary: Export resources as YAML
+      description: |
+        Canonical YAML of existing resources as one multi-document stream, in apply
+        order (modules, services, policies) and by name within a kind. Only document
+        fields are written. Applying the output back changes nothing, so it is the way
+        to move resources that were created in the web UI under git.
+      parameters:
+        - name: kind
+          in: query
+          description: service, policy or module (plural and any case are accepted). Omit for everything.
+          schema: { type: string }
+        - name: name
+          in: query
+          description: One resource of `kind`.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The documents.
+          content:
+            application/yaml:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /config/sources:
+    get:
+      tags: [Config]
+      operationId: listConfigSources
+      summary: List config sources
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Sources ordered by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigSourceList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Config]
+      operationId: createConfigSource
+      summary: Register a config source
+      description: |
+        A source is a repository location LCM pulls Service, Policy and Module documents
+        from. LCM keeps its own clone under its data directory and never touches the
+        repository's working copy. The first sync starts at once when the server runs.
+        The repository URL must not embed a password; use an SSH key or a git
+        credential helper.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigSourceRequest" }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigSource" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /config/sources/{name}:
+    parameters:
+      - $ref: "#/components/parameters/SourceName"
+    get:
+      tags: [Config]
+      operationId: getConfigSource
+      summary: A config source
+      responses:
+        "200":
+          description: The source.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigSource" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Config]
+      operationId: replaceConfigSource
+      summary: Replace the settings of a config source
+      description: |
+        Changing the repository, branch or path forgets the last commit, so the next
+        sync reads everything again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfigSourceRequest" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigSource" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      tags: [Config]
+      operationId: deleteConfigSource
+      summary: Delete a config source
+      description: |
+        Removes the source and LCM's clone. The resources it owned keep their content
+        and become managed through the web UI and API only.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /config/sources/{name}/sync:
+    post:
+      tags: [Config]
+      operationId: syncConfigSource
+      summary: Start a sync of a source now
+      description: |
+        Starts a sync in the background and answers 202 with the source at once;
+        a sync fetches the branch and re-applies its head commit, whatever the
+        interval. Read `lastSyncAt`, `lastCommit` and `lastError` from the source
+        (`GET /config/sources/{name}`) once `syncing` is false. A request while a
+        sync of the same source is running joins it instead of starting another.
+        Documents are applied one by one under the actor `configsync:<source>`: a
+        resource that was edited outside the repository (drifted) is never
+        overwritten, a changed repository document for it is reported as a conflict
+        (see `GET /config/ownership`, the timeline and the `configsync` alert
+        signals) instead.
+      parameters:
+        - $ref: "#/components/parameters/SourceName"
+      responses:
+        "202":
+          description: The sync is running or was already running.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigSource" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /config/ownership:
+    get:
+      tags: [Config]
+      operationId: listConfigOwnership
+      summary: Resources managed by config sources
+      description: |
+        Each entry says where the resource's document comes from and whether it
+        drifted (edited outside the repository), has a conflict (a commit that
+        could not be applied because of that), or is orphaned (gone from the
+        repository, kept in LCM). Drift is computed on each call.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: source
+          in: query
+          schema: { type: string }
+        - name: kind
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Managed resources ordered by kind and name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnershipList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /config/ownership/{kind}/{name}/resolve:
+    post:
+      tags: [Config]
+      operationId: resolveConfigOwnership
+      summary: Settle a drifted or conflicting resource
+      description: |
+        `use: git` writes the repository document (the skipped newer one if there is a
+        conflict, otherwise the last applied one) and discards the local edits. For
+        a document that a source found for an existing, unowned resource with other
+        content, it applies the file and the source takes ownership.
+        `use: current` keeps the current content, accepts the skipped document as the
+        reference and closes the conflict; the resource stays drifted (and, for an
+        unowned resource, becomes owned) until the repository content equals the
+        current document, then the drift clears by itself.
+      parameters:
+        - $ref: "#/components/parameters/OwnedKind"
+        - $ref: "#/components/parameters/OwnedName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [use]
+              additionalProperties: false
+              properties:
+                use: { type: string, enum: [git, current] }
+      responses:
+        "200":
+          description: The resource's ownership after resolving.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ownership" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /config/ownership/{kind}/{name}:
+    delete:
+      tags: [Config]
+      operationId: releaseConfigOwnership
+      summary: Release a resource from its config source
+      description: The resource keeps its content and becomes managed through the web UI and API only.
+      parameters:
+        - $ref: "#/components/parameters/OwnedKind"
+        - $ref: "#/components/parameters/OwnedName"
+      responses:
+        "204": { description: Released. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /runs:
     get:
       tags: [Runs]
@@ -1389,6 +1664,21 @@ components:
       in: path
       required: true
       schema: { type: string }
+    SourceName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
+    OwnedKind:
+      name: kind
+      in: path
+      required: true
+      schema: { type: string, enum: [service, policy, module] }
+    OwnedName:
+      name: name
+      in: path
+      required: true
+      schema: { type: string }
     Version:
       name: v
       in: path
@@ -1695,7 +1985,6 @@ components:
             checks:
               type: array
               items: { $ref: "#/components/schemas/Check" }
-            configSource: { type: string, enum: [gui, git] }
     PolicyNode:
       type: object
       required: [id, type]
@@ -1775,7 +2064,7 @@ components:
       enum: [unknown, healthy, degraded, down]
     ServiceSummary:
       type: object
-      required: [name, host, labels, state, stateSince, health, version, configSource, updatedAt, deployedVersion]
+      required: [name, host, labels, state, stateSince, health, version, updatedAt, deployedVersion, managedBy]
       properties:
         name: { type: string }
         host: { type: string }
@@ -1786,11 +2075,11 @@ components:
         version:
           type: integer
           description: Version of the configuration document.
-        configSource: { type: string, enum: [gui, git] }
         updatedAt: { type: string, format: date-time }
         deployedVersion:
           type: string
           description: Commit of the last successful deployment; empty if none.
+        managedBy: { $ref: "#/components/schemas/ManagedBy" }
     ServiceList:
       type: object
       required: [items, nextCursor]
@@ -1819,7 +2108,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/ServiceDoc"
         - type: object
-          required: [name, host, state, stateSince, createdAt, health, healthSince, checks, alerts, deployedVersion, lastDeployment]
+          required: [name, host, state, stateSince, createdAt, health, healthSince, checks, alerts, deployedVersion, lastDeployment, managedBy]
           properties:
             name: { type: string }
             host: { type: string }
@@ -1839,6 +2128,7 @@ components:
               oneOf:
                 - $ref: "#/components/schemas/Deployment"
                 - type: "null"
+            managedBy: { $ref: "#/components/schemas/ManagedBy" }
     ServiceVersionInfo:
       type: object
       required: [version, createdAt, createdBy, restoredFrom]
@@ -2085,7 +2375,7 @@ components:
         createdAt: { type: string, format: date-time }
     PolicySummary:
       type: object
-      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, lastRun]
+      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, lastRun, managedBy]
       properties:
         name: { type: string }
         labels: { $ref: "#/components/schemas/Labels" }
@@ -2102,6 +2392,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/LastRun"
             - type: "null"
+        managedBy: { $ref: "#/components/schemas/ManagedBy" }
     PolicyList:
       type: object
       required: [items, nextCursor]
@@ -2121,7 +2412,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/PolicyDoc"
         - type: object
-          required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, triggers, lastRun, warnings]
+          required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, triggers, lastRun, warnings, managedBy]
           properties:
             name: { type: string }
             labels: { $ref: "#/components/schemas/Labels" }
@@ -2137,6 +2428,7 @@ components:
               oneOf:
                 - $ref: "#/components/schemas/LastRun"
                 - type: "null"
+            managedBy: { $ref: "#/components/schemas/ManagedBy" }
             warnings:
               type: array
               description: Non-fatal compiler findings such as unreachable nodes.
@@ -2177,6 +2469,134 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/StateEntry" }
+        nextCursor: { type: [string, "null"] }
+    ManagedBy:
+      type: [object, "null"]
+      description: |
+        Set when a config source manages the resource; null when only the web UI and
+        API do. `drifted`: edited outside the repository. `conflict`: a commit was
+        skipped because of that.
+      required: [source, path, commit, drifted, conflict]
+      properties:
+        source: { type: string }
+        path: { type: string, description: File in the repository. }
+        commit: { type: string }
+        drifted: { type: boolean }
+        conflict: { type: boolean }
+    ApplyResult:
+      type: object
+      required: [index, kind, name, action, version, diff, reason, issues, warnings, conflict, drifted, path]
+      properties:
+        index:
+          type: integer
+          description: Position of the document in the request body.
+        kind:
+          type: string
+          description: Empty when the document does not say.
+        name: { type: string }
+        action:
+          type: string
+          enum: [create, update, unchanged, skipped, failed]
+        version:
+          type: integer
+          description: Resource version after the apply; 0 when nothing was written or known.
+        diff:
+          type: string
+          description: Unified diff of the canonical YAML, current to new.
+        reason: { type: string }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/Issue" }
+        warnings:
+          type: array
+          items: { $ref: "#/components/schemas/Issue" }
+        conflict:
+          type: boolean
+          description: The repository changed a resource that was edited locally.
+        drifted:
+          type: boolean
+        path:
+          type: string
+          description: File of a document that came from a config source; `-` for a request body.
+    ApplyResponse:
+      type: object
+      required: [dryRun, items]
+      properties:
+        dryRun: { type: boolean }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ApplyResult" }
+    ConfigSourceRequest:
+      type: object
+      additionalProperties: false
+      required: [repo]
+      properties:
+        name:
+          type: string
+          description: 1-63 characters of a-z, 0-9, `.`, `_`, `-`. Required on create; on replace it must match the URL.
+        repo: { type: string, description: Repository URL or local path. }
+        branch: { type: string, default: main }
+        path:
+          type: string
+          description: Directory (or file) in the repository; every `*.yaml` and `*.yml` below it is read, except `*.test.yaml`.
+          default: "."
+        interval:
+          type: string
+          description: Go duration between syncs, 10s to 24h.
+          default: 1m
+        enabled: { type: boolean, default: true }
+    ConfigSource:
+      type: object
+      required: [name, repo, branch, path, interval, enabled, lastCommit, lastSyncAt, lastError, syncing, createdAt, updatedAt]
+      properties:
+        name: { type: string }
+        repo: { type: string }
+        branch: { type: string }
+        path: { type: string }
+        interval: { type: string }
+        enabled: { type: boolean }
+        lastCommit: { type: string, description: Commit the last sync read; empty before the first. }
+        lastSyncAt: { type: [string, "null"], format: date-time }
+        lastError:
+          type: string
+          description: What went wrong in the last sync, empty if nothing.
+        syncing: { type: boolean, description: A sync of this source is running now. }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ConfigSourceList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigSource" }
+        nextCursor: { type: [string, "null"] }
+    Ownership:
+      type: object
+      required: [kind, name, source, path, commit, appliedVersion, appliedAt, drifted, missing, conflict, conflictCommit, acknowledged, orphaned]
+      properties:
+        kind: { type: string, enum: [Service, Policy, Module] }
+        name: { type: string }
+        source: { type: string }
+        path: { type: string }
+        commit: { type: string }
+        appliedVersion: { type: integer }
+        appliedAt: { type: string, format: date-time }
+        drifted: { type: boolean }
+        missing: { type: boolean, description: The managed resource was deleted. }
+        conflict: { type: boolean }
+        conflictCommit: { type: string }
+        acknowledged:
+          type: boolean
+          description: The operator chose to keep the current content.
+        orphaned: { type: boolean }
+    OwnershipList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Ownership" }
         nextCursor: { type: [string, "null"] }
     ValidationResult:
       type: object
@@ -2386,6 +2806,9 @@ components:
         matched:
           type: integer
           description: Number of `trigger.git` nodes notified.
+        sources:
+          type: integer
+          description: Number of config sources that will sync because of this push.
 
     EventType:
       type: string
