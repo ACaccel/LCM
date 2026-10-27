@@ -1,5 +1,5 @@
 // Package model defines the document types for apiVersion lcm/v1 (kinds
-// Policy and Module), their strict decoding from YAML or JSON, and the
+// Policy, Module and Service), their strict decoding from YAML or JSON, and the
 // structural validation that needs no knowledge of node types.
 package model
 

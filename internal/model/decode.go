@@ -14,7 +14,7 @@ import (
 // MaxDocumentSize bounds the accepted document size.
 const MaxDocumentSize = 4 << 20
 
-// Decode parses a Policy or Module from YAML or JSON (JSON is valid YAML).
+// Decode parses a Policy, Module or Service from YAML or JSON (JSON is valid YAML).
 // Unknown fields are rejected, values are normalized (see Normalize) and the
 // document is structurally validated. Errors are Issues.
 func Decode(data []byte) (Document, error) {
@@ -56,8 +56,20 @@ func Decode(data []byte) (Document, error) {
 			return nil, err
 		}
 		return &m, nil
+	case KindService:
+		var sv Service
+		if err := decodeOne(data, &sv, true); err != nil {
+			return nil, err
+		}
+		if err := sv.normalize(); err != nil {
+			return nil, err
+		}
+		if err := ValidateService(&sv); err != nil {
+			return nil, err
+		}
+		return &sv, nil
 	}
-	return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q or %q", KindPolicy, KindModule)}}
+	return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q, %q or %q", KindPolicy, KindModule, KindService)}}
 }
 
 // DecodePolicy decodes data and requires kind Policy.
@@ -84,6 +96,19 @@ func DecodeModule(data []byte) (*Module, error) {
 		return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q", KindModule)}}
 	}
 	return m, nil
+}
+
+// DecodeService decodes data and requires kind Service.
+func DecodeService(data []byte) (*Service, error) {
+	doc, err := Decode(data)
+	if err != nil {
+		return nil, err
+	}
+	s, ok := doc.(*Service)
+	if !ok {
+		return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q", KindService)}}
+	}
+	return s, nil
 }
 
 // Encode returns the canonical JSON form of a document, which Decode reads
