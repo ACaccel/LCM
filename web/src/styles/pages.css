@@ -1,0 +1,223 @@
+/* Page-specific styles are appended below as pages are added. */
+
+.props-form .field {
+  margin-bottom: 10px;
+}
+
+.field-issues {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* Graph canvas */
+
+.graph-wrap {
+  height: 100%;
+  min-height: 360px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.react-flow {
+  --xy-edge-stroke-default: var(--muted-foreground);
+  --xy-node-border-radius-default: 8px;
+  background: var(--background);
+}
+
+.gnode {
+  width: 210px;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+}
+
+.gnode.selected {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.gnode.has-issue {
+  border-color: var(--destructive);
+}
+
+.gnode .gh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  border-top: 4px solid var(--cat, var(--primary));
+}
+
+.gnode .gid {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gnode .gtype {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gnode .gsum {
+  padding: 3px 8px;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  min-height: 22px;
+}
+
+.gnode .gport {
+  height: 20px;
+  line-height: 20px;
+  text-align: right;
+  padding-right: 10px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.gnode .gport.err {
+  color: var(--destructive);
+}
+
+.gnode .gstat {
+  margin-left: auto;
+  flex: none;
+}
+
+.gnode.st-ok {
+  border-color: var(--success);
+}
+
+.gnode.st-bad {
+  border-color: var(--destructive);
+}
+
+.gnode.st-info {
+  border-color: var(--info);
+}
+
+.gnode.st-warn {
+  border-color: var(--warning);
+}
+
+.gnode.st-neutral {
+  opacity: 0.85;
+}
+
+.gnode .badge-issue {
+  color: var(--destructive);
+  font-weight: 700;
+}
+
+.react-flow__handle {
+  width: 9px;
+  height: 9px;
+  background: var(--card);
+  border: 1.5px solid var(--muted-foreground);
+}
+
+.react-flow__handle.err {
+  border-color: var(--destructive);
+}
+
+.react-flow__handle-connecting {
+  background: var(--primary);
+}
+
+/* Editor layout */
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) 360px;
+  gap: 12px;
+  height: calc(100vh - 210px);
+  min-height: 460px;
+}
+
+.editor-grid > * {
+  min-height: 0;
+  min-width: 0;
+}
+
+.palette {
+  overflow-y: auto;
+}
+
+.palette details {
+  margin-bottom: 6px;
+}
+
+.palette summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.palette .item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 3px 6px 3px 10px;
+  margin: 2px 0;
+  background: var(--card);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--cat, var(--primary));
+  border-radius: 6px;
+  cursor: grab;
+}
+
+.palette .item:hover {
+  background: var(--muted);
+}
+
+.side-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.side-pane .body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+@media (max-width: 1100px) {
+  .editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .graph-wrap {
+    height: 60vh;
+  }
+}

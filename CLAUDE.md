@@ -1,11 +1,12 @@
 # LCM
 
-Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration, the HTTP API v1, config sync and the CLI client done; the web UI remains). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
+Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration, the HTTP API v1, config sync, the CLI client and the web console done). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
 
 ## Stack
 
 - Go 1.26+, standard library first: `net/http` with `ServeMux` patterns, `log/slog`, `flag`. No web framework, no ORM, no CLI framework.
 - SQLite via `modernc.org/sqlite` (pure Go; keep `CGO_ENABLED=0` builds working).
+- Web console in `web/`: React 19, TypeScript (strict), Vite, `@xyflow/react`, TanStack Query, React Router, CodeMirror 6, `yaml`; API types generated from OpenAPI (`openapi-typescript`/`openapi-fetch`); plain CSS with variables; Vitest. Built output is embedded through `internal/webui`.
 - Hand-written `database/sql` queries; schema changes are new numbered files in `internal/store/migrations/`, applied at startup.
 
 ## Commands
@@ -15,8 +16,12 @@ make build   # bin/lcm with version ldflags
 make test    # go test -race ./...
 make lint    # golangci-lint run (v2; install: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest)
 make fmt     # golangci-lint fmt (gofmt + goimports)
-make check   # fmt-check, vet, lint, test: run before finishing any change
+make check   # fmt-check, vet, lint, test, plus web-check when Node is available: run before finishing any change
+make web     # npm ci (if needed) + vite build into internal/webui/dist
+make web-check  # in web/: tsc, eslint, vitest, generated API types up to date (npm run check)
 ```
+
+Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd web && npm run dev` proxies `/api` to a running `lcm serve`. After editing `internal/api/openapi.yaml` run `npm run gen:api` in `web/`.
 
 ## Directory map
 
@@ -50,9 +55,11 @@ make check   # fmt-check, vet, lint, test: run before finishing any change
 | `internal/api/` | HTTP handlers (one file per resource), middleware chain, error envelope, `openapi.yaml` |
 | `internal/configsync/` | Policy-as-code: apply and export of Service, Policy and Module documents, config sources (LCM's own git clones), ownership, drift and conflicts, sync loop; semantics in `configsync.go` |
 | `internal/client/` | HTTP client of the API behind the `lcm` client commands; sends the token to the configured server only |
+| `internal/webui/` | Embeds `dist/` (built console) and serves it with SPA fallback, caching and CSP; `dist/.gitkeep` is the only committed file there |
+| `web/` | React 19 + TypeScript + Vite console; `src/api` (generated types, client, SSE), `src/policy` (YAML/graph logic), `src/pages`, `src/strings.ts` (all UI text) |
 | `internal/buildinfo/` | Version metadata |
 
-Not built yet: `web/`, replay, and opening pull requests from the UI (export is the way back to git).
+Not built yet: replay and opening pull requests from the UI (export is the way back to git).
 
 ## Repo rules
 
@@ -70,3 +77,4 @@ Not built yet: `web/`, replay, and opening pull requests from the UI (export is 
 - Config sync never overwrites a drifted resource and never deletes one; documents carry no privileges (allowlists and unit scopes stay in host config). Git runs only through `execx` with a fixed environment and the repository after `--`.
 - Token and user management stays session-only: an API token must never be able to mint or revoke tokens.
 - Lint findings are fixed, not disabled; a justified `//nolint:<linter> // reason` is the only exception.
+- Web console: UI text only in `web/src/strings.ts` (Traditional Chinese, technical terms in English); no node types or validation rules duplicated from the server (palette and forms come from `/node-types`, validation from `/validate`); the generated `web/src/api/schema.d.ts` is never edited by hand; no UI framework, no chart library.

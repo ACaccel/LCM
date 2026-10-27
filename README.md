@@ -2,7 +2,7 @@
 
 LCM is a lifecycle control plane for self-hosted services. It tracks each service you operate (where it runs, its version, health and lifecycle stage) and, driven by policy, performs deployment, recovery and backup actions. Every action is guarded, and every decision is auditable and replayable. It targets 1-10 hosts running services under systemd, docker or plain processes, ships as a single binary backed by SQLite, and does not target Kubernetes.
 
-> **Status: rewrite in progress.** The server runs the policy engine, service catalog with lifecycle actions, health monitoring and triggers (signal, git, cron, webhook), serves the full REST and event-stream API, syncs documents from git (policy-as-code), and the `lcm` binary has client commands for it. The web UI is not built yet. The previous implementation is preserved at commit `18a24f6`.
+> **Status: rewrite in progress.** The server runs the policy engine, service catalog with lifecycle actions, health monitoring and triggers (signal, git, cron, webhook), serves the full REST and event-stream API, syncs documents from git (policy-as-code), and the `lcm` binary has client commands for it. The web console (React, embedded in the binary) is built; see [Web console](#web-console). The previous implementation is preserved at commit `18a24f6`.
 
 ## Build
 
@@ -95,7 +95,7 @@ A service is reported `healthy` only when every critical check has passed; until
 
 The web UI and API are the default way to configure LCM and take effect at once. Git management is opt-in per resource: services, policies and modules can also be described as YAML documents in a repository, which LCM pulls and applies. Documents describe resources only; command allowlists, the `systemctl` privilege prefix and the units LCM may touch stay in the host configuration and are never read from a document.
 
-Register a repository as a **config source** (admin API, or the web UI later):
+Register a repository as a **config source** (admin API, or *Settings > Config sources* in the web console):
 
 ```sh
 curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/config/sources \
@@ -116,6 +116,29 @@ curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/config/
 **Manual apply and export.** `lcm apply -f` works for resources nobody owns. For an owned resource it refuses (`skipped`, exit status 3) unless the document equals the current content or `--force` is given; a forced apply writes the document but leaves the resource owned, so it shows as drifted and the repository stays the source of truth. `--dry-run` only validates and diffs. `lcm export` writes the canonical YAML of GUI-created resources, in apply order and sorted by name, so they can be committed and put under git; applying the export back changes nothing. A policy that was undeployed in the UI is not redeployed by a sync unless its document changes.
 
 Opening a pull request from the UI (write-back) is not built; export is the way back to git for now.
+
+## Web console
+
+`lcm serve` serves the console at `/` on the same listener as the API (`/api/*`). Log in with the admin account from `lcm admin set-password`. Pages: overview, services (detail with timeline, health checks, deployments and configuration), timeline, policies (graph editor with a YAML view), runs (live graph of a run), hosts and settings (API tokens, config sources, ownership, locks). The text is Traditional Chinese and lives in `web/src/strings.ts`; light and dark themes follow the browser. A service document with the annotation `lcm.dev/dashboard-url` (an `http` or `https` link, for example to Grafana) gets an external dashboard link in its header. The policy editor stores node positions as JSON in the policy's `metadata.annotations["lcm.dev/layout"]`; the engine ignores it.
+
+Responses carry a restrictive `Content-Security-Policy` (same-origin scripts only; inline styles are allowed because CodeMirror and React Flow need them). The console uses the REST API and one server-sent-event connection per browser tab; it has no server-side state.
+
+**Build.** The console is a Vite project in `web/` whose output goes to `internal/webui/dist`, which the binary embeds. `make build` builds it first when Node.js 24 and npm are installed. Without Node, `make build` and `go build` still work and the binary answers every console request with a page that says how to build it (a committed empty `internal/webui/dist/.gitkeep` keeps the embed valid).
+
+```sh
+make web         # npm ci (when needed) and npm run build
+make web-check   # typecheck, lint, unit tests, generated API types up to date
+```
+
+**Develop.** Run the Go server, then the Vite dev server, which proxies `/api` to it and reloads on changes:
+
+```sh
+bin/lcm serve                              # or go run ./cmd/lcm serve
+cd web && npm ci && npm run dev            # http://127.0.0.1:5173
+LCM_DEV_API=http://127.0.0.1:9000 npm run dev   # when the server listens elsewhere
+```
+
+The API types in `web/src/api/schema.d.ts` are generated from `internal/api/openapi.yaml`. After changing the OpenAPI document run `npm run gen:api` in `web/` and commit the result; `npm run check:api` (part of `make web-check` and CI) fails when it is stale. Tests are Vitest unit and component tests (`npm test`); there is no browser end-to-end suite.
 
 ## API v1
 

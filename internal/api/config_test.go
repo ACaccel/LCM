@@ -366,3 +366,26 @@ func TestSyncRequestsAreAsynchronousAndCoalesce(t *testing.T) {
 	x.call("POST", v1+"/config/sources/infra/sync", nil).want(http.StatusAccepted)
 	x.app.ConfigSync.Wait()
 }
+
+func TestAnnotationsSurviveStoreAndExport(t *testing.T) {
+	x := newSite(t)
+	const annot = "lcm.dev/layout"
+	doc := "apiVersion: lcm/v1\nkind: Policy\nmetadata:\n  name: laid-out\n  annotations:\n    " + annot + ` : '{"start":{"x":10,"y":20}}'` + "\nspec:\n  nodes:\n" + manualPolicyNodes
+	x.call("PUT", v1+"/policies/laid-out", doc, yamlBody()).want(http.StatusCreated)
+
+	got := x.call("GET", v1+"/policies/laid-out", nil).want(http.StatusOK).obj()
+	meta := got["document"].(map[string]any)["metadata"].(map[string]any)
+	if a, _ := meta["annotations"].(map[string]any); a[annot] != `{"start":{"x":10,"y":20}}` {
+		t.Fatalf("stored annotations = %v", meta["annotations"])
+	}
+
+	exported := x.call("GET", v1+"/export?kind=policy&name=laid-out", nil).want(http.StatusOK).String()
+	if !strings.Contains(exported, annot) {
+		t.Fatalf("export lost the annotation:\n%s", exported)
+	}
+	for _, it := range x.call("POST", v1+"/apply", exported, yamlBody()).want(http.StatusOK).items() {
+		if it["action"] != "unchanged" {
+			t.Fatalf("round trip = %v", it)
+		}
+	}
+}

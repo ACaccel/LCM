@@ -2,6 +2,10 @@ package app_test
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,5 +185,35 @@ spec:
 	}
 	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy)); err != nil {
 		t.Fatalf("deploy with module: %v", err)
+	}
+}
+
+// The console and the API share one listener; neither may shadow the other.
+func TestHandlerServesConsoleAndAPI(t *testing.T) {
+	h := newHarness(t)
+	srv := httptest.NewServer(h.app.Handler())
+	t.Cleanup(srv.Close)
+
+	get := func(path string) (int, string) {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := get("/api/v1/health"); code != http.StatusOK || !strings.Contains(body, `"status"`) {
+		t.Fatalf("health = %d %q", code, body)
+	}
+	if code, body := get("/api/v1/unknown"); code != http.StatusNotFound || !strings.Contains(body, `"error"`) {
+		t.Fatalf("unknown API path = %d %q", code, body)
+	}
+	// Built or not, a client-side route answers with HTML, not the API's
+	// JSON error.
+	code, body := get("/services/web")
+	if (code != http.StatusOK && code != http.StatusServiceUnavailable) || !strings.Contains(body, "<html") {
+		t.Fatalf("console route = %d %q", code, body)
 	}
 }

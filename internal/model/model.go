@@ -82,10 +82,13 @@ type Header struct {
 	Metadata   Metadata `yaml:"metadata" json:"metadata"`
 }
 
-// Metadata names and labels a document.
+// Metadata names and labels a document. Annotations hold data for tools
+// around LCM (the web console stores its graph layout there); the engine and
+// the lifecycle manager ignore them.
 type Metadata struct {
-	Name   string            `yaml:"name" json:"name"`
-	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Name        string            `yaml:"name" json:"name"`
+	Labels      map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	Annotations map[string]string `yaml:"annotations,omitempty" json:"annotations,omitempty"`
 }
 
 // Policy is an operational policy: a graph of nodes started by a trigger.

@@ -44,6 +44,7 @@ import (
 	"github.com/ACaccel/lcm/internal/state"
 	"github.com/ACaccel/lcm/internal/store"
 	"github.com/ACaccel/lcm/internal/trigger"
+	"github.com/ACaccel/lcm/internal/webui"
 )
 
 // shutdownTimeout bounds the graceful stop of the HTTP server.
@@ -324,8 +325,13 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
 		ConfigSync: a.ConfigSync, Events: a.Events, Context: a.ctx, GitHubWebhookSecret: cfg.GitHubWebhookSecret,
 	})
+	// The API keeps its own middleware chain; the console is static files
+	// and needs none of it.
+	root := http.NewServeMux()
+	root.Handle("/api/", a.api.Handler())
+	root.Handle("/", webui.Handler())
 	a.server = &http.Server{
-		Handler:           a.api.Handler(),
+		Handler:           root,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -338,8 +344,8 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	return a, nil
 }
 
-// Handler returns the HTTP handler of the API, for tests that drive it
-// without a listener.
+// Handler returns the HTTP handler of the whole server (API and web console),
+// for tests that drive it without a listener.
 func (a *App) Handler() http.Handler { return a.server.Handler }
 
 // Addr returns the bound listen address.

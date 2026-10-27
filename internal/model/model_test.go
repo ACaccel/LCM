@@ -174,6 +174,10 @@ func TestValidatePolicy(t *testing.T) {
 		{"name long", func(p *model.Policy) { p.Metadata.Name = strings.Repeat("a", 64) }, "metadata.name", "lowercase"},
 		{"label key", func(p *model.Policy) { p.Metadata.Labels = map[string]string{"-x": "v"} }, "metadata.labels.-x", "invalid label key"},
 		{"label value", func(p *model.Policy) { p.Metadata.Labels = map[string]string{"k": strings.Repeat("v", 256)} }, "metadata.labels.k", "exceeds"},
+		{"annotation key", func(p *model.Policy) { p.Metadata.Annotations = map[string]string{"bad key": "v"} }, "metadata.annotations.bad key", "invalid annotation key"},
+		{"annotations size", func(p *model.Policy) {
+			p.Metadata.Annotations = map[string]string{"lcm.dev/layout": strings.Repeat("v", model.MaxAnnotationsSize)}
+		}, "metadata.annotations", "exceeds"},
 		{"mode", func(p *model.Policy) { p.Spec.Concurrency.Mode = "burst" }, "spec.concurrency.mode", "must be one of"},
 		{"limit negative", func(p *model.Policy) { p.Spec.Concurrency.Limit = -1 }, "spec.concurrency.limit", "negative"},
 		{"limit not parallel", func(p *model.Policy) {
@@ -283,4 +287,37 @@ func assertIssue(t *testing.T, err error, path, msg string) {
 		}
 	}
 	t.Fatalf("no issue at %q containing %q in %v", path, msg, is)
+}
+
+func TestAnnotationsRoundTrip(t *testing.T) {
+	const src = `
+apiVersion: lcm/v1
+kind: Policy
+metadata:
+  name: p
+  annotations:
+    lcm.dev/layout: '{"a":{"x":1,"y":2}}'
+spec:
+  nodes:
+    - { id: a, type: trigger.manual }
+`
+	p, err := model.DecodePolicy([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"a":{"x":1,"y":2}}`
+	if got := p.Metadata.Annotations["lcm.dev/layout"]; got != want {
+		t.Fatalf("annotation = %q, want %q", got, want)
+	}
+	b, err := model.Encode(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := model.DecodePolicy(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p2.Metadata.Annotations["lcm.dev/layout"]; got != want {
+		t.Fatalf("annotation after round trip = %q, want %q", got, want)
+	}
 }

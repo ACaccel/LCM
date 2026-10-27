@@ -29,3 +29,34 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.15
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: web
+
+      - name: Check
+        run: npm run check
+        working-directory: web
+
+      - name: Build
+        run: npm run build
+        working-directory: web
+
+      # The binary embeds the built console, so prove that it compiles with it.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build with the console
+        run: go build ./...

@@ -1914,6 +1914,14 @@ components:
       properties:
         name: { type: string }
         labels: { $ref: "#/components/schemas/Labels" }
+        annotations:
+          allOf:
+            - $ref: "#/components/schemas/Labels"
+          description: |
+            Free-form data for tools around LCM; the engine ignores it. Keys follow the
+            label key syntax, and keys plus values may total 64 KiB. The web console keeps
+            the policy graph layout in `lcm.dev/layout` (JSON) and reads an external
+            dashboard link of a service from `lcm.dev/dashboard-url`.
     DocMeta:
       type: object
       required: [version, updatedAt, updatedBy]

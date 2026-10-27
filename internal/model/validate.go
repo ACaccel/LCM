@@ -13,6 +13,11 @@ const (
 	maxNameLen     = 63
 	maxLabelKeyLen = 63
 	maxLabelValLen = 255
+
+	// MaxAnnotationsSize bounds the summed length of all annotation keys and
+	// values of one document.
+	MaxAnnotationsSize = 64 << 10
+	maxAnnotationKey   = 253
 )
 
 var (
@@ -119,6 +124,16 @@ func validateHeader(h *Header, kind Kind, is *Issues) {
 		if len(h.Metadata.Labels[k]) > maxLabelValLen {
 			is.addf(path, "label value exceeds %d characters", maxLabelValLen)
 		}
+	}
+	size := 0
+	for _, k := range sortedKeys(h.Metadata.Annotations) {
+		if len(k) > maxAnnotationKey || !labelKeyRe.MatchString(k) {
+			is.addf("metadata.annotations."+k, "invalid annotation key")
+		}
+		size += len(k) + len(h.Metadata.Annotations[k])
+	}
+	if size > MaxAnnotationsSize {
+		is.addf("metadata.annotations", "total size of keys and values exceeds %d bytes", MaxAnnotationsSize)
 	}
 }
 
