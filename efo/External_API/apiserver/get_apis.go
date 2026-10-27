@@ -28,6 +28,14 @@ func (g_api *Get_apis) Service_Information(c *gin.Context) {
 	c.JSON(http.StatusOK, info)
 }
 
+func (g_api *Get_apis) List_Services(c *gin.Context) {
+	c.JSON(http.StatusOK, g_api.efo.List_Services())
+}
+
+func (g_api *Get_apis) Node_Types(c *gin.Context) {
+	c.JSON(http.StatusOK, g_api.efo.Node_Types())
+}
+
 func (g_api *Get_apis) Policy_Information(c *gin.Context) {
 	service := c.Param("service_Name")
 	policy := c.Param("policy_Name")
@@ -41,18 +49,49 @@ func (g_api *Get_apis) Policy_Information(c *gin.Context) {
 	c.JSON(http.StatusOK, info)
 }
 
-func (g_api *Get_apis) DataPacket_Information(c *gin.Context) {
+// Policy_Run returns the latest execution trace of a deployed policy. The
+// optional since query parameter returns only events newer than that sequence
+// number, so a client can poll a running execution incrementally.
+func (g_api *Get_apis) Policy_Run(c *gin.Context) {
 	service := c.Param("service_Name")
 	policy := c.Param("policy_Name")
-	node := c.Query("node")
-	port_str := c.Query("port")
 
-	port, err := strconv.Atoi(port_str)
+	since := 0
+	if since_str := c.Query("since"); since_str != "" {
+		parsed, err := strconv.Atoi(since_str)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		since = parsed
+	}
+
+	trace, err := g_api.efo.Policy_Run(service, policy, since)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	info, err := g_api.efo.DataPacket_Information(service, policy, node, port)
+
+	c.JSON(http.StatusOK, trace)
+}
+
+func (g_api *Get_apis) List_Modules(c *gin.Context) {
+	service := c.Param("service_Name")
+
+	modules, err := g_api.efo.List_Modules(service)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, modules)
+}
+
+func (g_api *Get_apis) Module_Information(c *gin.Context) {
+	service := c.Param("service_Name")
+	module := c.Param("module_Name")
+
+	info, err := g_api.efo.Module_Information(service, module)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

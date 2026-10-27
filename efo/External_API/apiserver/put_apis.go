@@ -2,9 +2,10 @@ package apiserver
 
 import (
 	"1935/efo"
-	"net/http"
-
+	lcmconfig "1935/efo/LCM_Enabler/config"
 	i "1935/efo/LCM_Enabler/interfaces"
+	"net/http"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,20 +35,30 @@ func (p_api *Put_apis) Configure_Service(c *gin.Context) {
 
 func (p_api *Put_apis) Configure_Service_Config(c *gin.Context) {
 	// upload config file
-	dst := ""
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	dst = "./efo/LCM_Enabler/upload/" + file.Filename
+	// Base strips any client-supplied directory part so the file cannot land
+	// outside the upload dir.
+	dst := "./" + lcmconfig.UploadDir() + "/" + filepath.Base(file.Filename)
 	if err := c.SaveUploadedFile(file, dst); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	}
-
-	if err := p_api.efo.Configure_Service_Config(dst); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	config, err := p_api.efo.Configure_Service_Config(dst)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"msg":          "configure service success",
+		"service_name": config.SvcName,
+		"policies":     policyNames(config),
+	})
 }
 
 func (p_api *Put_apis) Update_Policy(c *gin.Context) {
@@ -65,4 +76,21 @@ func (p_api *Put_apis) Update_Policy(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"msg": "update policy success"})
+}
+
+func (p_api *Put_apis) Update_Module(c *gin.Context) {
+	service_name := c.Param("service_Name")
+	module_name := c.Param("module_Name")
+	var module i.ModuleConfig
+	if err := c.ShouldBindJSON(&module); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := p_api.efo.Update_Module(service_name, module_name, module); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"msg": "update module success"})
 }

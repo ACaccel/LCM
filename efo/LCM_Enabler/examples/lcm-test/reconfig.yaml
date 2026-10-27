@@ -1,0 +1,50 @@
+# Reconfigure variant of config-logic.yaml (same service svc-logic).
+# Used to test PUT /api/lcm/service/file (reconfigure, only allowed with no deployed
+# policies). Difference: p-if-ge threshold 7 -> 5.
+service_name: svc-logic
+module:
+  - name: branch-mod
+    numInPort: 1
+    numOutPort: 2
+    inPort:
+      - { modulePort: 0, nodeName: m-if, nodePort: 0 }
+    outPort:
+      - { modulePort: 0, nodeName: m-if, nodePort: 0 }
+      - { modulePort: 1, nodeName: m-if, nodePort: 1 }
+    node:
+      - { name: m-if, type: If, property: { combinator: AND, conditions: [ { field: Value, operator: "<=", value: 9 } ] } }
+    path: []
+policy:
+  - name: policy-1
+    trigger:
+      - name: webhook-0
+        type: Webhook
+        property: { event_type: metric }
+    node:
+      - { name: p-if-ge, type: If, property: { combinator: AND, conditions: [ { field: Value, operator: ">=", value: 5 } ] } }
+      - { name: hot-branch, type: Module, property: { module: branch-mod } }
+      - { name: p-if-eq, type: If, property: { combinator: AND, conditions: [ { field: Value, operator: "==", value: 10 } ] } }
+    path:
+      - { nodePair: [webhook-0, p-if-ge], portPair: [0, 0], transFormat: [{ src: Value, dst: Value }] }
+      - { nodePair: [p-if-ge, hot-branch], portPair: [0, 0], transFormat: [{ src: Value, dst: Value }] }
+      - { nodePair: [p-if-ge, p-if-eq], portPair: [1, 0], transFormat: [{ src: Value, dst: Value }] }
+  - name: policy-rejoin
+    # Branch and rejoin: only one side of r-if ever runs, so the join needs
+    # mode: any. The default mode: all would wait for the untaken branch forever.
+    trigger:
+      - name: rejoin-wh
+        type: Webhook
+        property: { event_type: rejoin }
+    node:
+      - { name: r-if, type: If, property: { combinator: AND, conditions: [ { field: Value, operator: ">=", value: 5 }, { field: Value, operator: "<", value: 100 } ] } }
+      - { name: r-true, type: Wait, property: { seconds: 0 } }
+      - { name: r-false, type: Wait, property: { seconds: 0 } }
+      - { name: r-join, type: Merge, property: { mode: any } }
+      - { name: r-http, type: HTTPRequest, property: { method: GET, url: "http://localhost:8000/api/lcm/service" } }
+    path:
+      - { nodePair: [rejoin-wh, r-if], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [r-if, r-true], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [r-if, r-false], portPair: [1, 0], transFormat: [] }
+      - { nodePair: [r-true, r-join], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [r-false, r-join], portPair: [0, 1], transFormat: [] }
+      - { nodePair: [r-join, r-http], portPair: [0, 0], transFormat: [] }

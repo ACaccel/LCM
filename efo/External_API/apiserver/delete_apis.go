@@ -20,11 +20,11 @@ func (d_api *Delete_apis) Remove_Service(c *gin.Context) {
 
 	err := d_api.efo.Remove_Service(service)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	
-	c.JSON(http.StatusOK, gin.H{ "msg": "terminate service success" })
+
+	c.JSON(http.StatusOK, gin.H{"msg": "terminate service success"})
 }
 
 func (d_api *Delete_apis) Remove_Policy(c *gin.Context) {
@@ -33,9 +33,20 @@ func (d_api *Delete_apis) Remove_Policy(c *gin.Context) {
 
 	err := d_api.efo.Remove_Policy(service_name, policy_name)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{ "error": err.Error() })
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	
-	c.JSON(http.StatusOK, gin.H{ "msg": "remove policy success" })
+
+	c.JSON(http.StatusOK, gin.H{"msg": "remove policy success"})
+}
+func (d_api *Delete_apis) Remove_Module(c *gin.Context) {
+	service_name := c.Param("service_Name")
+	module_name := c.Param("module_Name")
+
+	if err := d_api.efo.Remove_Module(service_name, module_name); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"msg": "remove module success"})
 }

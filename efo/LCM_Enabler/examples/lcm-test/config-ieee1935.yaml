@@ -1,0 +1,70 @@
+# Template 2 - IEEE1935 action-node workflow (property reference).
+#
+# Primary purpose: show how to fill each IEEE1935_* action node's `property`.
+# Running it for real needs a live control node + app store (the run.sh gates this
+# behind RUN_IEEE1935=1); otherwise use it only as a configuration example.
+#
+# New spec: no policy `type`; webhook subscribes via `property.event_type`.
+service_name: svc-app
+policy:
+  - name: deploy-pipeline
+    trigger:
+      - name: webhook-0
+        type: Webhook
+        property: { event_type: deploy }
+    node:
+      # IEEE1935_Manifest: onboard/query manifest files.
+      #   request: Onboarded_Manifest | Get_Manifest | List_Manifest | Delete_Manifest
+      - name: manifest-1
+        type: IEEE1935_Manifest
+        property:
+          request: "Onboarded_Manifest"
+          manifest_file: "GoServer.zip" # read from <upload_dir>/<service>/<file>
+      # IEEE1935_Image: build/manage images.
+      #   request: Build_Image | List_Image | Remove_Image | Load_Image_From_Tar
+      - name: image-build
+        type: IEEE1935_Image
+        property:
+          request: "Build_Image"
+          manifest_name: "GoServer.zip"
+      # IEEE1935_Application: design/manage app definitions.
+      #   request: Design_App | Get_App | List_App | Update_App | Remove_App
+      - name: design-app
+        type: IEEE1935_Application
+        property:
+          request: "Design_App"
+          app_name: "GoServer"
+          yaml_file: "GoServer.yaml" # read from <upload_dir>/<service>/<file>
+          manifest_number: "1"
+          manifest: ["GoServer.zip"]
+      # IEEE1935_Deployment: create/manage deployments on a cluster.
+      #   request: Deploy_Deployment | List_Deployment | Get_Deployments | Update_Deployment | Remove_Deployment
+      - name: deployment-1
+        type: IEEE1935_Deployment
+        property:
+          request: "Deploy_Deployment"
+          cluster_name: "Cluster0"
+          app_name: "GoServer"
+          allocated_cpu: "1.5"
+          allocated_memory: "500M"
+          replicas: "3"
+      # IEEE1935_Service: instantiate/scale/terminate a running service.
+      #   request: Instantiate_Service | List_Service | Get_Service | Service_Scaling | Terminate_Service
+      - name: service-1
+        type: IEEE1935_Service
+        property:
+          request: "Instantiate_Service"
+          cluster_name: "Cluster0"
+          app_name: "GoServer"
+          selected_nodes: ["worker1"]
+    path:
+      - { nodePair: [webhook-0, manifest-1], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [manifest-1, image-build], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [image-build, design-app], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [design-app, deployment-1], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [deployment-1, service-1], portPair: [0, 0], transFormat: [] }
+# Other IEEE1935_* action nodes not shown above (same OutputFormat pattern):
+#   IEEE1935_Cluster   request: Create_Cluster | List_Clusters | Get_Cluster | Delete_Cluster
+#   IEEE1935_Node      request: Join_Node | List_Nodes | Get_Node | Delete_Node
+#   IEEE1935_Machine   request: Join_Machine | List_Machines | Get_Machine | Delete_Machine | Create_VM
+#   IEEE1935_AppStore  request: Create_AppStore | Get_AppStore | Remove_AppStore

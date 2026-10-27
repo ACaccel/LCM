@@ -1,0 +1,184 @@
+# CALM four-stage adaptive loop -- demo policy.
+#
+# One Timer tick is one slot:
+#
+#   timer-0 -> telemetry-0 -> selector-0 --(4 ports, canonical mode order)-->
+#   mode-latency / mode-balanced / mode-energy / mode-resilient
+#   --(apply-0 in-ports 0..3)--> apply-0 -> wait-0 -> verify-0
+#
+# Only one mode branch runs per slot, so apply-0 joins with JoinAny (fixed in the
+# node type, not configured here).
+#
+# Every connection leaves transFormat and carry empty. Empty carry forwards every
+# upstream namespace, which is what lets verify-0 still read target_cluster and
+# services -- both published by telemetry-0, four hops upstream. Naming namespaces
+# explicitly would prune, not add.
+#
+# calm-demo.sh rewrites the four values marked DEMO_* below. Edit them by
+# hand only when running the policy without the driver.
+service_name: calm-fourstage
+module: []
+policy:
+  - name: calm-loop
+    trigger:
+      - name: timer-0
+        type: Timer
+        property:
+          interval_seconds: 30 # DEMO_INTERVAL_SECONDS
+          # max_ticks stops the timer after that many ticks; 0 runs until the
+          # policy is undeployed. Ticks dropped because the previous run was
+          # still draining still count, because the count is of slots elapsed.
+          max_ticks: 0 # DEMO_MAX_TICKS
+    node:
+      # Stage 1 -- read the decision domain once per slot and publish one flat
+      # state vector plus per-service svc_<name>_{rate,replicas,d99_ms} keys.
+      - name: telemetry-0
+        type: CALM_Telemetry
+        property:
+          target_cluster: DEMO_TARGET_CLUSTER
+          sample_window_seconds: 60
+          jaeger_limit: 20
+          inject_file: efo/LCM_Enabler/examples/calm-fourstage/calm-inject.json # DEMO_INJECT_FILE
+
+      # Stage 2 -- fold in the previous slot's reward, build the context, ask the
+      # stability guard, then LinUCB. The chosen arm is the output port.
+      - name: selector-0
+        type: CALM_PolicySelector
+        property:
+          # 0 leaves the configured selector_alpha (default 1.0) in place. The
+          # value only ever takes effect on the call that creates this service's
+          # loop state; a live learner keeps the coefficient it started with.
+          alpha: 0
+          # Empty disables the JSON snapshot. Set a path to survive an EFO
+          # restart -- a convenience, not a durability guarantee.
+          state_file: ""
+          fallback_mode: balanced
+
+      # Stage 3a -- four instances of one node type, one per arm. The knob values
+      # are the simulator's calibration, carried over unchanged; they are a
+      # starting point on real hardware, not a tuning.
+      - name: mode-latency
+        type: CALM_PolicyMode
+        property:
+          mode: latency_priority
+          scale_out_threshold: 0.55
+          scale_in_threshold: 0.35
+          scale_step: 2
+          scale_in_dmr_tolerance: 0.3
+          redundancy_target: 2
+          redundancy_factor: 1.5
+          offloading_mode: latency_pref
+          offload_fraction: 0.30
+          migration_allowed: "true"
+          migration_cost_weight: 1.0
+          recovery_behavior: persistent_only
+          radio_compression_factor: 0.5
+          node_selection: spread
+
+      - name: mode-balanced
+        type: CALM_PolicyMode
+        property:
+          mode: balanced
+          scale_out_threshold: 0.70
+          scale_in_threshold: 0.35
+          scale_step: 1
+          scale_in_dmr_tolerance: 0.5
+          redundancy_target: 2
+          redundancy_factor: 1.2
+          offloading_mode: latency_pref
+          offload_fraction: 0.15
+          migration_allowed: penalized
+          migration_cost_weight: 1.5
+          recovery_behavior: normal
+          radio_compression_factor: 0.8
+          node_selection: pack
+
+      - name: mode-energy
+        type: CALM_PolicyMode
+        property:
+          mode: energy_saving
+          scale_out_threshold: 0.70
+          scale_in_threshold: 0.30
+          scale_step: 1
+          scale_in_dmr_tolerance: 1.0
+          redundancy_target: 1
+          redundancy_factor: 1.0
+          offloading_mode: energy_pref
+          offload_fraction: 0.20
+          migration_allowed: restricted
+          migration_cost_weight: 1.0
+          recovery_behavior: persistent_only
+          radio_compression_factor: 0.5
+          node_selection: pack
+
+      - name: mode-resilient
+        type: CALM_PolicyMode
+        property:
+          mode: resilient
+          scale_out_threshold: 0.65
+          scale_in_threshold: 0.25
+          scale_step: 2
+          scale_in_dmr_tolerance: 0.2
+          redundancy_target: 3
+          redundancy_factor: 2.0
+          offloading_mode: latency_pref
+          offload_fraction: 0.25
+          migration_allowed: restricted
+          migration_cost_weight: 1.0
+          recovery_behavior: fallback
+          radio_compression_factor: 0.6
+          node_selection: spread
+
+      # Stage 3b -- write the plan's replica targets through
+      # PATCH /api/clusters/{cluster}/services/{service}. target_cluster is left
+      # empty on purpose: the value arrives on the payload from telemetry-0, so
+      # there is one place to change the decision domain.
+      - name: apply-0
+        type: CALM_PlacementApply
+        property:
+          dry_run: false # DEMO_DRY_RUN
+          target_cluster: ""
+
+      # Let the placement take effect before it is measured. Keep this shorter
+      # than verify_window_seconds, which in turn stays shorter than the slot.
+      - name: wait-0
+        type: Wait
+        property:
+          seconds: 10
+
+      # Stage 4 -- re-measure, judge against the SLO, advance the recovery state
+      # machine and hand the reward to the pending decision. The next slot's
+      # selector-0 folds it into the bandit.
+      - name: verify-0
+        type: CALM_PostVerify
+        property:
+          verify_window_seconds: 30
+    path:
+      - { nodePair: [timer-0, telemetry-0], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [telemetry-0, selector-0], portPair: [0, 0], transFormat: [] }
+      # Output port index is the LinUCB arm index. This order is canonical and
+      # load-bearing -- never renumber it.
+      - { nodePair: [selector-0, mode-latency], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [selector-0, mode-balanced], portPair: [1, 0], transFormat: [] }
+      - { nodePair: [selector-0, mode-energy], portPair: [2, 0], transFormat: [] }
+      - { nodePair: [selector-0, mode-resilient], portPair: [3, 0], transFormat: [] }
+      # The fan-in mirrors the fan-out, so an apply-0 in-port identifies the mode
+      # that produced the plan on it.
+      - { nodePair: [mode-latency, apply-0], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [mode-balanced, apply-0], portPair: [0, 1], transFormat: [] }
+      - { nodePair: [mode-energy, apply-0], portPair: [0, 2], transFormat: [] }
+      - { nodePair: [mode-resilient, apply-0], portPair: [0, 3], transFormat: [] }
+      - { nodePair: [apply-0, wait-0], portPair: [0, 0], transFormat: [] }
+      - { nodePair: [wait-0, verify-0], portPair: [0, 0], transFormat: [] }
+    ui:
+      node:
+        timer-0: { x: 0, y: 300 }
+        telemetry-0: { x: 220, y: 300 }
+        selector-0: { x: 460, y: 300 }
+        mode-latency: { x: 720, y: 40 }
+        mode-balanced: { x: 720, y: 210 }
+        mode-energy: { x: 720, y: 380 }
+        mode-resilient: { x: 720, y: 550 }
+        apply-0: { x: 990, y: 300 }
+        wait-0: { x: 1210, y: 300 }
+        verify-0: { x: 1410, y: 300 }

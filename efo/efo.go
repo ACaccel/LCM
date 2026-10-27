@@ -5,7 +5,7 @@ import (
 )
 
 type EFO struct {
-	LCM_Enabler    *lcmenabler.LCM_Enabler
+	LCM_Enabler *lcmenabler.LCM_Enabler
 }
 
 func EFO_Factory(LCM_Enabler *lcmenabler.LCM_Enabler) (*EFO, error) {

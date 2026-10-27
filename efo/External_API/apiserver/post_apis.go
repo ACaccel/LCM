@@ -2,10 +2,11 @@ package apiserver
 
 import (
 	"1935/efo"
-
+	lcmconfig "1935/efo/LCM_Enabler/config"
 	i "1935/efo/LCM_Enabler/interfaces"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,28 +36,46 @@ func (p_api *Post_apis) Register_Service(c *gin.Context) {
 
 func (p_api *Post_apis) Register_Service_Config(c *gin.Context) {
 	// upload config file
-	dst := ""
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	dst = "./efo/LCM_Enabler/upload/" + file.Filename
+	// Base strips any client-supplied directory part so the file cannot land
+	// outside the upload dir.
+	dst := "./" + lcmconfig.UploadDir() + "/" + filepath.Base(file.Filename)
 	if err := c.SaveUploadedFile(file, dst); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	}
-
-	if err := p_api.e.Register_Service_Config(dst); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"msg": "register service success"})
+	config, err := p_api.e.Register_Service_Config(dst)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"msg":          "register service success",
+		"service_name": config.SvcName,
+		"policies":     policyNames(config),
+	})
+}
+
+// policyNames lists a config's policy names in document order, for the upload
+// endpoints' responses. Document order matters: the GUI opens the first one.
+func policyNames(config i.ServiceConfig) []string {
+	names := make([]string, 0, len(config.Policy))
+	for _, policy := range config.Policy {
+		names = append(names, policy.PolicyName)
+	}
+	return names
 }
 
 func (p_api *Post_apis) Upload_Service_File(c *gin.Context) {
 	// upload manifest file
 	service_name := c.Param("service_Name")
-	uploadDir := "./efo/LCM_Enabler/upload/" + service_name
+	uploadDir := "./" + lcmconfig.UploadDir() + "/" + service_name
 	if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(uploadDir, os.ModePerm); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -91,15 +110,16 @@ func (p_api *Post_apis) Execute_Webhook(c *gin.Context) {
 		return
 	}
 
-	// process the Policy
-	if err := p_api.e.Execute_Webhook(
+	// dispatch the event to subscribed webhook triggers
+	dispatched, err := p_api.e.Execute_Webhook(
 		webhook.SvcName,
 		webhook.EventType,
 		webhook.Content,
-	); err != nil {
+	)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	} else {
-		c.JSON(http.StatusOK, nil)
+		c.JSON(http.StatusOK, gin.H{"dispatched": dispatched})
 	}
 }
 
@@ -146,24 +166,6 @@ func (p_api *Post_apis) Policy_Undeployment(c *gin.Context) {
 	}
 }
 
-func (p_api *Post_apis) Configure_DataPacket(c *gin.Context) {
-	service := c.Param("service_Name")
-	policy := c.Param("policy_Name")
-
-	var data_packet i.ConfigureDataPacket
-	if err := c.ShouldBindJSON(&data_packet); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid DataPacket format"})
-		return
-	}
-
-	if err := p_api.e.Configure_DataPacket(service, policy, data_packet); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"msg": "configure DataPacket success"})
-}
-
 func (p_api *Post_apis) Configure_Template(c *gin.Context) {
 	var template_data i.TemplateConfigure
 	if err := c.ShouldBindJSON(&template_data); err != nil {
@@ -177,4 +179,19 @@ func (p_api *Post_apis) Configure_Template(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"msg": "configure template success"})
+}
+
+func (p_api *Post_apis) Register_Module(c *gin.Context) {
+	service_name := c.Param("service_Name")
+	var module i.ModuleConfig
+	if err := c.ShouldBindJSON(&module); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := p_api.e.Register_Module(service_name, module); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"msg": "register module success"})
+	}
 }

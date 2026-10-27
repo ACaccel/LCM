@@ -2,46 +2,35 @@
 
 ![lcm_architecture](./efo/LCM_Enabler/assets/LCM_api.png)
 
-## APIs to test LCM
+Standalone lifecycle management (LCM) policy engine ported from the IEEE1935 testbed.
+Operators define services, each with policies (triggers, function nodes, connections),
+deploy them, and drive them with webhook or interval events.
 
-- Service
-  - GET     /api/service/:service_Name
-    - get the information of a service
-    - `curl -X GET "localhost:8000/api/service/service-1"`
-  - POST    /api/service
-    - register a service with post json body
-    - `curl -X POST -H "Content-Type: application/json" -d '{"service_name":"service-1","module":[],"policy":[{"name":"policy-1","type":"default","trigger":[{"name":"interval-0","type":"Interval","property":{"Interval":1}}],"node":[],"path":[]}]}' localhost:8000/api/service`
-  - PUT     /api/service
-    - reconfigure a service with put json body
-    - `curl -X PUT -H "Content-Type: application/json" -d '{"service_name":"service-1","module":[],"policy":[{"name":"policy-1","type":"default","trigger":[{"name":"interval-0","type":"Interval","property":{"Interval":2}}],"node":[],"path":[]}]}' localhost:8000/api/service`
-  - POST    /api/service/file
-    - register a service with a configuration file
-    - `curl -X POST -F "config=@config.yaml" localhost:8000/api/service/file`
-  - PUT     /api/service/file
-    - reconfigure a service with a new configuration file
-    - `curl -X PUT -F "config=@reconfig.yaml" localhost:8000/api/service/file`
-  - DELETE  /api/service/:service_Name
-    - delete a service
-    - `curl -X DELETE "localhost:8000/api/service/service-1"`
+| Component                       | Role                                                                     | Docs                                            |
+| ------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
+| `efo/LCM_Enabler/`            | Policy design and management, `/api/lcm` REST API, GUI (`frontend/`) | [LCM Enabler](./efo/LCM_Enabler/README.md)       |
+| `efo/Rule_Framework/`         | Runtime engine that executes deployed policies                           | [Rule Framework](./efo/Rule_Framework/README.md) |
+| `efo/External_API/apiserver/` | Gin HTTP server exposing the LCM API                                     | -                                               |
 
-- Policy
-  - GET /api/service/:service_Name/policy/:policy_Name
-    - get the information of a policy
-    - `curl -X GET "localhost:8000/api/service/service-1/policy/policy-1"`
-  - POST /api/service/policy/deploy
-    - deploy/undeploy a service's policies
-    - `curl -X POST -H "Content-Type: application/json" -d '{"SvcName":"service-1", "Type": "POLICY_DEPLOY", "Policies": ["policy-1"]}' localhost:8000/api/service/policy/deploy`
-    - `curl -X POST -H "Content-Type: application/json" -d '{"SvcName":"service-1", "Type": "POLICY_UNDEPLOY", "Policies": ["policy-1"]}' localhost:8000/api/service/policy/deploy`
+The API is unauthenticated; the server binds to localhost only.
 
-- DataPacket
-  - GET  /api/service/:service_Name/policy/:policy_Name/datapacket
-    - get the information of a node's data packet
-    - `curl -X GET "localhost:8000/api/service/service-1/policy/policy-1/datapacket?node=p1-if-0&port=0"`
-  - POST /api/service/:service_Name/policy/:policy_Name/datapacket
-    - set the transformat of a node's data packet
-    - `curl -X POST -H "Content-Type: application/json" -d '{"NodeName":"p1-if-0", "Port": 0, "TransFormat": [{"src": "a", "dst": "b"}]}' localhost:8000/api/service/service-1/policy/policy-1/datapacket`
+## Run
 
-- Misc
-  - POST /api/webhook
-    - send the webhook event to each deployed policies
-    - `curl -X POST -H "Content-Type: application/json" -d '{"SvcName":"service-1", "EventType": "default", "Content": {"Value": 10}}' localhost:8000/api/webhook`
+Backend (Go, listens on `127.0.0.1:8000`; run from the repository root, since the upload
+and template directories are resolved relative to it):
+
+```sh
+go run .
+curl localhost:8000/ping
+```
+
+GUI (Node.js and npm):
+
+```sh
+cd efo/LCM_Enabler/frontend
+npm install
+npm run dev
+```
+
+The full API reference is in [efo/LCM_Enabler/README.md](./efo/LCM_Enabler/README.md);
+example configs and scripts are in `efo/LCM_Enabler/examples/`.

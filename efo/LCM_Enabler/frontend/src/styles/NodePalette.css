@@ -1,0 +1,51 @@
+.node-palette {
+  padding: 6px 0 8px;
+  border-top: 1px solid var(--border);
+}
+
+.palette-title {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-secondary);
+}
+
+.palette-category {
+  margin-bottom: 4px;
+}
+
+.palette-category-label {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.palette-item {
+  margin: 2px 6px;
+  padding: 5px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: grab;
+  user-select: none;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item:hover {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.palette-item:active {
+  cursor: grabbing;
+}

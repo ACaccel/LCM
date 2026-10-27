@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	// "encoding/json"
@@ -34,18 +35,20 @@ func ReadJson(path string, content any) error {
 func ReadYaml(path string, content any) error {
 	yamlFile, err := os.Open(path)
 	if err != nil {
-		return errors.New("failed to parse YAML file")
+		return fmt.Errorf("failed to read YAML file: %w", err)
 	}
 	defer yamlFile.Close()
 
 	yamlFileContent, err := io.ReadAll(yamlFile)
 	if err != nil {
-		return errors.New("failed to parse YAML file")
+		return fmt.Errorf("failed to read YAML file: %w", err)
 	}
 
+	// Keep the yaml error intact: it carries the line number, which is the
+	// only actionable detail for a hand-written config.
 	err = yaml.Unmarshal(yamlFileContent, content)
 	if err != nil {
-		return errors.New("failed to parse YAML file")
+		return fmt.Errorf("failed to parse YAML file: %w", err)
 	}
 
 	return nil

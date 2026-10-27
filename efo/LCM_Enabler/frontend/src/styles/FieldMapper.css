@@ -1,0 +1,158 @@
+.field-mapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fm-banner {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.fm-banner strong {
+  color: var(--accent-green);
+}
+
+.fm-banner.mapped strong {
+  color: var(--accent-blue);
+}
+
+.fm-note {
+  font-size: 11px;
+  color: var(--accent-orange);
+  line-height: 1.4;
+}
+
+.fm-empty {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  padding: 2px 0;
+}
+
+.fm-columns {
+  display: flex;
+  gap: 6px;
+}
+
+.fm-column {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fm-column-head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-chip {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.fm-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
+
+.fm-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fm-chip.selected {
+  border-color: var(--accent-blue);
+  background: #1a2a40;
+}
+
+.fm-chip.mapped {
+  border-color: var(--accent-green);
+}
+
+.fm-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-chip-sample {
+  color: var(--accent-green);
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-footnote {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* Carried-context selector: which upstream namespaces continue downstream. */
+.fm-section-head {
+  margin: 10px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7d879c;
+}
+
+.fm-namespaces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fm-ns {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid #333a4f;
+  border-radius: 12px;
+  font-size: 12px;
+  color: #7d879c;
+  cursor: pointer;
+}
+
+.fm-ns.kept {
+  border-color: #3aab6e;
+  color: #d7dceb;
+}
+
+.fm-ns input {
+  margin: 0;
+}
+
+.fm-ns-count {
+  font-size: 10px;
+  color: #7d879c;
+}

@@ -1,0 +1,37 @@
+# Teaching example for the GUI config-upload feature.
+#
+# Upload from the Policy Designer: left panel > Services > the upload button
+# (or: curl -X POST -F "file=@config-upload-example.yaml" localhost:8000/api/lcm/service/file).
+# The GUI opens the first policy below on the canvas. No `ui` block is needed:
+# nodes are laid out automatically, and the GUI writes positions back on Save.
+#
+# config-logic.yaml next to this file is the exhaustive shape reference
+# (modules, carry, qualified fields); this file keeps to one small policy and
+# comments each field once.
+service_name: svc-upload-example
+module: [] # reusable subgraphs a policy can instantiate; see config-logic.yaml
+policy:
+  - name: threshold-alert # policies open in document order; this one first
+    trigger: # entry points, fired by POST /api/lcm/webhook
+      - name: metric-in
+        type: Webhook
+        property: { event_type: metric } # runs on events with EventType=metric
+    node: # function nodes; property keys per type come from GET /api/lcm/nodetypes
+      - name: over-limit
+        type: If # output port 0 = conditions true, port 1 = false
+        property: { combinator: AND, conditions: [{ field: Value, operator: ">=", value: 10 }] }
+      - name: notify
+        type: HTTPRequest
+        property: { method: GET, url: "http://localhost:8000/api/lcm/service" }
+      - name: cool-down
+        type: Wait
+        property: { seconds: 1 }
+    path: # edges: nodePair [from, to], portPair [fromOutPort, toInPort]
+      # An empty transFormat passes the upstream payload through unchanged.
+      - { nodePair: [metric-in, over-limit], portPair: [0, 0], transFormat: [] }
+      # A non-empty transFormat projects/renames fields src -> dst for the
+      # receiving node only.
+      - { nodePair: [over-limit, notify], portPair: [0, 0], transFormat: [{ src: Value, dst: Value }] }
+      # carry names which upstream namespaces this edge forwards; empty or
+      # omitted forwards everything.
+      - { nodePair: [over-limit, cool-down], portPair: [1, 0], transFormat: [], carry: [metric-in] }
