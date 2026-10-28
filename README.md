@@ -20,7 +20,7 @@ make check        # format check, vet, golangci-lint, tests with -race
 ```sh
 export LCM_DATA_DIR=./data               # optional, this is the default
 
-bin/lcm admin set-password               # prompts for the admin password (min 12 characters)
+bin/lcm admin set-password               # prompts for the admin password (min 8 characters)
 bin/lcm serve                            # listens on 127.0.0.1:7800
 ```
 

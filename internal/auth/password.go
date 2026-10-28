@@ -12,7 +12,7 @@ import (
 )
 
 // MinPasswordLength is the minimum accepted password length in bytes.
-const MinPasswordLength = 12
+const MinPasswordLength = 8
 
 // Argon2id parameters (OWASP minimum: m=19 MiB, t=2, p=1). Kept small because
 // LCM targets a resident footprint under 50 MB.

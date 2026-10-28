@@ -86,7 +86,7 @@ func TestSetPassword(t *testing.T) {
 	}
 
 	a.stdin = strings.NewReader("short\n")
-	if r := runCLI(t, a, out, errb, "admin", "set-password"); r.code != 1 || !strings.Contains(r.stderr, "at least 12") {
+	if r := runCLI(t, a, out, errb, "admin", "set-password"); r.code != 1 || !strings.Contains(r.stderr, "at least 8") {
 		t.Errorf("weak password: %+v", r)
 	}
 	a.stdin = strings.NewReader("")

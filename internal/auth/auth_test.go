@@ -85,8 +85,11 @@ func TestVerifyMalformedHash(t *testing.T) {
 func TestSetPasswordValidation(t *testing.T) {
 	svc, _ := newService(t)
 	ctx := context.Background()
-	if _, err := svc.SetPassword(ctx, "admin", "short"); !errors.Is(err, auth.ErrWeakPassword) {
-		t.Errorf("short password: %v", err)
+	if _, err := svc.SetPassword(ctx, "admin", "seven77"); !errors.Is(err, auth.ErrWeakPassword) {
+		t.Errorf("7-character password: %v", err)
+	}
+	if _, err := svc.SetPassword(ctx, "admin", "eight888"); err != nil {
+		t.Errorf("8-character password: %v", err)
 	}
 	if _, err := svc.SetPassword(ctx, "", testPassword); !errors.Is(err, auth.ErrInvalidUsername) {
 		t.Errorf("empty username: %v", err)

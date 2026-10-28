@@ -187,7 +187,7 @@ note "healthy: $(curl -fsS http://127.0.0.1:7800/api/v1/health)"
 
 log "admin account and seed token"
 if ((fresh_db)) && [[ -t 0 ]]; then
-	note "set the password of the web console's admin account (min 12 characters)"
+	note "set the password of the web console's admin account (min 8 characters)"
 	as_lcm /usr/local/bin/lcm admin set-password --data-dir /var/lib/lcm
 else
 	note "unchanged; to set the admin password: sudo -u lcm /usr/local/bin/lcm admin set-password --data-dir /var/lib/lcm"
