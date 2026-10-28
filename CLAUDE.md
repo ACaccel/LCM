@@ -1,6 +1,6 @@
 # LCM
 
-Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration, the HTTP API v1, config sync, the CLI client and the web console done). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
+Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration, the HTTP API v1, config sync, the CLI client, the web console and host deployment with self-deploy done). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
 
 ## Stack
 
@@ -61,6 +61,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `web/` | React 19 + TypeScript + Vite console; `src/api` (generated types, client, SSE), `src/policy` (YAML/graph logic), `src/pages`, `src/strings.ts` (all UI text) |
 | `internal/templates/` | Built-in policy templates: descriptors and the renderer over `examples/templates/*.yaml` (embedded through the data-only `examples` package) |
 | `internal/buildinfo/` | Version metadata |
+| `deploy/` | Host installation: `bootstrap.sh` (root, idempotent), `seed.sh`, `uninstall.sh`, `self-install` (the only sudo command of the `lcm` account), unit, env, sudoers and the self-deploy documents; tested by `internal/app/deploy_test.go`, opt-in end-to-end `LCM_IT_SELFDEPLOY=1 go test ./internal/app -run TestRealSelfDeploy` |
 | `docs/` | `architecture.md` (components, data flow, engine summary, security model) and `operations.md` (install, systemd unit, backup, upgrade) |
 
 Not built yet: replay and opening pull requests from the UI (export is the way back to git).

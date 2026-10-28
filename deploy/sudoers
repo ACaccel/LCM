@@ -1,0 +1,5 @@
+# /etc/sudoers.d/lcm, installed by deploy/bootstrap.sh (docs/operations.md).
+# The lcm account may run exactly this command line as root: install the
+# binary its self-deploy built. Rules for other units are separate, reviewed
+# additions.
+lcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm

@@ -69,6 +69,8 @@ Cmnd_Alias LCM_UNITS = \
 lcm ALL=(root) NOPASSWD: LCM_UNITS
 ```
 
+LCM can deploy itself ([self-deploy](operations.md#self-deploy)): its only root command is `self-install` with one fixed argument, which installs the binary built in LCM's own checkout and restarts and verifies LCM from a separate systemd unit.
+
 Because the rule lives on the host, a document cannot widen it: allowlists, the privilege prefix and the reachable units are host configuration and are never read from a document. Do not set `NoNewPrivileges=yes` on LCM's own unit; it would disable `sudo`.
 
 **Authentication and token scopes.** The admin account is created from the CLI only (`lcm admin set-password`, passwords are hashed with argon2id). Browsers use a session cookie; scripts use bearer tokens. Tokens have a scope: `admin` reaches the whole API except token management, `ingest` reaches only alert, heartbeat and webhook endpoints and `GET /auth/me`. Creating and revoking tokens needs a session, so a leaked token can never mint more tokens. Webhook listeners with an `hmacSecret` and the GitHub endpoint (with `LCM_GITHUB_WEBHOOK_SECRET`) accept a valid HMAC signature instead of a token. Failed logins are rate limited.

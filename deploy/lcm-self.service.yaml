@@ -1,0 +1,60 @@
+# LCM deploying itself. Applied by deploy/seed.sh; docs/operations.md
+# explains the flow and the trust boundary.
+#
+# Runtime command: lcm.service is LCM itself, so LCM must not restart it
+# from inside a deployment (the restart would kill the process recording the
+# deployment). start, stop and restart are therefore no-ops; the install
+# step's self-install schedules the restart 3s later in a separate systemd
+# unit, verifies the new version and restores the previous binary when it
+# does not become healthy.
+#
+# Checks: "api" is the health endpoint. "version" passes only when the
+# running server reports the version of the binary built in the checkout,
+# so a deployment that self-install rolled back is seen as unhealthy and the
+# auto-deploy policy rolls the checkout back too. It also fails for the few
+# seconds between a build and the restart.
+apiVersion: lcm/v1
+kind: Service
+metadata:
+  name: lcm
+spec:
+  runtime:
+    type: command
+    status: systemctl is-active --quiet lcm.service
+    start: "true"
+    stop: "true"
+    restart: "true"
+  source:
+    repo: /var/lib/lcm/work/lcm
+    branch: main
+    # make build compiles the console (npm) and bin/lcm with the toolchains
+    # bootstrap copied; caches stay under the data directory.
+    build: >-
+      PATH=/opt/lcm/toolchain/go/bin:/opt/lcm/toolchain/node/bin:$PATH
+      GOTOOLCHAIN=local GOFLAGS=-modcacherw
+      GOCACHE=/var/lib/lcm/cache/go-build GOMODCACHE=/var/lib/lcm/cache/go-mod
+      npm_config_cache=/var/lib/lcm/cache/npm npm_config_audit=false
+      npm_config_fund=false npm_config_update_notifier=false
+      make build
+    install: sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm
+    timeout: 20m
+  checks:
+    - name: api
+      type: http
+      interval: 15s
+      props:
+        url: http://127.0.0.1:7800/api/v1/health
+    - name: version
+      type: command
+      interval: 15s
+      props:
+        command:
+          - sh
+          - -c
+          - |
+            built=$(/var/lib/lcm/work/lcm/bin/lcm version) || exit 1
+            set -- $built
+            body=$(curl -fsS --max-time 3 http://127.0.0.1:7800/api/v1/health) || exit 1
+            case $body in *"\"version\":\"$2\""*) exit 0 ;; esac
+            echo "running $body, built $2" >&2
+            exit 1

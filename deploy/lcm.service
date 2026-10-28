@@ -1,0 +1,30 @@
+# /etc/systemd/system/lcm.service, installed by deploy/bootstrap.sh.
+# Docs: docs/operations.md
+[Unit]
+Description=LCM lifecycle control plane
+Documentation=https://github.com/ACaccel/LCM/blob/main/docs/operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lcm
+Group=lcm
+EnvironmentFile=/etc/lcm/lcm.env
+ExecStart=/usr/local/bin/lcm serve
+Restart=on-failure
+RestartSec=5
+# LCM waits up to 10s for running policy nodes; their runs resume after the
+# next start. mixed sends SIGTERM to LCM only, so commands it runs are not
+# killed before it has stopped them itself.
+KillMode=mixed
+TimeoutStopSec=30
+UMask=0027
+PrivateTmp=yes
+# No NoNewPrivileges= and no ProtectSystem=: self-deploy runs
+# "sudo -n /usr/local/libexec/lcm/self-install", which needs setuid sudo
+# (disabled by NoNewPrivileges) and writes /usr/local/bin and /run from this
+# unit's mount namespace (read-only under ProtectSystem).
+
+[Install]
+WantedBy=multi-user.target

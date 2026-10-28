@@ -2,7 +2,7 @@
 
 LCM is a lifecycle control plane for self-hosted services. It tracks each service you operate (where it runs, its version, health and lifecycle stage) and, driven by policy, performs deployment, recovery and backup actions. Every action is guarded, and every decision is auditable and replayable. It targets 1-10 hosts running services under systemd, docker or plain processes, ships as a single binary backed by SQLite, and does not target Kubernetes.
 
-More documentation: [architecture and security model](docs/architecture.md), [operating LCM](docs/operations.md).
+More documentation: [architecture and security model](docs/architecture.md), [operating LCM](docs/operations.md), including [installing it on a host](docs/operations.md#install) with `deploy/` so that it deploys itself.
 
 > **Status: rewrite in progress.** The server runs the policy engine, service catalog with lifecycle actions, health monitoring and triggers (signal, git, cron, webhook), serves the full REST and event-stream API, syncs documents from git (policy-as-code), and the `lcm` binary has client commands for it. The web console (React, embedded in the binary) is built; see [Web console](#web-console). The previous implementation is preserved at commit `18a24f6`.
 

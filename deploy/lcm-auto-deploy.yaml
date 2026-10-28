@@ -1,0 +1,139 @@
+# Scenario 1: deploy every new commit of a branch once CI is green.
+#
+# trigger.git -> (CI check) -> deploy window -> lifecycle.deploy ->
+# wait for health -> notify; an unhealthy or failed deploy rolls back.
+# One Discord message is created at the start and edited as stages finish.
+#
+# The trigger takes its values when the template is instantiated (trigger
+# props cannot be expressions); every other node reads params.* and can be
+# changed by editing spec.params.
+apiVersion: lcm/v1
+kind: Policy
+metadata:
+  name: lcm-auto-deploy
+  labels:
+    service: lcm
+  annotations:
+    lcm.dev/template: auto-deploy
+spec:
+  params:
+    service: lcm
+    requireCI: true
+    ciRepo: ACaccel/LCM
+    ciWorkflows:
+      - ci.yml
+    ciTokenSecret: ""
+    ciWait: 30m
+    windows:
+      - end: "24:00"
+        start: "00:00"
+    timezone: Asia/Taipei
+    healthTimeout: 3m
+    notifySecret: ""
+  nodes:
+    - id: push
+      type: trigger.git
+      props:
+        repo: https://github.com/ACaccel/LCM.git
+        branch: main
+      next: {out: [fresh]}
+    # Forget the previous run's message so each deployment gets its own.
+    - id: fresh
+      type: state.set
+      props: {key: deploy-message, value: {}}
+      next: {out: [announce]}
+    - id: announce
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }}"
+        message: "Commit {{ trigger.commit[:7] }} pushed. Checking CI."
+      next: {out: [ci_gate], error: [ci_gate]}
+    - id: ci_gate
+      type: flow.if
+      props: {condition: params.requireCI}
+      next: {true: [ci], false: [window]}
+    - id: ci
+      type: ci.status
+      props:
+        repo: "{{ params.ciRepo }}"
+        commit: "{{ trigger.commit }}"
+        workflows: "{{ params.ciWorkflows }}"
+        tokenSecret: "{{ params.ciTokenSecret }}"
+        waitFor: "{{ params.ciWait }}"
+      next: {success: [window], failure: [ci_failed], pending: [ci_failed]}
+    - id: window
+      type: guard.window
+      props:
+        windows: "{{ params.windows }}"
+        timezone: "{{ params.timezone }}"
+        wait: true
+      next: {out: [deploy], blocked: [blocked]}
+    - id: deploy
+      type: lifecycle.deploy
+      props:
+        service: "{{ params.service }}"
+        version: "{{ trigger.commit }}"
+      next: {out: [healthy], error: [rollback]}
+    - id: healthy
+      type: wait.until
+      props:
+        interval: 10s
+        timeout: "{{ params.healthTimeout }}"
+        condition: 'inputs.svc.health == "healthy" && all(values(inputs.svc.checks), {!.critical || .lastResultMs > inputs.since})'
+        inputs:
+          svc: "{{ service[params.service] }}"
+          since: "{{ nodes.deploy.startedMs + nodes.deploy.durationMs }}"
+      next: {out: [done], timeout: [rollback]}
+    - id: rollback
+      type: lifecycle.rollback
+      props: {service: "{{ params.service }}"}
+      next: {out: [rolled_back], error: [rollback_failed]}
+    - id: done
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }}"
+        message: "Deployed {{ trigger.commit[:7] }} and the service is healthy."
+    - id: rolled_back
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }}"
+        message: "Deploying {{ trigger.commit[:7] }} failed or the service did not become healthy. Rolled back to the previous version."
+    - id: rollback_failed
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }}"
+        message: "Deploying {{ trigger.commit[:7] }} failed and the rollback failed too. Manual action needed."
+    - id: ci_failed
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }}"
+        message: "CI for {{ trigger.commit[:7] }} did not pass. Not deployed."
+    - id: blocked
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }}"
+        message: "{{ trigger.commit[:7] }} is outside the deploy window. Not deployed."

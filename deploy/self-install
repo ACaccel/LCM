@@ -1,0 +1,153 @@
+#!/bin/sh
+# Install a binary built by LCM's self-deploy and restart LCM, rolling back
+# when the new binary does not become healthy. Docs: docs/operations.md
+#
+#   sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm
+#
+# The only command the lcm account may run as root (/etc/sudoers.d/lcm). It
+# copies the binary to /usr/local/bin/lcm, keeps the previous one as lcm.prev
+# and schedules "self-install --verify" in a transient systemd unit, so that
+# the restart happens outside the LCM process that runs the deployment and
+# after that deployment has been recorded. The sudoers rule cannot reach
+# --verify because its argv differs.
+set -euf
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C
+umask 022
+
+root='' user=lcm unit=lcm.service health=http://127.0.0.1:7800/api/v1/health
+systemctl=systemctl run_prefix=lcm-self-update wait_s=60
+# Verification logs to the journal, where a <N> line prefix sets the priority.
+err=''
+
+say() { printf '%sself-install: %s\n' "${2:-}" "$1"; }
+die() { printf '%sself-install: %s\n' "$err" "$2" >&2; exit "$1"; }
+
+# Test mode (internal/app deploy tests): paths under a prefix, user-scope
+# units, no identity switch. It is refused as root, so neither sudo nor the
+# scheduled verification can enter it.
+if [ -n "${LCM_SELF_INSTALL_TEST_ROOT:-}" ]; then
+	[ "$(id -u)" -ne 0 ] || die 2 "test mode is refused as root"
+	root=$LCM_SELF_INSTALL_TEST_ROOT
+	unit=${LCM_SELF_INSTALL_TEST_UNIT:-}
+	health=${LCM_SELF_INSTALL_TEST_HEALTH:-}
+	wait_s=${LCM_SELF_INSTALL_TEST_WAIT:-60}
+	case $root in /*) ;; *) die 2 "test root must be an absolute path" ;; esac
+	case $unit in lcm-d1-*.service) ;; *) die 2 "test unit must be named lcm-d1-*.service" ;; esac
+	case $health in http://127.0.0.1:*/api/v1/health) ;; *) die 2 "test health URL must be on 127.0.0.1" ;; esac
+	case $wait_s in '' | *[!0-9]*) die 2 "test wait must be a number of seconds" ;; esac
+	user=$(id -un) systemctl='systemctl --user' run_prefix=${unit%.service}-update
+elif [ "$(id -u)" -ne 0 ]; then
+	die 2 "must run as root"
+fi
+
+src=$root/var/lib/lcm/work/lcm/bin/lcm
+bin=$root/usr/local/bin/lcm
+self=$root/usr/local/libexec/lcm/self-install
+lock=$root/run/lcm-self-install.lock
+pending=$root/run/lcm-self-install.pending
+
+# as_user runs a command as the lcm account with an empty environment.
+as_user() {
+	if [ -n "$root" ]; then env -i PATH="$PATH" "$@"; else
+		setpriv --reuid="$user" --regid="$user" --clear-groups -- env -i PATH="$PATH" "$@"
+	fi
+}
+
+# version_of prints the version reported by "<binary> version", run as lcm.
+version_of() {
+	out=$(as_user timeout 10 "$1" version 2>/dev/null) || return 1
+	set -- $out
+	[ "${1:-}" = lcm ] || return 1
+	case ${2:-} in '' | *[!A-Za-z0-9._+-]*) return 1 ;; esac
+	printf '%s\n' "$2"
+}
+
+# healthy waits until the health endpoint reports version $1.
+healthy() {
+	deadline=$(($(date +%s) + wait_s))
+	while [ "$(date +%s)" -lt "$deadline" ]; do
+		if body=$(curl -fsS --max-time 2 "$health" 2>/dev/null); then
+			case $body in *"\"version\":\"$1\""*) return 0 ;; esac
+		fi
+		sleep 1
+	done
+	return 1
+}
+
+# restore puts lcm.prev back in place atomically.
+restore() { cp -p -- "$bin.prev" "$bin.new" && mv -f -- "$bin.new" "$bin"; }
+
+install_binary() {
+	[ "$1" = "$src" ] || die 2 "refusing argument '$1': only $src is accepted"
+	[ -f "$src" ] && [ ! -L "$src" ] || die 1 "$src is not a regular file"
+	[ "$(stat -c %U -- "$src")" = "$user" ] || die 1 "$src is not owned by $user"
+	exec 9>"$lock"
+	flock -n 9 || die 1 "another self-install is running"
+	since=0
+	[ -f "$pending" ] && read -r since <"$pending" || true
+	case $since in '' | *[!0-9]*) since=0 ;; esac
+	[ $(($(date +%s) - since)) -ge 600 ] || die 1 "the previous update is still being verified"
+
+	# Read the source as lcm: a link swapped in after the checks above then
+	# cannot expose a file that only root may read.
+	rm -f -- "$bin.new"
+	as_user timeout 120 cat -- "$src" >"$bin.new" || { rm -f -- "$bin.new"; die 1 "cannot read $src"; }
+	chmod 0755 -- "$bin.new"
+	new=$(version_of "$bin.new") || { rm -f -- "$bin.new"; die 1 "$src fails 'lcm version'"; }
+	if [ -f "$bin" ]; then
+		cp -p -- "$bin" "$bin.prev.tmp"
+		mv -f -- "$bin.prev.tmp" "$bin.prev"
+	fi
+	mv -f -- "$bin.new" "$bin"
+
+	name=$run_prefix-$(date +%Y%m%d-%H%M%S)-$$
+	date +%s >"$pending"
+	if [ -n "$root" ]; then
+		set -- --user --setenv=LCM_SELF_INSTALL_TEST_ROOT="$root" --setenv=LCM_SELF_INSTALL_TEST_UNIT="$unit" \
+			--setenv=LCM_SELF_INSTALL_TEST_HEALTH="$health" --setenv=LCM_SELF_INSTALL_TEST_WAIT="$wait_s"
+	else
+		set --
+	fi
+	if ! systemd-run --quiet "$@" --unit="$name" --on-active=3s --timer-property=AccuracySec=100ms \
+		--description="LCM self-update verification" -- "$self" --verify; then
+		if [ -f "$bin.prev" ]; then restore; fi
+		rm -f -- "$pending"
+		die 1 "could not schedule the restart; the previous binary is back in place"
+	fi
+	say "installed $bin version $new (previous kept as $bin.prev)"
+	say "scheduled $name: restart $unit in 3s, then verify $health"
+}
+
+verify() {
+	err='<3>'
+	exec 9>"$lock"
+	flock -w 300 9 || die 1 "could not take the self-install lock"
+	trap 'rm -f -- "$pending"' EXIT
+	want=$(version_of "$bin") || want=''
+	say "restarting $unit, expecting version ${want:-unknown}"
+	$systemctl restart "$unit" || say "systemctl restart $unit failed" '<4>'
+	if [ -n "$want" ] && healthy "$want"; then
+		say "$unit is healthy with version $want"
+		return 0
+	fi
+	say "ERROR: $unit did not report version ${want:-unknown} healthy within ${wait_s}s" '<3>'
+	[ -f "$bin.prev" ] || die 1 "ERROR: no $bin.prev to restore; $unit needs manual repair"
+	cp -p -- "$bin" "$bin.failed.tmp" && mv -f -- "$bin.failed.tmp" "$bin.failed"
+	restore
+	prev=$(version_of "$bin") || prev=''
+	say "restored $bin.prev (version ${prev:-unknown}); the failed binary is kept as $bin.failed" '<3>'
+	$systemctl reset-failed "$unit" 2>/dev/null || true
+	$systemctl restart "$unit" || say "systemctl restart $unit failed" '<3>'
+	if [ -n "$prev" ] && healthy "$prev"; then
+		say "rolled back: $unit is healthy with version $prev" '<3>'
+	else
+		say "CRITICAL: $unit is not healthy after the rollback either" '<2>'
+	fi
+	exit 1
+}
+
+[ $# -eq 1 ] || die 2 "usage: self-install $src"
+case $1 in
+--verify) verify ;;
+*) install_binary "$1" ;;
+esac
