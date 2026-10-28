@@ -145,14 +145,27 @@ spec:
 		}
 		return n
 	}
-	if n := count(`SELECT COUNT(*) FROM runs`); n != 1 {
-		t.Errorf("runs left = %d, want 1", n)
+	// Other loops can register their timers before the retention pass has
+	// finished, so wait for its effects rather than for a timer count alone.
+	counts := func() (runs, timeline, locks int) {
+		return count(`SELECT COUNT(*) FROM runs`),
+			count(`SELECT COUNT(*) FROM timeline WHERE service = 'ghost'`),
+			count(`SELECT COUNT(*) FROM locks`)
 	}
-	if n := count(`SELECT COUNT(*) FROM timeline WHERE service = 'ghost'`); n != 1 {
-		t.Errorf("timeline entries left = %d, want 1 (the recent one)", n)
+	deadline := time.Now().Add(waitTimeout)
+	runs, timeline, locks := counts()
+	for (runs != 1 || timeline != 1 || locks != 0) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		runs, timeline, locks = counts()
 	}
-	if n := count(`SELECT COUNT(*) FROM locks`); n != 0 {
-		t.Errorf("expired locks left = %d", n)
+	if runs != 1 {
+		t.Errorf("runs left = %d, want 1", runs)
+	}
+	if timeline != 1 {
+		t.Errorf("timeline entries left = %d, want 1 (the recent one)", timeline)
+	}
+	if locks != 0 {
+		t.Errorf("expired locks left = %d", locks)
 	}
 }
 
