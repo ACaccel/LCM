@@ -20,6 +20,7 @@ import (
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/engine/enginetest"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/trigger"
 )
 
 func TestMain(m *testing.M) {
@@ -47,6 +48,7 @@ type testOpts struct {
 	dir       string
 	clk       *clock.Fake
 	runner    *execx.Fake
+	git       trigger.GitRunner
 	configure func(*config.Config)
 }
 
@@ -77,7 +79,7 @@ func (h *harness) open(o testOpts) *app.App {
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(h.ctx, cfg,
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client),
-		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events))
+		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git))
 	if err != nil {
 		h.t.Fatalf("app.New: %v", err)
 	}

@@ -244,6 +244,56 @@ func (c *Catalog) RecordCompletion(ctx context.Context, service, action, key str
 	return nil
 }
 
+// PruneDeployments keeps the newest keep deployments of each service and
+// deletes the rest, including those of deleted services. A deployment that
+// is still running is never deleted. It returns how many rows were removed;
+// a non-positive keep keeps everything.
+func (c *Catalog) PruneDeployments(ctx context.Context, keep int) (int64, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	var n int64
+	err := c.db.Write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM deployments WHERE outcome <> ? AND id NOT IN (
+			   SELECT id FROM (
+			     SELECT id, ROW_NUMBER() OVER (PARTITION BY service ORDER BY id DESC) AS pos FROM deployments
+			   ) WHERE pos <= ?)`, OutcomeRunning, keep)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("catalog: prune deployments: %w", err)
+	}
+	return n, nil
+}
+
+// PruneCompletions deletes idempotency records older than retention. A
+// retried node only needs the record of its own run, so any retention longer
+// than the longest run is safe. A non-positive retention keeps everything.
+func (c *Catalog) PruneCompletions(ctx context.Context, retention time.Duration) (int64, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	cutoff := c.now().Add(-retention).UnixMilli()
+	var n int64
+	err := c.db.Write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM action_completions WHERE completed_at < ?`, cutoff)
+		if err != nil {
+			return err
+		}
+		n, err = res.RowsAffected()
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("catalog: prune completions: %w", err)
+	}
+	return n, nil
+}
+
 // tailCap keeps the last n bytes of s, cutting at a line start when it can.
 func tailCap(s string, n int) string {
 	if len(s) <= n {

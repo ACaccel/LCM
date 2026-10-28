@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/goleak"
 
@@ -151,5 +153,41 @@ func TestShutdownEndsEventStreams(t *testing.T) {
 	defer cancel()
 	if err := h.app.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestPprofIsOffUnlessConfigured(t *testing.T) {
+	h := newHarness(t)
+	if h.app.PprofAddr() != nil {
+		t.Fatal("pprof listener without configuration")
+	}
+	rec := httptest.NewRecorder()
+	h.app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
+	if strings.Contains(rec.Body.String(), "Types of profiles") {
+		t.Fatal("pprof reachable through the application handler")
+	}
+}
+
+func TestPprofServesOnItsOwnLoopbackListener(t *testing.T) {
+	h := newHarness(t, func(o *testOpts) {
+		o.configure = func(c *config.Config) { c.PprofListen = "127.0.0.1:0" }
+	})
+	stop := h.run()
+	addr := h.app.PprofAddr()
+	if addr == nil {
+		t.Fatal("no pprof listener")
+	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + addr.String() + "/debug/pprof/heap?debug=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "heap profile") {
+		t.Fatalf("heap profile: %d %.80s", resp.StatusCode, body)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
 	}
 }

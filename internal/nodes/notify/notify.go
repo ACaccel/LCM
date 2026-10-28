@@ -55,11 +55,14 @@ type Props struct {
 	Tags        []string `json:"tags" desc:"ntfy tags"`
 	Username    string   `json:"username" desc:"Discord: name shown for the message"`
 	TokenSecret string   `json:"tokenSecret" desc:"secret name sent as a bearer token (webhook and ntfy)"`
+	Optional    bool     `json:"optional" desc:"send nothing, and succeed, when neither url nor urlSecret is set; for destinations that a template parameter may leave empty"`
 }
 
 func validate(p Props) error {
 	switch {
-	case (p.URL == "") == (p.URLSecret == ""):
+	case p.URL != "" && p.URLSecret != "":
+		return errors.New("set exactly one of url and urlSecret, not both")
+	case p.URL == "" && p.URLSecret == "" && !p.Optional:
 		return errors.New("set exactly one of url and urlSecret")
 	case p.URLSecret != "" && !secret.ValidName(p.URLSecret):
 		return errors.New("urlSecret: invalid secret name")
@@ -95,6 +98,9 @@ func Register(r *node.Registry, d Deps) {
 }
 
 func send(ctx context.Context, rc *node.RunContext, d Deps, p Props) (node.Result, error) {
+	if p.Optional && p.URL == "" && p.URLSecret == "" {
+		return node.Result{Output: map[string]any{"sent": false, "target": p.Target, "skipped": "no destination configured"}}, nil
+	}
 	target, err := resolveURL(d, p)
 	if err != nil {
 		return node.Result{}, node.Permanent(err)

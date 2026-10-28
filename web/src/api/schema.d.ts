@@ -754,6 +754,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the built-in policy templates
+         * @description Templates are Policy documents with `spec.params`; each entry describes
+         *     the parameters a form needs. Trigger props cannot be expressions, so the
+         *     parameters a trigger uses are written into it when a template is
+         *     instantiated; all other nodes keep reading `params.*`.
+         */
+        get: operations["listTemplates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/templates/{t}/instantiate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a policy from a template
+         * @description Fills the template with `params` (defaults for the rest), compiles the
+         *     result and deploys it as a new policy. With `dryRun` nothing is stored and
+         *     the concrete document is returned for review. The named service must exist.
+         */
+        post: operations["instantiateTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/apply": {
         parameters: {
             query?: never;
@@ -1867,6 +1912,40 @@ export interface components {
             name: string;
             valid: boolean;
             issues: components["schemas"]["Issue"][];
+            warnings: components["schemas"]["Issue"][];
+        };
+        Template: {
+            id: string;
+            title: string;
+            description: string;
+            /** @description Name of the parameter that selects the target service. */
+            serviceParam: string;
+            params: components["schemas"]["TemplateParam"][];
+        };
+        TemplateParam: {
+            name: string;
+            /**
+             * @description `secret` is the name of a secret, `service` the name of a catalog
+             *     service, `duration` Go syntax such as `5m`, `strings` a list of
+             *     strings and `json` any JSON value.
+             * @enum {string}
+             */
+            type: "string" | "boolean" | "duration" | "secret" | "service" | "strings" | "json";
+            description: string;
+            required: boolean;
+            /** @description Name of a boolean parameter that makes this one required while it is true. */
+            requiredIf?: string;
+            /** @description Absent for required parameters. */
+            default?: unknown;
+        };
+        TemplateInstance: {
+            template: string;
+            name: string;
+            /** @description The concrete policy document. */
+            yaml: string;
+            /** @description Null for a dry run. */
+            version: number | null;
+            deployed: boolean;
             warnings: components["schemas"]["Issue"][];
         };
         ModuleSummary: {
@@ -3507,6 +3586,81 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Templates sorted by id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["Template"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    instantiateTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id. */
+                t: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Name of the new policy. */
+                    name: string;
+                    params?: {
+                        [key: string]: unknown;
+                    };
+                    dryRun?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Dry run; the document that would be deployed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateInstance"];
+                };
+            };
+            /** @description Created and deployed. */
+            201: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateInstance"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
         };
     };
     applyDocuments: {

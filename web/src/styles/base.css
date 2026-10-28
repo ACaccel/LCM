@@ -660,3 +660,13 @@ dl.kv dd {
   color: var(--muted-foreground);
   background: var(--muted);
 }
+
+.field .hint .error-text {
+  color: var(--destructive);
+  font-weight: 600;
+}
+
+.grow {
+  flex: 1;
+  margin: 0;
+}

@@ -352,3 +352,39 @@ func TestNotifyValidationAndSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifyOptionalSkipsAnEmptyDestination(t *testing.T) {
+	x := setup(t)
+	// The destination is a template parameter: empty means "do not notify",
+	// a name means send. Without optional an empty destination is an error.
+	x.h.Deploy(x.e, `apiVersion: lcm/v1
+kind: Policy
+metadata: { name: o }
+spec:
+  params: { hook: "" }
+  nodes:
+    - { id: start, type: trigger.manual, next: { out: [say] } }
+    - { id: say, type: notify, props: { target: discord, optional: true, urlSecret: "{{ params.hook }}", message: hello }, next: { out: [after] } }
+    - { id: after, type: data.set, props: { values: { reached: true } } }
+`)
+	v := x.h.Wait(x.e, x.h.Start(x.e, "o", nil))
+	if v.Status != engine.RunSucceeded || len(x.stub.requests()) != 0 {
+		t.Fatalf("status=%s requests=%d (%s)", v.Status, len(x.stub.requests()), v.Error)
+	}
+	if n, _ := v.Node("say"); n.Output.(map[string]any)["sent"] != false {
+		t.Fatalf("output = %v", n.Output)
+	}
+
+	x.h.Deploy(x.e, `apiVersion: lcm/v1
+kind: Policy
+metadata: { name: m }
+spec:
+  params: { hook: "" }
+  nodes:
+    - { id: start, type: trigger.manual, next: { out: [say] } }
+    - { id: say, type: notify, props: { target: discord, urlSecret: "{{ params.hook }}", message: hello } }
+`)
+	if v := x.h.Wait(x.e, x.h.Start(x.e, "m", nil)); v.Status != engine.RunFailed {
+		t.Fatalf("empty destination without optional: status = %s", v.Status)
+	}
+}

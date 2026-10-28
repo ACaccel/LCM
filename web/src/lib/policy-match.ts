@@ -1,4 +1,4 @@
-import type { Labels, Trigger } from "../api/types";
+import type { Labels, PolicySummary, Trigger } from "../api/types";
 
 function mentions(value: unknown, name: string): boolean {
   if (typeof value === "string") return value === name;
@@ -24,4 +24,13 @@ export function triggerConcernsService(trigger: Trigger, service: string, labels
     }
   }
   return false;
+}
+
+/**
+ * Whether a policy concerns a service: its `service` label (set by the
+ * built-in templates) names it, or one of its triggers does.
+ */
+export function policyConcernsService(policy: Pick<PolicySummary, "labels" | "triggers">, service: string, labels: Labels): boolean {
+  if (policy.labels["service"] === service) return true;
+  return policy.triggers.some((t) => triggerConcernsService(t, service, labels));
 }

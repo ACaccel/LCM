@@ -9,6 +9,7 @@ import { Async, Empty, Field, PageHead, Pill, Tag } from "../components/ui";
 import { formatTime } from "../lib/format";
 import { runStatusView } from "../lib/status";
 import { s } from "../strings";
+import { TemplateDialog } from "./template-dialog";
 
 const NAME_RE = /^[a-z]([a-z0-9-]*[a-z0-9])?$/;
 
@@ -45,9 +46,13 @@ function CreateDialog({ existing, onClose }: { existing: Set<string>; onClose: (
 export function PoliciesPage() {
   const q = useQuery(policiesQuery());
   const [creating, setCreating] = useState(false);
+  const [fromTemplate, setFromTemplate] = useState(false);
   return (
     <div className="page">
       <PageHead title={s.policies.title}>
+        <button type="button" className="btn" onClick={() => setFromTemplate(true)}>
+          {s.templates.fromTemplate}
+        </button>
         <button type="button" className="btn primary" onClick={() => setCreating(true)}>
           {s.policies.create}
         </button>
@@ -120,6 +125,7 @@ export function PoliciesPage() {
           )
         }
       </Async>
+      {fromTemplate && <TemplateDialog onClose={() => setFromTemplate(false)} />}
       {creating && <CreateDialog existing={new Set((q.data ?? []).map((p) => p.name))} onClose={() => setCreating(false)} />}
     </div>
   );

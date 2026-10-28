@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
@@ -171,5 +172,73 @@ func TestDeploymentLogIsCapped(t *testing.T) {
 	}
 	if len(d.Error) > 2100 {
 		t.Fatalf("error len %d", len(d.Error))
+	}
+}
+
+func TestPruneDeployments(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	finished := func(service string, n int) {
+		for range n {
+			id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: service, Action: "deploy", Actor: alice})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.cat.FinishDeployment(ctx, id, catalog.OutcomeSucceeded, "", ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	finished("a", 5)
+	finished("b", 2)
+	// The oldest deployment of a is still running: it must survive.
+	running, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: "c", Action: "deploy", Actor: alice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished("c", 3)
+
+	if n, err := e.cat.PruneDeployments(ctx, 0); err != nil || n != 0 {
+		t.Fatalf("keep 0 removed %d, %v", n, err)
+	}
+	n, err := e.cat.PruneDeployments(ctx, 2)
+	if err != nil || n != 4 {
+		t.Fatalf("pruned %d, %v; want 3 of a and 1 of c (its running record is spared)", n, err)
+	}
+	for svc, want := range map[string]int{"a": 2, "b": 2, "c": 3} {
+		if got := len(deployments(t, e, svc)); got != want {
+			t.Errorf("%s has %d deployments, want %d", svc, got, want)
+		}
+	}
+	found := false
+	for _, d := range deployments(t, e, "c") {
+		found = found || d.ID == running
+	}
+	if !found {
+		t.Error("the running deployment was pruned")
+	}
+}
+
+func TestPruneCompletions(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	if err := e.cat.RecordCompletion(ctx, "app", "deploy", "k1", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Advance(48 * time.Hour)
+	if err := e.cat.RecordCompletion(ctx, "app", "restart", "k2", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.cat.PruneCompletions(ctx, 0); err != nil || n != 0 {
+		t.Fatalf("no retention removed %d, %v", n, err)
+	}
+	if n, err := e.cat.PruneCompletions(ctx, 24*time.Hour); err != nil || n != 1 {
+		t.Fatalf("pruned %d, %v", n, err)
+	}
+	if _, ok, _ := e.cat.CompletedAction(ctx, "app", "deploy", "k1"); ok {
+		t.Error("the old completion survived")
+	}
+	if _, ok, _ := e.cat.CompletedAction(ctx, "app", "restart", "k2"); !ok {
+		t.Error("the recent completion was pruned")
 	}
 }

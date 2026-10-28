@@ -1,0 +1,64 @@
+# Restart a service when its health turns down and report whether it came
+# back. This simple version has no rate limit: a service that keeps going
+# down is restarted every time. Guards for that (stable, budget, circuit)
+# arrive with the M2 guard nodes.
+#
+# The trigger takes its values when the template is instantiated; every
+# other node reads params.*.
+apiVersion: lcm/v1
+kind: Policy
+metadata:
+  name: restart-on-down
+spec:
+  params:
+    service: my-service
+    healthTimeout: 5m
+    notifySecret: ""
+  nodes:
+    - id: down
+      type: trigger.signal
+      props:
+        kinds: [health.changed]
+        services: ["{{ params.service }}"]
+        statuses: [down]
+      next: { out: [restart] }
+
+    - id: restart
+      type: lifecycle.restart
+      props: { service: "{{ params.service }}" }
+      next: { out: [healthy], error: [restart_failed] }
+    - id: healthy
+      type: wait.until
+      props:
+        interval: 10s
+        timeout: "{{ params.healthTimeout }}"
+        condition: 'inputs.svc.health == "healthy" && all(values(inputs.svc.checks), {!.critical || .lastResultMs > inputs.since})'
+        inputs:
+          svc: "{{ service[params.service] }}"
+          since: "{{ nodes.restart.startedMs + nodes.restart.durationMs }}"
+      next: { out: [recovered], timeout: [still_down] }
+
+    - id: recovered
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        title: "{{ params.service }}"
+        message: "The service went down, was restarted and is healthy again."
+    - id: still_down
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        title: "{{ params.service }}"
+        message: "The service went down and is still not healthy after a restart."
+    - id: restart_failed
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        title: "{{ params.service }}"
+        message: "The service went down and the restart failed: {{ nodes.restart.message }}"

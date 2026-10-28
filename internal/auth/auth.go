@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/store"
@@ -50,17 +51,21 @@ type Service struct {
 	now        func() time.Time
 	sessionTTL time.Duration
 	// dummyHash is verified when the username is unknown so that the response
-	// time does not reveal which usernames exist.
+	// time does not reveal which usernames exist. It is hashed on first use:
+	// doing it at startup would cost every process a 19 MiB memory spike.
+	dummyOnce sync.Once
 	dummyHash string
+	dummyErr  error
+}
+
+func (s *Service) dummy() (string, error) {
+	s.dummyOnce.Do(func() { s.dummyHash, s.dummyErr = HashPassword("unused-placeholder-password") })
+	return s.dummyHash, s.dummyErr
 }
 
 // NewService returns a Service whose sessions live for sessionTTL.
 func NewService(db *store.DB, sessionTTL time.Duration, opts ...Option) (*Service, error) {
-	dummy, err := HashPassword("unused-placeholder-password")
-	if err != nil {
-		return nil, err
-	}
-	s := &Service{db: db, now: time.Now, sessionTTL: sessionTTL, dummyHash: dummy}
+	s := &Service{db: db, now: time.Now, sessionTTL: sessionTTL}
 	for _, o := range opts {
 		o(s)
 	}
@@ -132,7 +137,9 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 		return "", time.Time{}, User{}, fmt.Errorf("auth: look up user: %w", qerr)
 	}
 	if !known {
-		hash = s.dummyHash
+		if hash, err = s.dummy(); err != nil {
+			return "", time.Time{}, User{}, err
+		}
 	}
 	ok, verr := VerifyPassword(password, hash)
 	if verr != nil {

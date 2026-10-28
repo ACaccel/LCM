@@ -6,7 +6,8 @@ import type { CheckStatus, Deployment, ServiceDetail } from "../../api/types";
 import { LatencyChart, UptimeBars } from "../../components/charts";
 import { Async, Empty, ErrorBox, Pill, Spinner, Tag } from "../../components/ui";
 import { formatDateTime, formatDuration, formatTime, formatUptime, shortVersion, spanMs } from "../../lib/format";
-import { triggerConcernsService } from "../../lib/policy-match";
+import { policyConcernsService } from "../../lib/policy-match";
+import { TemplateDialog } from "../template-dialog";
 import { bucketUptime, overallUptime } from "../../lib/series";
 import { s } from "../../strings";
 import { ManagedBadges } from "../../components/badges";
@@ -208,13 +209,20 @@ export function DeploymentsTab({ service, deployedVersion, hasSource, onDeploy }
 
 export function PoliciesTab({ service, detail }: { service: string; detail: ServiceDetail }) {
   const q = useQuery(policiesQuery());
+  const [applying, setApplying] = useState(false);
   return (
     <Async q={q}>
       {(policies) => {
-        const matched = policies.filter((p) => p.triggers.some((t) => triggerConcernsService(t, service, detail.document.metadata.labels ?? {})));
+        const matched = policies.filter((p) => policyConcernsService(p, service, detail.document.metadata.labels ?? {}));
         return (
           <div className="stack">
-            <p className="meta">{s.servicePolicies.help}</p>
+            <div className="row">
+              <p className="meta grow">{s.servicePolicies.help}</p>
+              <button type="button" className="btn primary" onClick={() => setApplying(true)}>
+                {s.servicePolicies.applyTemplate}
+              </button>
+            </div>
+            {applying && <TemplateDialog service={service} onClose={() => setApplying(false)} />}
             {matched.length === 0 ? (
               <Empty>{s.servicePolicies.empty}</Empty>
             ) : (

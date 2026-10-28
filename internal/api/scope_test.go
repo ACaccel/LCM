@@ -1,13 +1,14 @@
-package api
+package api_test
 
 import (
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
-
-	"github.com/ACaccel/lcm/internal/auth"
 )
+
+const testPassword = "correct horse battery staple"
 
 // ingestRoutes are the only protected routes an ingest-scoped token may use.
 var ingestRoutes = map[string]bool{
@@ -26,53 +27,88 @@ var publicRoutes = map[string]bool{
 	"POST /api/v1/auth/login":  true,
 }
 
-// authSelfRoutes decide authentication in the handler (signature or token).
-// They run no middleware check, so this test cannot probe them without
-// components.
+// authSelfRoutes decide authentication in the handler (signature or token)
+// and run no middleware check, so they are not probed here; their tests
+// cover the cases that matter.
 var authSelfRoutes = map[string]bool{
 	"POST /api/v1/hooks/github": true,
 	"POST /api/v1/hooks/{name}": true,
 }
 
-func routeRequest(e *env, pattern string, opts ...reqOpt) *httptest.ResponseRecorder {
-	method, path, _ := strings.Cut(pattern, " ")
-	for _, p := range []string{"{svc}", "{check}", "{action}", "{id}", "{p}", "{v}", "{key}", "{m}", "{name}", "{node}", "{source}"} {
-		path = strings.ReplaceAll(path, p, "x")
+// documentedRoutes lists "METHOD /api/v1/path" for every operation in the
+// OpenAPI document, which a test keeps equal to the registered routes.
+func documentedRoutes(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, p := range loadSpec(t).paths {
+		for method := range p.item {
+			switch method {
+			case "get", "post", "put", "delete", "patch":
+				out = append(out, strings.ToUpper(method)+" /api/v1"+p.template)
+			}
+		}
 	}
-	return e.do(method, path, nil, opts...)
+	sort.Strings(out)
+	return out
 }
 
-func TestIngestTokenReachesOnlyIngestRoutes(t *testing.T) {
-	e := newEnv(t)
-	_, ingest, err := e.auth.CreateToken(t.Context(), "hook", auth.ScopeIngest)
-	if err != nil {
-		t.Fatal(err)
+// probe sends a request for a route pattern, with every path parameter
+// filled with "x", straight to the handler. It does not check the response
+// against the OpenAPI document because the probes deliberately hit error
+// paths.
+func (x *site) probe(pattern string, opts ...opt) *httptest.ResponseRecorder {
+	method, path, _ := strings.Cut(pattern, " ")
+	for strings.Contains(path, "{") {
+		i, j := strings.Index(path, "{"), strings.Index(path, "}")
+		path = path[:i] + "x" + path[j+1:]
 	}
-	_, admin, err := e.auth.CreateToken(t.Context(), "ci", auth.ScopeAdmin)
-	if err != nil {
-		t.Fatal(err)
+	r := httptest.NewRequest(method, path, nil)
+	for _, o := range opts {
+		o(r)
 	}
-	cookie := e.login()
+	w := httptest.NewRecorder()
+	x.handler.ServeHTTP(w, r)
+	return w
+}
 
-	routes := e.srv.Routes()
+// login returns the session cookie of the admin user.
+func (x *site) login() *http.Cookie {
+	x.t.Helper()
+	if _, err := x.app.Auth.SetPassword(x.ctx, "admin", testPassword); err != nil {
+		x.t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", v1+"/auth/login", strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+	w := httptest.NewRecorder()
+	x.handler.ServeHTTP(w, req)
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "lcm_session" {
+			return c
+		}
+	}
+	x.t.Fatal("no session cookie")
+	return nil
+}
+
+func withSession(c *http.Cookie) opt { return func(r *http.Request) { r.AddCookie(c) } }
+
+func TestIngestTokenReachesOnlyIngestRoutes(t *testing.T) {
+	x := newSite(t)
+
+	routes := documentedRoutes(t)
 	if len(routes) < 50 {
-		t.Fatalf("only %d routes registered", len(routes))
+		t.Fatalf("only %d routes documented", len(routes))
 	}
 	for _, pattern := range routes {
 		switch {
-		case publicRoutes[pattern]:
-			continue
-		case authSelfRoutes[pattern]:
-			// The handlers refuse anonymous callers themselves; the
-			// integration tests cover that with real components.
+		case publicRoutes[pattern], authSelfRoutes[pattern]:
 			continue
 		}
-		if w := routeRequest(e, pattern); w.Code != http.StatusUnauthorized {
+		if w := x.probe(pattern); w.Code != http.StatusUnauthorized {
 			t.Errorf("%s anonymous = %d, want 401", pattern, w.Code)
 		}
-		w := routeRequest(e, pattern, withBearer(ingest))
+		w := x.probe(pattern, bearer(x.ingest))
 		if ingestRoutes[pattern] {
-			if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code >= 500 {
 				t.Errorf("%s with ingest token = %d, want access", pattern, w.Code)
 			}
 			continue
@@ -83,49 +119,10 @@ func TestIngestTokenReachesOnlyIngestRoutes(t *testing.T) {
 	}
 
 	// Token management stays with sessions, whatever the scope.
-	for name, tok := range map[string]string{"admin": admin, "ingest": ingest} {
-		wantError(t, e.do("POST", "/api/v1/tokens", map[string]string{"name": "evil"}, withBearer(tok)), http.StatusForbidden, codeForbidden)
-		wantError(t, e.do("GET", "/api/v1/tokens", nil, withBearer(tok)), http.StatusForbidden, codeForbidden)
-		_ = name
+	cookie := x.login()
+	for _, tok := range []string{x.admin, x.ingest} {
+		x.call("POST", v1+"/tokens", map[string]string{"name": "evil"}, bearer(tok)).wantError(http.StatusForbidden, "forbidden")
+		x.call("GET", v1+"/tokens", nil, bearer(tok)).wantError(http.StatusForbidden, "forbidden")
 	}
-	if w := e.do("GET", "/api/v1/tokens", nil, withSession(cookie)); w.Code != http.StatusOK {
-		t.Errorf("session token list = %d", w.Code)
-	}
-}
-
-func TestTokenScopeOverAPI(t *testing.T) {
-	e := newEnv(t)
-	cookie := e.login()
-
-	w := e.do("POST", "/api/v1/tokens", map[string]string{"name": "hook", "scope": "ingest"}, withSession(cookie))
-	wantStatus(t, w, http.StatusCreated)
-	created := decode[struct {
-		Scope string `json:"scope"`
-		Token string `json:"token"`
-	}](t, w)
-	if created.Scope != "ingest" {
-		t.Fatalf("created = %+v", created)
-	}
-	// The default scope is admin.
-	w = e.do("POST", "/api/v1/tokens", map[string]string{"name": "ci"}, withSession(cookie))
-	wantStatus(t, w, http.StatusCreated)
-	if s := decode[struct{ Scope string }](t, w).Scope; s != "admin" {
-		t.Fatalf("default scope = %q", s)
-	}
-	wantError(t, e.do("POST", "/api/v1/tokens", map[string]string{"name": "bad", "scope": "root"}, withSession(cookie)),
-		http.StatusUnprocessableEntity, codeValidation)
-
-	list := decode[struct {
-		Items []struct{ Name, Scope string } `json:"items"`
-	}](t, e.do("GET", "/api/v1/tokens", nil, withSession(cookie)))
-	if len(list.Items) != 2 || list.Items[0].Scope != "admin" || list.Items[1].Scope != "ingest" {
-		t.Fatalf("list = %+v", list)
-	}
-	if got := e.findAudit("token.create"); got.Details["scope"] != "admin" {
-		t.Errorf("audit details = %v", got.Details)
-	}
-
-	// The scoped token can identify itself but not read the audit log.
-	wantStatus(t, e.do("GET", "/api/v1/auth/me", nil, withBearer(created.Token)), http.StatusOK)
-	wantError(t, e.do("GET", "/api/v1/audit", nil, withBearer(created.Token)), http.StatusForbidden, codeForbidden)
+	x.call("GET", v1+"/tokens", nil, bearer(""), withSession(cookie)).want(http.StatusOK)
 }

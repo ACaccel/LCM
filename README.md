@@ -2,6 +2,8 @@
 
 LCM is a lifecycle control plane for self-hosted services. It tracks each service you operate (where it runs, its version, health and lifecycle stage) and, driven by policy, performs deployment, recovery and backup actions. Every action is guarded, and every decision is auditable and replayable. It targets 1-10 hosts running services under systemd, docker or plain processes, ships as a single binary backed by SQLite, and does not target Kubernetes.
 
+More documentation: [architecture and security model](docs/architecture.md), [operating LCM](docs/operations.md).
+
 > **Status: rewrite in progress.** The server runs the policy engine, service catalog with lifecycle actions, health monitoring and triggers (signal, git, cron, webhook), serves the full REST and event-stream API, syncs documents from git (policy-as-code), and the `lcm` binary has client commands for it. The web console (React, embedded in the binary) is built; see [Web console](#web-console). The previous implementation is preserved at commit `18a24f6`.
 
 ## Build
@@ -84,12 +86,34 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long service timeline entries are kept |
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |
 | `LCM_RUN_RETENTION_AGE` | `--run-retention-age` | `720h` | Finished runs younger than this are kept; older ones beyond the newest N are deleted |
+| `LCM_DEPLOYMENT_RETENTION_KEEP` | `--deployment-retention-keep` | `100` | Deployment records kept per service; the idempotency records of finished actions follow the run retention age |
+| `LCM_MEMORY_LIMIT` | `--memory-limit` | `40MiB` | Soft memory limit of the Go runtime (a size such as `40MiB` or `64M`; `0` or `off` disables it). A `GOMEMLIMIT` in the environment is respected unless this is set explicitly |
+| `LCM_PPROF_LISTEN` | `--pprof-listen` | empty | Serve `net/http/pprof` on this loopback address for diagnosis; off when empty |
 | `LCM_PRUNE_INTERVAL` | `--prune-interval` | `1h` | How often the retention jobs run |
 | `LCM_GITHUB_WEBHOOK_SECRET` | `--github-webhook-secret` | empty | Name (not value) of the secret that verifies GitHub push webhooks on `POST /api/v1/hooks/github`; when empty that endpoint needs an API token |
 
 Config sources keep their clones in `<data dir>/sources` (mode 0700), never in a working copy of yours.
 
 A service is reported `healthy` only when every critical check has passed; until a critical check has its first result the service is `unknown`.
+
+## Policy templates
+
+Four built-in templates (documents in [`examples/templates/`](examples/templates), embedded in the binary) cover the common loops. Pick one from *Apply template* on a service's Policy tab or *Create from template* on the policy list, or use the API:
+
+| Template | What it does |
+|---|---|
+| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback`; one Discord message is updated through the stages |
+| `scheduled-backup` | Cron (default `Asia/Taipei`, runs once after downtime) -> `lifecycle.backup` with retry and backoff -> optional wait for a heartbeat check -> notify on failure |
+| `post-deploy-verify` | After any deployment of the service, wait for health and roll back on timeout |
+| `restart-on-down` | Health turns `down` -> restart -> wait for recovery -> notify. No rate limit until the M2 guard nodes |
+
+```sh
+curl -H "Authorization: Bearer $LCM_TOKEN" localhost:7800/api/v1/templates          # parameters of each template
+curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/templates/restart-on-down/instantiate \
+     -d '{"name":"web-restart","params":{"service":"web","notifySecret":"discord-ops"},"dryRun":true}'
+```
+
+The result is an ordinary policy named `name`. Its parameters sit in `spec.params` and the nodes read `params.*`, so changing a parameter later means editing the document; the exception is what a trigger uses (repository, branch, schedule, watched service), which is written into the trigger because trigger props cannot be expressions. The target service needs at least one critical health check: the templates treat a service as recovered only when it is `healthy` with check results newer than the deployment or restart. `notifySecret` names a secret holding a Discord webhook URL; leave it empty to send no notifications. A rollback needs an earlier successful deployment recorded by LCM, so deploy a known-good version once (`lcm action <service> deploy --version <sha>`) before relying on `auto-deploy`.
 
 ## Policy-as-code
 

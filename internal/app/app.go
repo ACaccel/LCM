@@ -113,10 +113,13 @@ type App struct {
 	log      *slog.Logger
 	listener net.Listener
 	server   *http.Server
-	api      *api.Server
-	syncer   *monitorSyncer
-	follower *catalog.Follower
-	releaser *stateful.Releaser
+	// pprofListener and pprofServer exist only when profiling is enabled.
+	pprofListener net.Listener
+	pprofServer   *http.Server
+	api           *api.Server
+	syncer        *monitorSyncer
+	follower      *catalog.Follower
+	releaser      *stateful.Releaser
 
 	// ctx ends when Close starts, which stops loops that Run started.
 	ctx    context.Context
@@ -181,6 +184,14 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	// runs or touches services.
 	if a.listener, err = net.Listen("tcp", cfg.Listen); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
+	}
+
+	if cfg.PprofListen != "" {
+		if a.pprofListener, err = net.Listen("tcp", cfg.PprofListen); err != nil {
+			return nil, fmt.Errorf("pprof listen: %w", err)
+		}
+		a.pprofServer = newPprofServer()
+		log.Warn("pprof is enabled; it exposes runtime internals", "listen", a.pprofListener.Addr().String())
 	}
 
 	if a.DB, err = store.Open(ctx, cfg.DBPath()); err != nil {
@@ -273,7 +284,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		DB: a.DB, Registry: a.Registry, Modules: a.Modules, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
 		Logger:    log.With("component", "engine"),
 		Observers: append([]engine.Observer{a.releaser, &triggers, a.Events.Observer()}, o.observers...),
-		Vars:      []engine.Var{a.State.Var()},
+		Vars:      []engine.Var{a.State.Var(), serviceVar(a.Catalog, a.Monitor)},
 	})
 	if err != nil {
 		return nil, err
@@ -351,6 +362,15 @@ func (a *App) Handler() http.Handler { return a.server.Handler }
 // Addr returns the bound listen address.
 func (a *App) Addr() net.Addr { return a.listener.Addr() }
 
+// PprofAddr returns the address of the profiling listener, or nil when
+// profiling is not enabled.
+func (a *App) PprofAddr() net.Addr {
+	if a.pprofListener == nil {
+		return nil
+	}
+	return a.pprofListener.Addr()
+}
+
 // SyncMonitor applies the catalog's checks to the monitor now. The catalog
 // change hook does this in the background; callers that need the checks
 // scheduled before they continue use this.
@@ -402,6 +422,13 @@ func (a *App) Run(ctx context.Context) error {
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- a.server.Serve(a.listener) }()
+	if a.pprofServer != nil {
+		spawn("pprof", func() {
+			if err := a.pprofServer.Serve(a.pprofListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				a.log.Error("pprof server stopped", "error", err)
+			}
+		})
+	}
 	info := buildinfo.Get()
 	a.log.Info("server started", "addr", a.listener.Addr().String(), "version", info.String(), "data_dir", a.Config.DataDir)
 
@@ -421,6 +448,9 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
+	if a.pprofServer != nil {
+		_ = a.pprofServer.Close()
+	}
 	// HTTP is down; stop the loops (triggers stop starting runs) before the
 	// caller closes the engine.
 	cancel()
@@ -445,6 +475,12 @@ func (a *App) Close(ctx context.Context) error {
 			if err := a.server.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close http server: %w", err))
 			}
+		}
+		if a.pprofServer != nil {
+			_ = a.pprofServer.Close()
+		}
+		if a.pprofListener != nil {
+			_ = a.pprofListener.Close()
 		}
 		if a.listener != nil {
 			// Serve closes the listener; closing it again is only needed when

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/monitor"
@@ -71,4 +72,50 @@ func (r monitorRunner) Run(ctx context.Context, c monitor.Command) (monitor.Comm
 	default:
 		return out, err
 	}
+}
+
+// serviceVar returns the engine variable "service": a map from service name
+// to its lifecycle state, health and check results, read when a node whose
+// props mention service is about to run. Policies use it to wait for a
+// service to become healthy: inputs: { svc: "{{ service[params.service] }}" }.
+//
+// Check times are Unix milliseconds. A service that is not in the catalog is
+// absent from the map.
+func serviceVar(cat *catalog.Catalog, mon *monitor.Monitor) engine.Var {
+	return engine.Var{
+		Name: "service",
+		Value: func(ctx context.Context, _ engine.RunInfo) (any, error) {
+			recs, err := cat.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make(map[string]any, len(recs))
+			for _, r := range recs {
+				entry := map[string]any{
+					"name": r.Name, "state": string(r.State), "health": string(monitor.HealthUnknown),
+					"checks": map[string]any{},
+				}
+				if st, ok := mon.Service(r.Name); ok {
+					checks := make(map[string]any, len(st.Checks))
+					for _, c := range st.Checks {
+						checks[c.Name] = map[string]any{
+							"status": string(c.Status), "message": c.Message, "critical": c.Critical,
+							"sinceMs": millis(c.Since), "lastResultMs": millis(c.LastResult),
+						}
+					}
+					entry["health"], entry["checks"] = string(st.Health), checks
+				}
+				out[r.Name] = entry
+			}
+			return out, nil
+		},
+	}
+}
+
+// millis converts t to Unix milliseconds, with 0 for the zero time.
+func millis(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }

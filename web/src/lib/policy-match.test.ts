@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Trigger } from "../api/types";
-import { triggerConcernsService } from "./policy-match";
+import { policyConcernsService, triggerConcernsService } from "./policy-match";
 
 const sig = (props: Record<string, unknown>): Trigger => ({ id: "t", type: "trigger.signal", props });
 
@@ -19,5 +19,13 @@ describe("triggerConcernsService", () => {
   it("does not match an empty selector or unrelated props", () => {
     expect(triggerConcernsService(sig({ labels: {} }), "web", { a: "b" })).toBe(false);
     expect(triggerConcernsService(sig({ name: "web" }), "web", {})).toBe(false);
+  });
+});
+
+describe("policyConcernsService", () => {
+  it("matches the service label or a trigger", () => {
+    expect(policyConcernsService({ labels: { service: "web" }, triggers: [] }, "web", {})).toBe(true);
+    expect(policyConcernsService({ labels: {}, triggers: [sig({ services: ["web"] })] }, "web", {})).toBe(true);
+    expect(policyConcernsService({ labels: { service: "api" }, triggers: [] }, "web", {})).toBe(false);
   });
 });

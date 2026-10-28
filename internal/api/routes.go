@@ -89,6 +89,8 @@ func (s *Server) routes() http.Handler {
 	handle("PUT", v1+"/modules/{m}", admin(s.handlePutModule))
 	handle("GET", v1+"/modules/{m}/versions", admin(s.handleModuleVersions))
 	handle("GET", v1+"/node-types", admin(s.handleNodeTypes))
+	handle("GET", v1+"/templates", admin(s.handleListTemplates))
+	handle("POST", v1+"/templates/{t}/instantiate", admin(s.handleInstantiateTemplate))
 
 	// Policy-as-code.
 	handle("POST", v1+"/apply", admin(s.handleApply))

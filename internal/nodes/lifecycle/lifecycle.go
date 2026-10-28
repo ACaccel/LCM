@@ -125,6 +125,7 @@ func execute(ctx context.Context, rc *node.RunContext, service string, opts cata
 
 	opts.RunID = rc.RunID
 	opts.IdempotencyKey = rc.IdempotencyKey
+	startedMs := rc.Now().UnixMilli()
 	res, err := run(withRunActor(ctx, rc), service, opts)
 	if err != nil {
 		return node.Result{}, classify(err)
@@ -136,6 +137,7 @@ func execute(ctx context.Context, rc *node.RunContext, service string, opts cata
 		"to":         string(res.To),
 		"durationMs": res.DurationMs,
 		"replayed":   res.Replayed,
+		"startedMs":  startedMs,
 	}
 	if res.Version != "" {
 		out["version"] = res.Version

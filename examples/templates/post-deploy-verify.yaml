@@ -1,0 +1,60 @@
+# Verify every deployment of a service, whoever started it (a person, the
+# CLI or another policy): wait for health and roll back when it never
+# arrives. Do not combine it with the auto-deploy template for the same
+# service, which already verifies and rolls back by itself.
+#
+# The trigger takes its values when the template is instantiated; every
+# other node reads params.*.
+apiVersion: lcm/v1
+kind: Policy
+metadata:
+  name: post-deploy-verify
+spec:
+  params:
+    service: my-service
+    healthTimeout: 5m
+    notifySecret: ""
+  nodes:
+    - id: changed
+      type: trigger.signal
+      props:
+        kinds: [lifecycle.changed]
+        services: ["{{ params.service }}"]
+        statuses: [running]
+      next: { out: [is_deploy] }
+    - id: is_deploy
+      type: flow.if
+      props: { condition: 'trigger.data.action == "deploy"' }
+      next: { true: [healthy] }
+
+    - id: healthy
+      type: wait.until
+      props:
+        interval: 10s
+        timeout: "{{ params.healthTimeout }}"
+        condition: 'inputs.svc.health == "healthy" && all(values(inputs.svc.checks), {!.critical || .lastResultMs > inputs.since})'
+        inputs:
+          svc: "{{ service[params.service] }}"
+          since: "{{ date(trigger.time).UnixMilli() }}"
+      next: { timeout: [rollback] }
+
+    - id: rollback
+      type: lifecycle.rollback
+      props: { service: "{{ params.service }}" }
+      next: { out: [rolled_back], error: [rollback_failed] }
+    - id: rolled_back
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        title: "{{ params.service }}"
+        message: "The service was not healthy after the deployment. Rolled back to the previous version."
+    - id: rollback_failed
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        title: "{{ params.service }}"
+        message: "The service was not healthy after the deployment and the rollback failed. Manual action needed."

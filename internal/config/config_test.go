@@ -117,6 +117,11 @@ func TestInvalidValues(t *testing.T) {
 		{"empty alert labels", map[string]string{EnvAlertServiceLabels: " , "}, nil, "alert service labels"},
 		{"zero timeline retention", nil, []string{"--timeline-retention", "0s"}, "timeline retention"},
 		{"zero run keep", nil, []string{"--run-retention-keep", "0"}, "run retention keep"},
+		{"zero deployment keep", map[string]string{EnvDeploymentKeep: "0"}, nil, "deployment retention keep"},
+		{"bad memory limit", map[string]string{EnvMemoryLimit: "lots"}, nil, "memory limit"},
+		{"negative memory limit", nil, []string{"--memory-limit", "-5MiB"}, "memory limit"},
+		{"public pprof", map[string]string{EnvPprofListen: "0.0.0.0:6060"}, nil, "loopback"},
+		{"pprof without port", nil, []string{"--pprof-listen", "127.0.0.1"}, "pprof listen"},
 		{"zero run age", map[string]string{EnvRunRetentionAge: "0s"}, nil, "run retention age"},
 		{"zero prune interval", nil, []string{"--prune-interval", "0s"}, "prune interval"},
 		{"zero action timeout", nil, []string{"--runtime-action-timeout", "0s"}, "runtime action timeout"},
@@ -187,7 +192,7 @@ func TestComponentSettings(t *testing.T) {
 		EnvSystemctlPrivilege: "doas", EnvRuntimeStatusTimeout: "3s", EnvRuntimeActionTimeout: "2m", EnvLockTTL: "30m",
 		EnvMonitorConcurrency: "2", EnvMonitorRawRetention: "24h", EnvMonitorRollupRetention: "48h",
 		EnvAlertServiceLabels: "svc, app ,", EnvTimelineRetention: "720h", EnvRunRetentionKeep: "5",
-		EnvRunRetentionAge: "48h", EnvPruneInterval: "10m", EnvGitHubWebhookSecret: "gh-hook",
+		EnvRunRetentionAge: "48h", EnvDeploymentKeep: "7", EnvPruneInterval: "10m", EnvGitHubWebhookSecret: "gh-hook",
 	}, "--git", "/usr/bin/git", "--alert-service-labels", "a,b")
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +212,7 @@ func TestComponentSettings(t *testing.T) {
 	if !reflect.DeepEqual(c.Privilege(), []string{"doas"}) {
 		t.Errorf("privilege = %v", c.Privilege())
 	}
-	if c.LockTTL != 30*time.Minute || c.MonitorConcurrency != 2 || c.RunRetentionKeep != 5 || c.PruneInterval != 10*time.Minute {
+	if c.LockTTL != 30*time.Minute || c.MonitorConcurrency != 2 || c.RunRetentionKeep != 5 || c.DeploymentKeep != 7 || c.PruneInterval != 10*time.Minute {
 		t.Errorf("values: %+v", c)
 	}
 
@@ -273,5 +278,25 @@ func TestMissingBinaries(t *testing.T) {
 	missing := c.MissingBinaries()
 	if len(missing) != 2 || !strings.HasPrefix(missing[0], "systemctl") || !strings.HasPrefix(missing[1], "git") {
 		t.Errorf("missing = %v", missing)
+	}
+}
+
+func TestMemoryLimitBytes(t *testing.T) {
+	tests := map[string]int64{
+		"": 0, "0": 0, "off": 0, "OFF": 0, "40MiB": 40 << 20, "64M": 64 << 20, "1g": 1 << 30, "512 KiB": 512 << 10, "1048576": 1 << 20, "2048b": 2048,
+	}
+	for in, want := range tests {
+		got, err := Config{MemoryLimit: in}.MemoryLimitBytes()
+		if err != nil || got != want {
+			t.Errorf("%q = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"-1", "MiB", "4.5M", "1TB", "99999999999999g"} {
+		if _, err := (Config{MemoryLimit: in}).MemoryLimitBytes(); err == nil {
+			t.Errorf("%q accepted", in)
+		}
+	}
+	if c := Default(); c.MemoryLimit != DefaultMemoryLimit {
+		t.Errorf("default = %q", c.MemoryLimit)
 	}
 }

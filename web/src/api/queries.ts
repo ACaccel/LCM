@@ -26,6 +26,7 @@ export const qk = {
   policyVersion: (name: string, v: number) => ["policy", name, "version", v] as const,
   nodeTypes: () => ["node-types"] as const,
   modules: () => ["modules"] as const,
+  templates: () => ["templates"] as const,
   runs: (f: RunFilter = {}) => ["runs", f.policy ?? "", f.status ?? []] as const,
   runsAll: () => ["runs"] as const,
   run: (id: string) => ["run", id] as const,
@@ -185,6 +186,13 @@ export const nodeTypesQuery = () =>
   queryOptions({
     queryKey: qk.nodeTypes(),
     queryFn: async () => (await unwrap(client.GET("/node-types"))).items,
+    staleTime: Infinity,
+  });
+
+export const templatesQuery = () =>
+  queryOptions({
+    queryKey: qk.templates(),
+    queryFn: async () => (await unwrap(client.GET("/templates"))).items,
     staleTime: Infinity,
   });
 

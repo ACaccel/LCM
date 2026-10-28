@@ -21,6 +21,8 @@ make web     # npm ci (if needed) + vite build into internal/webui/dist
 make web-check  # in web/: tsc, eslint, vitest, generated API types up to date (npm run check)
 ```
 
+Opt-in end-to-end scenarios (a real throwaway user-scope systemd unit, git repositories and the real clock; about 90 s): `LCM_IT_E2E=1 go test ./internal/app -run TestRealScenarios -v -count=1`. Diagnosis: `LCM_PPROF_LISTEN=127.0.0.1:6060` serves pprof (off by default).
+
 Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd web && npm run dev` proxies `/api` to a running `lcm serve`. After editing `internal/api/openapi.yaml` run `npm run gen:api` in `web/`.
 
 ## Directory map
@@ -57,13 +59,15 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/client/` | HTTP client of the API behind the `lcm` client commands; sends the token to the configured server only |
 | `internal/webui/` | Embeds `dist/` (built console) and serves it with SPA fallback, caching and CSP; `dist/.gitkeep` is the only committed file there |
 | `web/` | React 19 + TypeScript + Vite console; `src/api` (generated types, client, SSE), `src/policy` (YAML/graph logic), `src/pages`, `src/strings.ts` (all UI text) |
+| `internal/templates/` | Built-in policy templates: descriptors and the renderer over `examples/templates/*.yaml` (embedded through the data-only `examples` package) |
 | `internal/buildinfo/` | Version metadata |
+| `docs/` | `architecture.md` (components, data flow, engine summary, security model) and `operations.md` (install, systemd unit, backup, upgrade) |
 
 Not built yet: replay and opening pull requests from the UI (export is the way back to git).
 
 ## Repo rules
 
-- All code lives under `internal/` except `cmd/`; there is no public Go API.
+- All code lives under `internal/` except `cmd/` and `examples/examples.go`, which only embeds the example documents; there is no public Go API.
 - Every state-changing action writes an audit entry through `audit.Log.Record` with the actor taken from the context (`auth.WithActor`). CLI commands use `auth.CLI`. Never put secrets in audit details or logs.
 - Writes go through `store.DB.Write`; reads use `store.DB.Reader()`. Times are stored as Unix milliseconds.
 - Code with expiry or time-window logic takes an injected clock (`internal/clock`); tests must not sleep.

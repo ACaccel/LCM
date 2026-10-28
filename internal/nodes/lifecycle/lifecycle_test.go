@@ -12,6 +12,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/engine/enginetest"
 	"github.com/ACaccel/lcm/internal/execx"
@@ -104,7 +105,7 @@ func decode(t *testing.T, r *node.Registry, typ string, props map[string]any) (*
 }
 
 func rc() *node.RunContext {
-	return &node.RunContext{RunID: "01RUN", Policy: "self-heal", NodeID: "act", IdempotencyKey: "01RUN/act", Mode: node.ModeLive}
+	return &node.RunContext{RunID: "01RUN", Policy: "self-heal", NodeID: "act", IdempotencyKey: "01RUN/act", Mode: node.ModeLive, Clock: clock.NewFake(time.UnixMilli(1_700_000_000_000))}
 }
 
 func TestRegistration(t *testing.T) {
@@ -167,6 +168,7 @@ func TestRunPassesIdentityAndShapesOutput(t *testing.T) {
 	want := map[string]any{
 		"service": "web", "action": "deploy", "from": "running", "to": "running", "version": "abc",
 		"previousVersion": "def", "deploymentId": int64(12), "durationMs": int64(340), "replayed": false,
+		"startedMs": int64(1_700_000_000_000),
 	}
 	if !reflect.DeepEqual(res.Output, want) || res.Port != "" {
 		t.Fatalf("output = %#v", res.Output)

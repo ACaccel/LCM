@@ -1012,6 +1012,75 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /templates:
+    get:
+      tags: [Policies]
+      operationId: listTemplates
+      summary: List the built-in policy templates
+      description: |
+        Templates are Policy documents with `spec.params`; each entry describes
+        the parameters a form needs. Trigger props cannot be expressions, so the
+        parameters a trigger uses are written into it when a template is
+        instantiated; all other nodes keep reading `params.*`.
+      responses:
+        "200":
+          description: Templates sorted by id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Template" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /templates/{t}/instantiate:
+    post:
+      tags: [Policies]
+      operationId: instantiateTemplate
+      summary: Create a policy from a template
+      description: |
+        Fills the template with `params` (defaults for the rest), compiles the
+        result and deploys it as a new policy. With `dryRun` nothing is stored and
+        the concrete document is returned for review. The named service must exist.
+      parameters:
+        - { name: t, in: path, required: true, schema: { type: string }, description: Template id. }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, description: Name of the new policy. }
+                params:
+                  type: object
+                  additionalProperties: true
+                dryRun: { type: boolean }
+      responses:
+        "200":
+          description: Dry run; the document that would be deployed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateInstance" }
+        "201":
+          description: Created and deployed.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateInstance" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
   /apply:
     post:
       tags: [Config]
@@ -2618,6 +2687,55 @@ components:
         issues:
           type: array
           items: { $ref: "#/components/schemas/Issue" }
+        warnings:
+          type: array
+          items: { $ref: "#/components/schemas/Issue" }
+
+    Template:
+      type: object
+      required: [id, title, description, serviceParam, params]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        serviceParam:
+          type: string
+          description: Name of the parameter that selects the target service.
+        params:
+          type: array
+          items: { $ref: "#/components/schemas/TemplateParam" }
+    TemplateParam:
+      type: object
+      required: [name, type, description, required]
+      properties:
+        name: { type: string }
+        type:
+          type: string
+          enum: [string, boolean, duration, secret, service, strings, json]
+          description: |
+            `secret` is the name of a secret, `service` the name of a catalog
+            service, `duration` Go syntax such as `5m`, `strings` a list of
+            strings and `json` any JSON value.
+        description: { type: string }
+        required: { type: boolean }
+        requiredIf:
+          type: string
+          description: Name of a boolean parameter that makes this one required while it is true.
+        default:
+          description: Absent for required parameters.
+    TemplateInstance:
+      type: object
+      required: [template, name, yaml, version, deployed, warnings]
+      properties:
+        template: { type: string }
+        name: { type: string }
+        yaml:
+          type: string
+          description: The concrete policy document.
+        version:
+          type: [integer, "null"]
+          description: Null for a dry run.
+        deployed: { type: boolean }
         warnings:
           type: array
           items: { $ref: "#/components/schemas/Issue" }

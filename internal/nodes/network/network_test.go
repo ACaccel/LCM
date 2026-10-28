@@ -469,3 +469,75 @@ func roundTrip(t *testing.T, v any) any {
 	}
 	return out
 }
+
+func wfRun(file string, number int, status, conclusion string) map[string]any {
+	return map[string]any{
+		"name": "workflow " + file, "path": ".github/workflows/" + file, "run_number": number,
+		"status": status, "conclusion": conclusion, "event": "push", "html_url": "https://ci/" + file,
+	}
+}
+
+func TestCIStatusWorkflowsMode(t *testing.T) {
+	var body atomic.Value
+	var gotQuery, gotPath atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery.Store(r.URL.RawQuery)
+		gotPath.Store(r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body.Load().(string))
+	}))
+	defer srv.Close()
+	f := newFixture(t, srv, nil)
+	set := func(runs ...map[string]any) {
+		b, _ := json.Marshal(map[string]any{"total_count": len(runs), "workflow_runs": runs})
+		body.Store(string(b))
+	}
+	props := map[string]any{"repo": "acme/app", "commit": "abc1234", "workflows": []string{"ci.yml", "secret-scan.yml"}}
+
+	tests := []struct {
+		name string
+		runs []map[string]any
+		port string
+	}{
+		{"both succeeded", []map[string]any{wfRun("ci.yml", 3, "completed", "success"), wfRun("secret-scan.yml", 2, "completed", "success")}, "success"},
+		{"unrelated workflow is ignored", []map[string]any{
+			wfRun("ci.yml", 3, "completed", "success"), wfRun("secret-scan.yml", 2, "completed", "success"), wfRun("pages.yml", 1, "completed", "failure"),
+		}, "success"},
+		{"one failed", []map[string]any{wfRun("ci.yml", 3, "completed", "failure"), wfRun("secret-scan.yml", 2, "completed", "success")}, "failure"},
+		{"a rerun supersedes the failed run", []map[string]any{
+			wfRun("ci.yml", 3, "completed", "failure"), wfRun("ci.yml", 4, "completed", "success"), wfRun("secret-scan.yml", 2, "completed", "success"),
+		}, "success"},
+		{"latest run failed after an earlier success", []map[string]any{
+			wfRun("ci.yml", 4, "completed", "failure"), wfRun("ci.yml", 3, "completed", "success"), wfRun("secret-scan.yml", 2, "completed", "success"),
+		}, "failure"},
+		{"still running", []map[string]any{wfRun("ci.yml", 3, "in_progress", ""), wfRun("secret-scan.yml", 2, "completed", "success")}, "pending"},
+		{"workflow has not started", []map[string]any{wfRun("ci.yml", 3, "completed", "success")}, "pending"},
+		{"no runs", nil, "pending"},
+		{"failure beats a missing workflow", []map[string]any{wfRun("ci.yml", 3, "completed", "failure")}, "failure"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			set(tt.runs...)
+			res, err := f.run(t, f.rc(), "ci.status", props)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Port != tt.port {
+				t.Fatalf("port = %q, want %q (%v)", res.Port, tt.port, res.Output)
+			}
+		})
+	}
+	if gotPath.Load() != "/repos/acme/app/actions/runs" || gotQuery.Load() != "head_sha=abc1234&event=push&per_page=100&page=1" {
+		t.Fatalf("request = %v ?%v", gotPath.Load(), gotQuery.Load())
+	}
+}
+
+func TestCIStatusWorkflowsValidation(t *testing.T) {
+	f := newFixture(t, nil, nil)
+	d, _ := f.reg.Lookup("ci.status")
+	for _, wf := range []string{".github/workflows/ci.yml", "ci", "../ci.yml"} {
+		if _, err := d.Decode(map[string]any{"repo": "acme/app", "commit": "abc1234", "workflows": []string{wf}}); err == nil {
+			t.Errorf("workflow %q accepted", wf)
+		}
+	}
+}

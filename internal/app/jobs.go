@@ -43,6 +43,12 @@ func (a *App) retentionJobs(ctx context.Context) {
 		{"timeline", func(ctx context.Context) (int64, error) {
 			return a.Catalog.PruneTimeline(ctx, a.Config.TimelineRetention)
 		}},
+		{"deployments", func(ctx context.Context) (int64, error) {
+			return a.Catalog.PruneDeployments(ctx, a.Config.DeploymentKeep)
+		}},
+		{"action completions", func(ctx context.Context) (int64, error) {
+			return a.Catalog.PruneCompletions(ctx, a.Config.RunRetentionAge)
+		}},
 		{"expired locks", func(ctx context.Context) (int64, error) {
 			return a.Locks.PurgeExpired(ctx)
 		}},
