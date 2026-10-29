@@ -87,6 +87,13 @@ var (
 		Description: "Service the policy acts on. It needs at least one critical health check, which decides whether it is healthy."}
 	notify = Param{Name: "notifySecret", Type: TypeSecret,
 		Description: "Name of a secret that holds a Discord webhook URL. Leave empty to send no notifications."}
+	// deployNotify lets auto-deploy report to Discord or a konata relay.
+	deployNotify = []Param{
+		{Name: "notifyTarget", Type: TypeString, Description: "Where notifications go: discord (notifySecret) or konata (notifyUrl and notifyTokenSecret)."},
+		{Name: "notifySecret", Type: TypeSecret, Description: "discord: name of a secret that holds the webhook URL. Leave empty to send no Discord notifications."},
+		{Name: "notifyUrl", Type: TypeString, Description: "konata: the notification route URL, such as http://127.0.0.1:4100/notifications/deploys. Leave empty to send no konata notifications."},
+		{Name: "notifyTokenSecret", Type: TypeSecret, Description: "konata: name of a secret that holds the relay's bearer key."},
+	}
 )
 
 func healthTimeout() Param {
@@ -98,8 +105,8 @@ var descriptors = []descriptor{
 	{
 		id: "auto-deploy", title: "Auto deploy", serviceParam: "service",
 		description: "Deploys every new commit of a branch once CI has passed and the deploy window is open, " +
-			"waits for the service to become healthy and rolls back otherwise. One Discord message is updated through the stages.",
-		params: []Param{
+			"waits for the service to become healthy and rolls back otherwise. One Discord or konata message is updated through the stages.",
+		params: append([]Param{
 			service,
 			{Name: "repo", Type: TypeString, Required: true, Description: "Git repository URL or local path that is polled for new commits."},
 			{Name: "branch", Type: TypeString, Description: "Branch to watch."},
@@ -111,8 +118,7 @@ var descriptors = []descriptor{
 			{Name: "windows", Type: TypeJSON, Description: `Deploy windows as a list of {days, start, end}; days is optional. The default allows every time.`},
 			{Name: "timezone", Type: TypeString, Description: "IANA time zone of the windows."},
 			healthTimeout(),
-			notify,
-		},
+		}, deployNotify...),
 	},
 	{
 		id: "scheduled-backup", title: "Scheduled backup", serviceParam: "service",

@@ -2,7 +2,9 @@
 #
 # trigger.git -> (CI check) -> deploy window -> lifecycle.deploy ->
 # wait for health -> notify; an unhealthy or failed deploy rolls back.
-# One Discord message is created at the start and edited as stages finish.
+# One message per deployment, on Discord (notifySecret) or a BotFleet konata
+# relay (notifyTarget: konata, notifyUrl, notifyTokenSecret), is created at
+# the start and edited as the stages finish.
 #
 # The trigger takes its values when the template is instantiated (trigger
 # props cannot be expressions); every other node reads params.* and can be
@@ -25,7 +27,10 @@ spec:
       - { start: "00:00", end: "24:00" }
     timezone: Asia/Taipei
     healthTimeout: 5m
+    notifyTarget: discord
     notifySecret: ""
+    notifyUrl: ""
+    notifyTokenSecret: ""
   nodes:
     - id: push
       type: trigger.git
@@ -34,7 +39,8 @@ spec:
         branch: "{{ params.branch }}"
       next: { out: [fresh] }
 
-    # Forget the previous run's message so each deployment gets its own.
+    # Forget the previous run's Discord message so each deployment gets its
+    # own; konata messages are per run anyway.
     - id: fresh
       type: state.set
       props: { key: deploy-message, value: {} }
@@ -42,12 +48,21 @@ spec:
     - id: announce
       type: notify
       props:
-        target: discord
+        target: "{{ params.notifyTarget }}"
         optional: true
         urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
         stateKey: deploy-message
-        title: "{{ params.service }}"
-        message: "Commit {{ trigger.commit[:7] }} pushed. Checking CI."
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
+        message: "{{ params.requireCI ? 'Commit ' + trigger.commit[:7] + ' pushed. Checking CI.' : 'Commit ' + trigger.commit[:7] + ' pushed.' }}"
+        status: running
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'running' : 'skipped' }}" }
+          - { label: Deploy window, state: pending }
+          - { label: Build and install, state: pending }
+          - { label: Health check, state: pending }
       next: { out: [ci_gate], error: [ci_gate] }
 
     - id: ci_gate
@@ -70,14 +85,52 @@ spec:
         windows: "{{ params.windows }}"
         timezone: "{{ params.timezone }}"
         wait: true
-      next: { out: [deploy], blocked: [blocked] }
+      next: { out: [deploying], blocked: [blocked] }
+    - id: deploying
+      type: notify
+      props:
+        target: "{{ params.notifyTarget }}"
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
+        message: "Deploying {{ trigger.commit[:7] }}."
+        status: running
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
+          - { label: Build and install, state: running }
+          - { label: Health check, state: pending }
+      next: { out: [deploy], error: [deploy] }
 
     - id: deploy
       type: lifecycle.deploy
       props:
         service: "{{ params.service }}"
         version: "{{ trigger.commit }}"
-      next: { out: [healthy], error: [rollback] }
+      next: { out: [verifying], error: [rolling_back] }
+    - id: verifying
+      type: notify
+      props:
+        target: "{{ params.notifyTarget }}"
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
+        message: "Deployed {{ trigger.commit[:7] }}. Waiting for the service to become healthy."
+        status: running
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
+          - { label: Build and install, state: done }
+          - { label: Health check, state: running }
+      next: { out: [healthy], error: [healthy] }
 
     - id: healthy
       type: wait.until
@@ -88,7 +141,30 @@ spec:
         inputs:
           svc: "{{ service[params.service] }}"
           since: "{{ nodes.deploy.startedMs + nodes.deploy.durationMs }}"
-      next: { out: [done], timeout: [rollback] }
+      next: { out: [done], timeout: [rolling_back] }
+
+    # Reached from a failed deploy or a health timeout; a failed deploy's
+    # output is the error, which has a message.
+    - id: rolling_back
+      type: notify
+      props:
+        target: "{{ params.notifyTarget }}"
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
+        stateKey: deploy-message
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
+        message: "{{ 'message' in nodes.deploy ? 'Deploying ' + trigger.commit[:7] + ' failed.' : 'The service did not become healthy within ' + params.healthTimeout + '.' }} Rolling back."
+        status: running
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
+          - { label: Build and install, state: "{{ 'message' in nodes.deploy ? 'failed' : 'done' }}" }
+          - { label: Health check, state: "{{ 'message' in nodes.deploy ? 'skipped' : 'failed' }}" }
+          - { label: Rollback, state: running }
+      next: { out: [rollback], error: [rollback] }
 
     - id: rollback
       type: lifecycle.rollback
@@ -98,45 +174,92 @@ spec:
     - id: done
       type: notify
       props:
-        target: discord
+        target: "{{ params.notifyTarget }}"
         optional: true
         urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
         stateKey: deploy-message
-        title: "{{ params.service }}"
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
         message: "Deployed {{ trigger.commit[:7] }} and the service is healthy."
+        status: succeeded
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
+          - { label: Build and install, state: done }
+          - { label: Health check, state: done }
     - id: rolled_back
       type: notify
       props:
-        target: discord
+        target: "{{ params.notifyTarget }}"
         optional: true
         urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
         stateKey: deploy-message
-        title: "{{ params.service }}"
-        message: "Deploying {{ trigger.commit[:7] }} failed or the service did not become healthy. Rolled back to the previous version."
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
+        message: "{{ 'message' in nodes.deploy ? 'Deploying ' + trigger.commit[:7] + ' failed.' : 'The service did not become healthy within ' + params.healthTimeout + '.' }} Rolled back to the previous version."
+        status: failed
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
+          - { label: Build and install, state: "{{ 'message' in nodes.deploy ? 'failed' : 'done' }}" }
+          - { label: Health check, state: "{{ 'message' in nodes.deploy ? 'skipped' : 'failed' }}" }
+          - { label: Rollback, state: done }
     - id: rollback_failed
       type: notify
       props:
-        target: discord
+        target: "{{ params.notifyTarget }}"
         optional: true
         urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
         stateKey: deploy-message
-        title: "{{ params.service }}"
-        message: "Deploying {{ trigger.commit[:7] }} failed and the rollback failed too. Manual action needed."
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
+        message: "{{ 'message' in nodes.deploy ? 'Deploying ' + trigger.commit[:7] + ' failed.' : 'The service did not become healthy within ' + params.healthTimeout + '.' }} The rollback failed too. Manual action needed."
+        status: failed
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
+          - { label: Build and install, state: "{{ 'message' in nodes.deploy ? 'failed' : 'done' }}" }
+          - { label: Health check, state: "{{ 'message' in nodes.deploy ? 'skipped' : 'failed' }}" }
+          - { label: Rollback, state: failed }
     - id: ci_failed
       type: notify
       props:
-        target: discord
+        target: "{{ params.notifyTarget }}"
         optional: true
         urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
         stateKey: deploy-message
-        title: "{{ params.service }}"
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
         message: "CI for {{ trigger.commit[:7] }} did not pass. Not deployed."
+        status: failed
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: failed }
+          - { label: Deploy window, state: skipped }
+          - { label: Build and install, state: skipped }
+          - { label: Health check, state: skipped }
     - id: blocked
       type: notify
       props:
-        target: discord
+        target: "{{ params.notifyTarget }}"
         optional: true
         urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
         stateKey: deploy-message
-        title: "{{ params.service }}"
+        title: "{{ params.service }} {{ trigger.commit[:7] }}"
         message: "{{ trigger.commit[:7] }} is outside the deploy window. Not deployed."
+        status: cancelled
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: failed }
+          - { label: Build and install, state: skipped }
+          - { label: Health check, state: skipped }

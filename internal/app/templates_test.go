@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -62,13 +63,30 @@ func newDiscord(t *testing.T) *discordRecorder {
 		body, _ := io.ReadAll(r.Body)
 		var m struct {
 			Content string `json:"content"`
+			// konata relay fields
+			Summary string `json:"summary"`
+			Status  string `json:"status"`
+			Stages  []struct {
+				Label, State string
+			} `json:"stages"`
 		}
 		_ = json.Unmarshal(body, &m)
+		msg := r.Method + " " + strings.ReplaceAll(m.Content, "\n", " | ")
+		if r.Method == http.MethodPut {
+			if r.Header.Get("Authorization") != "Bearer RELAY-KEY" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			msg = "PUT " + m.Status + " | " + m.Summary
+			for _, st := range m.Stages {
+				msg += " | " + st.Label + "=" + st.State
+			}
+		}
 		d.mu.Lock()
-		d.messages = append(d.messages, r.Method+" "+strings.ReplaceAll(m.Content, "\n", " | "))
+		d.messages = append(d.messages, msg)
 		d.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"msg%d"}`, d.n.Add(1))
+		_, _ = fmt.Fprintf(w, `{"id":"msg%d","messageId":"msg%d","created":true}`, d.n.Add(1), d.n.Load())
 	}))
 	t.Cleanup(d.Close)
 	return d
@@ -115,14 +133,19 @@ type deployFixture struct {
 	// only while it equals goodCommit.
 	served     atomic.Value
 	goodCommit atomic.Value
+	// badBuild is a commit whose build fails.
+	badBuild atomic.Value
 }
 
-func newDeployFixture(t *testing.T) *deployFixture {
+// newDeployFixture instantiates auto-deploy with Discord notifications;
+// params override the template parameters.
+func newDeployFixture(t *testing.T, params ...map[string]any) *deployFixture {
 	t.Helper()
 	git := &staticGit{head: shaOld}
 	f := &deployFixture{git: git, discord: newDiscord(t), web: newSwitchable(t)}
 	f.served.Store(shaOld)
 	f.goodCommit.Store(shaA)
+	f.badBuild.Store("")
 	runner := &execx.Fake{}
 	f.harness = newHarness(t, func(o *testOpts) { o.git, o.runner = git, runner })
 
@@ -139,6 +162,12 @@ func newDeployFixture(t *testing.T) *deployFixture {
 		f.served.Store(c.Argv[len(c.Argv)-1])
 		return execx.Result{}, nil
 	})
+	runner.On(matchCmd("web-build"), func(execx.Cmd) (execx.Result, error) {
+		if f.served.Load() == f.badBuild.Load() {
+			return execx.Result{ExitCode: 2}, &execx.ExitError{Code: 2}
+		}
+		return execx.Result{}, nil
+	})
 	runner.On(matchCmd("web-restart"), func(execx.Cmd) (execx.Result, error) {
 		f.web.healthy.Store(f.served.Load() == f.goodCommit.Load() || f.served.Load() == shaOld)
 		return execx.Result{}, nil
@@ -151,20 +180,29 @@ func newDeployFixture(t *testing.T) *deployFixture {
 	if err := os.WriteFile(filepath.Join(secrets, "ops-hook"), []byte(f.discord.URL+"/api/webhooks/1/TOKEN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(secrets, "relay-key"), []byte("RELAY-KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f.putService(fmt.Sprintf(`
 apiVersion: lcm/v1
 kind: Service
 metadata: { name: web }
 spec:
   runtime: { type: command, start: web-start, stop: web-stop, restart: web-restart, status: web-status }
-  source: { repo: /srv/web, branch: main, build: "true", install: "true" }
+  source: { repo: /srv/web, branch: main, build: web-build, install: "true" }
   checks:
     - { name: http, type: http, interval: %s, timeout: 2s, props: { url: %q } }
 `, checkInterval, f.web.srv.URL))
 	tpl, _ := templates.Get("auto-deploy")
-	doc, err := tpl.Render("web-auto-deploy", map[string]any{
-		"service": "web", "repo": "https://example.com/web.git", "requireCI": false, "notifySecret": "ops-hook",
-	})
+	p := map[string]any{"service": "web", "repo": "https://example.com/web.git", "requireCI": false, "notifySecret": "ops-hook"}
+	for _, extra := range params {
+		maps.Copy(p, extra)
+	}
+	// "relay" stands for the stub's konata route.
+	if p["notifyUrl"] == "relay" {
+		p["notifyUrl"] = f.discord.URL + "/notifications/deploys"
+	}
+	doc, err := tpl.Render("web-auto-deploy", p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,8 +285,10 @@ func TestAutoDeployTemplateDeploysHealthyCommit(t *testing.T) {
 	if f.served.Load() != shaA {
 		t.Errorf("checkout = %v, want %s", f.served.Load(), shaA)
 	}
+	// One message, posted at the start and edited at each stage.
 	msgs := f.discord.all()
-	if len(msgs) != 2 || !strings.HasPrefix(msgs[0], "POST ") || !strings.HasPrefix(msgs[1], "PATCH ") || !strings.Contains(msgs[1], "Deployed aaaaaaa") {
+	if len(msgs) != 4 || !strings.HasPrefix(msgs[0], "POST ") || !strings.HasPrefix(msgs[3], "PATCH ") ||
+		!strings.Contains(msgs[3], "Deployed aaaaaaa and the service is healthy. | Status: succeeded") || !strings.Contains(msgs[3], "✓ Health check") {
 		t.Fatalf("discord = %q", msgs)
 	}
 }
@@ -271,7 +311,9 @@ func TestAutoDeployTemplateRollsBackUnhealthyCommit(t *testing.T) {
 		t.Errorf("checkout after rollback = %v, want %s", f.served.Load(), shaOld)
 	}
 	msgs := f.discord.all()
-	if len(msgs) != 2 || !strings.Contains(msgs[1], "Rolled back") {
+	last := msgs[len(msgs)-1]
+	if len(msgs) != 5 || !strings.Contains(last, "did not become healthy within 5m. Rolled back") ||
+		!strings.Contains(last, "✓ Build and install | ✗ Health check | ✓ Rollback") {
 		t.Fatalf("discord = %q", msgs)
 	}
 	// Each deployment starts a fresh message instead of editing the last one.
@@ -280,6 +322,26 @@ func TestAutoDeployTemplateRollsBackUnhealthyCommit(t *testing.T) {
 	f.events.WaitFor(t, "second deploy run", func(e engine.Event) bool {
 		return e.Kind == engine.EventRunQueued && e.Policy == "web-auto-deploy" && e.RunID != run
 	})
+}
+
+// With notifyTarget konata the same stages go to the relay as structured
+// updates of one thread; a failed build is reported as such.
+func TestAutoDeployTemplateReportsToKonata(t *testing.T) {
+	f := newDeployFixture(t, map[string]any{"notifyTarget": "konata", "notifySecret": "", "notifyUrl": "relay", "notifyTokenSecret": "relay-key"})
+	f.badBuild.Store(shaB)
+	run := f.push(shaB)
+	view := f.finish(run)
+	if view.Status != engine.RunSucceeded {
+		t.Fatalf("run = %s (%s)", view.Status, view.Error)
+	}
+	msgs := f.discord.all()
+	if len(msgs) != 4 {
+		t.Fatalf("konata = %q", msgs)
+	}
+	want := "PUT failed | Deploying bbbbbbb failed. Rolled back to the previous version. | CI=skipped | Deploy window=done | Build and install=failed | Health check=skipped | Rollback=done"
+	if msgs[3] != want {
+		t.Fatalf("last update = %q, want %q", msgs[3], want)
+	}
 }
 
 // TestBackupTemplateConfirmsWithHeartbeat runs the scheduled-backup template

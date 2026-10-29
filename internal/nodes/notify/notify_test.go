@@ -40,11 +40,12 @@ type stub struct {
 	nextID   int
 	gone     map[string]bool // message ids that answer PATCH with 404
 	failWith int
+	threads  map[string]string // konata thread keys to message ids
 }
 
 func newStub(t *testing.T) *stub {
 	t.Helper()
-	s := &stub{gone: map[string]bool{}}
+	s := &stub{gone: map[string]bool{}, threads: map[string]string{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		s.mu.Lock()
@@ -55,6 +56,16 @@ func newStub(t *testing.T) *stub {
 			return
 		}
 		switch {
+		case r.Method == http.MethodPut:
+			key := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			id, seen := s.threads[key]
+			if !seen {
+				s.nextID++
+				id = fmt.Sprintf("k%d", s.nextID)
+				s.threads[key] = id
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"messageId": id, "created": !seen})
 		case r.Method == http.MethodPatch:
 			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 			if s.gone[id] {
@@ -99,7 +110,7 @@ func setup(t *testing.T) env {
 	st := state.New(h.DB)
 	notify.Register(h.Registry, notify.Deps{
 		Client: s.Client(), State: st,
-		Secrets: secrets{"discord-hook": s.URL + "/api/webhooks/42/SECRET-TOKEN", "ntfy-token": "tk_123", "bad-url": "not a url"},
+		Secrets: secrets{"discord-hook": s.URL + "/api/webhooks/42/SECRET-TOKEN", "ntfy-token": "tk_123", "bad-url": "not a url", "relay-key": "RELAY-KEY"},
 	})
 	return env{h: h, e: h.Open(), stub: s, state: st}
 }
@@ -318,15 +329,20 @@ func TestNotifyDryRunSendsNothing(t *testing.T) {
 func TestNotifyValidationAndSecrets(t *testing.T) {
 	x := setup(t)
 	bad := map[string]string{
-		`{ target: webhook, message: m }`:                                       "exactly one",
-		`{ target: webhook, message: m, url: "http://x", urlSecret: s }`:        "exactly one",
-		`{ target: webhook, message: " ", url: "http://x" }`:                    "message",
-		`{ target: ntfy, message: m, url: "http://x", stateKey: k }`:            "only supported for discord",
-		`{ target: discord, message: m, url: "http://x", stateKey: "bad key" }`: "stateKey",
-		`{ target: discord, message: m, url: "http://x", payload: {} }`:         "payload",
-		`{ target: webhook, message: m, url: "javascript:alert(1)" }`:           "url",
-		`{ target: sms, message: m, url: "http://x" }`:                          "one of",
-		`{ target: webhook, message: m, urlSecret: "../etc" }`:                  "urlSecret",
+		`{ target: webhook, message: m }`:                                                         "exactly one",
+		`{ target: webhook, message: m, url: "http://x", urlSecret: s }`:                          "exactly one",
+		`{ target: webhook, message: " ", url: "http://x" }`:                                      "message",
+		`{ target: ntfy, message: m, url: "http://x", stateKey: k }`:                              "only supported for discord and konata",
+		`{ target: konata, message: m, url: "http://x" }`:                                         "tokenSecret",
+		`{ target: discord, message: m, url: "http://x", status: done }`:                          "status",
+		`{ target: discord, message: m, url: "http://x", link: "ftp://x" }`:                       "link",
+		`{ target: discord, message: m, url: "http://x", stages: [{ label: a, state: nope }] }`:   "state",
+		`{ target: discord, message: m, url: "http://x", stages: [{ label: " ", state: done }] }`: "label",
+		`{ target: discord, message: m, url: "http://x", stateKey: "bad key" }`:                   "stateKey",
+		`{ target: discord, message: m, url: "http://x", payload: {} }`:                           "payload",
+		`{ target: webhook, message: m, url: "javascript:alert(1)" }`:                             "url",
+		`{ target: sms, message: m, url: "http://x" }`:                                            "one of",
+		`{ target: webhook, message: m, urlSecret: "../etc" }`:                                    "urlSecret",
 	}
 	for props, want := range bad {
 		_, err := x.e.Validate(x.h.Ctx, []byte(policy("v", "    - { id: start, type: trigger.manual, next: { out: [n] } }\n    - { id: n, type: notify, props: "+props+" }\n")))
@@ -386,5 +402,104 @@ spec:
 `)
 	if v := x.h.Wait(x.e, x.h.Start(x.e, "m", nil)); v.Status != engine.RunFailed {
 		t.Fatalf("empty destination without optional: status = %s", v.Status)
+	}
+}
+
+func TestKonataEditsOneMessagePerRunAndKey(t *testing.T) {
+	x := setup(t)
+	x.h.Deploy(x.e, policy("k", `
+    - { id: start, type: trigger.manual, next: { out: [first] } }
+    - id: first
+      type: notify
+      props:
+        target: konata
+        url: "`+x.stub.URL+`/notifications/deploys/"
+        tokenSecret: relay-key
+        stateKey: deploy
+        title: "lcm {{ trigger.sha }}"
+        message: building
+        link: "https://github.com/o/r/commit/{{ trigger.sha }}"
+        stages: [{ label: CI, state: done }, { label: Build, state: "{{ trigger.build }}" }]
+      next: { out: [second] }
+    - id: second
+      type: notify
+      props: { target: konata, url: "`+x.stub.URL+`/notifications/deploys", tokenSecret: relay-key, stateKey: deploy, message: deployed, status: succeeded }
+      next: { out: [other] }
+    - { id: other, type: notify, props: { target: konata, url: "`+x.stub.URL+`/notifications/deploys", tokenSecret: relay-key, message: separate } }
+`))
+	run := func() engine.RunView {
+		v := x.h.Wait(x.e, x.h.Start(x.e, "k", map[string]any{"sha": "abc1234", "build": "running"}))
+		if v.Status != engine.RunSucceeded {
+			t.Fatalf("status = %s (%s)", v.Status, v.Error)
+		}
+		return v
+	}
+	v := run()
+	reqs := x.stub.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	for _, r := range reqs {
+		if r.Method != http.MethodPut || r.Header.Get("Authorization") != "Bearer RELAY-KEY" {
+			t.Fatalf("request = %+v", r)
+		}
+	}
+	if reqs[0].Path != "/notifications/deploys/"+v.ID+".deploy" || reqs[1].Path != reqs[0].Path || reqs[2].Path != "/notifications/deploys/"+v.ID+".other" {
+		t.Fatalf("thread keys = %s %s %s", reqs[0].Path, reqs[1].Path, reqs[2].Path)
+	}
+	var first, second map[string]any
+	_ = json.Unmarshal([]byte(reqs[0].Body), &first)
+	_ = json.Unmarshal([]byte(reqs[1].Body), &second)
+	stages, _ := first["stages"].([]any)
+	if first["title"] != "lcm abc1234" || first["summary"] != "building" || first["status"] != "running" ||
+		first["url"] != "https://github.com/o/r/commit/abc1234" || len(stages) != 2 ||
+		stages[1].(map[string]any)["state"] != "running" || !strings.HasSuffix(first["occurredAt"].(string), "Z") {
+		t.Fatalf("first body = %v", first)
+	}
+	if second["title"] != "k" || second["status"] != "succeeded" || second["stages"] == nil {
+		t.Fatalf("second body = %v", second)
+	}
+	n1, _ := v.Node("first")
+	n2, _ := v.Node("second")
+	if o := n1.Output.(map[string]any); o["edited"] != false || o["messageId"] != "k1" {
+		t.Fatalf("first output = %v", o)
+	}
+	if o := n2.Output.(map[string]any); o["edited"] != true || o["messageId"] != "k1" {
+		t.Fatalf("second output = %v", o)
+	}
+	b, _ := json.Marshal(v)
+	if strings.Contains(string(b), "RELAY-KEY") {
+		t.Fatalf("run trace leaks the relay key: %s", b)
+	}
+
+	// A new run starts a new message.
+	v2 := run()
+	if v2.ID == v.ID || x.stub.requests()[3].Path == reqs[0].Path {
+		t.Fatal("the second run reused the first run's thread")
+	}
+}
+
+func TestDiscordShowsStatusStagesAndLink(t *testing.T) {
+	x := setup(t)
+	x.h.Deploy(x.e, policy("s", `
+    - { id: start, type: trigger.manual, next: { out: [say] } }
+    - id: say
+      type: notify
+      props:
+        target: discord
+        urlSecret: discord-hook
+        title: T
+        message: m
+        status: failed
+        link: https://example.com/c
+        stages: [{ label: Build, state: done }, { label: Health, state: failed }]
+`))
+	if v := x.h.Wait(x.e, x.h.Start(x.e, "s", nil)); v.Status != engine.RunSucceeded {
+		t.Fatalf("status = %s (%s)", v.Status, v.Error)
+	}
+	var body map[string]any
+	_ = json.Unmarshal([]byte(x.stub.requests()[0].Body), &body)
+	if want := "**T**\nm\nStatus: failed\n✓ Build\n✗ Health\nhttps://example.com/c"; body["content"] != want {
+		t.Fatalf("content = %q, want %q", body["content"], want)
 	}
 }

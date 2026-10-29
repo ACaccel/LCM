@@ -63,6 +63,14 @@ systemctl list-units --failed 'lcm-self-update-*'      # rejected updates; clear
 
 - Manual rollback of the binary: `sudo install -m 0755 /usr/local/bin/lcm.prev /usr/local/bin/lcm && sudo systemctl restart lcm`. Then deploy the matching commit from the console or `lcm action lcm deploy --version <sha>` so that the catalog agrees.
 - To pause self-deploy, pause the policy `lcm-auto-deploy` in the console.
+- Progress goes to the BotFleet konata relay route `lcm-deploy`, one Discord message per deployment ([template notifications](policies.md#templates)). It needs the route in konata's `notificationRoutes` (installed settings and the deployer's build snapshot, then a konata restart; see BotFleet's notification relay docs) and konata's `NOTIFY_API_KEY` in the LCM secret `konata-notify-key`:
+
+  ```sh
+  grep '^NOTIFY_API_KEY=' /var/lib/pleiades-deployer/inputs/konata.env | cut -d= -f2- \
+    | sudo -u lcm sh -c 'umask 077 && cat > /var/lib/lcm/secrets/konata-notify-key'
+  ```
+
+  Without them the deployment still runs, but the run ends failed on its last notification.
 - A manual `lcm action lcm deploy` has no policy to roll back: if the verification restores `lcm.prev`, the catalog still records the new commit, and the failing `version` check shows the mismatch until you deploy a good commit.
 - The verification does not restore the database: a new binary that applied a migration and then failed runs the previous binary on the migrated schema. Back up the database before merging changes that add migrations.
 

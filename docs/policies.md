@@ -12,7 +12,7 @@ Four built-in templates ([`examples/templates/`](../examples/templates), embedde
 
 | Template | What it does |
 |---|---|
-| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback`; one Discord message is updated through the stages |
+| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback`; one message per deployment, on Discord or a konata relay, shows the stages as they finish |
 | `scheduled-backup` | Cron (default `Asia/Taipei`, runs once after downtime) -> `lifecycle.backup` with retry and backoff -> optional wait for a heartbeat check -> notify on failure |
 | `post-deploy-verify` | After any deployment of the service, wait for health and roll back on timeout |
 | `restart-on-down` | Health turns `down` -> restart -> wait for recovery -> notify. It has no rate limit: a service that keeps failing is restarted every time |
@@ -26,6 +26,7 @@ curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/templat
 - The result is an ordinary policy. Its parameters sit in `spec.params` and the nodes read `params.*`, so changing one later means editing the document. Trigger props cannot be expressions, so what a trigger uses (repository, branch, schedule, watched service) is written into the trigger.
 - The target service needs at least one critical health check: a service counts as recovered only when it is `healthy` with check results newer than the deployment or restart.
 - `notifySecret` names a secret holding a Discord webhook URL; leave it empty to send nothing.
+- `auto-deploy` can report to a [BotFleet](https://github.com/ACaccel/pleiades-fleet) konata notification relay instead: set `notifyTarget: konata`, `notifyUrl` to the route (`http://127.0.0.1:<NOTIFY_API_PORT>/notifications/<route>`, the route defined in konata's `notificationRoutes`) and `notifyTokenSecret` to a secret holding konata's `NOTIFY_API_KEY`. Each run gets its own message; konata shows the stages (CI, deploy window, build and install, health check, rollback) and colours it by the outcome.
 - A rollback needs an earlier successful deployment recorded by LCM: deploy a known-good version once (`lcm action <service> deploy --version <sha>`) before relying on `auto-deploy`.
 - `restart-on-down` needs a runtime that can restart the service ([services](services.md#runtime)); on an `external` service the restart is refused.
 
