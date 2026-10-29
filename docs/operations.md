@@ -39,7 +39,7 @@ How to run LCM on a host. Build and configuration reference: [README](../README.
 
 Later admin password changes: `sudo -u lcm /usr/local/bin/lcm admin set-password --data-dir /var/lib/lcm`. Run the `lcm` CLI's database commands as `lcm` (`sudo -u lcm`), never as root: the binary is replaced by self-deploy.
 
-**Monitoring-only services.** `seed.sh` lists the systemd units of `card-together*`, `personal-quant-desk*`, `pleiades@*` and `mongodb-pleiades` that exist, and registers one service per application with runtime `external` (LCM has no actions on them) and no policies. Long-running units get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. `http` checks are added only for URLs that answer at seed time (card-together `/health`, metube). The docker check for `metube` is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
+**Monitoring-only services.** `seed.sh` lists the systemd units of `card-together*`, `personal-quant-desk*`, `pleiades@*` and `mongodb-pleiades` that exist, and registers one service per application with runtime `external` (LCM only monitors them, so their start, stop and restart are disabled; see [runtimes](services.md#runtime)) and no policies. Long-running units get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. `http` checks are added only for URLs that answer at seed time (card-together `/health`, metube). The docker check for `metube` is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
 
 ### Self-deploy
 
@@ -114,7 +114,7 @@ Back up `secrets/` separately and store it more carefully than the database. A r
 2. Install the new binary (`lcm version` shows the build) and `sudo systemctl restart lcm`. With [self-deploy](#self-deploy) this happens on every merge to `main`.
 3. Schema migrations run at startup and are not reversible: to go back, restore the backup together with the old binary.
 
-On start, and every minute afterwards, LCM reconciles service states with reality and resumes interrupted policy runs, so a restart during a deployment is safe; a deployment that was cut off is marked interrupted.
+On start LCM [reconciles service states](services.md#lifecycle-states-and-actions) (and keeps doing so every minute) and resumes interrupted policy runs, so a restart during a deployment is safe; a deployment that was cut off is marked interrupted.
 
 ## Resource use
 

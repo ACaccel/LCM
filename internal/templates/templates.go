@@ -136,7 +136,7 @@ var descriptors = []descriptor{
 	{
 		id: "restart-on-down", title: "Restart when down", serviceParam: "service",
 		description: "Restarts the service when its health turns down and reports whether it recovered. " +
-			"This simple version has no rate limit; guards for that arrive with the M2 guard nodes.",
+			"This simple version has no rate limit: a service that keeps failing is restarted every time.",
 		params: []Param{service, healthTimeout(), notify},
 	},
 }

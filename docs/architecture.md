@@ -1,6 +1,6 @@
 # Architecture
 
-LCM is one Go process (`lcm serve`) with one SQLite database. The HTTP API, the web console, the policy engine, the service catalog, the health monitor and the trigger watchers all run inside it. Setup and configuration are in the [README](../README.md); operating it is in [operations.md](operations.md).
+LCM is one Go process (`lcm serve`) with one SQLite database. The HTTP API, the web console, the policy engine, the service catalog, the health monitor and the trigger watchers all run inside it. Setup and configuration are in the [README](../README.md), what services and policies do in [services.md](services.md) and [policies.md](policies.md), and running it on a host in [operations.md](operations.md).
 
 ## Components and data flow
 
@@ -31,13 +31,16 @@ A typical loop: a health check fails, `monitor` publishes a `health.changed` sig
 
 | Component | Responsibility |
 |---|---|
-| `internal/app` | Builds all components in dependency order, runs the background loops, shuts down in reverse. The only place that connects components. |
+| `internal/app` | Builds all components in dependency order, runs the background loops (triggers, lock expiry, monitor sync, config sync, retention, reconciliation), shuts down in reverse. The only place that connects components. |
+| `internal/api` | HTTP handlers, middleware, error envelope and the OpenAPI document; handlers parse, call a component and map errors. |
 | `internal/store` | SQLite with one writer connection and a reader pool; numbered migrations applied at startup. |
 | `internal/engine` | Compiles policies into plans and runs them; checkpoints every node so runs survive restarts. |
-| `internal/catalog` | Service documents and versions, the lifecycle state machine, deployments, timeline; the `Manager` performs actions under a durable lock, refuses actions the runtime cannot perform (an external service, a command runtime without that command) and reconciles states with the runtimes every minute. |
+| `internal/catalog` | Service documents and versions, the lifecycle state machine, deployments, timeline; the `Manager` performs actions under a durable lock and reconciles states with the runtimes ([services](services.md#lifecycle-states-and-actions)). |
+| `internal/runtime` | Adapters that control processes (systemd, docker, compose, command, external) and declare which actions each configuration supports. |
 | `internal/monitor` | Health checks, history, rollups, health aggregation and alert ingestion. |
 | `internal/trigger` | `trigger.*` nodes and the watchers behind them (signals, git polling, cron, webhooks). |
 | `internal/configsync` | Policy-as-code: applies documents from files or git, tracks ownership, drift and conflicts. |
+| `internal/events` | Event hub behind the SSE stream: bounded, filtered subscriptions fed by the signal bus, engine observers and catalog hooks. |
 | `internal/templates` | Built-in policy templates (`examples/templates`). |
 
 ## Engine semantics
@@ -56,7 +59,7 @@ The `service` variable exposes `{ state, health, checks.<name>.{status, critical
 
 LCM restarts services and runs commands, so it is a high-privilege system. The design keeps that power narrow and visible.
 
-**Process and listener.** It listens on `127.0.0.1` by default and warns otherwise. It speaks plain HTTP; put a TLS proxy in front for remote access and set `LCM_COOKIE_SECURE=true`. Cross-origin browser requests are refused.
+**Process and listener.** It listens on `127.0.0.1` by default and warns otherwise. It speaks plain HTTP; remote access goes through a TLS proxy ([remote access](operations.md#remote-access)). Cross-origin browser requests are refused, and console responses carry a restrictive `Content-Security-Policy` (same-origin scripts; inline styles allowed for CodeMirror and React Flow).
 
 **Execution permissions.** LCM runs as an unprivileged user. Anything it executes (service `build`, `install`, `backup` and `jobs` commands, command runtimes, command health checks) runs as that user through `execx`, with a short environment allowlist (`PATH`, `HOME`, `XDG_RUNTIME_DIR` and a few more) so LCM's own variables never reach children. Whoever can write a Service document (an admin session or token, or a config-sync repository) can therefore make LCM run commands as that user: treat write access to those documents like shell access to the LCM user.
 

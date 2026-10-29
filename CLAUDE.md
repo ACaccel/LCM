@@ -1,6 +1,6 @@
 # LCM
 
-Self-hosted service lifecycle control plane: a single Go binary with SQLite. Rewrite in progress (foundation, policy engine, catalog, monitor, triggers, integration, the HTTP API v1, config sync, the CLI client, the web console and host deployment with self-deploy done). Design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`.
+Self-hosted service lifecycle control plane: a single Go binary with SQLite, a web console and a CLI. The rewrite is complete apart from the items under "Not built yet"; its design and phase plan live in `.plan/redesign/` (not versioned). The legacy implementation is at commit `18a24f6`. User documentation: `README.md` (setup, CLI, configuration) and `docs/` (below).
 
 ## Stack
 
@@ -39,13 +39,13 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/signal/` | In-process signal bus (check, health, lifecycle, alert); lossy by design |
 | `internal/model/` | `lcm/v1` Policy, Module and Service documents: strict decoding, value normalization, structural validation |
 | `internal/expr/` | Expression and `{{ }}` template compiler over expr-lang, with static reference extraction |
-| `internal/node/` | Node SDK: `Spec[P]`, registry, props schema reflection and validation, `RunContext` |
+| `internal/node/` | Node SDK: `Spec[P]` (including `ServiceProp`, the prop naming the service a node acts on), registry, props schema reflection and validation, `RunContext` |
 | `internal/nodes/core/` | Built-in flow, data and module nodes |
 | `internal/nodes/lifecycle/` | `lifecycle.*` nodes over the catalog manager |
 | `internal/nodes/{flow,guard,network,notify,stateful}/` | Waiting and polling, time windows, HTTP and CI requests, notifications, state and lock nodes |
-| `internal/engine/` | Compiler, scheduler, run state, checkpoints, recovery, concurrency modes, observers; semantics in `doc.go`; `enginetest/` harness |
-| `internal/catalog/` | Service documents and versions, lifecycle state machine, deployments, timeline, and the `Manager` that performs lifecycle actions |
-| `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external) |
+| `internal/engine/` | Compiler, scheduler, run state, checkpoints, recovery, concurrency modes, observers, static service targets of a plan; semantics in `doc.go`; `enginetest/` harness |
+| `internal/catalog/` | Service documents and versions, lifecycle state machine, deployments, timeline, the `Manager` that performs lifecycle actions, action availability and reconciliation |
+| `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external) and `CapabilitiesOf`, the actions a runtime configuration supports |
 | `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |
 | `internal/monitor/` | Health checks, history, rollups, health aggregation, alert ingestion; `alert/` parses Alertmanager, Uptime Kuma, Gatus and generic payloads |
 | `internal/trigger/` | `trigger.*` nodes and the manager running signal, git, cron and webhook watchers |
@@ -62,7 +62,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/templates/` | Built-in policy templates: descriptors and the renderer over `examples/templates/*.yaml` (embedded through the data-only `examples` package) |
 | `internal/buildinfo/` | Version metadata |
 | `deploy/` | Host installation: `bootstrap.sh` (root, idempotent), `seed.sh`, `uninstall.sh`, `self-install` (the only sudo command of the `lcm` account), unit, env, sudoers and the self-deploy documents; tested by `internal/app/deploy_test.go`, opt-in end-to-end `LCM_IT_SELFDEPLOY=1 go test ./internal/app -run TestRealSelfDeploy` |
-| `docs/` | `architecture.md` (components, data flow, engine summary, security model) and `operations.md` (install, systemd unit, backup, upgrade) |
+| `docs/` | `services.md` (Service documents, runtimes and actions, checks, lifecycle), `policies.md` (policies, templates, policy-as-code), `architecture.md` (components, data flow, engine summary, security model), `operations.md` (install, self-deploy, backup, upgrade) |
 
 Not built yet: replay and opening pull requests from the UI (export is the way back to git).
 
@@ -81,5 +81,7 @@ Not built yet: replay and opening pull requests from the UI (export is the way b
 - API tokens carry a scope (`admin` or `ingest`); routes use `requireAdmin` unless they are ingest endpoints (`requireAny`) or session-only (`requireSession`).
 - Config sync never overwrites a drifted resource and never deletes one; documents carry no privileges (allowlists and unit scopes stay in host config). Git runs only through `execx` with a fixed environment and the repository after `--`.
 - Token and user management stays session-only: an API token must never be able to mint or revoke tokens.
+- LCM never records a state change it did not make: an action the runtime cannot perform is refused (`catalog.ErrUnsupported`), never configured as a no-op command.
+- Behavior visible to users is documented in one place: `README.md` for setup, CLI and configuration, `docs/services.md`, `docs/policies.md`, `docs/architecture.md` and `docs/operations.md` for the rest; update the page that owns a fact and link to it elsewhere.
 - Lint findings are fixed, not disabled; a justified `//nolint:<linter> // reason` is the only exception.
 - Web console: UI text only in `web/src/strings.ts` (Traditional Chinese, technical terms in English); no node types or validation rules duplicated from the server (palette and forms come from `/node-types`, validation from `/validate`); the generated `web/src/api/schema.d.ts` is never edited by hand; no UI framework, no chart library.

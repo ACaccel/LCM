@@ -5,7 +5,7 @@
 # Uses the admin token in LCM_TOKEN_FILE (default ~/.config/lcm/token, written
 # by bootstrap.sh), the server LCM_SERVER (default http://127.0.0.1:7800) and
 # the client LCM_BIN (default /usr/local/bin/lcm).
-# Docs: docs/operations.md#seed
+# Docs: docs/operations.md#procedure (step 3)
 set -Eeuo pipefail -f
 export LC_ALL=C
 

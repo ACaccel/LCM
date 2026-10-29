@@ -1,7 +1,7 @@
 # Restart a service when its health turns down and report whether it came
 # back. This simple version has no rate limit: a service that keeps going
-# down is restarted every time. Guards for that (stable, budget, circuit)
-# arrive with the M2 guard nodes.
+# down is restarted every time; guard nodes for that (stability, budget,
+# circuit breaker) are not built yet.
 #
 # The trigger takes its values when the template is instantiated; every
 # other node reads params.*.
