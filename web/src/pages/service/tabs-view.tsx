@@ -6,7 +6,7 @@ import type { CheckStatus, Deployment, ServiceDetail } from "../../api/types";
 import { LatencyChart, UptimeBars } from "../../components/charts";
 import { Async, Empty, ErrorBox, Pill, Spinner, Tag } from "../../components/ui";
 import { formatDateTime, formatDuration, formatTime, formatUptime, shortVersion, spanMs } from "../../lib/format";
-import { policyConcernsService } from "../../lib/policy-match";
+import { policyRelation, type PolicyRelation } from "../../lib/policy-match";
 import { TemplateDialog } from "../template-dialog";
 import { bucketUptime, overallUptime } from "../../lib/series";
 import { s } from "../../strings";
@@ -207,13 +207,23 @@ export function DeploymentsTab({ service, deployedVersion, hasSource, onDeploy }
   );
 }
 
+function relationText(r: PolicyRelation): string {
+  if (r.kind === "dynamic") return s.servicePolicies.relation.dynamic;
+  if (r.kind === "watches") return s.servicePolicies.relation.watches;
+  return s.servicePolicies.relation.acts(r.types.map((t) => s.actionName[t.replace(/^lifecycle\./, "")] ?? t).join("、"));
+}
+
 export function PoliciesTab({ service, detail }: { service: string; detail: ServiceDetail }) {
   const q = useQuery(policiesQuery());
   const [applying, setApplying] = useState(false);
   return (
     <Async q={q}>
       {(policies) => {
-        const matched = policies.filter((p) => policyConcernsService(p, service, detail.document.metadata.labels ?? {}));
+        const labels = detail.document.metadata.labels ?? {};
+        const matched = policies.flatMap((p) => {
+          const relation = policyRelation(p, service, labels);
+          return relation ? [{ policy: p, relation }] : [];
+        });
         return (
           <div className="stack">
             <div className="row">
@@ -228,13 +238,22 @@ export function PoliciesTab({ service, detail }: { service: string; detail: Serv
             ) : (
               <div className="table-wrap">
                 <table className="table">
+                  <thead>
+                    <tr>
+                      <th>{s.servicePolicies.columns.name}</th>
+                      <th>{s.servicePolicies.columns.relation}</th>
+                      <th>{s.servicePolicies.columns.state}</th>
+                      <th>{s.servicePolicies.columns.managed}</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {matched.map((p) => (
+                    {matched.map(({ policy: p, relation }) => (
                       <tr key={p.name}>
                         <td>
                           <Link to={`/policies/${encodeURIComponent(p.name)}`}>{p.name}</Link>
                         </td>
-                        <td>{p.deployed ? (p.paused ? s.policies.paused : s.policies.deployed) : s.policies.notDeployed}</td>
+                        <td>{relationText(relation)}</td>
+                        <td>{p.paused ? s.policies.paused : s.policies.deployed}</td>
                         <td>
                           <div className="row" style={{ gap: 4 }}>
                             <ManagedBadges managedBy={p.managedBy} />

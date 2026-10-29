@@ -69,7 +69,7 @@ func checkService(name string) error {
 func Register(r *node.Registry, a Actions) {
 	simple := func(typ, action, desc string, run func(context.Context, string, catalog.ActionOptions) (catalog.ActionResult, error)) {
 		node.Register(r, node.Spec[ServiceProps]{
-			Type: typ, Category: Category, Effect: node.EffectWrite, Description: desc,
+			Type: typ, Category: Category, Effect: node.EffectWrite, Description: desc, ServiceProp: "service",
 			Validate: func(p ServiceProps) error { return checkService(p.Service) },
 			Run: func(ctx context.Context, rc *node.RunContext, p ServiceProps) (node.Result, error) {
 				return execute(ctx, rc, p.Service, catalog.ActionOptions{}, run)
@@ -88,7 +88,7 @@ func Register(r *node.Registry, a Actions) {
 	simple("lifecycle.backup", catalog.ActionBackup, "Runs the service's backup command.", a.Backup)
 
 	node.Register(r, node.Spec[DeployProps]{
-		Type: "lifecycle.deploy", Category: Category, Effect: node.EffectWrite,
+		Type: "lifecycle.deploy", Category: Category, Effect: node.EffectWrite, ServiceProp: "service",
 		Description: "Updates a service from its source repository: fetch, check out, build, install, restart.",
 		Validate:    func(p DeployProps) error { return checkService(p.Service) },
 		Run: func(ctx context.Context, rc *node.RunContext, p DeployProps) (node.Result, error) {
@@ -99,7 +99,7 @@ func Register(r *node.Registry, a Actions) {
 		},
 	})
 	node.Register(r, node.Spec[RunJobProps]{
-		Type: "lifecycle.run-job", Category: Category, Effect: node.EffectWrite,
+		Type: "lifecycle.run-job", Category: Category, Effect: node.EffectWrite, ServiceProp: "service",
 		Description: "Runs a job defined in the service document.",
 		Validate:    func(p RunJobProps) error { return checkService(p.Service) },
 		Run: func(ctx context.Context, rc *node.RunContext, p RunJobProps) (node.Result, error) {

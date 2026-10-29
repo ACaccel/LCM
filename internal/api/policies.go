@@ -29,6 +29,29 @@ func triggersOf(plan *engine.Plan) []triggerDTO {
 	return out
 }
 
+type targetDTO struct {
+	Node string `json:"node"`
+	Type string `json:"type"`
+	// Service is null when the policy decides it while running.
+	Service *string `json:"service"`
+}
+
+func targetsOf(plan *engine.Plan) []targetDTO {
+	out := []targetDTO{}
+	if plan == nil {
+		return out
+	}
+	for _, t := range plan.ServiceTargets() {
+		d := targetDTO{Node: t.Node, Type: t.Type}
+		if t.Service != "" {
+			svc := t.Service
+			d.Service = &svc
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 type lastRunDTO struct {
 	ID        string           `json:"id"`
 	Status    engine.RunStatus `json:"status"`
@@ -48,7 +71,9 @@ type policySummaryDTO struct {
 	DeployedAt      *time.Time   `json:"deployedAt"`
 	UpdatedAt       time.Time    `json:"updatedAt"`
 	Triggers        []triggerDTO `json:"triggers"`
-	LastRun         *lastRunDTO  `json:"lastRun"`
+	// Targets are the deployed version's nodes that act on a service.
+	Targets []targetDTO `json:"targets"`
+	LastRun *lastRunDTO `json:"lastRun"`
 	// ManagedBy is null when only the web UI and API manage the policy.
 	ManagedBy *managedByDTO `json:"managedBy"`
 }
@@ -56,13 +81,14 @@ type policySummaryDTO struct {
 func (s *Server) policySummary(r *http.Request, info engine.PolicyInfo) (policySummaryDTO, error) {
 	out := policySummaryDTO{
 		Name: info.Name, Labels: map[string]string{}, LatestVersion: info.LatestVersion, Paused: info.Paused,
-		DeployedAt: optTime(info.DeployedAt), UpdatedAt: info.UpdatedAt, Triggers: []triggerDTO{},
+		DeployedAt: optTime(info.DeployedAt), UpdatedAt: info.UpdatedAt, Triggers: []triggerDTO{}, Targets: []targetDTO{},
 	}
 	if info.DeployedVersion > 0 {
 		v := info.DeployedVersion
 		out.DeployedVersion, out.Deployed = &v, true
 		if plan, ok := s.engine.Plan(info.Name); ok {
 			out.Triggers = triggersOf(plan)
+			out.Targets = targetsOf(plan)
 			if l := plan.Labels(); l != nil {
 				out.Labels = l
 			}

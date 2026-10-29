@@ -1761,8 +1761,17 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             triggers: components["schemas"]["Trigger"][];
+            /** @description Nodes of the deployed version that act on a service; empty when not deployed. */
+            targets: components["schemas"]["PolicyTarget"][];
             lastRun: components["schemas"]["LastRun"] | null;
             managedBy: components["schemas"]["ManagedBy"];
+        };
+        PolicyTarget: {
+            /** @description Scoped node id such as deploy or mod/restart. */
+            node: string;
+            type: string;
+            /** @description The service the node acts on; null when the policy decides it while running (for example from the trigger event). */
+            service: string | null;
         };
         PolicyList: {
             items: components["schemas"]["PolicySummary"][];

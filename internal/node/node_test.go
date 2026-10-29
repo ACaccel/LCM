@@ -119,6 +119,9 @@ func TestRegisterPanics(t *testing.T) {
 	type stdDur struct {
 		A time.Duration `json:"a"`
 	}
+	type intProp struct {
+		N int `json:"n"`
+	}
 	type badOpt struct {
 		A string `json:"a" lcm:"weird"`
 	}
@@ -172,6 +175,12 @@ func TestRegisterPanics(t *testing.T) {
 		},
 		"chan": func(r *node.Registry) {
 			node.Register(r, node.Spec[chanField]{Type: "a.b", Category: "x", Run: runOf[chanField]()})
+		},
+		"service prop missing": func(r *node.Registry) {
+			node.Register(r, node.Spec[struct{}]{Type: "a.b", Category: "x", Run: run, ServiceProp: "service"})
+		},
+		"service prop not a string": func(r *node.Registry) {
+			node.Register(r, node.Spec[intProp]{Type: "a.b", Category: "x", Run: runOf[intProp](), ServiceProp: "n"})
 		},
 		"duplicate": func(r *node.Registry) {
 			node.Register(r, node.Spec[struct{}]{Type: "a.b", Category: "x", Run: run})

@@ -57,6 +57,19 @@ func TestTemplateInstantiate(t *testing.T) {
 	if trig["services"].([]any)[0] != "web" {
 		t.Fatalf("trigger props = %v", trig)
 	}
+	// The template's lifecycle nodes read params.service, which resolves
+	// without running the policy.
+	list := x.call("GET", v1+"/policies", nil).want(http.StatusOK).items()
+	targets := list[0]["targets"].([]any)
+	if len(targets) == 0 {
+		t.Fatalf("no targets in %v", list[0])
+	}
+	for _, tg := range targets {
+		m := tg.(map[string]any)
+		if m["service"] != "web" || !strings.HasPrefix(m["type"].(string), "lifecycle.") {
+			t.Fatalf("targets = %v", targets)
+		}
+	}
 
 	// The audit log names the actor and the policy.
 	var entry struct {

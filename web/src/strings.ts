@@ -255,8 +255,14 @@ export const s = {
   },
   servicePolicies: {
     title: "套用的 Policy",
-    help: "依 policy 標籤與 trigger 設定推測，僅供參考。",
-    empty: "沒有 policy 指向這個服務。",
+    help: "列出已部署、會作用在這個服務或監聽它的 policy。作用對象由伺服器依 policy 內容解析；未部署的 policy 不會執行，因此不列出。",
+    empty: "沒有已部署的 policy 作用在這個服務。",
+    columns: { name: "Policy", relation: "關係", state: "狀態", managed: "管理方式" },
+    relation: {
+      acts: (actions: string) => `動作：${actions}`,
+      dynamic: "監聽這個服務，動作對象在執行時依事件決定",
+      watches: "監聽這個服務的事件",
+    },
     applyTemplate: "套用範本",
   },
   templates: {

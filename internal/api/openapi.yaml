@@ -2466,7 +2466,7 @@ components:
         createdAt: { type: string, format: date-time }
     PolicySummary:
       type: object
-      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, lastRun, managedBy]
+      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, targets, lastRun, managedBy]
       properties:
         name: { type: string }
         labels: { $ref: "#/components/schemas/Labels" }
@@ -2479,11 +2479,24 @@ components:
         triggers:
           type: array
           items: { $ref: "#/components/schemas/Trigger" }
+        targets:
+          description: Nodes of the deployed version that act on a service; empty when not deployed.
+          type: array
+          items: { $ref: "#/components/schemas/PolicyTarget" }
         lastRun:
           oneOf:
             - $ref: "#/components/schemas/LastRun"
             - type: "null"
         managedBy: { $ref: "#/components/schemas/ManagedBy" }
+    PolicyTarget:
+      type: object
+      required: [node, type, service]
+      properties:
+        node: { type: string, description: Scoped node id such as deploy or mod/restart. }
+        type: { type: string }
+        service:
+          description: The service the node acts on; null when the policy decides it while running (for example from the trigger event).
+          type: [string, "null"]
     PolicyList:
       type: object
       required: [items, nextCursor]

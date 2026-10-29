@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Trigger } from "../api/types";
-import { policyConcernsService, triggerConcernsService } from "./policy-match";
+import { policyRelation, triggerConcernsService } from "./policy-match";
 
 const sig = (props: Record<string, unknown>): Trigger => ({ id: "t", type: "trigger.signal", props });
 
@@ -22,10 +22,21 @@ describe("triggerConcernsService", () => {
   });
 });
 
-describe("policyConcernsService", () => {
-  it("matches the service label or a trigger", () => {
-    expect(policyConcernsService({ labels: { service: "web" }, triggers: [] }, "web", {})).toBe(true);
-    expect(policyConcernsService({ labels: {}, triggers: [sig({ services: ["web"] })] }, "web", {})).toBe(true);
-    expect(policyConcernsService({ labels: { service: "api" }, triggers: [] }, "web", {})).toBe(false);
+describe("policyRelation", () => {
+  const target = (type: string, service: string | null) => ({ node: type, type, service });
+
+  it("prefers the resolved targets", () => {
+    const p = { targets: [target("lifecycle.deploy", "web"), target("lifecycle.rollback", "web"), target("lifecycle.deploy", "api")], triggers: [] };
+    expect(policyRelation(p, "web", {})).toEqual({ kind: "acts", types: ["lifecycle.deploy", "lifecycle.rollback"] });
+  });
+
+  it("falls back to the trigger filter", () => {
+    expect(policyRelation({ targets: [target("lifecycle.restart", null)], triggers: [sig({ services: ["web"] })] }, "web", {})).toEqual({ kind: "dynamic" });
+    expect(policyRelation({ targets: [], triggers: [sig({ services: ["web"] })] }, "web", {})).toEqual({ kind: "watches" });
+  });
+
+  it("ignores policies that neither act on nor listen to the service", () => {
+    expect(policyRelation({ targets: [target("lifecycle.deploy", "api")], triggers: [] }, "web", {})).toBeNull();
+    expect(policyRelation({ targets: [target("lifecycle.restart", null)], triggers: [sig({ services: ["api"] })] }, "web", {})).toBeNull();
   });
 });
