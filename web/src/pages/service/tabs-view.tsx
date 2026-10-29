@@ -2,13 +2,13 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
 import { checksQuery, deploymentsQuery, policiesQuery, seriesQuery, summaryQuery } from "../../api/queries";
-import type { CheckStatus, Deployment, ServiceDetail } from "../../api/types";
-import { LatencyChart, UptimeBars } from "../../components/charts";
+import type { CheckStatus, Deployment, SeriesPoint, ServiceDetail } from "../../api/types";
+import { ChartLegend, LatencyChart, UptimeBars } from "../../components/charts";
 import { Async, Empty, ErrorBox, Pill, Spinner, Tag } from "../../components/ui";
 import { formatDateTime, formatDuration, formatTime, formatUptime, shortVersion, spanMs } from "../../lib/format";
 import { policyRelation, type PolicyRelation } from "../../lib/policy-match";
 import { TemplateDialog } from "../template-dialog";
-import { bucketUptime, overallUptime } from "../../lib/series";
+import { bucketUptime, latencyStats, overallUptime } from "../../lib/series";
 import { s } from "../../strings";
 import { ManagedBadges } from "../../components/badges";
 
@@ -20,6 +20,15 @@ function checkView(c: CheckStatus) {
   return c.status === "up" ? { tone: "ok" as const, icon: "✓", label: s.checks.up } : { tone: "bad" as const, icon: "✕", label: s.checks.down };
 }
 
+const BARS = 48;
+
+function panelStats(points: readonly SeriesPoint[]): string {
+  const uptime = `${s.checks.uptime} ${formatUptime(overallUptime(points), points.reduce((n, p) => n + p.count, 0))}`;
+  const lat = latencyStats(points);
+  if (!lat) return uptime;
+  return `${s.checks.avg} ${formatDuration(lat.avg)} · ${s.checks.max} ${formatDuration(lat.max)} · ${uptime}`;
+}
+
 function CheckPanel({ service, check, windowKey }: { service: string; check: CheckStatus; windowKey: WindowKey }) {
   const points = windowKey === "24h" ? 96 : 120;
   const q = useQuery(seriesQuery(service, check.name, WINDOWS[windowKey], points));
@@ -29,11 +38,7 @@ function CheckPanel({ service, check, windowKey }: { service: string; check: Che
     <div className="panel">
       <div className="title">
         <span>{s.checks.latencyChart(check.name)}</span>
-        {q.data && (
-          <span>
-            {s.checks.uptime} {formatUptime(overallUptime(q.data.points), q.data.points.reduce((n, p) => n + p.count, 0))}
-          </span>
-        )}
+        {q.data && <span>{panelStats(q.data.points)}</span>}
       </div>
       {q.isPending ? (
         <Spinner />
@@ -41,8 +46,9 @@ function CheckPanel({ service, check, windowKey }: { service: string; check: Che
         <ErrorBox error={q.error} onRetry={() => void q.refetch()} />
       ) : (
         <>
-          <LatencyChart points={q.data.points} from={from} to={to} />
-          <UptimeBars buckets={bucketUptime(q.data.points, from, to, 48)} />
+          <LatencyChart points={q.data.points} from={from} to={to} stepMs={q.data.stepMs} />
+          <UptimeBars buckets={bucketUptime(q.data.points, from, to, BARS)} from={from} to={to} />
+          <ChartLegend bucketMs={(to - from) / BARS} />
         </>
       )}
     </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Series, SeriesPoint } from "../api/types";
-import { bucketUptime, mergeSeries, overallUptime } from "./series";
+import { bucketUptime, latencyStats, mergeSeries, overallUptime } from "./series";
 
 const pt = (time: string, count: number, failures: number, avg = 100): SeriesPoint => ({
   time,
@@ -48,5 +48,18 @@ describe("series helpers", () => {
   it("computes overall uptime", () => {
     expect(overallUptime([pt("a", 10, 1), pt("b", 10, 0)])).toBeCloseTo(0.95);
     expect(overallUptime([])).toBeUndefined();
+  });
+});
+
+describe("latencyStats", () => {
+  const pt = (count: number, failures: number, avg: number, max: number) => ({ time: "2026-01-01T00:00:00Z", count, failures, avgLatencyMs: avg, minLatencyMs: avg, maxLatencyMs: max });
+
+  it("weights the average by successful samples and ignores failed buckets", () => {
+    expect(latencyStats([pt(3, 0, 10, 20), pt(2, 1, 40, 90), pt(2, 2, 0, 0)])).toEqual({ avg: 17.5, max: 90 });
+  });
+
+  it("is undefined without a successful sample", () => {
+    expect(latencyStats([pt(1, 1, 0, 0)])).toBeUndefined();
+    expect(latencyStats([])).toBeUndefined();
   });
 });

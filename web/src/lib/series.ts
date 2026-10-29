@@ -62,3 +62,21 @@ export function overallUptime(points: readonly SeriesPoint[]): number | undefine
   }
   return count > 0 ? 1 - failures / count : undefined;
 }
+
+/**
+ * Average latency over the successful samples (weighted by their count) and
+ * the highest latency seen; undefined when no sample succeeded.
+ */
+export function latencyStats(points: readonly SeriesPoint[]): { avg: number; max: number } | undefined {
+  let ok = 0;
+  let sum = 0;
+  let max = 0;
+  for (const p of points) {
+    const n = p.count - p.failures;
+    if (n <= 0) continue;
+    ok += n;
+    sum += p.avgLatencyMs * n;
+    max = Math.max(max, p.maxLatencyMs);
+  }
+  return ok > 0 ? { avg: sum / ok, max } : undefined;
+}

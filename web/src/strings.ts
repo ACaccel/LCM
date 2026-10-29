@@ -236,9 +236,17 @@ export const s = {
     uptime: "可用率",
     window: { "24h": "24 小時", "7d": "7 天", "30d": "30 天" } as Record<string, string>,
     latencyChart: (name: string) => `${name} 延遲`,
-    p95: "最大",
+    max: "最大",
     avg: "平均",
     noData: "此區間沒有資料",
+    allFailed: "全部失敗",
+    samples: (count: number, failures: number) => (failures > 0 ? `檢查 ${count} 次，失敗 ${failures} 次` : `檢查 ${count} 次`),
+    chartHelp: "延遲圖；用左右方向鍵查看各時段的數值",
+    legend: {
+      latency: "平均延遲",
+      failed: "有失敗的時段",
+      uptime: (bucket: string) => `可用率（每格 ${bucket}）`,
+    },
   },
   deployments: {
     title: "部署歷史",
