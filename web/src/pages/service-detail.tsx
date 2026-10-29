@@ -8,6 +8,7 @@ import { TimelinePanel } from "../components/timeline-panel";
 import { ErrorBox, PageHead, Spinner, Tag } from "../components/ui";
 import { isApiError } from "../api/client";
 import { formatTime, shortVersion } from "../lib/format";
+import { unavailableReason } from "../lib/actions";
 import { dashboardUrl } from "../lib/yamldoc";
 import { s } from "../strings";
 import { ActionDialog } from "./service/action-dialog";
@@ -23,21 +24,22 @@ interface Pending {
 }
 
 function ActionBar({ detail, onAction }: { detail: ServiceDetail; onAction: (a: ActionName) => void }) {
-  const spec = detail.document.spec;
-  const has = (a: ActionName) => {
-    if (a === "deploy" || a === "rollback") return !!spec.source;
-    if (a === "backup") return !!spec.backup;
-    if (a === "run-job") return Object.keys(spec.jobs ?? {}).length > 0;
-    return a !== "retire";
-  };
+  // Actions the document does not configure (no source, backup or jobs) are
+  // hidden; the others stay visible and explain why they are disabled.
+  const shown = new Set(detail.actions.filter((a) => a.reason !== "notConfigured").map((a) => a.action));
   const order: ActionName[] = ["start", "stop", "restart", "backup", "run-job", "rollback", "deploy"];
   return (
     <div className="row" role="group" aria-label={s.service.actionsGroup}>
-      {order.filter(has).map((a) => (
-        <button key={a} type="button" className={`btn${a === "deploy" ? " primary" : ""}`} onClick={() => onAction(a)}>
-          {s.actionName[a]}
-        </button>
-      ))}
+      {order
+        .filter((a) => shown.has(a))
+        .map((a) => {
+          const reason = unavailableReason(detail, a);
+          return (
+            <button key={a} type="button" className={`btn${a === "deploy" ? " primary" : ""}`} disabled={reason !== ""} title={reason || undefined} onClick={() => onAction(a)}>
+              {s.actionName[a]}
+            </button>
+          );
+        })}
     </div>
   );
 }

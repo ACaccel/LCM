@@ -256,6 +256,29 @@ type serviceDetailDTO struct {
 	DeployedVersion string           `json:"deployedVersion"`
 	LastDeployment  *deploymentDTO   `json:"lastDeployment"`
 	ManagedBy       *managedByDTO    `json:"managedBy"`
+	// Actions tells the console which action buttons to offer, so that it
+	// does not repeat the server's rules.
+	Actions []actionAvailabilityDTO `json:"actions"`
+}
+
+type actionAvailabilityDTO struct {
+	Action  string  `json:"action"`
+	Allowed bool    `json:"allowed"`
+	Reason  *string `json:"reason"`
+}
+
+func toActionAvailability(rec *catalog.Record) []actionAvailabilityDTO {
+	avail := catalog.AvailableActions(rec)
+	out := make([]actionAvailabilityDTO, 0, len(avail))
+	for _, a := range avail {
+		d := actionAvailabilityDTO{Action: a.Action, Allowed: a.Allowed}
+		if a.Reason != "" {
+			reason := a.Reason
+			d.Reason = &reason
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +307,7 @@ func (s *Server) handleGetService(w http.ResponseWriter, r *http.Request) {
 		serviceDocDTO: doc, Name: rec.Name, Host: rec.Host, State: string(rec.State), StateSince: rec.StateSince,
 		CreatedAt: rec.CreatedAt, Health: string(monitor.HealthUnknown), Checks: []checkStatusDTO{}, Alerts: alerts,
 		DeployedVersion: deployedVersion(deps), ManagedBy: s.managedFor(r, model.KindService, name),
+		Actions: toActionAvailability(rec),
 	}
 	if out.Alerts == nil {
 		out.Alerts = []monitor.Alert{}

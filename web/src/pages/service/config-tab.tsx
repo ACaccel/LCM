@@ -12,6 +12,7 @@ import { useToast } from "../../components/toast";
 import { Async, ErrorBox, Spinner } from "../../components/ui";
 import { ValidationReport } from "../../components/validation";
 import { YamlEditor } from "../../components/yaml-editor-lazy";
+import { unavailableReason } from "../../lib/actions";
 import { formatTime } from "../../lib/format";
 import { docToYaml } from "../../lib/yamldoc";
 import { s } from "../../strings";
@@ -311,7 +312,7 @@ export function ConfigTab({ detail, onAction }: { detail: ServiceDetail; onActio
           <History detail={detail} onRestored={() => setDraft(null)} />
           <div className="panel">
             <div className="row">
-              <button type="button" className="btn danger" onClick={() => onAction("retire")}>
+              <button type="button" className="btn danger" disabled={unavailableReason(detail, "retire") !== ""} title={unavailableReason(detail, "retire") || undefined} onClick={() => onAction("retire")}>
                 {s.actionName["retire"]}
               </button>
               <button type="button" className="btn danger" onClick={() => setConfirmDelete(true)}>

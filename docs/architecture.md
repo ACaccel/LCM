@@ -34,7 +34,7 @@ A typical loop: a health check fails, `monitor` publishes a `health.changed` sig
 | `internal/app` | Builds all components in dependency order, runs the background loops, shuts down in reverse. The only place that connects components. |
 | `internal/store` | SQLite with one writer connection and a reader pool; numbered migrations applied at startup. |
 | `internal/engine` | Compiles policies into plans and runs them; checkpoints every node so runs survive restarts. |
-| `internal/catalog` | Service documents and versions, the lifecycle state machine, deployments, timeline; the `Manager` performs actions under a durable lock. |
+| `internal/catalog` | Service documents and versions, the lifecycle state machine, deployments, timeline; the `Manager` performs actions under a durable lock, refuses actions the runtime cannot perform (an external service, a command runtime without that command) and reconciles states with the runtimes every minute. |
 | `internal/monitor` | Health checks, history, rollups, health aggregation and alert ingestion. |
 | `internal/trigger` | `trigger.*` nodes and the watchers behind them (signals, git polling, cron, webhooks). |
 | `internal/configsync` | Policy-as-code: applies documents from files or git, tracks ownership, drift and conflicts. |

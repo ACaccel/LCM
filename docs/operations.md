@@ -47,7 +47,7 @@ The `lcm` service builds and installs LCM like any other service; the auto-deplo
 
 1. `trigger.git` sees the commit; `ci.status` waits for CI (unauthenticated GitHub API, 60 requests per hour per IP).
 2. `lifecycle.deploy` fetches and detaches `work/lcm` at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`.
-3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks that it answers `lcm version`, keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. The runtime's start, stop and restart commands are `true` for the same reason.
+3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks that it answers `lcm version`, keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step.
 4. The verification restarts `lcm.service` and waits up to 60 s for `/api/v1/health` to report the new version. If it does not, it restores `lcm.prev` (keeping the rejected binary as `lcm.failed`), restarts again, logs at error priority and leaves the transient unit failed.
 5. The policy's `wait.until` was suspended across the restart and resumes in the new process. The service's `version` check passes only when the running server reports the version of the binary built in the checkout, so after a verification rollback the service stays unhealthy, the wait times out after 3 minutes and `lifecycle.rollback` rebuilds and reinstalls the previous successful commit.
 
@@ -114,7 +114,7 @@ Back up `secrets/` separately and store it more carefully than the database. A r
 2. Install the new binary (`lcm version` shows the build) and `sudo systemctl restart lcm`. With [self-deploy](#self-deploy) this happens on every merge to `main`.
 3. Schema migrations run at startup and are not reversible: to go back, restore the backup together with the old binary.
 
-On start LCM reconciles service states with reality and resumes interrupted policy runs, so a restart during a deployment is safe; a deployment that was cut off is marked interrupted.
+On start, and every minute afterwards, LCM reconciles service states with reality and resumes interrupted policy runs, so a restart during a deployment is safe; a deployment that was cut off is marked interrupted.
 
 ## Resource use
 

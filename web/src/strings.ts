@@ -194,6 +194,11 @@ export const s = {
     needPreview: "請先預覽 (dry-run)，確認步驟後才能執行。",
     trackerFallback: "即時連線中斷，改以輪詢追蹤進度。",
     destructive: "此動作會改變正在執行的服務。",
+    unavailable: {
+      unsupported: "這個服務的 runtime 無法執行此動作（external 服務，或 command runtime 未設定對應指令）",
+      invalidState: (state: string) => `目前狀態「${state}」不能執行此動作`,
+      notConfigured: "服務設定缺少此動作需要的項目",
+    },
   },
   timeline: {
     title: "時間軸",

@@ -263,6 +263,38 @@ func TestCommand(t *testing.T) {
 	}
 }
 
+func TestCommandWithoutActions(t *testing.T) {
+	s := svc(t, "type: command\n    status: ./status.sh")
+	f := &execx.Fake{}
+	a := adapter(t, f, s)
+	ctx := context.Background()
+	for _, err := range []error{a.Start(ctx, s), a.Stop(ctx, s), a.Restart(ctx, s)} {
+		if !errors.Is(err, rt.ErrUnsupported) {
+			t.Fatalf("want ErrUnsupported, got %v", err)
+		}
+	}
+	if len(f.Calls()) != 0 {
+		t.Fatalf("missing commands must not run anything: %v", f.Displays())
+	}
+}
+
+func TestCapabilitiesOf(t *testing.T) {
+	cases := map[string]rt.Capabilities{
+		"type: systemd\n    unit: a.service":           {Start: true, Stop: true, Restart: true},
+		"type: external":                               {},
+		"type: command\n    status: s":                 {},
+		"type: command\n    start: a\n    stop: b":     {Start: true, Stop: true, Restart: true},
+		"type: command\n    start: a":                  {Start: true},
+		"type: command\n    restart: r\n    status: s": {Restart: true},
+		"type: command\n    stop: b\n    restart: r":   {Stop: true, Restart: true},
+	}
+	for doc, want := range cases {
+		if got := rt.CapabilitiesOf(svc(t, doc).Spec.Runtime); got != want {
+			t.Errorf("%q: %+v, want %+v", doc, got, want)
+		}
+	}
+}
+
 func TestExternal(t *testing.T) {
 	s := svc(t, "type: external")
 	f := &execx.Fake{}

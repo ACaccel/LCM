@@ -46,6 +46,9 @@ func (m *Manager) Restart(ctx context.Context, name string, opts ActionOptions) 
 // restartOrStart restarts an active service and starts an inactive one,
 // since not every runtime's restart brings up stopped processes.
 func (s *session) restartOrStart(ctx context.Context) error {
+	if !rt.CapabilitiesOf(s.svc.Spec.Runtime).Start {
+		return s.adapter.Restart(ctx, s.svc)
+	}
 	if st, err := s.adapter.Status(ctx, s.svc); err == nil && st.State != rt.StateActive && st.State != rt.StateUnknown {
 		return s.adapter.Start(ctx, s.svc)
 	}
@@ -53,11 +56,11 @@ func (s *session) restartOrStart(ctx context.Context) error {
 }
 
 // Retire stops the service and marks it retired, the terminal state. The
-// stop is skipped for services that are not running and for external ones,
-// which LCM cannot stop.
+// stop is skipped for services that are not running and for runtimes that
+// cannot stop them.
 func (m *Manager) Retire(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionRetire, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
-		if s.cur == StateRunning || s.cur == StateFailed {
+		if (s.cur == StateRunning || s.cur == StateFailed) && rt.CapabilitiesOf(s.svc.Spec.Runtime).Stop {
 			if err := s.adapter.Stop(ctx, s.svc); err != nil && !errors.Is(err, rt.ErrUnsupported) {
 				s.settle(ctx, false)
 				return err

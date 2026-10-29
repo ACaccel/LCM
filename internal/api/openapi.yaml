@@ -2185,7 +2185,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/ServiceDoc"
         - type: object
-          required: [name, host, state, stateSince, createdAt, health, healthSince, checks, alerts, deployedVersion, lastDeployment, managedBy]
+          required: [name, host, state, stateSince, createdAt, health, healthSince, checks, alerts, deployedVersion, lastDeployment, managedBy, actions]
           properties:
             name: { type: string }
             host: { type: string }
@@ -2206,6 +2206,20 @@ components:
                 - $ref: "#/components/schemas/Deployment"
                 - type: "null"
             managedBy: { $ref: "#/components/schemas/ManagedBy" }
+            actions:
+              description: Whether each action can start now. Rollback may still find no target; the dry-run is definitive.
+              type: array
+              items: { $ref: "#/components/schemas/ActionAvailability" }
+    ActionAvailability:
+      type: object
+      required: [action, allowed, reason]
+      properties:
+        action: { $ref: "#/components/schemas/ActionName" }
+        allowed: { type: boolean }
+        reason:
+          description: "Why the action is unavailable: notConfigured (no source, backup or jobs), unsupported (the runtime cannot do it), invalidState (not allowed in the current state); null when allowed."
+          type: [string, "null"]
+          enum: [notConfigured, unsupported, invalidState, null]
     ServiceVersionInfo:
       type: object
       required: [version, createdAt, createdBy, restoredFrom]

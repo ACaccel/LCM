@@ -77,6 +77,7 @@ func TestDecodeServiceRuntimes(t *testing.T) {
 		"command all":   "type: command\n    start: a\n    stop: b\n    restart: c\n    status: d",
 		"external":      "type: external",
 		"command empty": "type: command\n    start: a\n    stop: b\n    status: ''",
+		"status only":   "type: command\n    status: d",
 	}
 	for name, rt := range ok {
 		t.Run("ok/"+name, func(t *testing.T) {
@@ -102,8 +103,6 @@ func TestDecodeServiceRuntimes(t *testing.T) {
 		{"compose relative file", "type: compose\n    project: p\n    file: a.yml", "spec.runtime.file", "absolute"},
 		{"compose unclean file", "type: compose\n    project: p\n    file: /srv/../a.yml", "spec.runtime.file", "absolute"},
 		{"compose upper project", "type: compose\n    project: P\n    file: /a.yml", "spec.runtime.project", "lowercase"},
-		{"command no start", "type: command\n    stop: x", "spec.runtime.start", "required"},
-		{"command no stop", "type: command\n    start: x", "spec.runtime.stop", "required"},
 		{"command with scope", "type: command\n    start: x\n    stop: y\n    scope: user", "spec.runtime.scope", "not valid"},
 		{"external with unit", "type: external\n    unit: a.service", "spec.runtime.unit", "not valid"},
 	}

@@ -1524,6 +1524,17 @@ export interface components {
             deployedVersion: string;
             lastDeployment: components["schemas"]["Deployment"] | null;
             managedBy: components["schemas"]["ManagedBy"];
+            /** @description Whether each action can start now. Rollback may still find no target; the dry-run is definitive. */
+            actions: components["schemas"]["ActionAvailability"][];
+        };
+        ActionAvailability: {
+            action: components["schemas"]["ActionName"];
+            allowed: boolean;
+            /**
+             * @description Why the action is unavailable: notConfigured (no source, backup or jobs), unsupported (the runtime cannot do it), invalidState (not allowed in the current state); null when allowed.
+             * @enum {string|null}
+             */
+            reason: "notConfigured" | "unsupported" | "invalidState" | null;
         };
         ServiceVersionInfo: {
             version: number;

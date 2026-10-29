@@ -409,7 +409,7 @@ func (a *App) Run(ctx context.Context) error {
 			fn()
 		}()
 	}
-	a.log.Info("starting background loops", "loops", []string{"triggers", "lock releaser", "monitor sync", "config sync", "retention"})
+	a.log.Info("starting background loops", "loops", []string{"triggers", "lock releaser", "monitor sync", "config sync", "retention", "reconcile"})
 	spawn("triggers", func() { a.Triggers.Run(runCtx) })
 	spawn("lock releaser", func() { a.releaser.Run(runCtx, a.Engine) })
 	spawn("monitor sync", func() {
@@ -418,6 +418,9 @@ func (a *App) Run(ctx context.Context) error {
 	spawn("config sync", func() { a.ConfigSync.Run(runCtx) })
 	spawn("retention", func() {
 		every(runCtx, a.Clock, a.Config.PruneInterval, nil, a.retentionJobs)
+	})
+	spawn("reconcile", func() {
+		every(runCtx, a.Clock, reconcileInterval, nil, a.reconcileStates)
 	})
 
 	serveErr := make(chan error, 1)

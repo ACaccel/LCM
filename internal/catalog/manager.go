@@ -43,6 +43,7 @@ var (
 	ErrNoRollbackTarget = precondition("catalog: no earlier successful deployment to roll back to")
 	ErrNoBackup         = precondition("catalog: service has no backup command")
 	ErrUnknownJob       = precondition("catalog: service has no such job")
+	ErrUnsupported      = precondition("catalog: the service's runtime cannot perform this action")
 )
 
 // Locker serializes actions on a service across holders. Acquire must not
@@ -211,6 +212,10 @@ func (m *Manager) open(ctx context.Context, name, action string, opts ActionOpti
 	if !CanAct(action, rec.State) {
 		s.close()
 		return nil, &StateError{Service: name, Action: action, State: rec.State}
+	}
+	if err := checkRuntime(action, rec.Spec); err != nil {
+		s.close()
+		return nil, err
 	}
 	adapter, err := m.runtimes.For(rec.Spec)
 	if err != nil {

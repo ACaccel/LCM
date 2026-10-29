@@ -52,6 +52,28 @@ type Adapter interface {
 	Restart(ctx context.Context, svc *model.Service) error
 }
 
+// Capabilities lists the process actions a service's runtime can perform.
+// Status is always available; it reports unknown when it cannot tell.
+type Capabilities struct {
+	Start   bool `json:"start"`
+	Stop    bool `json:"stop"`
+	Restart bool `json:"restart"`
+}
+
+// CapabilitiesOf derives the capabilities from the runtime configuration
+// alone. External services support nothing; a command runtime supports the
+// actions that have a command, and restart also when it can stop and start.
+func CapabilitiesOf(r model.Runtime) Capabilities {
+	switch r.Type {
+	case model.RuntimeExternal:
+		return Capabilities{}
+	case model.RuntimeCommand:
+		start, stop := r.Start != "", r.Stop != ""
+		return Capabilities{Start: start, Stop: stop, Restart: r.Restart != "" || (start && stop)}
+	}
+	return Capabilities{Start: true, Stop: true, Restart: true}
+}
+
 // Options configure the adapters.
 type Options struct {
 	// Systemctl is the systemctl binary; default "systemctl".

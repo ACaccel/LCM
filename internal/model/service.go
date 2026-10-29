@@ -74,7 +74,8 @@ type Runtime struct {
 	// compose
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	File    string `yaml:"file,omitempty" json:"file,omitempty"`
-	// command: shell commands per action
+	// command: shell commands per action; each is optional and an action
+	// without one is not offered
 	Start   string `yaml:"start,omitempty" json:"start,omitempty"`
 	Stop    string `yaml:"stop,omitempty" json:"stop,omitempty"`
 	Restart string `yaml:"restart,omitempty" json:"restart,omitempty"`
@@ -254,12 +255,9 @@ func validateRuntime(r *Runtime, is *Issues) {
 			is.addf(base+".file", "must be a clean absolute path")
 		}
 	case RuntimeCommand:
+		// Every command is optional: a missing one makes the action
+		// unsupported instead of pretending to perform it.
 		forbid(merge(systemd, docker, compose))
-		for _, f := range []struct{ name, value string }{{"start", r.Start}, {"stop", r.Stop}} {
-			if f.value == "" {
-				is.addf(base+"."+f.name, "is required")
-			}
-		}
 		for name, v := range command {
 			if len(v) > maxCmdLen {
 				is.addf(base+"."+name, "exceeds %d bytes", maxCmdLen)

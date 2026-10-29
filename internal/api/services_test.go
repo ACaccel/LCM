@@ -27,6 +27,14 @@ func TestServiceCRUDAndVersions(t *testing.T) {
 		d["lastDeployment"] != nil || len(d["checks"].([]any)) != 0 || len(d["alerts"].([]any)) != 0 {
 		t.Fatalf("detail = %v", d)
 	}
+	actions := map[string]any{}
+	for _, a := range d["actions"].([]any) {
+		m := a.(map[string]any)
+		actions[m["action"].(string)] = m["reason"]
+	}
+	if len(actions) != 8 || actions["start"] != nil || actions["deploy"] != "notConfigured" || actions["rollback"] != "notConfigured" {
+		t.Fatalf("actions = %v", d["actions"])
+	}
 
 	// Update needs the current version.
 	upd := serviceDoc("web", "  dependsOn: [db]\n")

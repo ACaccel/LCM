@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/execx"
 )
 
 const checkedService = `
@@ -34,22 +36,26 @@ func TestCatalogChangeReachesMonitor(t *testing.T) {
 	h := newHarness(t)
 	before := h.clk.Pending()
 	h.run()
-	// Trigger sync, lock sweep, monitor sync and retention each arm one
-	// timer once their first pass is done.
+	// Trigger sync, lock sweep, monitor sync, retention and reconcile each
+	// arm one timer once their first pass is done.
 	h.waitTimers(before + loopTimers)
 
-	base := h.clk.Pending()
 	h.putService(checkedService)
-	// Scheduling a check arms its first-run timer.
-	h.waitTimers(base + 1)
-	if _, ok := h.app.Monitor.Service("cache"); !ok {
-		t.Fatal("monitor does not know the new service")
+	// A loop may still arm its timer after the first pass, so wait for the
+	// effect rather than for a timer count.
+	deadline := time.Now().Add(waitTimeout)
+	for time.Now().Before(deadline) {
+		if _, ok := h.app.Monitor.Service("cache"); ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("monitor does not know the new service")
 }
 
 // loopTimers is the number of clock timers the loops started by Run hold
 // once each has finished its first pass.
-const loopTimers = 4
+const loopTimers = 5
 
 func TestMonitorSyncSkipsRetiredAndRestoresOnStart(t *testing.T) {
 	h := newHarness(t)
@@ -167,6 +173,55 @@ spec:
 	if locks != 0 {
 		t.Errorf("expired locks left = %d", locks)
 	}
+}
+
+// The reconcile loop keeps lifecycle states true after startup: a service
+// started outside LCM is adopted as running, and one that stops outside LCM
+// is marked failed, without any action.
+func TestReconcileLoopFollowsTheRuntime(t *testing.T) {
+	var active atomic.Bool
+	active.Store(true)
+	h := newHarness(t, func(o *testOpts) {
+		o.runner.On(func(c execx.Cmd) bool { return strings.Contains(c.Display(), "app-status") }, func(execx.Cmd) (execx.Result, error) {
+			if active.Load() {
+				return execx.Result{}, nil
+			}
+			return execx.Result{ExitCode: 3}, &execx.ExitError{Code: 3}
+		})
+	})
+	h.putService(`
+apiVersion: lcm/v1
+kind: Service
+metadata: { name: app }
+spec:
+  runtime: { type: command, start: app-start, stop: app-stop, status: app-status }
+`)
+	state := func() catalog.State {
+		rec, err := h.app.Catalog.Get(h.ctx, "app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec.State
+	}
+	waitState := func(want catalog.State) {
+		t.Helper()
+		deadline := time.Now().Add(waitTimeout)
+		for state() != want && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got := state(); got != want {
+			t.Fatalf("state = %s, want %s", got, want)
+		}
+	}
+
+	base := h.clk.Pending()
+	h.run()
+	h.waitTimers(base + loopTimers)
+	waitState(catalog.StateRunning)
+
+	active.Store(false)
+	h.clk.Advance(time.Minute)
+	waitState(catalog.StateFailed)
 }
 
 // Policies compile against the module store, and the deployed version keeps

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ACaccel/lcm/internal/model"
+	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
 // Plan describes what an action would do, without doing it.
@@ -26,7 +27,11 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 	if !CanAct(action, rec.State) {
 		return Plan{}, &StateError{Service: name, Action: action, State: rec.State}
 	}
+	if err := checkRuntime(action, rec.Spec); err != nil {
+		return Plan{}, err
+	}
 	svc := rec.Spec
+	caps := rt.CapabilitiesOf(svc.Spec.Runtime)
 	p := Plan{Service: name, Action: action, From: rec.State, To: rec.State}
 	p.Steps = append(p.Steps, "lock "+LockName(name))
 	target := describeRuntime(svc.Spec.Runtime)
@@ -43,7 +48,7 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 		p.Steps = append(p.Steps, "restart (or start when inactive) "+target)
 	case ActionRetire:
 		p.To = StateRetired
-		if rec.State == StateRunning || rec.State == StateFailed {
+		if (rec.State == StateRunning || rec.State == StateFailed) && caps.Stop {
 			p.Steps = append(p.Steps, "stop "+target)
 		}
 	case ActionBackup:
@@ -113,6 +118,9 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 	}
 	if src.Install != "" {
 		steps = append(steps, "install: "+src.Install)
+	}
+	if !rt.CapabilitiesOf(rec.Spec.Spec.Runtime).Restart {
+		return append(steps, "skip restart: the runtime cannot restart this service, so the install step must apply the new version"), nil
 	}
 	return append(steps, "restart "+describeRuntime(rec.Spec.Spec.Runtime)), nil
 }

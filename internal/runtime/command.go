@@ -11,7 +11,8 @@ import (
 
 // command runs the operator's shell commands. The status command reports
 // through its exit code: 0 is active, any other code is inactive; a command
-// that cannot be run at all yields unknown.
+// that cannot be run at all yields unknown. An action without a command is
+// unsupported (see CapabilitiesOf).
 type command struct {
 	run  execx.Runner
 	opts Options
@@ -35,6 +36,9 @@ func (c *command) Status(ctx context.Context, svc *model.Service) (Status, error
 }
 
 func (c *command) exec(ctx context.Context, name, script string) error {
+	if script == "" {
+		return fmt.Errorf("%w: %s (the service has no %s command)", ErrUnsupported, name, name)
+	}
 	_, err := run(ctx, c.run, execx.Cmd{Shell: script, Timeout: c.opts.ActionTimeout})
 	if err != nil {
 		return fmt.Errorf("%s command: %w", name, err)
@@ -53,8 +57,12 @@ func (c *command) Stop(ctx context.Context, svc *model.Service) error {
 // Restart uses the restart command when configured and stop followed by
 // start otherwise.
 func (c *command) Restart(ctx context.Context, svc *model.Service) error {
-	if r := svc.Spec.Runtime.Restart; r != "" {
-		return c.exec(ctx, "restart", r)
+	r := svc.Spec.Runtime
+	if r.Restart != "" {
+		return c.exec(ctx, "restart", r.Restart)
+	}
+	if r.Start == "" || r.Stop == "" {
+		return c.exec(ctx, "restart", "")
 	}
 	if err := c.Stop(ctx, svc); err != nil {
 		return err

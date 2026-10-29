@@ -8,6 +8,19 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 )
 
+// reconcileInterval is how often lifecycle states are compared with what
+// the runtimes report, so that a service stopped or started outside LCM
+// does not keep a state that is no longer true.
+const reconcileInterval = time.Minute
+
+// reconcileStates runs Manager.Reconcile; the manager audits and records
+// each correction, so only failures are logged here.
+func (a *App) reconcileStates(ctx context.Context) {
+	if _, err := a.Manager.Reconcile(ctx); err != nil && ctx.Err() == nil {
+		a.log.Error("service reconciliation incomplete", "error", err)
+	}
+}
+
 // every runs fn immediately and then once per interval on clk until ctx
 // ends. The next wait starts after fn returns, so a slow job never overlaps
 // itself. kick, when non-nil, runs fn early.

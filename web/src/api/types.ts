@@ -15,6 +15,7 @@ export type ServiceVersionInfo = S["ServiceVersionInfo"];
 export type ServiceVersion = S["ServiceVersion"];
 export type ManagedBy = NonNullable<S["ManagedBy"]>;
 export type ActionName = S["ActionName"];
+export type ActionAvailability = S["ActionAvailability"];
 export type ActionPlan = S["ActionPlan"];
 export type Action = S["Action"];
 export type ActionResult = S["ActionResult"];

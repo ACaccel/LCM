@@ -10,6 +10,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
+	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
 // ErrDeployFailed is matched by the error of a deployment whose pipeline
@@ -38,7 +39,9 @@ var gitEnv = []string{"GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
 // Deploy updates the service to opts.Version, or to the head of the
 // configured branch. The source repository must have no uncommitted
 // changes to tracked files; it is detached at the target commit, built,
-// installed and the service restarted. There is no automatic rollback.
+// installed and the service restarted. A runtime that cannot restart the
+// service leaves applying the new version to the install step. There is no
+// automatic rollback.
 func (m *Manager) Deploy(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionDeploy, opts, func(ctx context.Context, s *session, res *ActionResult) error {
 		return s.deploy(ctx, res, opts.Version)
@@ -212,6 +215,10 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, log *stepLog,
 		}
 	}
 
+	if !rt.CapabilitiesOf(s.svc.Spec.Runtime).Restart {
+		log.note("skipping restart: the runtime cannot restart this service")
+		return sha, nil
+	}
 	log.note("restarting service")
 	if err := s.restartOrStart(ctx); err != nil {
 		log.note("error: %v", err)

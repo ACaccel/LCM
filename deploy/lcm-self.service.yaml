@@ -1,12 +1,13 @@
 # LCM deploying itself. Applied by deploy/seed.sh; docs/operations.md
 # explains the flow and the trust boundary.
 #
-# Runtime command: lcm.service is LCM itself, so LCM must not restart it
-# from inside a deployment (the restart would kill the process recording the
-# deployment). start, stop and restart are therefore no-ops; the install
-# step's self-install schedules the restart 3s later in a separate systemd
-# unit, verifies the new version and restores the previous binary when it
-# does not become healthy.
+# Runtime command: lcm.service is LCM itself, so LCM must not stop or restart
+# it (the restart would kill the process recording the deployment). The
+# runtime therefore only reports status: start, stop and restart are not
+# offered, and a deployment skips its restart step. The install step's
+# self-install schedules the restart 3s later in a separate systemd unit,
+# verifies the new version and restores the previous binary when it does not
+# become healthy.
 #
 # Checks: "api" is the health endpoint. "version" passes only when the
 # running server reports the version of the binary built in the checkout,
@@ -21,9 +22,6 @@ spec:
   runtime:
     type: command
     status: systemctl is-active --quiet lcm.service
-    start: "true"
-    stop: "true"
-    restart: "true"
   source:
     repo: /var/lib/lcm/work/lcm
     branch: main
