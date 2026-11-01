@@ -20,6 +20,8 @@ type Type string
 
 // Event types.
 const (
+	// TypeMachine announces committed machine events independently of service signals.
+	TypeMachine Type = "machine"
 	// TypeSignal carries a signal.Signal published on the bus.
 	TypeSignal Type = "signal"
 	// TypeRun carries an engine run event (queued, started, finished, ...).
@@ -36,7 +38,7 @@ const (
 )
 
 // Types lists every event type.
-var Types = []Type{TypeSignal, TypeRun, TypeNode, TypeTimeline, TypeAction, TypeCatalog}
+var Types = []Type{TypeSignal, TypeRun, TypeNode, TypeTimeline, TypeAction, TypeCatalog, TypeMachine}
 
 // Valid reports whether t is a known event type.
 func (t Type) Valid() bool {
@@ -51,6 +53,7 @@ func (t Type) Valid() bool {
 // Event is one entry of the feed. Service, Policy and Run route the event
 // to filtered subscribers; Data is the JSON-serializable payload.
 type Event struct {
+	Machine string
 	// ID increases with every published event.
 	ID      uint64
 	Type    Type
@@ -64,6 +67,7 @@ type Event struct {
 // Filter restricts a subscription. Empty fields match everything; the
 // non-empty ones must all match.
 type Filter struct {
+	Machine string
 	Service string
 	Policy  string
 	Run     string
@@ -72,6 +76,9 @@ type Filter struct {
 
 // Match reports whether e passes the filter.
 func (f Filter) Match(e Event) bool {
+	if f.Machine != "" && e.Machine != f.Machine {
+		return false
+	}
 	if f.Service != "" && e.Service != f.Service {
 		return false
 	}

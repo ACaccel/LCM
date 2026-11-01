@@ -89,8 +89,20 @@ func (s *Syncer) RequestSync(ctx context.Context, name string) (started bool, er
 		return false, err
 	}
 	s.mu.Lock()
+	inactive := s.life.Err() != nil || s.inflight[name] > 0
+	s.mu.Unlock()
+	if inactive {
+		return false, nil
+	}
+	// The background job owns its lease independently of the request context.
+	jctx, release, err := s.gate.Acquire(auth.WithActor(s.life, actor))
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
 	if s.life.Err() != nil || s.inflight[name] > 0 {
 		s.mu.Unlock()
+		release()
 		return false, nil
 	}
 	s.inflight[name]++
@@ -99,8 +111,8 @@ func (s *Syncer) RequestSync(ctx context.Context, name string) (started bool, er
 
 	go func() {
 		defer s.jobs.Done()
+		defer release()
 		defer s.end(name)
-		jctx := auth.WithActor(s.life, actor)
 		rep := s.syncSource(jctx, src, true)
 		outcome := audit.OutcomeOK
 		if rep.Error != "" {
@@ -124,6 +136,11 @@ func (s *Syncer) Close() {
 // syncSource fetches the source and applies its documents. A sync that
 // finds the same commit as last time does nothing unless force is set.
 func (s *Syncer) syncSource(ctx context.Context, src Source, force bool) Report {
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return Report{Source: src.Name, Previous: src.LastCommit, Error: err.Error()}
+	}
+	defer release()
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 

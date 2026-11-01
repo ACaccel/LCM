@@ -472,15 +472,17 @@ func cronRestart(t *testing.T, catchUp string) (*env, []engine.RunView) {
 	t.Helper()
 	x := newEnv(t, nil, "")
 	x.h.Deploy(x.e, policy("job", trig("trigger.cron", `{ schedule: "0 * * * *", catchUp: `+catchUp+` }`)))
+	baseTimers := x.h.Clock.Pending()
 	x.sync(t)
-	x.timers(1) // lastFire = 00:00 persisted
+	x.timers(baseTimers + 1) // The cron timer is armed after lastFire is persisted.
 	x.m.Close()
 
 	// Down from 00:00 to 03:30: the 01:00, 02:00 and 03:00 fires are missed.
 	x.h.Clock.Advance(3*time.Hour + 30*time.Minute)
 	x.m = x.newManager(t, nil, "")
+	baseTimers = x.h.Clock.Pending()
 	x.sync(t)
-	x.timers(1)
+	x.timers(baseTimers + 1)
 	var views []engine.RunView
 	for _, ev := range x.h.Events.Events() {
 		if ev.Kind == engine.EventRunQueued && ev.Policy == "job" {

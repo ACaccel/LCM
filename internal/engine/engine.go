@@ -17,6 +17,7 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/expr"
+	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/store"
@@ -28,6 +29,8 @@ type Config struct {
 	Registry *node.Registry
 	// Modules resolves module references at deploy and validate time.
 	Modules ModuleResolver
+	// Gate coordinates policy writes and run admission with machine maintenance; optional.
+	Gate *maintenance.Gate
 	// Workers is the size of the shared worker pool; 0 selects
 	// max(GOMAXPROCS*2, 4).
 	Workers int
@@ -67,6 +70,7 @@ type Engine struct {
 	db          *store.DB
 	reg         *node.Registry
 	modules     ModuleResolver
+	gate        *maintenance.Gate
 	clock       clock.Clock
 	log         *slog.Logger
 	audit       *audit.Log
@@ -136,7 +140,7 @@ func New(cfg Config) (*Engine, error) {
 		names = append(names, v.Name)
 	}
 	e := &Engine{
-		db: cfg.DB, reg: cfg.Registry, modules: cfg.Modules, clock: cfg.Clock, log: cfg.Logger,
+		db: cfg.DB, reg: cfg.Registry, modules: cfg.Modules, gate: cfg.Gate, clock: cfg.Clock, log: cfg.Logger,
 		audit: cfg.Audit, interceptor: cfg.Interceptor, vars: vars, varNames: names,
 		sched: newScheduler(), journal: newJournal(cfg.DB, cfg.Logger),
 		obs:    newObservers(cfg.Observers, cfg.Logger),
@@ -251,6 +255,11 @@ func (e *Engine) Deploy(ctx context.Context, doc []byte) (int, error) {
 	if _, err := actorFrom(ctx); err != nil {
 		return 0, err
 	}
+	ctx, release, err := e.gate.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	version, name, err := e.deploy(ctx, doc)
 	target := "policy:" + name
 	if name == "" {
@@ -292,7 +301,12 @@ func (e *Engine) Undeploy(ctx context.Context, name string) error {
 	if _, err := actorFrom(ctx); err != nil {
 		return err
 	}
-	err := e.undeploy(ctx, name)
+	ctx, release, err := e.gate.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	err = e.undeploy(ctx, name)
 	e.record(ctx, "policy.undeploy", "policy:"+name, err, nil)
 	return err
 }
@@ -334,9 +348,18 @@ func (e *Engine) undeploy(ctx context.Context, name string) error {
 
 // SetPaused pauses or unpauses a deployed policy. A paused policy rejects
 // new events with ErrPolicyPaused; runs already started continue.
+// Pausing remains available during maintenance; unpausing requires a lease.
 func (e *Engine) SetPaused(ctx context.Context, name string, paused bool) error {
 	if _, err := actorFrom(ctx); err != nil {
 		return err
+	}
+	if !paused {
+		leased, release, err := e.gate.Acquire(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
+		ctx = leased
 	}
 	action := "policy.unpause"
 	if paused {
@@ -420,7 +443,13 @@ func (e *Engine) limitLocked(name string, fallback *Plan) int {
 // with ErrDropped. Start writes an audit entry when ctx carries an actor
 // (calls made on behalf of a person or token); trigger subsystems call it
 // with a context without an actor.
+// The maintenance lease covers admission, not the asynchronous run lifetime.
 func (e *Engine) Start(ctx context.Context, policy, triggerNode string, event any, mode Mode) (string, error) {
+	ctx, release, err := e.gate.Acquire(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	id, err := e.start(ctx, policy, triggerNode, event, mode)
 	if _, ok := auth.ActorFrom(ctx); ok {
 		target := "policy:" + policy
@@ -563,11 +592,17 @@ func (e *Engine) fillLocked(g *group, fallback *Plan) []*run {
 // Resume resumes a suspended node whose suspension key matches. payload is
 // passed to the node as RunContext.Resumed.Payload and stored before Resume
 // returns, so a resume survives a restart. The actor comes from ctx.
+// Maintenance rejects a resume before its checkpoint is changed.
 func (e *Engine) Resume(ctx context.Context, runID, nodeID, key string, payload any) error {
 	if _, err := actorFrom(ctx); err != nil {
 		return err
 	}
-	err := e.resume(ctx, runID, nodeID, key, payload)
+	ctx, release, err := e.gate.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	err = e.resume(ctx, runID, nodeID, key, payload)
 	e.record(ctx, "run.resume", "run:"+runID, err, map[string]any{"node": nodeID})
 	return err
 }

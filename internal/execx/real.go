@@ -1,6 +1,7 @@
 package execx
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -93,6 +94,7 @@ func (r *Real) Run(ctx context.Context, c Cmd) (Result, error) {
 	} else {
 		cmd = exec.CommandContext(runCtx, c.Argv[0], c.Argv[1:]...) //nolint:gosec // argv comes from validated configuration
 	}
+	cmd.Stdin = bytes.NewReader(c.Stdin)
 	cmd.Dir = c.Dir
 	cmd.Env = r.environ(c.Env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

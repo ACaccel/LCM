@@ -10,6 +10,8 @@ import (
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/lock"
+	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
@@ -46,6 +48,16 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		busy   *lock.BusyError
 	)
 	switch {
+	case errors.Is(err, machine.ErrNotFound):
+		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
+	case errors.Is(err, machine.ErrExists):
+		writeError(w, http.StatusConflict, codeAlreadyExists, publicMessage(err), details(nil))
+	case errors.Is(err, machine.ErrConflict):
+		writeError(w, http.StatusConflict, codeVersionConflict, publicMessage(err), details(nil))
+	case errors.Is(err, machine.ErrForbidden):
+		writeError(w, http.StatusForbidden, codeForbidden, publicMessage(err), details(nil))
+	case errors.Is(err, machine.ErrPrecondition), errors.Is(err, machine.ErrUnsupported), errors.Is(err, maintenance.ErrActive):
+		writeError(w, http.StatusConflict, codePrecondition, publicMessage(err), details(nil))
 	case errors.As(err, &issues):
 		d := details(map[string]any{"issues": issuesBody(issues)})
 		writeError(w, http.StatusUnprocessableEntity, codeValidation, "validation failed", d)

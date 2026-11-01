@@ -28,6 +28,9 @@ import (
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/lock"
+	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/machine/power"
+	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/node"
@@ -54,11 +57,13 @@ const shutdownTimeout = 10 * time.Second
 type Option func(*options)
 
 type options struct {
-	clock  clock.Clock
-	log    *slog.Logger
-	runner execx.Runner
-	client *http.Client
-	git    trigger.GitRunner
+	machineObserver machine.Observer
+	machinePower    machine.PowerBackend
+	clock           clock.Clock
+	log             *slog.Logger
+	runner          execx.Runner
+	client          *http.Client
+	git             trigger.GitRunner
 
 	observers []engine.Observer
 }
@@ -73,6 +78,16 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.log = l } }
 // WithRunner replaces the command runner behind runtime adapters, lifecycle
 // commands and command-backed health checks.
 func WithRunner(r execx.Runner) Option { return func(o *options) { o.runner = r } }
+
+// WithMachineObserver substitutes telemetry without reading the test host.
+func WithMachineObserver(observer machine.Observer) Option {
+	return func(o *options) { o.machineObserver = observer }
+}
+
+// WithMachinePower substitutes the privileged boundary for deterministic tests.
+func WithMachinePower(backend machine.PowerBackend) Option {
+	return func(o *options) { o.machinePower = backend }
+}
 
 // WithHTTPClient replaces the HTTP client of the network, notify and
 // flow nodes.
@@ -89,23 +104,26 @@ func WithObservers(obs ...engine.Observer) Option {
 // App is a fully wired LCM process. The exported components are for the
 // HTTP layer and tests; callers must not Close them individually.
 type App struct {
-	Config   config.Config
-	DB       *store.DB
-	Audit    *audit.Log
-	Auth     *auth.Service
-	Bus      *signal.Bus
-	Events   *events.Hub
-	Secrets  *secret.Resolver
-	State    *state.Store
-	Locks    *lock.Manager
-	Runtimes *rt.Registry
-	Catalog  *catalog.Catalog
-	Manager  *catalog.Manager
-	Monitor  *monitor.Monitor
-	Modules  *modules.Store
-	Registry *node.Registry
-	Engine   *engine.Engine
-	Triggers *trigger.Manager
+	Machines       *machine.Manager
+	Maintenance    *maintenance.Gate
+	controllerLock *os.File
+	Config         config.Config
+	DB             *store.DB
+	Audit          *audit.Log
+	Auth           *auth.Service
+	Bus            *signal.Bus
+	Events         *events.Hub
+	Secrets        *secret.Resolver
+	State          *state.Store
+	Locks          *lock.Manager
+	Runtimes       *rt.Registry
+	Catalog        *catalog.Catalog
+	Manager        *catalog.Manager
+	Monitor        *monitor.Monitor
+	Modules        *modules.Store
+	Registry       *node.Registry
+	Engine         *engine.Engine
+	Triggers       *trigger.Manager
 	// ConfigSync applies documents and syncs config sources (policy-as-code).
 	ConfigSync *configsync.Syncer
 	Clock      clock.Clock
@@ -125,10 +143,13 @@ type App struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	// loops tracks the goroutines Run starts; Close waits for them.
-	loops     sync.WaitGroup
-	started   atomic.Bool
-	closeOnce sync.Once
-	closeErr  error
+	loops            sync.WaitGroup
+	started          atomic.Bool
+	closeOnce        sync.Once
+	closeErr         error
+	recoveryDeferred atomic.Bool
+	automationReady  chan struct{}
+	automationOnce   sync.Once
 }
 
 // New validates cfg, builds and recovers all components and binds the
@@ -180,6 +201,10 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		}
 	}()
 
+	if a.controllerLock, err = lockController(cfg.DataDir); err != nil {
+		return nil, err
+	}
+
 	// Binding first makes a port conflict fail before recovery restarts
 	// runs or touches services.
 	if a.listener, err = net.Listen("tcp", cfg.Listen); err != nil {
@@ -211,6 +236,24 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Secrets = secret.New(cfg.SecretsPath(), secret.WithLogger(log.With("component", "secret")))
 	a.State = state.New(a.DB, state.WithClock(clk.Now))
 	a.Locks = lock.New(a.DB, lock.WithClock(clk), lock.WithAudit(a.Audit))
+	a.Maintenance = maintenance.New(a.DB)
+	observer := o.machineObserver
+	if observer == nil {
+		observer = machineObserver{runner: machineRunner{runner: o.runner, systemctl: cfg.Systemctl, journalctl: cfg.Journalctl}, clock: clk}
+	}
+	backend := o.machinePower
+	if backend == nil {
+		backend = machinePower{enabled: cfg.MachinePower, client: power.Client{Runner: o.runner}, runner: o.runner, pending: "/run/lcm-self-install.pending"}
+	}
+	a.Machines, err = machine.New(machine.Config{DB: a.DB, Audit: a.Audit, Clock: clk, Gate: a.Maintenance, Observer: observer, Power: backend, MaintenancePreflight: controllerUpdatePending, Log: log.With("component", "machine"), RawRetention: cfg.MonitorRawRetention, RollupRetention: cfg.MonitorRollupRetention, EventRetention: cfg.TimelineRetention, OnEvent: func(e machine.Event) {
+		a.Events.Publish(events.Event{Type: events.TypeMachine, Machine: e.MachineID, Data: e})
+	}})
+	if err != nil {
+		return nil, err
+	}
+	if err = a.Machines.Reconcile(ctx); err != nil {
+		return nil, fmt.Errorf("machine recovery: %w", err)
+	}
 	ready("secrets", "dir", cfg.SecretsPath())
 
 	a.Runtimes = rt.NewRegistry(o.runner, rt.Options{
@@ -224,7 +267,8 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	// the initial sync in Run.
 	var kick atomic.Pointer[monitorSyncer]
 	a.Catalog, err = catalog.New(catalog.Config{
-		DB: a.DB, Audit: a.Audit, Bus: a.Bus, Clock: clk, Log: log.With("component", "catalog"),
+		Gate: a.Maintenance,
+		DB:   a.DB, Audit: a.Audit, Bus: a.Bus, Clock: clk, Log: log.With("component", "catalog"),
 		OnChange: func() {
 			if s := kick.Load(); s != nil {
 				s.Kick()
@@ -261,7 +305,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.syncer = newMonitorSyncer(a.Catalog, a.Monitor, log.With("component", "monitor"))
 	kick.Store(a.syncer)
 
-	if a.Modules, err = modules.New(a.DB, a.Audit, clk); err != nil {
+	if a.Modules, err = modules.New(a.DB, a.Audit, clk, modules.WithGate(a.Maintenance)); err != nil {
 		return nil, err
 	}
 	a.Registry = node.NewRegistry()
@@ -281,7 +325,8 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	// first sync.
 	var triggers lateObserver
 	a.Engine, err = engine.New(engine.Config{
-		DB: a.DB, Registry: a.Registry, Modules: a.Modules, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
+		Gate: a.Maintenance,
+		DB:   a.DB, Registry: a.Registry, Modules: a.Modules, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
 		Logger:    log.With("component", "engine"),
 		Observers: append([]engine.Observer{a.releaser, &triggers, a.Events.Observer()}, o.observers...),
 		Vars:      []engine.Var{a.State.Var(), serviceVar(a.Catalog, a.Monitor)},
@@ -306,6 +351,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	// The sync loop starts in Run, after recovery, so that a pulled
 	// document never races a recovering run.
 	a.ConfigSync, err = configsync.New(configsync.Config{
+		Machines: a.Machines, Gate: a.Maintenance,
 		DB: a.DB, Audit: a.Audit, Catalog: a.Catalog, Modules: a.Modules, Engine: a.Engine,
 		Checks: a.Monitor, Bus: a.Bus, Runner: o.runner, Git: cfg.Git, Dir: cfg.SourcesPath(),
 		Clock: clk, Log: log.With("component", "configsync"),
@@ -324,13 +370,21 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	} else if len(changes) > 0 {
 		log.Info("reconciled service states", "changes", len(changes))
 	}
-	if err := a.Engine.Recover(ctx); err != nil {
+	a.automationReady = make(chan struct{})
+	if err := a.Engine.Recover(ctx); errors.Is(err, engine.ErrRecoveryDeferred) {
+		a.recoveryDeferred.Store(true)
+		log.Info("automation recovery deferred until maintenance exits")
+	} else if err != nil {
 		log.Error("engine recovery incomplete", "error", err)
+		a.automationOnce.Do(func() { close(a.automationReady) })
+	} else {
+		a.automationOnce.Do(func() { close(a.automationReady) })
 	}
 
 	info := buildinfo.Get()
 	a.api = api.New(api.Deps{
-		DB: a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
+		Machines: a.Machines,
+		DB:       a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
 		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now,
 		Catalog: a.Catalog, Manager: a.Manager, Monitor: a.Monitor, Engine: a.Engine, Triggers: a.Triggers,
 		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
@@ -409,13 +463,22 @@ func (a *App) Run(ctx context.Context) error {
 			fn()
 		}()
 	}
-	a.log.Info("starting background loops", "loops", []string{"triggers", "lock releaser", "monitor sync", "config sync", "retention", "reconcile"})
-	spawn("triggers", func() { a.Triggers.Run(runCtx) })
+	a.log.Info("starting background loops", "loops", []string{"triggers", "machines", "lock releaser", "monitor sync", "config sync", "retention", "reconcile"})
+	afterRecovery := func(fn func(context.Context)) {
+		select {
+		case <-runCtx.Done():
+			return
+		case <-a.automationReady:
+			fn(runCtx)
+		}
+	}
+	spawn("triggers", func() { afterRecovery(a.Triggers.Run) })
+	spawn("machines", func() { a.Machines.Run(runCtx) })
 	spawn("lock releaser", func() { a.releaser.Run(runCtx, a.Engine) })
 	spawn("monitor sync", func() {
 		every(runCtx, a.Clock, monitorSyncInterval, a.syncer.kick, a.syncer.syncQuietly)
 	})
-	spawn("config sync", func() { a.ConfigSync.Run(runCtx) })
+	spawn("config sync", func() { afterRecovery(a.ConfigSync.Run) })
 	spawn("retention", func() {
 		every(runCtx, a.Clock, a.Config.PruneInterval, nil, a.retentionJobs)
 	})
@@ -524,6 +587,11 @@ func (a *App) Close(ctx context.Context) error {
 			}
 		}
 		a.closeErr = errors.Join(errs...)
+		if a.controllerLock != nil {
+			if err := a.controllerLock.Close(); err != nil {
+				a.closeErr = errors.Join(a.closeErr, err)
+			}
+		}
 	})
 	return a.closeErr
 }

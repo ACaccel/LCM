@@ -21,6 +21,7 @@ const (
 
 // eventEnvelope is the data of every server-sent event.
 type eventEnvelope struct {
+	Machine string    `json:"machine,omitempty"`
 	ID      uint64    `json:"id"`
 	Type    string    `json:"type"`
 	Time    time.Time `json:"time"`
@@ -36,7 +37,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	filter := events.Filter{Service: q.Get("service"), Run: q.Get("run"), Policy: q.Get("policy")}
+	filter := events.Filter{Service: q.Get("service"), Run: q.Get("run"), Policy: q.Get("policy"), Machine: q.Get("machine")}
 	for _, raw := range q["types"] {
 		for t := range strings.SplitSeq(raw, ",") {
 			t = strings.TrimSpace(t)
@@ -91,7 +92,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			data, err := json.Marshal(eventEnvelope{
-				ID: e.ID, Type: string(e.Type), Time: e.Time.UTC(), Service: e.Service, Policy: e.Policy, Run: e.Run, Data: e.Data,
+				Machine: e.Machine,
+				ID:      e.ID, Type: string(e.Type), Time: e.Time.UTC(), Service: e.Service, Policy: e.Policy, Run: e.Run, Data: e.Data,
 			})
 			if err != nil {
 				s.log.Warn("event not serializable", "type", e.Type, "error", err)

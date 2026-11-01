@@ -70,7 +70,22 @@ func (e *Engine) compileStored(ctx context.Context, v versionRow) (*Plan, error)
 //
 // Recover runs at most once. Policies or runs that cannot be restored are
 // reported in the returned error while the rest are recovered.
+// If the maintenance gate denies admission, Recover returns ErrRecoveryDeferred
+// wrapping the gate error without changing state. Call it again after maintenance
+// ends, before starting trigger producers. The lease covers recovery itself;
+// recovered runs acquire their own service action leases through the catalog.
 func (e *Engine) Recover(ctx context.Context) error {
+	if e.recovered.Load() {
+		return ErrAlreadyRecovered
+	}
+	if e.closing.Load() {
+		return ErrClosed
+	}
+	ctx, release, err := e.gate.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrRecoveryDeferred, err)
+	}
+	defer release()
 	if !e.recovered.CompareAndSwap(false, true) {
 		return ErrAlreadyRecovered
 	}

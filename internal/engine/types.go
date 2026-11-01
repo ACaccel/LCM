@@ -72,6 +72,8 @@ var (
 	ErrValueTooLarge     = errors.New("engine: value too large")
 	ErrAlreadyRecovered  = errors.New("engine: recover already ran")
 	ErrNotPolicy         = errors.New("engine: only Policy documents can be deployed")
+	// ErrRecoveryDeferred means recovery made no changes and can be retried.
+	ErrRecoveryDeferred = errors.New("engine: recovery deferred")
 )
 
 // Context causes that tell the engine why a node context ended.

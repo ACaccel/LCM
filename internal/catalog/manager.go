@@ -275,6 +275,11 @@ func (s *session) settle(ctx context.Context, alwaysFailed bool) {
 // action body, and the audit, timeline and completion records.
 func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOptions,
 	body func(ctx context.Context, s *session, res *ActionResult) error) (ActionResult, error) {
+	ctx, releaseGate, gateErr := m.cat.gate.Acquire(ctx)
+	if gateErr != nil {
+		return ActionResult{}, gateErr
+	}
+	defer releaseGate()
 
 	actor, err := requireActor(ctx)
 	if err != nil {

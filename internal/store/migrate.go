@@ -15,6 +15,18 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+// SchemaVersion is the newest storage version this binary understands.
+func SchemaVersion() (int, error) {
+	ms, err := loadMigrations()
+	if err != nil {
+		return 0, err
+	}
+	if len(ms) == 0 {
+		return 0, fmt.Errorf("store: no migrations")
+	}
+	return ms[len(ms)-1].version, nil
+}
+
 type migration struct {
 	version int
 	name    string
@@ -78,6 +90,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if err := rows.Scan(&v); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("store: scan schema_migrations: %w", err)
+		}
+		if len(ms) > 0 && v > ms[len(ms)-1].version {
+			_ = rows.Close()
+			return fmt.Errorf("store: database schema %d is newer than supported schema %d", v, ms[len(ms)-1].version)
 		}
 		applied[v] = true
 	}

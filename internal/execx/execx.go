@@ -16,10 +16,15 @@ import (
 // zero. Only the tail is kept because failures are reported at the end.
 const DefaultMaxOutput = 64 << 10
 
+// MaxStdin bounds structured input independently of output capture.
+const MaxStdin = 64 << 10
+
 // Cmd describes one command. Exactly one of Argv and Shell must be set.
 type Cmd struct {
 	// Argv is executed directly, without a shell.
 	Argv []string
+	// Stdin is bounded input; its contents are never included in Display.
+	Stdin []byte
 	// Shell is a script run as `sh -c Shell`. Use it only for commands
 	// written by the operator, never for values taken from untrusted input.
 	Shell string
@@ -63,6 +68,8 @@ func quoteIfNeeded(s string) string {
 
 func (c Cmd) validate() error {
 	switch {
+	case len(c.Stdin) > MaxStdin:
+		return errors.New("execx: stdin exceeds limit")
 	case len(c.Argv) > 0 && c.Shell != "":
 		return errors.New("execx: set either Argv or Shell, not both")
 	case len(c.Argv) == 0 && strings.TrimSpace(c.Shell) == "":

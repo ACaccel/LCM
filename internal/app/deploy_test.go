@@ -182,6 +182,21 @@ func TestSelfInstallRefusesBadInvocations(t *testing.T) {
 	e.expectUntouched()
 }
 
+func TestSelfInstallRefusesSchemaChangeBeforeReplacement(t *testing.T) {
+	for _, oldSchema := range []string{"10", "unknown"} {
+		t.Run(oldSchema, func(t *testing.T) {
+			e := newSelfInstallEnv(t)
+			e.write(e.bin, "#!/bin/sh\nif [ \"$1\" = storage-schema ]; then echo "+oldSchema+"; else echo 'lcm v1 (c1) now'; fi\n")
+			e.write(e.src, "#!/bin/sh\nif [ \"$1\" = storage-schema ]; then echo 11; else echo 'lcm v2 (c2) now'; fi\n")
+			code, out := e.run(nil, e.src)
+			if code != 1 || !strings.Contains(out, "storage schema unknown or changed") {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+			e.expectUntouched()
+		})
+	}
+}
+
 func TestSelfInstallRefusesUnsafeSources(t *testing.T) {
 	e := newSelfInstallEnv(t)
 	secret := filepath.Join(e.root, "secret")

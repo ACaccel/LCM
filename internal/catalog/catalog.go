@@ -39,6 +39,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
+	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/store"
@@ -54,6 +55,7 @@ var (
 
 // Config configures a Catalog.
 type Config struct {
+	Gate  *maintenance.Gate
 	DB    *store.DB
 	Audit *audit.Log
 	// Bus receives lifecycle signals; optional.
@@ -87,6 +89,7 @@ const (
 
 // Catalog stores services and their history.
 type Catalog struct {
+	gate     *maintenance.Gate
 	db       *store.DB
 	audit    *audit.Log
 	bus      *signal.Bus
@@ -103,6 +106,7 @@ func New(cfg Config) (*Catalog, error) {
 		return nil, errors.New("catalog: DB and Audit are required")
 	}
 	c := &Catalog{db: cfg.DB, audit: cfg.Audit, bus: cfg.Bus, clk: cfg.Clock, log: cfg.Log, onChange: cfg.OnChange, onDoc: cfg.OnDocument, onTL: cfg.OnTimeline}
+	c.gate = cfg.Gate
 	if c.clk == nil {
 		c.clk = clock.Real()
 	}
@@ -200,6 +204,11 @@ func (c *Catalog) Put(ctx context.Context, data []byte, expected int) (PutResult
 }
 
 func (c *Catalog) put(ctx context.Context, svc *model.Service, expected, restoredFrom int) (PutResult, error) {
+	ctx, release, gateErr := c.gate.Acquire(ctx)
+	if gateErr != nil {
+		return PutResult{}, gateErr
+	}
+	defer release()
 	actor, err := requireActor(ctx)
 	if err != nil {
 		return PutResult{}, err
@@ -338,6 +347,11 @@ func (c *Catalog) Restore(ctx context.Context, name string, version, expected in
 // timeline stay. Services must be out of any running action; running ones
 // are retired first so that deleting never orphans a live process.
 func (c *Catalog) Delete(ctx context.Context, name string) error {
+	ctx, release, gateErr := c.gate.Acquire(ctx)
+	if gateErr != nil {
+		return gateErr
+	}
+	defer release()
 	actor, err := requireActor(ctx)
 	if err != nil {
 		return err

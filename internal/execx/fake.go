@@ -51,7 +51,8 @@ func (f *Fake) Run(ctx context.Context, c Cmd) (Result, error) {
 		return Result{ExitCode: -1}, fmt.Errorf("%s: %w", c.Display(), err)
 	}
 	f.mu.Lock()
-	f.calls = append(f.calls, c)
+	c = cloneCmd(c)
+	f.calls = append(f.calls, cloneCmd(c))
 	var h Handler
 	for _, r := range f.rules {
 		if r.match(c) {
@@ -70,7 +71,11 @@ func (f *Fake) Run(ctx context.Context, c Cmd) (Result, error) {
 func (f *Fake) Calls() []Cmd {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]Cmd(nil), f.calls...)
+	calls := make([]Cmd, len(f.calls))
+	for i, c := range f.calls {
+		calls[i] = cloneCmd(c)
+	}
+	return calls
 }
 
 // Displays returns the Display form of every recorded command.
@@ -88,4 +93,11 @@ func (f *Fake) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = nil
+}
+
+func cloneCmd(c Cmd) Cmd {
+	c.Argv = append([]string(nil), c.Argv...)
+	c.Env = append([]string(nil), c.Env...)
+	c.Stdin = append([]byte(nil), c.Stdin...)
+	return c
 }

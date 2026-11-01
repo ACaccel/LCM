@@ -100,6 +100,8 @@ func Head(data []byte) (kind model.Kind, name string) {
 // "policies" and so on.
 func ParseKind(s string) (model.Kind, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "machine", "machines":
+		return model.KindMachine, nil
 	case "service", "services", "svc":
 		return model.KindService, nil
 	case "policy", "policies":
@@ -107,5 +109,5 @@ func ParseKind(s string) (model.Kind, error) {
 	case "module", "modules":
 		return model.KindModule, nil
 	}
-	return "", errors.New("kind must be service, policy or module")
+	return "", errors.New("kind must be service, machine, policy or module")
 }

@@ -173,3 +173,34 @@ func TestFake(t *testing.T) {
 		t.Fatal("Reset kept calls")
 	}
 }
+
+func TestBoundedStdin(t *testing.T) {
+	input := []byte("structured input\n")
+	res, err := execx.New().Run(context.Background(), execx.Cmd{Argv: []string{"cat"}, Stdin: input})
+	if err != nil || res.Output != string(input) {
+		t.Fatalf("stdin = %q, %v", res.Output, err)
+	}
+	for _, runner := range []execx.Runner{execx.New(), &execx.Fake{}} {
+		if _, err := runner.Run(context.Background(), execx.Cmd{Argv: []string{"cat"}, Stdin: make([]byte, execx.MaxStdin+1)}); err == nil {
+			t.Fatal("oversized stdin accepted")
+		}
+	}
+	f := &execx.Fake{}
+	cmd := execx.Cmd{Argv: []string{"helper"}, Stdin: input}
+	if _, err := f.Run(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	input[0] = 'X'
+	calls := f.Calls()
+	if string(calls[0].Stdin) != "structured input\n" {
+		t.Fatal("recorded stdin aliased caller")
+	}
+	calls[0].Stdin[0] = 'Y'
+	calls[0].Argv[0] = "changed"
+	if got := f.Calls()[0]; string(got.Stdin) != "structured input\n" || got.Argv[0] != "helper" {
+		t.Fatal("Calls exposed mutable backing storage")
+	}
+	if strings.Contains(cmd.Display(), "structured") {
+		t.Fatal("Display exposed stdin")
+	}
+}

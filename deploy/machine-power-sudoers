@@ -1,0 +1,3 @@
+# Example only; provision separately after the machine recovery gates are ready.
+# The final empty argument string restricts this rule to no arguments.
+lcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm-machine-power ""

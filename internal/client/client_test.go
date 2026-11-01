@@ -119,3 +119,24 @@ func TestUnreachableServer(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRequestHeadersKeepAuthenticationOwnedByClient(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-Match") != `"7"` || r.Header.Get("Authorization") != "Bearer real-token" || r.Header.Get("User-Agent") != "lcm-cli" {
+			t.Errorf("headers: %v", r.Header)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+	c, err := client.New(ts.URL, "real-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := http.Header{"If-Match": {`"7"`}, "Authorization": {"Bearer wrong-token"}, "User-Agent": {"untrusted"}}
+	if _, err := c.Do(context.Background(), client.Request{Method: "POST", Path: "/machines/workstation/maintenance", Header: headers}); err != nil {
+		t.Fatal(err)
+	}
+	if headers.Get("Authorization") != "Bearer wrong-token" {
+		t.Fatal("Do mutated caller headers")
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
 )
@@ -140,6 +141,19 @@ type current struct {
 // currentOf reads a resource; a nil result means it does not exist.
 func (s *Syncer) currentOf(ctx context.Context, ref Ref) (*current, error) {
 	switch ref.Kind {
+	case model.KindMachine:
+		if s.machines == nil {
+			return nil, ErrMachinesUnavailable
+		}
+		rec, err := s.machines.Get(ctx, ref.Name)
+		if errors.Is(err, machine.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		b, err := model.Encode(rec.Document)
+		return &current{version: rec.Version, canon: string(b)}, err
 	case model.KindService:
 		rec, err := s.cat.Get(ctx, ref.Name)
 		if errors.Is(err, catalog.ErrNotFound) {
@@ -230,6 +244,9 @@ func (s *Syncer) Ownership(ctx context.Context, source string) ([]Ownership, err
 // Owner returns the ownership of one resource, or nil when it is managed
 // through the web UI and API only.
 func (s *Syncer) Owner(ctx context.Context, kind model.Kind, name string) (*Ownership, error) {
+	if kind == model.KindMachine && s.machines == nil {
+		return nil, ErrMachinesUnavailable
+	}
 	r, err := s.loadOwn(ctx, Ref{kind, name})
 	if err != nil || r == nil {
 		return nil, err
@@ -251,6 +268,14 @@ func (s *Syncer) Resolve(ctx context.Context, kind model.Kind, name string, useG
 	if _, ok := actorOf(ctx); !ok {
 		return Ownership{}, audit.ErrNoActor
 	}
+	if kind == model.KindMachine && s.machines == nil {
+		return Ownership{}, ErrMachinesUnavailable
+	}
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return Ownership{}, err
+	}
+	defer release()
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	ref := Ref{kind, name}
@@ -329,6 +354,14 @@ func (s *Syncer) Release(ctx context.Context, kind model.Kind, name string) erro
 	if _, ok := actorOf(ctx); !ok {
 		return audit.ErrNoActor
 	}
+	if kind == model.KindMachine && s.machines == nil {
+		return ErrMachinesUnavailable
+	}
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	ref := Ref{kind, name}

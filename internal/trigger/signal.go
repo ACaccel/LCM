@@ -3,6 +3,7 @@ package trigger
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/ACaccel/lcm/internal/signal"
 )
@@ -44,6 +45,10 @@ func (w *signalWatcher) run(ctx context.Context) {
 
 // matchSignal reports whether sig passes every configured filter.
 func matchSignal(p SignalProps, sig signal.Signal) bool {
+	// New machine sources must not widen legacy service wildcard subscriptions.
+	if strings.HasPrefix(string(sig.Kind), "machine.") && !slices.Contains(p.Kinds, string(sig.Kind)) {
+		return false
+	}
 	if len(p.Kinds) > 0 && !slices.Contains(p.Kinds, string(sig.Kind)) {
 		return false
 	}

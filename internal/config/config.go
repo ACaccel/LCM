@@ -108,6 +108,8 @@ var DefaultAlertServiceLabels = []string{"lcm_service", "service"}
 
 // Config is the validated runtime configuration.
 type Config struct {
+	Journalctl   string
+	MachinePower bool
 	Listen       string
 	DataDir      string
 	LogFormat    string
@@ -172,6 +174,7 @@ type Config struct {
 // Default returns the configuration used when nothing is set.
 func Default() Config {
 	return Config{
+		Journalctl: "journalctl",
 		Listen:     DefaultListen,
 		DataDir:    DefaultDataDir,
 		LogFormat:  DefaultLogFormat,
@@ -277,6 +280,15 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	str(&c.SystemctlPrivilege, EnvSystemctlPrivilege)
 	str(&c.Docker, EnvDocker)
 	str(&c.Git, EnvGit)
+	str(&c.Journalctl, "LCM_JOURNALCTL")
+	if v := getenv("LCM_MACHINE_POWER"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("LCM_MACHINE_POWER: invalid boolean"))
+		} else {
+			c.MachinePower = b
+		}
+	}
 	dur(&c.RuntimeStatusTimeout, EnvRuntimeStatusTimeout)
 	dur(&c.RuntimeActionTimeout, EnvRuntimeActionTimeout)
 	dur(&c.LockTTL, EnvLockTTL)
@@ -327,6 +339,8 @@ func (l stringList) Set(s string) error {
 // RegisterFlags registers every setting as a flag on fs. The current field
 // values (defaults plus environment) become the flag defaults.
 func (c *Config) RegisterFlags(fs *flag.FlagSet) {
+	fs.StringVar(&c.Journalctl, "journalctl", c.Journalctl, "journalctl binary (LCM_JOURNALCTL)")
+	fs.BoolVar(&c.MachinePower, "machine-power", c.MachinePower, "enable the separately installed restricted machine helper (LCM_MACHINE_POWER)")
 	fs.StringVar(&c.Listen, "listen", c.Listen, "listen address ("+EnvListen+")")
 	c.RegisterDataDirFlag(fs)
 	fs.StringVar(&c.LogFormat, "log-format", c.LogFormat, "log format: text or json ("+EnvLogFormat+")")
@@ -393,6 +407,9 @@ func (c Config) Validate() error {
 
 func (c Config) validateComponents() []error {
 	var errs []error
+	if strings.TrimSpace(c.Journalctl) == "" {
+		errs = append(errs, errors.New("journalctl binary must not be empty"))
+	}
 	positive := func(name string, d time.Duration) {
 		if d <= 0 {
 			errs = append(errs, fmt.Errorf("%s %s: must be positive", name, d))

@@ -66,6 +66,8 @@ type Request struct {
 	Query       url.Values
 	Body        []byte
 	ContentType string
+	// Header supplies request metadata such as If-Match. Authentication is always set by Client.
+	Header http.Header
 }
 
 // Response is a successful (2xx) answer.
@@ -122,6 +124,10 @@ func (c *Client) Do(ctx context.Context, r Request) (*Response, error) {
 	req, err := http.NewRequestWithContext(ctx, r.Method, target, body)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header = r.Header.Clone()
+	if req.Header == nil {
+		req.Header = make(http.Header)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("User-Agent", "lcm-cli")

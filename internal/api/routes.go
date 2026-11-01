@@ -34,6 +34,7 @@ func (s *Server) routes() http.Handler {
 	}
 	admin, session, ingest := s.requireAdmin, s.requireSession, s.requireAny
 	const v1 = "/api/v1"
+	s.machineRoutes(handle)
 
 	// Public.
 	handle("GET", v1+"/health", s.handleHealth)

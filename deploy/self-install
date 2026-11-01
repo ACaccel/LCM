@@ -62,6 +62,21 @@ version_of() {
 	printf '%s\n' "$2"
 }
 
+# schema_of rejects binaries that cannot report storage compatibility.
+schema_of() {
+	out=$(as_user timeout 10 "$1" storage-schema 2>/dev/null) || return 1
+	case $out in '' | *[!0-9]*) return 1 ;; esac
+	[ "${#out}" -le 9 ] || return 1
+	printf '%s\n' "$out"
+}
+
+# Automatic fallback is safe only when both binaries understand the same schema.
+same_schema() {
+	a_schema=$(schema_of "$1") || return 1
+	b_schema=$(schema_of "$2") || return 1
+	[ "$a_schema" = "$b_schema" ]
+}
+
 # healthy waits until the health endpoint reports version $1.
 healthy() {
 	deadline=$(($(date +%s) + wait_s))
@@ -75,7 +90,10 @@ healthy() {
 }
 
 # restore puts lcm.prev back in place atomically.
-restore() { cp -p -- "$bin.prev" "$bin.new" && mv -f -- "$bin.new" "$bin"; }
+restore() {
+	same_schema "$bin" "$bin.prev" || die 1 "automatic binary rollback refused: storage schema unknown or changed; restore a matching DB and binary in maintenance"
+	cp -p -- "$bin.prev" "$bin.new" && mv -f -- "$bin.new" "$bin"
+}
 
 install_binary() {
 	[ "$1" = "$src" ] || die 2 "refusing argument '$1': only $src is accepted"
@@ -94,6 +112,10 @@ install_binary() {
 	as_user timeout 120 cat -- "$src" >"$bin.new" || { rm -f -- "$bin.new"; die 1 "cannot read $src"; }
 	chmod 0755 -- "$bin.new"
 	new=$(version_of "$bin.new") || { rm -f -- "$bin.new"; die 1 "$src fails 'lcm version'"; }
+	if [ -f "$bin" ] && ! same_schema "$bin" "$bin.new"; then
+		rm -f -- "$bin.new"
+		die 1 "storage schema unknown or changed; use a maintenance upgrade with a consistent DB backup and matching rollback"
+	fi
 	if [ -f "$bin" ]; then
 		cp -p -- "$bin" "$bin.prev.tmp"
 		mv -f -- "$bin.prev.tmp" "$bin.prev"

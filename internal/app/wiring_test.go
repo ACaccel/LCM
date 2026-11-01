@@ -55,7 +55,7 @@ func TestCatalogChangeReachesMonitor(t *testing.T) {
 
 // loopTimers is the number of clock timers the loops started by Run hold
 // once each has finished its first pass.
-const loopTimers = 5
+const loopTimers = 7
 
 func TestMonitorSyncSkipsRetiredAndRestoresOnStart(t *testing.T) {
 	h := newHarness(t)

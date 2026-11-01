@@ -3,6 +3,266 @@
  */
 
 export interface paths {
+    "/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list Machines */
+        get: operations["listMachines"];
+        put?: never;
+        /** create Machine */
+        post: operations["createMachine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get Machine */
+        get: operations["getMachine"];
+        /** put Machine */
+        put: operations["putMachine"];
+        post?: never;
+        /** unmanage Machine */
+        delete: operations["unmanageMachine"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/phase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** set Machine Phase */
+        post: operations["setMachinePhase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list Machine Versions */
+        get: operations["listMachineVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/versions/{v}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get Machine Version */
+        get: operations["getMachineVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** restore Machine */
+        post: operations["restoreMachine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/observe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** observe Machine */
+        post: operations["observeMachine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list Machine History */
+        get: operations["listMachineHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list Machine Events */
+        get: operations["listMachineEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get Machine Capabilities */
+        get: operations["getMachineCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/maintenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get Machine Maintenance */
+        get: operations["getMachineMaintenance"];
+        put?: never;
+        /** enter Machine Maintenance */
+        post: operations["enterMachineMaintenance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/maintenance/exit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** exit Machine Maintenance */
+        post: operations["exitMachineMaintenance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** list Machine Operations */
+        get: operations["listMachineOperations"];
+        put?: never;
+        /** submit Machine Operation */
+        post: operations["submitMachineOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** get Machine Operation */
+        get: operations["getMachineOperation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/operations/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** resolve Machine Operation */
+        post: operations["resolveMachineOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1227,6 +1487,7 @@ export interface paths {
          *
          *     Event types and their `data` payloads:
          *
+         *     - `machine`: a committed normalized Machine event; reload durable APIs after reconnect.
          *     - `signal`: a signal from the bus (check, health, lifecycle, alert).
          *     - `run`: a run event (`run.queued`, `run.started`, `run.suspended`,
          *       `run.resumed`, `run.finished`).
@@ -1246,10 +1507,272 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/machine-archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List archived machine registrations */
+        get: operations["listMachineArchives"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/machines/{machine}/maintenance/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["previewMachineMaintenance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        MachineMaintenancePreview: {
+            machineId: string;
+            version: number;
+            hash: string;
+            partialCoverage: boolean;
+            controllerOffline: boolean;
+            manualPowerOn: boolean;
+            workloads: {
+                name: string;
+                version: number;
+                state: string;
+                autostart: string;
+            }[];
+        };
+        MachineCoverage: {
+            state: string;
+            reason?: string;
+        };
+        MachineThresholds: {
+            cpuPercent: number;
+            memoryPercent: number;
+            diskPercent: number;
+            consecutive: number;
+            hysteresis: number;
+        };
+        MachineMonitoring: {
+            interval: string;
+            staleAfter: string;
+            filesystems: string[];
+            interfaces?: string[];
+            units?: string[];
+            journal: boolean;
+            thresholds: components["schemas"]["MachineThresholds"];
+        };
+        MachineDocument: {
+            /** @constant */
+            apiVersion: "lcm/v1";
+            /** @constant */
+            kind: "Machine";
+            metadata: {
+                name: string;
+                labels?: {
+                    [key: string]: string;
+                };
+                annotations?: {
+                    [key: string]: string;
+                };
+            };
+            spec: {
+                /** @constant */
+                host: "local";
+                monitoring: components["schemas"]["MachineMonitoring"];
+            };
+        };
+        MachineFilesystem: {
+            path: string;
+            total: number;
+            available: number;
+            inodes: number;
+            freeInodes: number;
+        };
+        MachineSnapshot: {
+            id: number;
+            /** Format: date-time */
+            observedAt: string;
+            bootId: string;
+            os: string;
+            init: string;
+            uptimeSeconds: number;
+            cpuTotal: number;
+            cpuIdle: number;
+            cpuCount: number;
+            cpuPercent: number | null;
+            load?: number[];
+            memoryTotal: number;
+            memoryAvailable: number;
+            swapTotal: number;
+            swapFree: number;
+            filesystems: components["schemas"]["MachineFilesystem"][] | null;
+            interfaces?: {
+                [key: string]: string;
+            };
+            units?: {
+                [key: string]: string;
+            };
+            pressure?: {
+                [key: string]: number;
+            };
+            coverage: {
+                [key: string]: components["schemas"]["MachineCoverage"];
+            };
+        };
+        MachineStatus: {
+            snapshot: components["schemas"]["MachineSnapshot"] | null;
+            health: string;
+            reasons: string[];
+            identity: string;
+            journal: components["schemas"]["MachineCoverage"];
+            fresh: boolean;
+        };
+        MachineRecord: {
+            id: string;
+            name: string;
+            host: string;
+            version: number;
+            /** @enum {string} */
+            phase: "managed" | "retired" | "unmanaged";
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            document: components["schemas"]["MachineDocument"];
+            status: components["schemas"]["MachineStatus"];
+        };
+        MachineVersion: {
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["Actor"];
+            restoredFrom: number;
+            document: components["schemas"]["MachineDocument"];
+        };
+        MachineEvent: {
+            operationId?: string;
+            id: number;
+            machineId: string;
+            source: string;
+            kind: string;
+            severity: string;
+            /** Format: date-time */
+            occurredAt: string;
+            /** Format: date-time */
+            ingestedAt: string;
+            bootId?: string;
+            unit?: string;
+            historical: boolean;
+            reason?: string;
+        };
+        MachineCapability: {
+            action: string;
+            available: boolean;
+            reason: string;
+        };
+        MachineMaintenance: {
+            machineId: string;
+            state: string;
+            /** Format: date-time */
+            enteredAt: string;
+            actor: components["schemas"]["Actor"];
+            reason: string;
+            acknowledged: boolean;
+            preview: components["schemas"]["MachineMaintenancePreview"];
+        };
+        MachinePowerRequest: {
+            controllerId: string;
+            operationId: string;
+            requestHash: string;
+            action: string;
+            bootId: string;
+            /** Format: date-time */
+            deadline: string;
+            /** Format: date-time */
+            issuedAt: string;
+            /** Format: date-time */
+            validUntil: string;
+        };
+        MachineReceipt: {
+            state: string;
+            /** Format: date-time */
+            acceptedAt: string;
+            bootId: string;
+        };
+        MachineOperation: {
+            id: string;
+            machineId: string;
+            action: string;
+            state: string;
+            unresolved: boolean;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            actor: components["schemas"]["Actor"];
+            request: components["schemas"]["MachinePowerRequest"];
+            receipt: components["schemas"]["MachineReceipt"] | null;
+            reason: string;
+            resolution?: string;
+            resolvedBy?: components["schemas"]["Actor"];
+            /** Format: date-time */
+            resolvedAt?: string;
+            evidence?: components["schemas"]["MachineStatus"];
+        };
+        MachineThresholdsInput: {
+            cpuPercent?: number;
+            memoryPercent?: number;
+            diskPercent?: number;
+            consecutive?: number;
+            hysteresis?: number;
+        };
+        MachineMonitoringInput: {
+            interval?: string;
+            staleAfter?: string;
+            filesystems?: string[];
+            interfaces?: string[];
+            units?: string[];
+            journal?: boolean;
+            thresholds?: components["schemas"]["MachineThresholdsInput"];
+        };
+        MachineDocumentInput: {
+            /** @constant */
+            apiVersion: "lcm/v1";
+            /** @constant */
+            kind: "Machine";
+            metadata: {
+                name: string;
+                labels?: {
+                    [key: string]: string;
+                };
+                annotations?: {
+                    [key: string]: string;
+                };
+            };
+            spec: {
+                /** @constant */
+                host?: "local";
+                monitoring?: components["schemas"]["MachineMonitoringInput"];
+            };
+        };
         ErrorEnvelope: {
             error: {
                 /** @description Machine-readable code such as `not_found` or `version_conflict`. */
@@ -2110,7 +2633,7 @@ export interface components {
             sources?: number;
         };
         /** @enum {string} */
-        EventType: "signal" | "run" | "node" | "timeline" | "action" | "catalog";
+        EventType: "signal" | "run" | "node" | "timeline" | "action" | "catalog" | "machine";
         /** @description Payload of `run` and `node` events, and of policy deployments in `catalog` events. */
         EngineEvent: {
             /** @enum {string} */
@@ -2154,6 +2677,8 @@ export interface components {
         };
         /** @description The `data` of every server-sent event. */
         EventEnvelope: {
+            /** @description Immutable Machine ID. */
+            machine?: string;
             /**
              * Format: int64
              * @description Increases with every event.
@@ -2166,7 +2691,7 @@ export interface components {
             policy?: string;
             run?: string;
             /** @description Depends on `type`. */
-            data: components["schemas"]["Signal"] | components["schemas"]["EngineEvent"] | components["schemas"]["TimelineEntry"] | components["schemas"]["Action"] | components["schemas"]["CatalogChange"];
+            data: components["schemas"]["Signal"] | components["schemas"]["EngineEvent"] | components["schemas"]["TimelineEntry"] | components["schemas"]["Action"] | components["schemas"]["CatalogChange"] | components["schemas"]["MachineEvent"];
         };
     };
     responses: {
@@ -2269,7 +2794,7 @@ export interface components {
         Policy: string;
         Module: string;
         SourceName: string;
-        OwnedKind: "service" | "policy" | "module";
+        OwnedKind: "service" | "policy" | "module" | "machine";
         OwnedName: string;
         Version: number;
         RunID: string;
@@ -2308,6 +2833,1073 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listMachines: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineRecord"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createMachine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachineDocumentInput"];
+                "application/yaml": components["schemas"]["MachineDocumentInput"];
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMachine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    putMachine: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachineDocumentInput"];
+                "application/yaml": components["schemas"]["MachineDocumentInput"];
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    unmanageMachine: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setMachinePhase: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    phase: "managed" | "retired";
+                };
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMachineVersions: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineVersion"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMachineVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+                v: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    restoreMachine: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    observeMachine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRecord"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMachineHistory: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                resolution?: "raw" | "minute";
+            };
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineSnapshot"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMachineEvents: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineEvent"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMachineCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineCapability"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMachineMaintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        maintenance: components["schemas"]["MachineMaintenance"] | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    enterMachineMaintenance: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                    acknowledged: boolean;
+                    previewHash: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        maintenance: components["schemas"]["MachineMaintenance"];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    exitMachineMaintenance: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMachineOperations: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineOperation"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    submitMachineOperation: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    action: "reboot" | "graceful-shutdown";
+                    idempotencyKey: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMachineOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    resolveMachineOperation: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getHealth: {
         parameters: {
             query?: never;
@@ -4305,6 +5897,8 @@ export interface operations {
     streamEvents: {
         parameters: {
             query?: {
+                /** @description Only committed events for this immutable Machine ID. */
+                machine?: string;
                 /** @description Only events about this service. */
                 service?: string;
                 /** @description Only events about this policy. */
@@ -4332,6 +5926,85 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    listMachineArchives: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["MachineRecord"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            /** @description Request rejected or unavailable. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Request rejected or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    previewMachineMaintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current known local workloads and partial coverage; review before entering maintenance. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineMaintenancePreview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
 }

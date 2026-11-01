@@ -11,6 +11,7 @@ import { s } from "../strings";
 const items = [
   { to: "/", label: s.nav.overview, end: true },
   { to: "/services", label: s.nav.services },
+  { to: "/machines", label: s.nav.machines },
   { to: "/timeline", label: s.nav.timeline },
   { to: "/policies", label: s.nav.policies },
   { to: "/runs", label: s.nav.runs },

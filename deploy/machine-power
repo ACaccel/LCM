@@ -1,0 +1,12 @@
+#!/bin/sh
+# Install at /usr/local/libexec/lcm-machine-power as root:root. The wrapper,
+# pinned helper binary and their ancestors must be unwritable by other users.
+# The helper is a separately provisioned copy, never the self-deploy binary.
+set -eu
+
+if [ "$#" -ne 0 ]; then
+	printf '%s\n' 'machine-power accepts no arguments' >&2
+	exit 2
+fi
+
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C /usr/local/libexec/lcm-machine-helper machine-helper

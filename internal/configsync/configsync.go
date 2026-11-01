@@ -1,4 +1,4 @@
-// Package configsync is policy-as-code: it applies Service, Policy and
+// Package configsync is policy-as-code: it applies Service, Machine, Policy and
 // Module documents from files or from git repositories, tracks which
 // resources a repository owns, and tells the operator when local edits and
 // the repository disagree.
@@ -45,7 +45,7 @@
 //
 // # Privileges
 //
-// Documents only describe services, policies and modules. Command
+// Documents only describe services, machines, policies and modules. Command
 // allowlists, the privilege prefix and the units LCM may touch live in the
 // host configuration and are never read from a document.
 package configsync
@@ -66,6 +66,8 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/signal"
@@ -76,6 +78,8 @@ import (
 var (
 	// ErrNotFound means a source or an ownership record does not exist.
 	ErrNotFound = errors.New("configsync: not found")
+	// ErrMachinesUnavailable rejects Machine requests when no manager is configured.
+	ErrMachinesUnavailable = errors.New("configsync: machine management is not available")
 	// ErrExists means a source with that name already exists.
 	ErrExists = errors.New("configsync: source already exists")
 )
@@ -99,6 +103,10 @@ type Config struct {
 	Catalog *catalog.Catalog
 	Modules *modules.Store
 	Engine  *engine.Engine
+	// Machines manages Machine documents; optional for legacy callers.
+	Machines *machine.Manager
+	// Gate coordinates complete writes with local machine maintenance; optional.
+	Gate *maintenance.Gate
 	// Checks validates service health checks; optional.
 	Checks CheckValidator
 	// Bus receives conflict notifications; optional.
@@ -118,19 +126,21 @@ type Config struct {
 
 // Syncer applies documents, owns the ownership table and runs the sources.
 type Syncer struct {
-	db      *store.DB
-	audit   *audit.Log
-	cat     *catalog.Catalog
-	mods    *modules.Store
-	eng     *engine.Engine
-	checks  CheckValidator
-	bus     *signal.Bus
-	runner  execx.Runner
-	gitBin  string
-	gitTime time.Duration
-	dir     string
-	clk     clock.Clock
-	log     *slog.Logger
+	db       *store.DB
+	audit    *audit.Log
+	cat      *catalog.Catalog
+	mods     *modules.Store
+	eng      *engine.Engine
+	machines *machine.Manager
+	gate     *maintenance.Gate
+	checks   CheckValidator
+	bus      *signal.Bus
+	runner   execx.Runner
+	gitBin   string
+	gitTime  time.Duration
+	dir      string
+	clk      clock.Clock
+	log      *slog.Logger
 
 	// applyMu serializes applies so that ownership decisions never race
 	// with each other.
@@ -159,7 +169,7 @@ func New(cfg Config) (*Syncer, error) {
 		return nil, errors.New("configsync: DB, Audit, Catalog, Modules and Engine are required")
 	}
 	s := &Syncer{
-		db: cfg.DB, audit: cfg.Audit, cat: cfg.Catalog, mods: cfg.Modules, eng: cfg.Engine, checks: cfg.Checks,
+		db: cfg.DB, audit: cfg.Audit, cat: cfg.Catalog, mods: cfg.Modules, eng: cfg.Engine, checks: cfg.Checks, machines: cfg.Machines, gate: cfg.Gate,
 		bus: cfg.Bus, runner: cfg.Runner, gitBin: cfg.Git, gitTime: cfg.GitTimeout, dir: cfg.Dir, clk: cfg.Clock, log: cfg.Log,
 		forced: map[string]bool{}, kick: make(chan struct{}, 1), inflight: map[string]int{},
 	}
@@ -187,8 +197,10 @@ func kindRank(k model.Kind) int {
 		return 1
 	case model.KindService:
 		return 2
-	case model.KindPolicy:
+	case model.KindMachine:
 		return 3
+	case model.KindPolicy:
+		return 4
 	}
 	return 0
 }

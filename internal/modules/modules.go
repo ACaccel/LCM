@@ -18,6 +18,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
+	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/store"
 )
@@ -35,17 +36,31 @@ type Store struct {
 	db    *store.DB
 	audit *audit.Log
 	clk   clock.Clock
+	gate  *maintenance.Gate
+}
+
+// Option configures a Store.
+type Option func(*Store)
+
+// WithGate coordinates complete module writes with machine maintenance.
+// A nil gate preserves unrestricted writes.
+func WithGate(gate *maintenance.Gate) Option {
+	return func(s *Store) { s.gate = gate }
 }
 
 // New returns a Store. clk defaults to the real clock.
-func New(db *store.DB, log *audit.Log, clk clock.Clock) (*Store, error) {
+func New(db *store.DB, log *audit.Log, clk clock.Clock, opts ...Option) (*Store, error) {
 	if db == nil || log == nil {
 		return nil, errors.New("modules: DB and audit log are required")
 	}
 	if clk == nil {
 		clk = clock.Real()
 	}
-	return &Store{db: db, audit: log, clk: clk}, nil
+	s := &Store{db: db, audit: log, clk: clk}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // VersionInfo describes one stored version.
@@ -80,6 +95,11 @@ func (s *Store) Put(ctx context.Context, data []byte, expected int) (PutResult, 
 	if !ok {
 		return PutResult{}, audit.ErrNoActor
 	}
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return PutResult{}, err
+	}
+	defer release()
 	if expected < 0 {
 		return PutResult{}, errors.New("modules: expected version must not be negative")
 	}

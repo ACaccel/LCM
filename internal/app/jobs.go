@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/clock"
+	"github.com/ACaccel/lcm/internal/engine"
 )
 
 // reconcileInterval is how often lifecycle states are compared with what
@@ -16,6 +18,18 @@ const reconcileInterval = time.Minute
 // reconcileStates runs Manager.Reconcile; the manager audits and records
 // each correction, so only failures are logged here.
 func (a *App) reconcileStates(ctx context.Context) {
+	if a.recoveryDeferred.Load() {
+		if err := a.Engine.Recover(ctx); !errors.Is(err, engine.ErrRecoveryDeferred) {
+			if err != nil {
+				a.log.Error("engine recovery completed with errors", "error", err)
+			}
+			a.recoveryDeferred.Store(false)
+			a.automationOnce.Do(func() { close(a.automationReady) })
+		}
+	}
+	if err := a.Machines.Reconcile(ctx); err != nil && ctx.Err() == nil {
+		a.log.Error("machine reconciliation incomplete", "error", err)
+	}
 	if _, err := a.Manager.Reconcile(ctx); err != nil && ctx.Err() == nil {
 		a.log.Error("service reconciliation incomplete", "error", err)
 	}
@@ -46,6 +60,9 @@ func every(ctx context.Context, clk clock.Clock, interval time.Duration, kick <-
 // retentionJobs deletes expired data. Each job reports how many rows it
 // removed; failures are logged and retried at the next interval.
 func (a *App) retentionJobs(ctx context.Context) {
+	if err := a.Machines.Prune(ctx); err != nil && ctx.Err() == nil {
+		a.log.Warn("machine retention failed", "error", err)
+	}
 	jobs := []struct {
 		name string
 		run  func(context.Context) (int64, error)

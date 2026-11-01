@@ -45,6 +45,7 @@ tags:
   - name: Meta
   - name: Auth
   - name: Services
+  - name: Machines
   - name: Actions
   - name: Monitoring
   - name: Policies
@@ -56,6 +57,1168 @@ tags:
   - name: Events
 
 paths:
+  /machines:
+    get:
+      tags:
+      - Machines
+      operationId: listMachines
+      summary: list Machines
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - nextCursor
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineRecord'
+                  nextCursor:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+      - Machines
+      operationId: createMachine
+      summary: create Machine
+      parameters: []
+      responses:
+        '201':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineDocumentInput'
+          application/yaml:
+            schema:
+              $ref: '#/components/schemas/MachineDocumentInput'
+  /machines/{machine}:
+    get:
+      tags:
+      - Machines
+      operationId: getMachine
+      summary: get Machine
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      tags:
+      - Machines
+      operationId: putMachine
+      summary: put Machine
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineDocumentInput'
+          application/yaml:
+            schema:
+              $ref: '#/components/schemas/MachineDocumentInput'
+    delete:
+      tags:
+      - Machines
+      operationId: unmanageMachine
+      summary: unmanage Machine
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Successful response.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/phase:
+    post:
+      tags:
+      - Machines
+      operationId: setMachinePhase
+      summary: set Machine Phase
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - phase
+              properties:
+                phase:
+                  type: string
+                  enum:
+                  - managed
+                  - retired
+  /machines/{machine}/versions:
+    get:
+      tags:
+      - Machines
+      operationId: listMachineVersions
+      summary: list Machine Versions
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - nextCursor
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineVersion'
+                  nextCursor:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/versions/{v}:
+    get:
+      tags:
+      - Machines
+      operationId: getMachineVersion
+      summary: get Machine Version
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: v
+        in: path
+        required: true
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineVersion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/restore:
+    post:
+      tags:
+      - Machines
+      operationId: restoreMachine
+      summary: restore Machine
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - version
+              properties:
+                version:
+                  type: integer
+  /machines/{machine}/observe:
+    post:
+      tags:
+      - Machines
+      operationId: observeMachine
+      summary: observe Machine
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/history:
+    get:
+      tags:
+      - Machines
+      operationId: listMachineHistory
+      summary: list Machine History
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: resolution
+        in: query
+        schema:
+          type: string
+          enum:
+          - raw
+          - minute
+          default: raw
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - nextCursor
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineSnapshot'
+                  nextCursor:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/events:
+    get:
+      tags:
+      - Machines
+      operationId: listMachineEvents
+      summary: list Machine Events
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - nextCursor
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineEvent'
+                  nextCursor:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/capabilities:
+    get:
+      tags:
+      - Machines
+      operationId: getMachineCapabilities
+      summary: get Machine Capabilities
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineCapability'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/maintenance:
+    get:
+      tags:
+      - Machines
+      operationId: getMachineMaintenance
+      summary: get Machine Maintenance
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - maintenance
+                properties:
+                  maintenance:
+                    anyOf:
+                    - $ref: '#/components/schemas/MachineMaintenance'
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+      - Machines
+      operationId: enterMachineMaintenance
+      summary: enter Machine Maintenance
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - maintenance
+                properties:
+                  maintenance:
+                    $ref: '#/components/schemas/MachineMaintenance'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - reason
+              - acknowledged
+              - previewHash
+              properties:
+                reason:
+                  type: string
+                acknowledged:
+                  type: boolean
+                previewHash:
+                  type: string
+                  minLength: 64
+                  maxLength: 64
+  /machines/{machine}/maintenance/exit:
+    post:
+      tags:
+      - Machines
+      operationId: exitMachineMaintenance
+      summary: exit Machine Maintenance
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Successful response.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
+  /machines/{machine}/operations:
+    get:
+      tags:
+      - Machines
+      operationId: listMachineOperations
+      summary: list Machine Operations
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - nextCursor
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineOperation'
+                  nextCursor:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      tags:
+      - Machines
+      operationId: submitMachineOperation
+      summary: submit Machine Operation
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineOperation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - action
+              - idempotencyKey
+              properties:
+                action:
+                  type: string
+                  enum:
+                  - reboot
+                  - graceful-shutdown
+                idempotencyKey:
+                  type: string
+  /machines/{machine}/operations/{id}:
+    get:
+      tags:
+      - Machines
+      operationId: getMachineOperation
+      summary: get Machine Operation
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineOperation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /machines/{machine}/operations/{id}/resolve:
+    post:
+      tags:
+      - Machines
+      operationId: resolveMachineOperation
+      summary: resolve Machine Operation
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineOperation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+              - reason
+              properties:
+                reason:
+                  type: string
   /health:
     get:
       tags: [Meta]
@@ -1629,56 +2792,135 @@ paths:
 
   /events:
     get:
-      tags: [Events]
+      tags:
+      - Events
       operationId: streamEvents
       summary: Live events (server-sent events)
-      description: |
-        A `text/event-stream` of what happens in LCM. Each frame has an `id`, an
-        `event` name (the event type) and `data` holding an `EventEnvelope`. Comment
-        lines (`: heartbeat`) keep idle connections open every 15 seconds. A client
-        that cannot keep up receives `event: overflow` and is disconnected; it must
-        reload its data from the REST API and reconnect. `Last-Event-ID` is not
-        supported: reload after reconnecting.
-
-        Event types and their `data` payloads:
-
-        - `signal`: a signal from the bus (check, health, lifecycle, alert).
-        - `run`: a run event (`run.queued`, `run.started`, `run.suspended`,
-          `run.resumed`, `run.finished`).
-        - `node`: a node event (`node.started`, `node.finished`, `node.retrying`,
-          `node.suspended`, `node.dead`).
-        - `timeline`: a stored timeline entry.
-        - `action`: progress of an action started through the API.
-        - `catalog`: a service document was created, updated, restored or deleted,
-          or a policy was deployed or undeployed.
+      description: "A `text/event-stream` of what happens in LCM. Each frame has an `id`, an\n`event` name (the event type) and `data` holding an `EventEnvelope`. Comment\nlines (`: heartbeat`) keep idle connections open every 15 seconds. A client\nthat cannot keep up receives `event: overflow` and is disconnected; it must\nreload its data from the REST API and reconnect. `Last-Event-ID` is not\nsupported: reload after reconnecting.\n\nEvent types and their `data` payloads:\n\n- `machine`: a committed normalized Machine event; reload durable APIs after reconnect.\n- `signal`: a signal from the bus (check, health, lifecycle, alert).\n- `run`: a run event (`run.queued`, `run.started`, `run.suspended`,\n  `run.resumed`, `run.finished`).\n- `node`: a node event (`node.started`, `node.finished`, `node.retrying`,\n  `node.suspended`, `node.dead`).\n- `timeline`: a stored timeline entry.\n- `action`: progress of an action started through the API.\n- `catalog`: a service document was created, updated, restored or deleted,\n  or a policy was deployed or undeployed.\n"
       parameters:
-        - name: service
-          in: query
-          description: Only events about this service.
-          schema: { type: string }
-        - name: policy
-          in: query
-          description: Only events about this policy.
-          schema: { type: string }
-        - name: run
-          in: query
-          description: Only events of this run.
-          schema: { type: string }
-        - name: types
-          in: query
-          description: Event types to receive, repeated or comma separated; all when omitted.
-          schema: { type: array, items: { $ref: "#/components/schemas/EventType" } }
-          style: form
-          explode: true
+      - name: machine
+        in: query
+        description: Only committed events for this immutable Machine ID.
+        schema:
+          type: string
+      - name: service
+        in: query
+        description: Only events about this service.
+        schema:
+          type: string
+      - name: policy
+        in: query
+        description: Only events about this policy.
+        schema:
+          type: string
+      - name: run
+        in: query
+        description: Only events of this run.
+        schema:
+          type: string
+      - name: types
+        in: query
+        description: Event types to receive, repeated or comma separated; all when omitted.
+        schema:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventType'
+        style: form
+        explode: true
       responses:
-        "200":
+        '200':
           description: The stream.
           content:
             text/event-stream:
-              schema: { $ref: "#/components/schemas/EventEnvelope" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
+              schema:
+                $ref: '#/components/schemas/EventEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /machine-archives:
+    get:
+      tags:
+      - Machines
+      operationId: listMachineArchives
+      summary: List archived machine registrations
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                - items
+                - nextCursor
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MachineRecord'
+                  nextCursor:
+                    anyOf:
+                    - type: string
+                    - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '500':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Request rejected or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+
+  /machines/{machine}/maintenance/preview:
+    get:
+      tags:
+      - Machines
+      operationId: previewMachineMaintenance
+      parameters:
+      - name: machine
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Active name, or @ followed by immutable ID for archived read-only history.
+      responses:
+        '200':
+          description: Current known local workloads and partial coverage; review before entering maintenance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MachineMaintenancePreview'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
 components:
   securitySchemes:
@@ -1742,7 +2984,7 @@ components:
       name: kind
       in: path
       required: true
-      schema: { type: string, enum: [service, policy, module] }
+      schema: { type: string, enum: [service, policy, module, machine] }
     OwnedName:
       name: name
       in: path
@@ -1854,6 +3096,598 @@ components:
               accepted: { type: boolean }
 
   schemas:
+    MachineMaintenancePreview:
+      type: object
+      additionalProperties: false
+      required:
+      - machineId
+      - version
+      - hash
+      - partialCoverage
+      - controllerOffline
+      - manualPowerOn
+      - workloads
+      properties:
+        machineId:
+          type: string
+        version:
+          type: integer
+        hash:
+          type: string
+        partialCoverage:
+          type: boolean
+        controllerOffline:
+          type: boolean
+        manualPowerOn:
+          type: boolean
+        workloads:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - name
+            - version
+            - state
+            - autostart
+            properties:
+              name:
+                type: string
+              version:
+                type: integer
+              state:
+                type: string
+              autostart:
+                type: string
+    MachineCoverage:
+      type: object
+      additionalProperties: false
+      required:
+      - state
+      properties:
+        state:
+          type: string
+        reason:
+          type: string
+    MachineThresholds:
+      type: object
+      additionalProperties: false
+      required:
+      - cpuPercent
+      - memoryPercent
+      - diskPercent
+      - consecutive
+      - hysteresis
+      properties:
+        cpuPercent:
+          type: number
+        memoryPercent:
+          type: number
+        diskPercent:
+          type: number
+        consecutive:
+          type: integer
+        hysteresis:
+          type: number
+    MachineMonitoring:
+      type: object
+      additionalProperties: false
+      required:
+      - interval
+      - staleAfter
+      - filesystems
+      - journal
+      - thresholds
+      properties:
+        interval:
+          type: string
+        staleAfter:
+          type: string
+        filesystems:
+          type: array
+          items:
+            type: string
+        interfaces:
+          type: array
+          items:
+            type: string
+        units:
+          type: array
+          items:
+            type: string
+        journal:
+          type: boolean
+        thresholds:
+          $ref: '#/components/schemas/MachineThresholds'
+    MachineDocument:
+      type: object
+      additionalProperties: false
+      required:
+      - apiVersion
+      - kind
+      - metadata
+      - spec
+      properties:
+        apiVersion:
+          type: string
+          const: lcm/v1
+        kind:
+          type: string
+          const: Machine
+        metadata:
+          type: object
+          additionalProperties: false
+          required:
+          - name
+          properties:
+            name:
+              type: string
+            labels:
+              type: object
+              additionalProperties:
+                type: string
+            annotations:
+              type: object
+              additionalProperties:
+                type: string
+        spec:
+          type: object
+          additionalProperties: false
+          required:
+          - host
+          - monitoring
+          properties:
+            host:
+              type: string
+              const: local
+            monitoring:
+              $ref: '#/components/schemas/MachineMonitoring'
+    MachineFilesystem:
+      type: object
+      additionalProperties: false
+      required:
+      - path
+      - total
+      - available
+      - inodes
+      - freeInodes
+      properties:
+        path:
+          type: string
+        total:
+          type: integer
+        available:
+          type: integer
+        inodes:
+          type: integer
+        freeInodes:
+          type: integer
+    MachineSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - observedAt
+      - bootId
+      - os
+      - init
+      - uptimeSeconds
+      - cpuTotal
+      - cpuIdle
+      - cpuCount
+      - cpuPercent
+      - memoryTotal
+      - memoryAvailable
+      - swapTotal
+      - swapFree
+      - filesystems
+      - coverage
+      properties:
+        id:
+          type: integer
+        observedAt:
+          type: string
+          format: date-time
+        bootId:
+          type: string
+        os:
+          type: string
+        init:
+          type: string
+        uptimeSeconds:
+          type: number
+        cpuTotal:
+          type: integer
+        cpuIdle:
+          type: integer
+        cpuCount:
+          type: integer
+        cpuPercent:
+          anyOf:
+          - type: number
+          - type: 'null'
+        load:
+          type: array
+          items:
+            type: number
+        memoryTotal:
+          type: integer
+        memoryAvailable:
+          type: integer
+        swapTotal:
+          type: integer
+        swapFree:
+          type: integer
+        filesystems:
+          anyOf:
+          - type: array
+            items:
+              $ref: '#/components/schemas/MachineFilesystem'
+          - type: 'null'
+        interfaces:
+          type: object
+          additionalProperties:
+            type: string
+        units:
+          type: object
+          additionalProperties:
+            type: string
+        pressure:
+          type: object
+          additionalProperties:
+            type: number
+        coverage:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MachineCoverage'
+    MachineStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - snapshot
+      - health
+      - reasons
+      - identity
+      - journal
+      - fresh
+      properties:
+        snapshot:
+          anyOf:
+          - $ref: '#/components/schemas/MachineSnapshot'
+          - type: 'null'
+        health:
+          type: string
+        reasons:
+          type: array
+          items:
+            type: string
+        identity:
+          type: string
+        journal:
+          $ref: '#/components/schemas/MachineCoverage'
+        fresh:
+          type: boolean
+    MachineRecord:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - name
+      - host
+      - version
+      - phase
+      - createdAt
+      - updatedAt
+      - document
+      - status
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        host:
+          type: string
+        version:
+          type: integer
+        phase:
+          type: string
+          enum:
+          - managed
+          - retired
+          - unmanaged
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        document:
+          $ref: '#/components/schemas/MachineDocument'
+        status:
+          $ref: '#/components/schemas/MachineStatus'
+    MachineVersion:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      - createdAt
+      - createdBy
+      - restoredFrom
+      - document
+      properties:
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          $ref: '#/components/schemas/Actor'
+        restoredFrom:
+          type: integer
+        document:
+          $ref: '#/components/schemas/MachineDocument'
+    MachineEvent:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - machineId
+      - source
+      - kind
+      - severity
+      - occurredAt
+      - ingestedAt
+      - historical
+      properties:
+        operationId:
+          type: string
+        id:
+          type: integer
+        machineId:
+          type: string
+        source:
+          type: string
+        kind:
+          type: string
+        severity:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        ingestedAt:
+          type: string
+          format: date-time
+        bootId:
+          type: string
+        unit:
+          type: string
+        historical:
+          type: boolean
+        reason:
+          type: string
+    MachineCapability:
+      type: object
+      additionalProperties: false
+      required:
+      - action
+      - available
+      - reason
+      properties:
+        action:
+          type: string
+        available:
+          type: boolean
+        reason:
+          type: string
+    MachineMaintenance:
+      type: object
+      additionalProperties: false
+      required:
+      - machineId
+      - state
+      - enteredAt
+      - actor
+      - reason
+      - acknowledged
+      - preview
+      properties:
+        machineId:
+          type: string
+        state:
+          type: string
+        enteredAt:
+          type: string
+          format: date-time
+        actor:
+          $ref: '#/components/schemas/Actor'
+        reason:
+          type: string
+        acknowledged:
+          type: boolean
+        preview:
+          $ref: '#/components/schemas/MachineMaintenancePreview'
+    MachinePowerRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - controllerId
+      - operationId
+      - requestHash
+      - action
+      - bootId
+      - deadline
+      - issuedAt
+      - validUntil
+      properties:
+        controllerId:
+          type: string
+        operationId:
+          type: string
+        requestHash:
+          type: string
+        action:
+          type: string
+        bootId:
+          type: string
+        deadline:
+          type: string
+          format: date-time
+        issuedAt:
+          type: string
+          format: date-time
+        validUntil:
+          type: string
+          format: date-time
+    MachineReceipt:
+      type: object
+      additionalProperties: false
+      required:
+      - state
+      - acceptedAt
+      - bootId
+      properties:
+        state:
+          type: string
+        acceptedAt:
+          type: string
+          format: date-time
+        bootId:
+          type: string
+    MachineOperation:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - machineId
+      - action
+      - state
+      - unresolved
+      - version
+      - createdAt
+      - updatedAt
+      - actor
+      - request
+      - receipt
+      - reason
+      properties:
+        id:
+          type: string
+        machineId:
+          type: string
+        action:
+          type: string
+        state:
+          type: string
+        unresolved:
+          type: boolean
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        actor:
+          $ref: '#/components/schemas/Actor'
+        request:
+          $ref: '#/components/schemas/MachinePowerRequest'
+        receipt:
+          anyOf:
+          - $ref: '#/components/schemas/MachineReceipt'
+          - type: 'null'
+        reason:
+          type: string
+        resolution:
+          type: string
+        resolvedBy:
+          $ref: '#/components/schemas/Actor'
+        resolvedAt:
+          type: string
+          format: date-time
+        evidence:
+          $ref: '#/components/schemas/MachineStatus'
+    MachineThresholdsInput:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        cpuPercent:
+          type: number
+        memoryPercent:
+          type: number
+        diskPercent:
+          type: number
+        consecutive:
+          type: integer
+        hysteresis:
+          type: number
+    MachineMonitoringInput:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        interval:
+          type: string
+        staleAfter:
+          type: string
+        filesystems:
+          type: array
+          items:
+            type: string
+        interfaces:
+          type: array
+          items:
+            type: string
+        units:
+          type: array
+          items:
+            type: string
+        journal:
+          type: boolean
+        thresholds:
+          $ref: '#/components/schemas/MachineThresholdsInput'
+    MachineDocumentInput:
+      type: object
+      additionalProperties: false
+      required:
+      - apiVersion
+      - kind
+      - metadata
+      - spec
+      properties:
+        apiVersion:
+          type: string
+          const: lcm/v1
+        kind:
+          type: string
+          const: Machine
+        metadata:
+          type: object
+          additionalProperties: false
+          required:
+          - name
+          properties:
+            name:
+              type: string
+            labels:
+              type: object
+              additionalProperties:
+                type: string
+            annotations:
+              type: object
+              additionalProperties:
+                type: string
+        spec:
+          type: object
+          additionalProperties: false
+          required: []
+          properties:
+            host:
+              type: string
+              const: local
+            monitoring:
+              $ref: '#/components/schemas/MachineMonitoringInput'
     ErrorEnvelope:
       type: object
       required: [error]
@@ -2965,7 +4799,14 @@ components:
 
     EventType:
       type: string
-      enum: [signal, run, node, timeline, action, catalog]
+      enum:
+      - signal
+      - run
+      - node
+      - timeline
+      - action
+      - catalog
+      - machine
     EngineEvent:
       type: object
       description: Payload of `run` and `node` events, and of policy deployments in `catalog` events.
@@ -3021,19 +4862,36 @@ components:
     EventEnvelope:
       type: object
       description: The `data` of every server-sent event.
-      required: [id, type, time, data]
+      required:
+      - id
+      - type
+      - time
+      - data
       properties:
-        id: { type: integer, format: int64, description: Increases with every event. }
-        type: { $ref: "#/components/schemas/EventType" }
-        time: { type: string, format: date-time }
-        service: { type: string }
-        policy: { type: string }
-        run: { type: string }
+        machine:
+          type: string
+          description: Immutable Machine ID.
+        id:
+          type: integer
+          format: int64
+          description: Increases with every event.
+        type:
+          $ref: '#/components/schemas/EventType'
+        time:
+          type: string
+          format: date-time
+        service:
+          type: string
+        policy:
+          type: string
+        run:
+          type: string
         data:
           description: Depends on `type`.
           oneOf:
-            - $ref: "#/components/schemas/Signal"
-            - $ref: "#/components/schemas/EngineEvent"
-            - $ref: "#/components/schemas/TimelineEntry"
-            - $ref: "#/components/schemas/Action"
-            - $ref: "#/components/schemas/CatalogChange"
+          - $ref: '#/components/schemas/Signal'
+          - $ref: '#/components/schemas/EngineEvent'
+          - $ref: '#/components/schemas/TimelineEntry'
+          - $ref: '#/components/schemas/Action'
+          - $ref: '#/components/schemas/CatalogChange'
+          - $ref: '#/components/schemas/MachineEvent'

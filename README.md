@@ -1,14 +1,16 @@
 # LCM
 
-LCM is a lifecycle control plane for self-hosted services. It keeps a catalog of the services you run (how to control them, their version, health and lifecycle state), checks them, and performs deployments, rollbacks, restarts, backups and jobs, either from the web console and CLI or automatically through policies. Every action is locked per service, previewable as a dry run, and recorded in the timeline and audit log. It targets 1-10 hosts running services under systemd, docker or plain processes, ships as a single Go binary with SQLite, and does not target Kubernetes.
+LCM manages self-hosted software services and the Linux workstation running the controller. It checks services and performs deployments, rollbacks, restarts, backups and jobs from the console, CLI or policies. Local Machine management adds OS observations, bounded event history, maintenance and durable manual power requests. LCM ships as one Go binary with SQLite; current execution targets are local, and Kubernetes is outside its scope.
 
-**Status.** The rewrite is complete apart from run replay and opening pull requests from the console. The previous implementation is preserved at commit `18a24f6`.
+**Status.** The local-service baseline is implemented and accepted. Local Machine code is integrated; automated checks pass; privileged deployment and real reboot/shutdown acceptance remain open. Power is disabled by default and requires a separately installed restricted helper. Registration does not install tools, grant privileges or operate power. SSH, cloud VMs and generalized Resource management remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
+| [docs/roadmap.md](docs/roadmap.md) | Planned capabilities, priorities, dependencies, and completion criteria |
 | [docs/services.md](docs/services.md) | Service documents: runtimes and the actions they allow, deployments, health checks, lifecycle states, reconciliation, timeline |
+| [docs/machines.md](docs/machines.md) | Local Machine registration, native monitoring, event coverage, maintenance, power evidence and archives |
 | [docs/policies.md](docs/policies.md) | Policies, built-in templates, policy-as-code (git config sources, ownership, drift) |
 | [docs/architecture.md](docs/architecture.md) | Components, data flow, engine semantics, security model (authentication, tokens, privileges, secrets) |
 | [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), backup, upgrade, remote access |
@@ -26,7 +28,7 @@ bin/lcm serve                    # http://127.0.0.1:7800, data in ./data
 
 Log in to the console, add a service under *服務 > 建立服務* (see [services](docs/services.md)), then attach a policy from a template on its *Policy* tab. For the CLI and scripts, create a token under *設定 > API token* (or `bin/lcm token create --name cli > token && chmod 600 token`).
 
-The console (Traditional Chinese, light and dark themes) shows an overview, services with their timeline, health checks, deployments, policies and configuration, a global timeline, the policy graph editor, live runs, hosts and settings. It uses the REST API and one server-sent-event stream; it has no server-side state.
+The console (Traditional Chinese, light and dark themes) shows services, local machines, monitoring/history, maintenance and operation evidence, policies, live runs, hosts and settings. It uses the REST API and one server-sent-event stream. Registering a [local Machine](docs/machines.md#registration-and-configuration) preserves the existing Service and Host contracts.
 
 ## CLI
 
@@ -37,10 +39,12 @@ The console (Traditional Chinese, light and dark themes) shows an overview, serv
 | `lcm token create --name <name> [--scope admin\|ingest]` | Create an API token and print it once; the default scope is `admin` |
 | `lcm token list` / `lcm token revoke <id>` | List or revoke API tokens |
 | `lcm version` | Print version information |
-| `lcm apply -f <file\|dir> [-f ...] [--dry-run] [--force]` | Apply Service, Policy and Module documents; prints a result and a diff per document |
-| `lcm export [kind[/name]]` | Print resources as YAML (`service`, `policy`, `module`, or everything) |
+| `lcm storage-schema` | Report the binary's supported storage schema without starting a controller; used for upgrade compatibility checks |
+| `lcm apply -f <file\|dir> [-f ...] [--dry-run] [--force]` | Apply Service, Machine, Policy and Module documents; prints a result and a diff per document |
+| `lcm export [kind[/name]]` | Print documents as YAML (`service`, `machine`, `policy`, `module`, or everything) |
 | `lcm validate -f <file\|dir>` | Check documents on the server without applying them |
-| `lcm get services\|policies\|runs\|locks\|sources [name] [-o table\|json\|yaml] [--limit n]` | List or show resources |
+| `lcm get services\|machines\|policies\|runs\|locks\|sources [name] [-o table\|json\|yaml] [--limit n]` | List or show resources |
+| `lcm machine <command> <name> [flags]` | Observe/history/events, capabilities, maintenance, durable operations and management phase; [confirmation and recovery rules](docs/machines.md#maintenance-and-power-requests) |
 | `lcm run <policy> [--trigger id] [--event json] [--dry-run] [--wait]` | Start a policy run |
 | `lcm action <service> <action> [--version v] [--job j] [--dry-run] [--wait]` | Run a lifecycle action; `--dry-run` prints the plan |
 
@@ -70,15 +74,17 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_SECRETS_DIR` | `--secrets-dir` | `<data dir>/secrets` | Directory of secret files (one file per secret, mode 0600 recommended); created with mode 0700. Environment variables `LCM_SECRET_<NAME>` are the fallback |
 | `LCM_CALENDAR_DIR` | `--calendar-dir` | `<data dir>/calendars` | Directory that `trigger.cron` calendar files are confined to |
 | `LCM_SYSTEMCTL` / `LCM_DOCKER` / `LCM_GIT` | `--systemctl` / `--docker` / `--git` | `systemctl` / `docker` / `git` | Program paths; a missing program only logs a warning at startup |
+| `LCM_JOURNALCTL` | `--journalctl` | `journalctl` | Program used for bounded local Machine journal reads; unavailable access is shown as source coverage |
+| `LCM_MACHINE_POWER` | `--machine-power` | `false` | Permit new Machine power submissions only after the separately installed helper and recovery prerequisites pass; receipt queries remain available when disabled |
 | `LCM_SYSTEMCTL_PRIVILEGE` | `--systemctl-privilege` | `sudo -n` | Prefix for system-scope `systemctl` start, stop and restart; `none` (or an empty flag value) runs it directly |
 | `LCM_RUNTIME_STATUS_TIMEOUT` | `--runtime-status-timeout` | `15s` | Timeout of runtime status queries |
 | `LCM_RUNTIME_ACTION_TIMEOUT` | `--runtime-action-timeout` | `5m` | Timeout of runtime start, stop and restart |
 | `LCM_LOCK_TTL` | `--lock-ttl` | `1h` | Expiry of a service lock whose holder crashed; must exceed the longest lifecycle action (max `168h`) |
 | `LCM_MONITOR_CONCURRENCY` | `--monitor-concurrency` | `8` | Health probes running at the same time |
-| `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw check results are kept |
-| `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long one-minute rollups are kept; must not be shorter than the raw retention |
+| `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw Service check results and Machine snapshots are kept |
+| `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long Service rollups and Machine minute points are kept; must not be shorter than raw retention |
 | `LCM_ALERT_SERVICE_LABELS` | `--alert-service-labels` | `lcm_service,service` | Comma-separated alert labels that name the affected service |
-| `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long service timeline entries are kept |
+| `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long Service timeline entries and Machine events are kept; unresolved evidence has retention exceptions |
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |
 | `LCM_RUN_RETENTION_AGE` | `--run-retention-age` | `720h` | Finished runs younger than this are kept; older ones beyond the newest N are deleted |
 | `LCM_DEPLOYMENT_RETENTION_KEEP` | `--deployment-retention-keep` | `100` | Deployment records kept per service; the idempotency records of finished actions follow the run retention age |
@@ -92,10 +98,12 @@ Environment variables configure the server; each can be overridden by the `serve
 The API is described by the hand-written OpenAPI 3.1 document [`internal/api/openapi.yaml`](internal/api/openapi.yaml); a test fails when it and the registered routes disagree, and the integration tests check every response against it.
 
 - JSON uses camelCase; errors are `{"error":{"code","message","details"}}`, and a 422 lists `details.issues` as `{path, message}`.
-- Services, policies and modules are versioned documents sent as YAML or JSON; updates need `If-Match: <version>` and a stale one answers 409.
+- Service, Machine, Policy and Module documents accept YAML or JSON; updates need `If-Match: <version>` and a stale one answers 409.
 - Lists take `limit` and an opaque `cursor` and answer `{items, nextCursor}`.
 - Lifecycle actions run in the background (202 and an id for `GET /api/v1/actions/{id}`); `?dryRun=true` returns the plan instead.
+- Machine operations use their own durable `/api/v1/machines/{machine}/operations` records; acceptance does not prove reboot or power-off. See the [Machine completion contract](docs/machines.md#maintenance-and-power-requests).
 - `GET /api/v1/events` streams signals, run and node progress, timeline entries, action progress and catalog changes as server-sent events, filtered by `service`, `policy`, `run` and `types`.
+- Machine events have a separate category and immutable Machine ID filter. SSE is best effort; clients recover current state and history from the API after disconnect or overflow.
 - Alerts (`/hooks/alerts/{source}`), heartbeats (`/heartbeats/{svc}/{check}`) and webhooks (`/hooks/{name}`, `/hooks/github`) feed LCM from outside.
 
 Browsers authenticate with a session cookie, scripts with `Authorization: Bearer <token>`; token scopes and what each may call are in the [security model](docs/architecture.md#security-model).

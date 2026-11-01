@@ -162,6 +162,9 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     apply(env) {
       const type: EventType = env.type;
       switch (type) {
+		case "machine":
+		  invalidate(["machines"]);
+		  break;
         case "signal":
           onSignal(env, env.data as Signal);
           break;
@@ -214,7 +217,7 @@ export interface SourceLike {
   close(): void;
 }
 
-const NAMED_EVENTS: EventType[] = ["signal", "run", "node", "timeline", "action", "catalog"];
+const NAMED_EVENTS: EventType[] = ["signal", "run", "node", "timeline", "action", "catalog", "machine"];
 
 export interface StreamOptions {
   url?: string;

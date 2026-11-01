@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/buildinfo"
+	"github.com/ACaccel/lcm/internal/store"
 )
 
 const usage = `Usage: lcm <command> [flags]
@@ -26,12 +27,14 @@ Commands:
   token list                  List API tokens
   token revoke <id>           Revoke an API token
   version                     Print version information
+  storage-schema              Print the supported storage version
 
 Commands that talk to a running server (see the README):
-  apply -f <file|dir> [--dry-run] [--force]   Apply Service, Policy and Module documents
+  apply -f <file|dir> [--dry-run] [--force]   Apply Service, Machine, Policy and Module documents
   export [kind[/name]]                        Print resources as YAML
   validate -f <file|dir>                      Check documents on the server
-  get services|policies|runs|locks|sources [name] [-o table|json|yaml]
+  get services|machines|policies|runs|locks|sources [name] [-o table|json|yaml]
+  machine <command> <name> [flags]           Observe, maintain or operate a machine
   run <policy> [--trigger id] [--event json] [--dry-run] [--wait]
   action <service> <action> [--version v] [--job j] [--dry-run] [--wait]
 
@@ -100,6 +103,16 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "storage-schema":
+		if len(rest) != 0 {
+			return usagef("storage-schema accepts no arguments")
+		}
+		v, err := store.SchemaVersion()
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(a.stdout, v)
+		return err
 	case "serve":
 		return a.serve(ctx, rest)
 	case "admin":
@@ -118,6 +131,10 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.runPolicy(ctx, rest)
 	case "action":
 		return a.action(ctx, rest)
+	case "machine":
+		return a.machine(ctx, rest)
+	case "machine-helper":
+		return a.machineHelper(ctx, rest)
 	case "version", "--version":
 		_, err := fmt.Fprintf(a.stdout, "lcm %s\n", buildinfo.Get())
 		return err

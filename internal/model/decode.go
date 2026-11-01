@@ -32,6 +32,16 @@ func Decode(data []byte) (Document, error) {
 		return nil, Issues{{Path: "apiVersion", Message: fmt.Sprintf("must be %q", APIVersion)}}
 	}
 	switch head.Kind {
+	case KindMachine:
+		var m Machine
+		if err := decodeOne(data, &m, true); err != nil {
+			return nil, err
+		}
+		m.normalize()
+		if err := ValidateMachine(&m); err != nil {
+			return nil, err
+		}
+		return &m, nil
 	case KindPolicy:
 		var p Policy
 		if err := decodeOne(data, &p, true); err != nil {
@@ -69,7 +79,7 @@ func Decode(data []byte) (Document, error) {
 		}
 		return &sv, nil
 	}
-	return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q, %q or %q", KindPolicy, KindModule, KindService)}}
+	return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q, %q, %q or %q", KindPolicy, KindModule, KindService, KindMachine)}}
 }
 
 // DecodePolicy decodes data and requires kind Policy.

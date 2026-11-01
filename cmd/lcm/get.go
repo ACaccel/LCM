@@ -27,6 +27,13 @@ type resource struct {
 }
 
 var resources = map[string]resource{
+	"machines": {
+		list: "/machines", show: func(n string) string { return client.Path("machines", n) }, key: "name",
+		header: []string{"NAME", "PHASE", "HEALTH", "FRESH", "IDENTITY", "VERSION"},
+		row: func(m map[string]any) []string {
+			return []string{field(m, "name"), field(m, "phase"), field(m, "status.health"), field(m, "status.fresh"), field(m, "status.identity"), field(m, "version")}
+		},
+	},
 	"services": {
 		list: "/services", show: func(n string) string { return client.Path("services", n) }, key: "name",
 		header: []string{"NAME", "STATE", "HEALTH", "VERSION", "DEPLOYED", "MANAGED BY"},
@@ -152,11 +159,11 @@ func (a *app) get(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(pos) < 1 || len(pos) > 2 {
-		return usagef("get: expected <services|policies|runs|locks|sources> [name]")
+		return usagef("get: expected <services|machines|policies|runs|locks|sources> [name]")
 	}
 	res, ok := resources[pos[0]]
 	if !ok {
-		return usagef("get: unknown resource %q; expected services, policies, runs, locks or sources", pos[0])
+		return usagef("get: unknown resource %q; expected services, machines, policies, runs, locks or sources", pos[0])
 	}
 	switch *format {
 	case "table", "json", "yaml":

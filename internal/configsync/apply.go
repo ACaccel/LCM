@@ -135,6 +135,10 @@ func (o overlayModules) ResolveModule(ctx context.Context, name string) (*model.
 // structural ones Decode already did.
 func (s *Syncer) validate(ctx context.Context, it *item, overlay engine.ModuleResolver) (issues, warnings model.Issues) {
 	switch d := it.parsed.(type) {
+	case *model.Machine:
+		if s.machines == nil {
+			return model.Issues{{Message: ErrMachinesUnavailable.Error()}}, nil
+		}
 	case *model.Service:
 		hosts, err := s.cat.Hosts(ctx)
 		if err != nil {
@@ -167,7 +171,18 @@ func (s *Syncer) validate(ctx context.Context, it *item, overlay engine.ModuleRe
 // write stores a document through its component, which audits the change
 // under the actor in ctx. expected is the current version, 0 to create.
 func (s *Syncer) write(ctx context.Context, it *item, expected int) (int, error) {
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
 	switch it.Kind {
+	case model.KindMachine:
+		if s.machines == nil {
+			return 0, ErrMachinesUnavailable
+		}
+		res, err := s.machines.Put(ctx, it.doc.Data, expected)
+		return res.Version, err
 	case model.KindService:
 		res, err := s.cat.Put(ctx, it.doc.Data, expected)
 		return res.Version, err
@@ -211,7 +226,7 @@ type batch struct {
 }
 
 // Apply validates and applies documents: modules first, then services,
-// then policies. It is not transactional; every document gets its own
+// machines, then policies. It is not transactional; every document gets its own
 // result, and a failure does not stop the others. The error is only for
 // problems with the call itself, such as a missing actor.
 func (s *Syncer) Apply(ctx context.Context, docs []Document, opts Options) ([]Result, error) {
@@ -221,6 +236,15 @@ func (s *Syncer) Apply(ctx context.Context, docs []Document, opts Options) ([]Re
 func (s *Syncer) apply(ctx context.Context, docs []Document, o applyOpts) ([]Result, error) {
 	if _, ok := actorOf(ctx); !ok {
 		return nil, audit.ErrNoActor
+	}
+	if !o.DryRun {
+		var release func()
+		var err error
+		ctx, release, err = s.gate.Acquire(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
@@ -548,13 +572,16 @@ type Selector struct {
 }
 
 // Export returns the canonical YAML of existing resources as one
-// multi-document stream, in apply order (modules, services, policies) and
+// multi-document stream, in apply order (modules, services, machines, policies) and
 // by name within a kind, so repeated exports of an unchanged system are
 // identical. Only document fields are written; versions and state are not
 // part of a document. Applying the output back changes nothing.
 func (s *Syncer) Export(ctx context.Context, sel Selector) ([]byte, error) {
 	if sel.Name != "" && sel.Kind == "" {
 		return nil, model.Issues{{Path: "kind", Message: "a name needs a kind"}}
+	}
+	if sel.Kind == model.KindMachine && s.machines == nil {
+		return nil, ErrMachinesUnavailable
 	}
 	var docs []string
 	add := func(ref Ref, canon string) error {
@@ -599,6 +626,24 @@ func (s *Syncer) Export(ctx context.Context, sel Selector) ([]byte, error) {
 		}
 		if err != nil {
 			return nil, err
+		}
+	}
+	if s.machines != nil && (sel.Kind == "" || sel.Kind == model.KindMachine) {
+		machines, err := s.machines.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range machines {
+			if !want(model.KindMachine, r.Name) {
+				continue
+			}
+			b, err := model.Encode(r.Document)
+			if err == nil {
+				err = add(Ref{model.KindMachine, r.Name}, string(b))
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	pols, err := s.eng.Policies(ctx)

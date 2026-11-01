@@ -173,11 +173,16 @@ func (s *Syncer) CreateSource(ctx context.Context, src Source) (Source, error) {
 	if _, ok := actorOf(ctx); !ok {
 		return Source{}, audit.ErrNoActor
 	}
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return Source{}, err
+	}
+	defer release()
 	if err := src.normalize(); err != nil {
 		return Source{}, err
 	}
 	now := s.now().UnixMilli()
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		var n int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_sources WHERE name = ?`, src.Name).Scan(&n); err != nil {
 			return err
@@ -206,6 +211,11 @@ func (s *Syncer) UpdateSource(ctx context.Context, src Source) (Source, error) {
 	if _, ok := actorOf(ctx); !ok {
 		return Source{}, audit.ErrNoActor
 	}
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return Source{}, err
+	}
+	defer release()
 	if err := src.normalize(); err != nil {
 		return Source{}, err
 	}
@@ -239,6 +249,11 @@ func (s *Syncer) DeleteSource(ctx context.Context, name string) error {
 	if _, ok := actorOf(ctx); !ok {
 		return audit.ErrNoActor
 	}
+	ctx, release, err := s.gate.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if _, err := s.GetSource(ctx, name); err != nil {
 		return err
 	}
@@ -248,7 +263,7 @@ func (s *Syncer) DeleteSource(ctx context.Context, name string) error {
 	defer s.applyMu.Unlock()
 
 	var released int64
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM config_ownership WHERE source = ?`, name)
 		if err != nil {
 			return err

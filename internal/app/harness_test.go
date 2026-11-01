@@ -20,6 +20,7 @@ import (
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/engine/enginetest"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/trigger"
 )
 
@@ -45,11 +46,13 @@ type harness struct {
 }
 
 type testOpts struct {
-	dir       string
-	clk       *clock.Fake
-	runner    *execx.Fake
-	git       trigger.GitRunner
-	configure func(*config.Config)
+	dir             string
+	clk             *clock.Fake
+	runner          *execx.Fake
+	git             trigger.GitRunner
+	configure       func(*config.Config)
+	machineObserver machine.Observer
+	machinePower    machine.PowerBackend
 }
 
 func newHarness(t *testing.T, mod ...func(*testOpts)) *harness {
@@ -78,6 +81,7 @@ func (h *harness) open(o testOpts) *app.App {
 	// Keep-alives would leave connection goroutines behind for goleak.
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(h.ctx, cfg,
+		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower),
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client),
 		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git))
 	if err != nil {

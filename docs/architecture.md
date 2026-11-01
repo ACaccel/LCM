@@ -1,6 +1,6 @@
 # Architecture
 
-LCM is one Go process (`lcm serve`) with one SQLite database. The HTTP API, the web console, the policy engine, the service catalog, the health monitor and the trigger watchers all run inside it. Setup and configuration are in the [README](../README.md), what services and policies do in [services.md](services.md) and [policies.md](policies.md), and running it on a host in [operations.md](operations.md).
+LCM is one Go process (`lcm serve`) with one SQLite database. The HTTP API, the web console, the policy engine, the service catalog, the health monitor, local Machine management and the trigger watchers all run inside it. Setup and configuration are in the [README](../README.md), resource behavior in [services.md](services.md), [machines.md](machines.md) and [policies.md](policies.md), and running it on a host in [operations.md](operations.md).
 
 ## Components and data flow
 
@@ -11,6 +11,7 @@ flowchart LR
     API --> Cat[catalog + Manager]
     API --> Eng[engine]
     API --> CS[configsync]
+    API --> Mach[local Machine manager]
     Git[(git repos)] --> CS
     CS --> Cat
     CS --> Eng
@@ -23,25 +24,32 @@ flowchart LR
     Eng -->|notify, http, ci.status| Out[Discord, ntfy, webhooks, GitHub]
     Cat -->|execx| Host[systemd, docker, shell commands]
     Mon -->|probes| Svc[services]
+    Mach -->|native snapshots, bounded journal reads| OS[local Linux]
+    Mach -->|explicit admin power handoff| Helper[restricted root helper + receipts]
+    Mach -->|stored Machine events| Hub
     Bus --> Hub[event hub] -->|SSE| UI
-    Cat & Eng & Mon & CS --> DB[(SQLite)]
+    Cat & Eng & Mon & CS & Mach --> DB[(SQLite)]
 ```
 
 A typical loop: a health check fails, `monitor` publishes a `health.changed` signal, `trigger.signal` starts a run of a deployed policy, the policy's `lifecycle.restart` node asks the `Manager` for the action, the manager takes the service lock, moves the lifecycle state, runs the runtime command through `execx` and writes the timeline and audit entries. Every step is visible in the event stream.
 
 | Component | Responsibility |
 |---|---|
-| `internal/app` | Builds all components in dependency order, runs the background loops (triggers, lock expiry, monitor sync, config sync, retention, reconciliation), shuts down in reverse. The only place that connects components. |
+| `internal/app` | Builds all components in dependency order, recovers Machine operations/gates, runs observation, triggers, monitor/config sync, retention and reconciliation, and shuts down in reverse. The only place that connects components. |
 | `internal/api` | HTTP handlers, middleware, error envelope and the OpenAPI document; handlers parse, call a component and map errors. |
-| `internal/store` | SQLite with one writer connection and a reader pool; numbered migrations applied at startup. |
+| `internal/store` | SQLite with one writer connection and a reader pool; numbered migrations applied at startup, with rejection of a newer schema. Machine tables and minute points are additive migrations. |
 | `internal/engine` | Compiles policies into plans and runs them; checkpoints every node so runs survive restarts. |
 | `internal/catalog` | Service documents and versions, the lifecycle state machine, deployments, timeline; the `Manager` performs actions under a durable lock and reconciles states with the runtimes ([services](services.md#lifecycle-states-and-actions)). |
 | `internal/runtime` | Adapters that control processes (systemd, docker, compose, command, external) and declare which actions each configuration supports. |
 | `internal/monitor` | Health checks, history, rollups, health aggregation and alert ingestion. |
+| `internal/machine` | Local Linux Machine documents, snapshots, health, journal checkpoints, history and durable power operations; `observe/` provides bounded read-only probes, `power/` the restricted root helper protocol and independent receipt store. |
+| `internal/maintenance` | Durable local Machine maintenance gate shared by Service writes, config sync and self-deploy; observations continue. |
 | `internal/trigger` | `trigger.*` nodes and the watchers behind them (signals, git polling, cron, webhooks). |
 | `internal/configsync` | Policy-as-code: applies documents from files or git, tracks ownership, drift and conflicts. |
 | `internal/events` | Event hub behind the SSE stream: bounded, filtered subscriptions fed by the signal bus, engine observers and catalog hooks. |
 | `internal/templates` | Built-in policy templates (`examples/templates`). |
+
+Machine management is additive to Service and Host contracts. Observations, health baselines, journal events and cursors commit together before best-effort SSE publication. Machine events use a separate category and immutable ID rather than Service lifecycle signals. A data-directory file lock permits only one `serve` process; startup recovers Machine operations and maintenance gates before enabling writes and automation. The shared Gate and durable maintenance row protect local writes; this is a single-controller design, not a distributed lease or HA protocol. The [Machine contract](machines.md) owns identity, freshness, retention and completion semantics.
 
 ## Engine semantics
 
@@ -72,7 +80,9 @@ Cmnd_Alias LCM_UNITS = \
 lcm ALL=(root) NOPASSWD: LCM_UNITS
 ```
 
-LCM can deploy itself ([self-deploy](operations.md#self-deploy)): its only root command is `self-install` with one fixed argument, which installs the binary built in LCM's own checkout and restarts and verifies LCM from a separate systemd unit.
+The standard installation grants `self-install` with one fixed argument for [self-deploy](operations.md#self-deploy): it installs the binary built in LCM's own checkout and restarts and verifies LCM from a separate systemd unit. Automatic installation requires equal storage schemas so verification can safely restore the previous binary.
+
+Machine power defaults disabled and requires a [separately authorized helper installation](operations.md#local-machine-power-helper). That additional sudo permission accepts only a fixed no-argument root-owned wrapper running a pinned helper binary, independently of the self-deploy binary. Its permanent receipt ledger survives controller rollback. Direct administrator requests, acknowledged maintenance and verified OS/recovery prerequisites are required; no power policy node exists. Receipts prove handoff, not power completion. The [helper source contract](../internal/machine/power/README.md) defines the privileged boundary.
 
 Because the rule lives on the host, a document cannot widen it: allowlists, the privilege prefix and the reachable units are host configuration and are never read from a document. Do not set `NoNewPrivileges=yes` on LCM's own unit; it would disable `sudo`.
 

@@ -73,7 +73,8 @@ func (s *Syncer) timeline(ctx context.Context, ref Ref, kind, summary string, da
 	}
 }
 
-// alert publishes a signal.KindAlert with source "configsync". The signal
+// alert publishes a Service alert or a machine.config.* signal with source
+// "configsync". The signal
 // carries the service only as a label: with Signal.Service set, the
 // catalog's signal follower would add a second, less specific timeline
 // entry for the one written by timeline.
@@ -93,7 +94,13 @@ func (s *Syncer) alert(ref Ref, source, name, status, severity, message string, 
 	if ref.Kind == model.KindService {
 		labels["service"] = ref.Name
 	}
+	kind := signal.KindAlert
+	if ref.Kind == model.KindMachine {
+		// Machine conflicts must not enter legacy Service alert triggers.
+		kind = signal.Kind("machine." + name)
+		labels["machine"] = ref.Name
+	}
 	s.bus.Publish(signal.Signal{
-		Kind: signal.KindAlert, Source: SourceName, Severity: severity, Labels: labels, Data: data,
+		Kind: kind, Source: SourceName, Severity: severity, Labels: labels, Data: data,
 	})
 }
