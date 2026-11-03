@@ -2,7 +2,7 @@
 
 A `Machine` registers the Linux host running LCM. It adds OS observations, bounded history, maintenance and restricted power requests alongside the existing [Service](services.md) and [Policy](policies.md) models. It does not change Service runtimes or turn a Host into a remote execution target. Only one active local registration is allowed; retired registrations still occupy that slot.
 
-Basic monitoring uses Linux `/proc`, `/sys` and filesystem calls, with bounded `systemctl` queries for selected units. No extra monitoring packages are required. Journal collection uses the host's `journalctl`; full power control requires Linux/systemd and a separately installed helper. The implementation is integrated, but automated integration checks pass; privileged deployment and real hardware reboot/shutdown acceptance remain open. The helper is not installed or enabled by registration.
+Basic monitoring uses Linux `/proc`, `/sys` and filesystem calls, with bounded `systemctl` queries for selected units. No extra monitoring packages are required. Journal collection uses the host's `journalctl`; full power control requires Linux/systemd and a separately installed helper. Implementation and acceptance are complete; the [validation record](machine-validation.md) distinguishes automated checks from operator-confirmed deployment and hardware acceptance. The helper is not installed or enabled by registration.
 
 ## Registration and configuration
 

@@ -2,7 +2,7 @@
 
 LCM manages self-hosted software services and the Linux workstation running the controller. It checks services and performs deployments, rollbacks, restarts, backups and jobs from the console, CLI or policies. Local Machine management adds OS observations, bounded event history, maintenance and durable manual power requests. LCM ships as one Go binary with SQLite; current execution targets are local, and Kubernetes is outside its scope.
 
-**Status.** The local-service baseline is implemented and accepted. Local Machine code is integrated; automated checks pass; privileged deployment and real reboot/shutdown acceptance remain open. Power is disabled by default and requires a separately installed restricted helper. Registration does not install tools, grant privileges or operate power. SSH, cloud VMs and generalized Resource management remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
+**Status.** The local-service baseline and local Machine implementation are complete. Automated checks pass, and the operator confirmed all deployment and hardware acceptance complete on 2026-11-03; see the [validation record](docs/machine-validation.md). Power is disabled by default and requires a separately installed restricted helper. Registration does not install tools, grant privileges or operate power. SSH, cloud VMs and generalized Resource management remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
 
 ## Documentation
 

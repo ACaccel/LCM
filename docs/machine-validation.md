@@ -1,6 +1,6 @@
 # Local Machine validation
 
-Validated on 2026-11-01, Linux/amd64, on branch `feat/local-machine-lifecycle`. This records controller implementation checks; privileged installation and real power acceptance remain separate. Current behavior and constraints are defined in [machines.md](machines.md).
+Implementation checks completed on 2026-11-01, Linux/amd64; the implementation was merged to `main` as `72f7aa4`. The operator confirmed all remaining acceptance complete on 2026-11-03 and requested plan closure. This record distinguishes implementation checks from operator-confirmed deployment and hardware acceptance. Current behavior and constraints are defined in [machines.md](machines.md).
 
 ## Automated checks
 
@@ -41,14 +41,14 @@ The collaborative browser used a dedicated temporary data directory and loopback
 
 Journal permission/gap rendering, reconnect and uncertain-operation UI use synthetic tests. The browser run did not grant journal access, read selected-unit journals or test a real cross-boot backfill. Temporary processes and data are removed after verification.
 
-## Deployment acceptance still open
+## Operator-confirmed deployment acceptance
 
-The following require a separately authorized maintenance window and manual recovery arrangement:
+On 2026-11-03, the operator confirmed that all acceptance was complete, covering the previously open items below. This is an operator-reported result; no new privileged installation or hardware test was performed during documentation closure, and no additional measurements or operation IDs were supplied.
 
-- Root-owned wrapper/pinned helper/sudoers installation, trusted path permissions, ledger provisioning and local systemd/logind compatibility. Source artifacts and fake-command tests do not validate an installed helper.
-- Selected-unit journal permissions, persistent journal availability and actual cross-boot backfill. Missing optional access remains visible as limited coverage.
-- Real reboot completion and startup ordering; graceful shutdown followed by manual power-on. Same-host observation cannot prove physical power-off, and power-on remains unsupported.
-- Consistent production DB/binary/config/secrets backup and paired restore, with power disabled and independent receipt reconciliation. Never roll back or reset the helper ledger with the controller database.
-- Long-duration native polling/journal load on the target workstation. The synthetic load above does not replace this deployment measurement.
+- [x] Root-owned wrapper/pinned helper/sudoers installation, trusted path permissions, ledger provisioning and local systemd/logind compatibility.
+- [x] Selected-unit journal permissions, persistent journal availability and actual cross-boot backfill.
+- [x] Real reboot completion and startup ordering; graceful shutdown followed by manual power-on.
+- [x] Consistent production DB/binary/config/secrets backup and paired restore, with power disabled and independent receipt reconciliation.
+- [x] Long-duration native polling/journal load on the target workstation.
 
-The current implementation plan remains open for these deployment checks. Remote machines, cloud VMs, broader approval controls and monitoring extensions are tracked in the [roadmap](roadmap.md).
+Implementation and acceptance are closed, and the temporary local Machine plan has been removed. Acceptance does not change the runtime contract: same-host observation cannot prove physical power-off, power-on remains unsupported, and the independent helper ledger must never be reset or rolled back with the controller database. Other installations require their own deployment validation. Remote machines, cloud VMs, broader approval controls and monitoring extensions are tracked in the [roadmap](roadmap.md).
