@@ -3,6 +3,7 @@ package app_test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/monitor"
@@ -12,6 +13,12 @@ import (
 // healthy by reading the service variable, with no HTTP probe of its own.
 func TestServiceVarFeedsWaitUntil(t *testing.T) {
 	h := newHarness(t)
+	// Drain real HTTP probes before virtual time can reach their timeout.
+	advanceCheck := func() {
+		for range int(checkInterval / time.Second) {
+			h.advance(time.Second)
+		}
+	}
 	web := newSwitchable(t)
 	web.healthy.Store(false)
 	h.putService(fmt.Sprintf(`
@@ -34,7 +41,7 @@ spec:
     - id: wait
       type: wait.until
       props:
-        interval: 10s
+        interval: 20s
         timeout: 5m
         condition: 'inputs.svc.health == "healthy" && inputs.svc.checks.http.status == "up"'
         inputs: { svc: "{{ service[params.service] }}" }
@@ -45,9 +52,9 @@ spec:
 	if err := h.app.SyncMonitor(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(checkInterval)
-	if st, _ := h.app.Monitor.Service("web"); st.Health == monitor.HealthHealthy {
-		t.Fatalf("service healthy before it was repaired: %+v", st)
+	advanceCheck()
+	if st, ok := h.app.Monitor.Service("web"); !ok || st.Health != monitor.HealthDown {
+		t.Fatalf("health before repair = %+v", st)
 	}
 
 	runID, err := h.app.Engine.Start(h.ctx, "wait-healthy", "t", map[string]any{}, engine.ModeLive)
@@ -59,9 +66,12 @@ spec:
 	})
 
 	web.healthy.Store(true)
-	h.advance(checkInterval)
-	h.waitTimers(h.clk.Pending())
-	h.advance(checkInterval)
+	advanceCheck()
+	if st, ok := h.app.Monitor.Service("web"); !ok || st.Health != monitor.HealthHealthy {
+		t.Fatalf("health after repair = %+v", st)
+	}
+	// The monitor must publish recovery before the policy's next poll.
+	advanceCheck()
 
 	view := h.waitRun("wait-healthy", map[string]bool{})
 	if view.Status != engine.RunSucceeded {
