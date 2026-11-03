@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
 )
@@ -60,6 +61,10 @@ func every(ctx context.Context, clk clock.Clock, interval time.Duration, kick <-
 // retentionJobs deletes expired data. Each job reports how many rows it
 // removed; failures are logged and retried at the next interval.
 func (a *App) retentionJobs(ctx context.Context) {
+	actorCtx := auth.WithActor(ctx, auth.Actor{Kind: auth.KindSystem, ID: "security", Name: "security"})
+	if err := a.Security.Prune(actorCtx); err != nil && ctx.Err() == nil {
+		a.log.Warn("security retention failed", "error", err)
+	}
 	if err := a.Machines.Prune(ctx); err != nil && ctx.Err() == nil {
 		a.log.Warn("machine retention failed", "error", err)
 	}

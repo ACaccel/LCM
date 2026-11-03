@@ -115,6 +115,13 @@ func count(cmds []string, sub string) int {
 // policy, and the policy restarts the service through the command runtime.
 func TestSelfHealing(t *testing.T) {
 	h := newHarness(t)
+	// Let each real HTTP probe finish before virtual time can reach its
+	// timeout; a single ten-second jump races the asynchronous probe.
+	advanceCheck := func() {
+		for range int(checkInterval / time.Second) {
+			h.advance(time.Second)
+		}
+	}
 	web := newSwitchable(t)
 
 	// The restart command repairs the endpoint, as a real restart would.
@@ -160,13 +167,13 @@ spec:
 	}
 
 	// The first probe runs within the start spread; the service becomes healthy.
-	h.advance(checkInterval)
+	advanceCheck()
 	if st, ok := h.app.Monitor.Service("web"); !ok || st.Health != monitor.HealthHealthy {
 		t.Fatalf("health after first probe = %+v", st)
 	}
 
 	web.healthy.Store(false)
-	h.advance(checkInterval)
+	advanceCheck()
 
 	seen := map[string]bool{}
 	view := h.waitRun("self-heal", seen)
@@ -182,7 +189,7 @@ spec:
 	}
 
 	// The restart fixed the endpoint; the next probe sees it.
-	h.advance(checkInterval)
+	advanceCheck()
 	if st, _ := h.app.Monitor.Service("web"); st.Health != monitor.HealthHealthy {
 		t.Fatalf("health after recovery = %s", st.Health)
 	}

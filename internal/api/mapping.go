@@ -16,6 +16,8 @@ import (
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/monitor/alert"
+	"github.com/ACaccel/lcm/internal/security"
+	"github.com/ACaccel/lcm/internal/securityhost"
 	"github.com/ACaccel/lcm/internal/state"
 	"github.com/ACaccel/lcm/internal/trigger"
 )
@@ -48,6 +50,23 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		busy   *lock.BusyError
 	)
 	switch {
+	case errors.Is(err, securityhost.ErrConflict):
+		writeError(w, http.StatusConflict, codeConflict, publicMessage(err), details(nil))
+	case errors.Is(err, securityhost.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, codeUnavailable, publicMessage(err), details(nil))
+	case errors.Is(err, securityhost.ErrNotFound):
+		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
+	case errors.Is(err, security.ErrVersionConflict):
+		writeError(w, http.StatusConflict, codeVersionConflict, publicMessage(err), details(nil))
+	case errors.Is(err, security.ErrTestRate):
+		w.Header().Set("Retry-After", "300")
+		writeError(w, http.StatusTooManyRequests, codeRateLimited, publicMessage(err), details(nil))
+	case errors.Is(err, security.ErrDisabled):
+		writeError(w, http.StatusServiceUnavailable, codeUnavailable, publicMessage(err), details(nil))
+	case errors.Is(err, security.ErrConflict):
+		writeError(w, http.StatusConflict, codeConflict, publicMessage(err), details(nil))
+	case errors.Is(err, security.ErrCapacity):
+		writeError(w, http.StatusServiceUnavailable, codeUnavailable, publicMessage(err), details(nil))
 	case errors.Is(err, machine.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
 	case errors.Is(err, machine.ErrExists):

@@ -34,7 +34,7 @@ info:
 
     A browser session cookie (`POST /auth/login`) or `Authorization: Bearer <token>`.
     Sessions and `admin` tokens may use the whole API except token management,
-    which is session-only. `ingest` tokens may only call the alert, heartbeat and
+    which is session-only. `ingest` tokens may only call the alert, security-event, heartbeat and
     webhook endpoints (and `GET /auth/me`).
 servers:
   - url: /api/v1
@@ -2647,6 +2647,213 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /hooks/security/traffic:
+    post:
+      tags: [Monitoring]
+      operationId: ingestSecurityTraffic
+      summary: Persist typed Nginx traffic measurements without alert semantics
+      description: |
+        Accepts sessions, admin and ingest tokens; maximum 16 KiB. Immutable
+        windows are deduplicated by Machine, Service, category and both window
+        timestamps. A different payload for an existing window returns 409.
+        Normal measurements never create incidents or notifications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SecurityTraffic' }
+      responses:
+        '202':
+          description: Persisted observation or an identical retry
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, duplicate]
+                properties:
+                  accepted: { type: boolean }
+                  duplicate: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/Internal' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /security/traffic:
+    get:
+      tags: [Monitoring]
+      operationId: listSecurityTraffic
+      summary: Read bounded typed traffic history for Machine/Service correlation
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: machineId
+          in: query
+          schema:
+            type: string
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Newest receipt first, with original observation window times
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: '#/components/schemas/SecurityTraffic' }
+                        - type: object
+                          required: [id]
+                          properties:
+                            id: { type: integer }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/Internal' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /hooks/security:
+    post:
+      tags: [Monitoring]
+      operationId: ingestSecurityEvent
+      summary: Ingest a sanitized Machine-scoped security event
+      description: |
+        Accepts sessions, admin and ingest tokens. Maximum body 16 KiB.
+        eventId is globally unique and stable across retries. A different body
+        for an existing id is a conflict. Events older than ten minutes or
+        explicitly historical are stored without changing live incidents.
+        Timestamps allow five minutes of future skew and thirty days of history.
+        No raw command output, authentication material or request bodies belong here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SecurityEvent' }
+      responses:
+        '202':
+          description: Persisted event or an identical retry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecurityReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/Internal' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /security/status:
+    get:
+      tags: [Monitoring]
+      operationId: getSecurityStatus
+      summary: Read security ingestion and notification queue health
+      responses:
+        '200':
+          description: Delivery counters and latest observation progress
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SecurityStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '500': { $ref: '#/components/responses/Internal' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /security/incidents:
+    get:
+      tags: [Monitoring]
+      operationId: listSecurityIncidents
+      summary: Read bounded security incidents, newest first
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+        - name: machineId
+          in: query
+          schema:
+            type: string
+        - name: service
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum:
+            - machine
+            - service
+            - nginx
+            - auditd
+            - aide
+            - collector
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum:
+            - info
+            - warning
+            - critical
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum:
+            - firing
+            - resolved
+            - retired
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Incident page, including delivery failures and recoveries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/SecurityIncident' }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '500': { $ref: '#/components/responses/Internal' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /hooks/alerts/{source}:
     post:
       tags: [Ingest]
@@ -2922,6 +3129,562 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /security/incidents/{id}:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecurityIncident
+      summary: getSecurityIncident
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityIncidentDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /security/incidents/{id}/handling:
+    put:
+      tags:
+      - Monitoring
+      operationId: updateSecurityHandling
+      summary: updateSecurityHandling
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityHandling'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityHandlingUpdate'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: ^"[0-9]+"$
+        description: Strong quoted version; first version is "0".
+  /security/settings:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecuritySettings
+      summary: getSecuritySettings
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecuritySettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    put:
+      tags:
+      - Monitoring
+      operationId: updateSecuritySettings
+      summary: updateSecuritySettings
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecuritySettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecuritySettingsUpdate'
+      parameters:
+      - name: If-Match
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: ^"[0-9]+"$
+        description: Strong quoted version; first version is "0".
+  /security/test-notification:
+    post:
+      tags:
+      - Monitoring
+      operationId: startSecurityNotificationTest
+      summary: startSecurityNotificationTest
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '202':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityNotificationTest'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityTestRequest'
+  /security/tests/{id}:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecurityNotificationTest
+      summary: getSecurityNotificationTest
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityNotificationTest'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+  /security/traffic/series:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecurityTrafficSeries
+      summary: getSecurityTrafficSeries
+      description: Admin-only. At most seven days and 1000 nominal UTC buckets. Complete observation counters are assigned by
+        window start; gaps remain absent. RPS uses the union of observed intervals, not nominal bucket width. No percentiles
+        or NIC bandwidth.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecuritySeries'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      parameters:
+      - name: machineId
+        in: query
+        schema:
+          type: string
+      - name: service
+        in: query
+        schema:
+          type: string
+      - name: category
+        in: query
+        schema:
+          type: string
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: bucketSeconds
+        in: query
+        schema:
+          type: integer
+          enum:
+          - 60
+          - 300
+          - 900
+          - 3600
+  /security/host:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecurityHost
+      summary: getSecurityHost
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityHostStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /security/host/preview:
+    post:
+      tags:
+      - Monitoring
+      operationId: previewSecurityHost
+      summary: previewSecurityHost
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityHostPreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityHostPreviewRequest'
+  /security/host/apply:
+    post:
+      tags:
+      - Monitoring
+      operationId: applySecurityHost
+      summary: applySecurityHost
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '202':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityHostOperation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityHostApplyRequest'
+  /security/host/operations:
+    get:
+      tags:
+      - Monitoring
+      operationId: listSecurityHostOperations
+      summary: listSecurityHostOperations
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityHostOperations'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /security/host/operations/{id}:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecurityHostOperation
+      summary: getSecurityHostOperation
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Successful bounded response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityHostOperation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+
+  /security/settings/history:
+    get:
+      tags:
+      - Monitoring
+      operationId: getSecuritySettingsHistory
+      summary: Read the last hundred effective notification settings versions
+      description: Admin-only. Ingest tokens cannot read or manage this resource.
+      responses:
+        '200':
+          description: Durable change history.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SecuritySettingsHistory'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -3042,6 +3805,16 @@ components:
           schema: { $ref: "#/components/schemas/ModuleDocument" }
 
   responses:
+    Internal:
+      description: Internal server error.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unavailable:
+      description: Component disabled, capacity exceeded or shutting down.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     BadRequest:
       description: The request is malformed.
       content:
@@ -3096,6 +3869,755 @@ components:
               accepted: { type: boolean }
 
   schemas:
+    SecuritySettingsHistory:
+      type: object
+      required:
+      - version
+      - actor
+      - at
+      - reason
+      - notificationsEnabled
+      - cooldownSeconds
+      - minimumSeverity
+      additionalProperties: false
+      properties:
+        version:
+          type: integer
+        actor:
+          type: string
+        at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        notificationsEnabled:
+          type: boolean
+        cooldownSeconds:
+          type: integer
+        minimumSeverity:
+          type: string
+          enum:
+          - info
+          - warning
+          - critical
+    SecurityHandling:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      - acknowledged
+      - note
+      - silenceUntil
+      - updatedAt
+      - updatedBy
+      properties:
+        version:
+          type: integer
+        acknowledged:
+          type: boolean
+        note:
+          type: string
+        silenceUntil:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updatedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updatedBy:
+          type: string
+    SecurityHandlingHistory:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - action
+      - reason
+      - actor
+      - at
+      - silenceUntil
+      properties:
+        id:
+          type: integer
+        action:
+          type: string
+        reason:
+          type: string
+        actor:
+          type: string
+        at:
+          type: string
+          format: date-time
+        silenceUntil:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    SecurityHandlingUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - action
+      - reason
+      properties:
+        action:
+          type: string
+          enum:
+          - acknowledge
+          - note
+          - silence
+          - unsilence
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+        silenceUntil:
+          type: string
+          format: date-time
+    SecurityIncidentDetail:
+      type: object
+      additionalProperties: false
+      required:
+      - incident
+      - history
+      properties:
+        incident:
+          $ref: '#/components/schemas/SecurityIncident'
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/SecurityHandlingHistory'
+    SecuritySettings:
+      type: object
+      additionalProperties: false
+      required:
+      - version
+      - notificationsEnabled
+      - cooldownSeconds
+      - minimumSeverity
+      - rootEnabled
+      - notificationConfigured
+      - maxSilenceSeconds
+      properties:
+        version:
+          type: integer
+        notificationsEnabled:
+          type: boolean
+        cooldownSeconds:
+          type: integer
+        minimumSeverity:
+          type: string
+          enum:
+          - info
+          - warning
+          - critical
+        rootEnabled:
+          type: boolean
+        notificationConfigured:
+          type: boolean
+        maxSilenceSeconds:
+          type: integer
+    SecuritySettingsUpdate:
+      type: object
+      additionalProperties: false
+      required:
+      - notificationsEnabled
+      - cooldownSeconds
+      - minimumSeverity
+      - reason
+      properties:
+        notificationsEnabled:
+          type: boolean
+        cooldownSeconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+        minimumSeverity:
+          type: string
+          enum:
+          - info
+          - warning
+          - critical
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    SecurityNotificationTest:
+      type: object
+      additionalProperties: false
+      required:
+      - requestId
+      - incidentId
+      - state
+      - pending
+      properties:
+        requestId:
+          type: string
+        incidentId:
+          type: string
+        state:
+          type: string
+        pending:
+          type: boolean
+    SecurityTestRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - requestId
+      - reason
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    SecuritySeriesPoint:
+      type: object
+      additionalProperties: false
+      required:
+      - windowStart
+      - windowEnd
+      - requests
+      - status429
+      - status5xx
+      - dryRunHits
+      - requestBytes
+      - responseBytes
+      - observedWindows
+      - requestTimeSumMs
+      - requestTimeMaxMs
+      - averageMs
+      - requestsPerSecond
+      - observedSeconds
+      properties:
+        windowStart:
+          type: string
+          format: date-time
+        windowEnd:
+          type: string
+          format: date-time
+        requests:
+          type: integer
+        status429:
+          type: integer
+        status5xx:
+          type: integer
+        dryRunHits:
+          type: integer
+        requestBytes:
+          type: integer
+        responseBytes:
+          type: integer
+        observedWindows:
+          type: integer
+        requestTimeSumMs:
+          type: number
+        requestTimeMaxMs:
+          type: number
+        averageMs:
+          type: number
+        requestsPerSecond:
+          type: number
+        observedSeconds:
+          type: number
+    SecuritySeries:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - from
+      - to
+      - bucketSeconds
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SecuritySeriesPoint'
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        bucketSeconds:
+          type: integer
+    SecurityHostProfile:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - enabled
+      - required
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+        required:
+          type: boolean
+    SecurityHostLimit:
+      type: object
+      additionalProperties: false
+      required:
+      - category
+      - rate
+      - burst
+      - connections
+      properties:
+        category:
+          type: string
+          enum:
+          - auth
+          - api
+          - upload
+          - socket
+          - static
+          - other
+        rate:
+          type: string
+        burst:
+          type: integer
+        connections:
+          type: integer
+    SecurityHostSchedule:
+      type: object
+      additionalProperties: false
+      required:
+      - hour
+      - minute
+      properties:
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+    SecurityHostStatus:
+      type: object
+      additionalProperties: false
+      required:
+      - available
+      - reason
+      - machineId
+      - effectiveDigest
+      - capabilities
+      - aide
+      - audit
+      - nginx
+      - collector
+      properties:
+        available:
+          type: boolean
+        reason:
+          type: string
+        machineId:
+          type: string
+        effectiveDigest:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+            - action
+            - enabled
+            - reason
+            properties:
+              action:
+                type: string
+                enum:
+                - aide.check
+                - aide.schedule
+                - nginx.configure
+                - audit.profile
+                - aide.profile
+                - baseline.request
+              enabled:
+                type: boolean
+              reason:
+                type: string
+        aide:
+          type: object
+          additionalProperties: false
+          required:
+          - result
+          - lastRunAt
+          - nextRunAt
+          - baselineCreatedAt
+          - baselineDigest
+          - schedule
+          - profiles
+          - reportSummary
+          - targets
+          properties:
+            result:
+              type:
+              - string
+              - 'null'
+            lastRunAt:
+              type:
+              - string
+              - 'null'
+              format: date-time
+            nextRunAt:
+              type:
+              - string
+              - 'null'
+              format: date-time
+            baselineCreatedAt:
+              type:
+              - string
+              - 'null'
+              format: date-time
+            baselineDigest:
+              type:
+              - string
+              - 'null'
+            schedule:
+              oneOf:
+              - $ref: '#/components/schemas/SecurityHostSchedule'
+              - type: 'null'
+            profiles:
+              type: array
+              items:
+                $ref: '#/components/schemas/SecurityHostProfile'
+            targets:
+              type: [array, 'null']
+              maxItems: 256
+              items: {type: string, maxLength: 500}
+            reportSummary:
+              type:
+              - string
+              - 'null'
+        audit:
+          type: object
+          additionalProperties: false
+          required:
+          - enabled
+          - lost
+          - backlog
+          - rulesLoaded
+          - profiles
+          properties:
+            enabled:
+              type:
+              - integer
+              - 'null'
+            lost:
+              type:
+              - integer
+              - 'null'
+            backlog:
+              type:
+              - integer
+              - 'null'
+            rulesLoaded:
+              type:
+              - boolean
+              - 'null'
+            profiles:
+              type: array
+              items:
+                $ref: '#/components/schemas/SecurityHostProfile'
+        nginx:
+          type: object
+          additionalProperties: false
+          required:
+          - mode
+          - dryRunOnly
+          - r11Approved
+          - limits
+          properties:
+            mode:
+              type:
+              - string
+              - 'null'
+            dryRunOnly:
+              type: boolean
+            r11Approved:
+              type: boolean
+            limits:
+              type: array
+              items:
+                $ref: '#/components/schemas/SecurityHostLimit'
+        collector:
+          type: object
+          additionalProperties: false
+          required:
+          - observedAt
+          - lastDelivery
+          - queued
+          - dropped
+          - deliveryError
+          - health
+          properties:
+            observedAt:
+              type:
+              - string
+              - 'null'
+              format: date-time
+            lastDelivery:
+              type:
+              - string
+              - 'null'
+              format: date-time
+            queued:
+              type:
+              - integer
+              - 'null'
+            dropped:
+              type:
+              - integer
+              - 'null'
+            deliveryError:
+              type:
+              - string
+              - 'null'
+            health:
+              type: object
+              additionalProperties: true
+    SecurityHostPreviewRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - requestId
+      - action
+      - reason
+      - expectedDigest
+      - settings
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+        action:
+          type: string
+          enum:
+          - aide.check
+          - aide.schedule
+          - nginx.configure
+          - audit.profile
+          - aide.profile
+          - baseline.request
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+        expectedDigest:
+          type: string
+        settings:
+          type: object
+          description: Action-specific allowlisted typed settings; no paths, commands, configuration text or credentials.
+          additionalProperties: true
+    SecurityHostPreview:
+      type: object
+      additionalProperties: false
+      required:
+      - requestId
+      - action
+      - previewHash
+      - expiresAt
+      - changes
+      - requiresLocalApproval
+      properties:
+        requestId:
+          type: string
+        action:
+          type: string
+          enum:
+          - aide.check
+          - aide.schedule
+          - nginx.configure
+          - audit.profile
+          - aide.profile
+          - baseline.request
+        previewHash:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        changes:
+          type: array
+          items:
+            type: string
+        requiresLocalApproval:
+          type: boolean
+    SecurityHostApplyRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - requestId
+      - previewHash
+      - reason
+      properties:
+        requestId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]*$
+        previewHash:
+          type: string
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    SecurityHostOperation:
+      type: object
+      additionalProperties: false
+      required:
+      - seq
+      - id
+      - action
+      - state
+      - reason
+      - actor
+      - createdAt
+      - updatedAt
+      - result
+      - error
+      - previewHash
+      - effectiveDigest
+      properties:
+        seq:
+          type: integer
+        id:
+          type: string
+        action:
+          type: string
+          enum:
+          - aide.check
+          - aide.schedule
+          - nginx.configure
+          - audit.profile
+          - aide.profile
+          - baseline.request
+        state:
+          type: string
+          enum:
+          - prepared
+          - running
+          - succeeded
+          - failed
+          - indeterminate
+          - awaiting-local-approval
+        reason:
+          type: string
+        actor:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        result:
+          type: string
+        error:
+          type: string
+        previewHash:
+          type: string
+        effectiveDigest:
+          type: string
+    SecurityHostOperations:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - nextCursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SecurityHostOperation'
+        nextCursor:
+          type:
+          - string
+          - 'null'
+    SecurityTraffic:
+      type: object
+      required: [machineId, windowStart, windowEnd, category, requests, status429, status5xx, requestTimeSumMs, requestTimeMaxMs, responseBytes, requestBytes, dryRunHits]
+      properties:
+        machineId: { type: string, minLength: 1, maxLength: 100 }
+        service: { type: string, maxLength: 63 }
+        windowStart: { type: string, format: date-time }
+        windowEnd: { type: string, format: date-time }
+        category: { type: string, enum: [auth, api, upload, socket, static, other] }
+        requests: { type: integer, minimum: 0, maximum: 1000000000000 }
+        status429: { type: integer, minimum: 0, maximum: 1000000000000 }
+        status5xx: { type: integer, minimum: 0, maximum: 1000000000000 }
+        requestTimeSumMs: { type: number, minimum: 0 }
+        requestTimeMaxMs: { type: number, minimum: 0 }
+        responseBytes: { type: integer, minimum: 0 }
+        requestBytes: { type: integer, minimum: 0 }
+        dryRunHits: { type: integer, minimum: 0, maximum: 1000000000000 }
+    SecurityEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, machineId, source, fingerprint, status, severity, summary, observedAt]
+      properties:
+        eventId: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$' }
+        machineId: { type: string, minLength: 1, maxLength: 100 }
+        service: { type: string, maxLength: 63 }
+        source: { type: string, enum: [nginx, auditd, aide, collector] }
+        fingerprint: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$' }
+        status: { type: string, enum: [firing, resolved] }
+        severity: { type: string, enum: [info, warning, critical] }
+        summary: { type: string, minLength: 1, maxLength: 500 }
+        observedAt: { type: string, format: date-time }
+        historical: { type: boolean, default: false }
+    SecurityReceipt:
+      type: object
+      required: [accepted, duplicate, incidentId, historical]
+      properties:
+        accepted: { type: boolean }
+        duplicate: { type: boolean }
+        incidentId: { type: string }
+        historical: { type: boolean }
+    SecurityStatus:
+      type: object
+      required: [enabled, notificationsEnabled, machineId, pending, failed, overflow, expired, lastError, lastPollAt]
+      properties:
+        enabled: { type: boolean }
+        notificationsEnabled: { type: boolean }
+        machineId: { type: string }
+        pending: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        overflow: { type: integer, minimum: 0 }
+        expired: { type: integer, minimum: 0 }
+        lastError: { type: string }
+        lastPollAt: { type: [string, 'null'], format: date-time }
+    SecurityIncident:
+      type: object
+      required: [seq, id, machineId, service, source, fingerprint, state, severity, summary, openedAt, observedAt, updatedAt, occurrences, revision, delivery, lastError, handling]
+      properties:
+        handling: { $ref: '#/components/schemas/SecurityHandling' }
+        seq: { type: integer }
+        id: { type: string }
+        machineId: { type: string }
+        service: { type: string }
+        source: { type: string, enum: [nginx, auditd, aide, collector, machine, service] }
+        fingerprint: { type: string }
+        state: { type: string, enum: [firing, resolved, retired] }
+        severity: { type: string, enum: [info, warning, critical] }
+        summary: { type: string }
+        openedAt: { type: string, format: date-time }
+        observedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        occurrences: { type: integer, minimum: 1 }
+        revision: { type: integer, minimum: 1 }
+        delivery: { type: string, enum: [disabled, pending, sent, failed, overflow, expired, filtered] }
+        lastError: { type: string }
     MachineMaintenancePreview:
       type: object
       additionalProperties: false

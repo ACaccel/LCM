@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -531,13 +533,41 @@ func TestCronCatchUpAll(t *testing.T) {
 func TestCronCatchUpAllIsCapped(t *testing.T) {
 	x := newEnv(t, nil, "")
 	x.h.Deploy(x.e, policy("job", trig("trigger.cron", `{ schedule: "* * * * *", catchUp: all }`)))
+	waitForCronCheckpoint := func() {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var raw string
+			err := x.h.DB.Reader().QueryRowContext(context.Background(), `SELECT data FROM trigger_state WHERE policy='job' AND node_id='t'`).Scan(&raw)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				t.Fatal(err)
+			}
+			var state struct {
+				LastFire int64 `json:"lastFire"`
+			}
+			if err == nil {
+				if err = json.Unmarshal([]byte(raw), &state); err != nil {
+					t.Fatal(err)
+				}
+				if state.LastFire == x.h.Clock.Now().UnixMilli() {
+					return
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("cron catch-up did not persist its completion checkpoint")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	x.sync(t)
-	x.timers(1)
+	waitForCronCheckpoint()
 	x.m.Close()
 	x.h.Clock.Advance(3 * time.Hour) // 180 missed minutes
 	x.m = x.newManager(t, nil, "")
 	x.sync(t)
-	x.timers(1)
+	// Engine timers may be armed while catch-up is still queuing runs.
+	// The persisted cron checkpoint is written only after the whole batch.
+	waitForCronCheckpoint()
 	n := 0
 	for _, ev := range x.h.Events.Events() {
 		if ev.Kind == engine.EventRunQueued && ev.Policy == "job" {

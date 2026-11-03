@@ -6,6 +6,7 @@ Self-hosted Service and local Linux Machine lifecycle control plane: a single Go
 
 - Go 1.26+, standard library first: `net/http` with `ServeMux` patterns, `log/slog`, `flag`. No web framework, no ORM, no CLI framework.
 - SQLite via `modernc.org/sqlite` (pure Go; keep `CGO_ENABLED=0` builds working).
+- Restricted security host helper in `deploy/security-host/`: Python 3 standard library, with fixed JSON operations and separately provisioned root permissions.
 - Web console in `web/`: React 19, TypeScript (strict), Vite, `@xyflow/react`, TanStack Query, React Router, CodeMirror 6, `yaml`; API types generated from OpenAPI (`openapi-typescript`/`openapi-fetch`); plain CSS with variables; Vitest. Built output is embedded through `internal/webui`.
 - Hand-written `database/sql` queries; schema changes are new numbered files in `internal/store/migrations/`, applied at startup.
 
@@ -19,6 +20,7 @@ make fmt     # golangci-lint fmt (gofmt + goimports)
 make check   # fmt-check, vet, lint, test, plus web-check when Node is available: run before finishing any change
 make web     # npm ci (if needed) + vite build into internal/webui/dist
 make web-check  # in web/: tsc, eslint, vitest, generated API types up to date (npm run check)
+make security-host-check  # Python unittest fixtures for the restricted helper; included in make check
 ```
 
 Opt-in end-to-end scenarios (a real throwaway user-scope systemd unit, git repositories and the real clock; about 90 s): `LCM_IT_E2E=1 go test ./internal/app -run TestRealScenarios -v -count=1`. Diagnosis: `LCM_PPROF_LISTEN=127.0.0.1:6060` serves pprof (off by default).
@@ -47,6 +49,8 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/catalog/` | Service documents and versions, lifecycle state machine, deployments, timeline, the `Manager` that performs lifecycle actions, action availability and reconciliation |
 | `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external) and `CapabilitiesOf`, the actions a runtime configuration supports |
 | `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |
+| `internal/security/` | Bounded security incidents and traffic, operator handling, notification settings and durable Konata outbox |
+| `internal/securityhost/` | Typed preview/apply/query client and durable intent for the independently installed restricted security helper |
 | `internal/monitor/` | Health checks, history, rollups, health aggregation, alert ingestion; `alert/` parses Alertmanager, Uptime Kuma, Gatus and generic payloads |
 | `internal/machine/` | Local Machine registry, identity, snapshots/minute points, health transitions, journal checkpoints, archives, maintenance and durable operations; `observe/` contains bounded native probes, `power/` the restricted privileged protocol and independent receipts |
 | `internal/maintenance/` | Common local write gate held across Service/config-sync writes and persisted across machine maintenance; shared by all components in the controller |
@@ -84,6 +88,6 @@ See the README status for planned capabilities; export is currently the way back
 - Config sync never overwrites a drifted resource and never deletes one; documents carry no privileges (allowlists and unit scopes stay in host config). Git runs only through `execx` with a fixed environment and the repository after `--`.
 - Token and user management stays session-only: an API token must never be able to mint or revoke tokens.
 - LCM never records a state change it did not make: an action the runtime cannot perform is refused (`catalog.ErrUnsupported`), never configured as a no-op command.
-- Behavior visible to users is documented in one place: `README.md` for setup, CLI and configuration, `docs/services.md`, `docs/machines.md`, `docs/policies.md`, `docs/architecture.md` and `docs/operations.md` for the rest; update the page that owns a fact and link to it elsewhere.
+- Behavior visible to users is documented in one place: `README.md` for setup, CLI and configuration, `docs/services.md`, `docs/machines.md`, `docs/policies.md`, `docs/architecture.md`, `docs/operations.md` and `docs/security.md` for the rest; update the page that owns a fact and link to it elsewhere.
 - Lint findings are fixed, not disabled; a justified `//nolint:<linter> // reason` is the only exception.
 - Web console: UI text only in `web/src/strings.ts` (Traditional Chinese, technical terms in English); no node types or validation rules duplicated from the server (palette and forms come from `/node-types`, validation from `/validate`); the generated `web/src/api/schema.d.ts` is never edited by hand; no UI framework, no chart library.

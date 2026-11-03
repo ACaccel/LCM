@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,6 +109,11 @@ var DefaultAlertServiceLabels = []string{"lcm_service", "service"}
 
 // Config is the validated runtime configuration.
 type Config struct {
+	SecurityEnabled     bool
+	SecurityMachineID   string
+	SecurityKonataURL   string
+	SecurityTokenSecret string
+
 	Journalctl   string
 	MachinePower bool
 	Listen       string
@@ -281,6 +287,18 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	str(&c.Docker, EnvDocker)
 	str(&c.Git, EnvGit)
 	str(&c.Journalctl, "LCM_JOURNALCTL")
+	str(&c.SecurityMachineID, "LCM_SECURITY_MACHINE_ID")
+	str(&c.SecurityKonataURL, "LCM_SECURITY_KONATA_URL")
+	str(&c.SecurityTokenSecret, "LCM_SECURITY_TOKEN_SECRET")
+	if v := getenv("LCM_SECURITY_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			errs = append(errs, errors.New("LCM_SECURITY_ENABLED: invalid boolean"))
+		} else {
+			c.SecurityEnabled = b
+		}
+	}
+
 	if v := getenv("LCM_MACHINE_POWER"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -459,6 +477,21 @@ func (c Config) validateComponents() []error {
 	}
 	if c.GitHubWebhookSecret != "" && !secret.ValidName(c.GitHubWebhookSecret) {
 		errs = append(errs, fmt.Errorf("github webhook secret %q: not a valid secret name", c.GitHubWebhookSecret))
+	}
+	if c.SecurityEnabled && strings.TrimSpace(c.SecurityMachineID) == "" {
+		errs = append(errs, errors.New("security: immutable Machine id is required when enabled"))
+	}
+	if (c.SecurityKonataURL == "") != (c.SecurityTokenSecret == "") {
+		errs = append(errs, errors.New("security: configure both Konata route and token secret, or neither"))
+	}
+	if c.SecurityTokenSecret != "" && !secret.ValidName(c.SecurityTokenSecret) {
+		errs = append(errs, errors.New("security: invalid token secret name"))
+	}
+	if c.SecurityKonataURL != "" {
+		u, err := url.Parse(c.SecurityKonataURL)
+		if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !strings.HasPrefix(u.Path, "/notifications/") || strings.TrimPrefix(u.Path, "/notifications/") == "" || strings.Contains(strings.TrimPrefix(u.Path, "/notifications/"), "/") {
+			errs = append(errs, errors.New("security: Konata URL must be a loopback HTTP notification route without credentials or query"))
+		}
 	}
 	return errs
 }

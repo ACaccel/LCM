@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/engine/enginetest"
 	"github.com/ACaccel/lcm/internal/nodes/notify"
@@ -501,5 +504,33 @@ func TestDiscordShowsStatusStagesAndLink(t *testing.T) {
 	_ = json.Unmarshal([]byte(x.stub.requests()[0].Body), &body)
 	if want := "**T**\nm\nStatus: failed\n✓ Build\n✗ Health\nhttps://example.com/c"; body["content"] != want {
 		t.Fatalf("content = %q, want %q", body["content"], want)
+	}
+}
+
+func TestDurableKonataKeyAndRedirectIsolation(t *testing.T) {
+	s := newStub(t)
+	deps := notify.Deps{Secrets: secrets{"relay": "synthetic-key"}}
+	msg := notify.KonataMessage{Title: "Security incident", Summary: "Sanitized summary", Status: "failed", OccurredAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}
+	for range 2 {
+		if _, err := notify.SendKonata(context.Background(), deps, clock.Real(), s.URL+"/notifications/security-alerts", "relay", "sec-stable-incident", msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requests := s.requests()
+	if len(requests) != 2 || requests[0].Path != requests[1].Path || len(s.threads) != 1 {
+		t.Fatalf("durable key duplicated message: %+v", requests)
+	}
+	received := false
+	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { received = true }))
+	defer destination.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/credentials", http.StatusFound)
+	}))
+	defer redirect.Close()
+	if _, err := notify.SendKonata(context.Background(), deps, clock.Real(), redirect.URL+"/notifications/security-alerts", "relay", "sec-stable-incident", msg); err == nil {
+		t.Fatal("accepted redirect")
+	}
+	if received {
+		t.Fatal("bearer key followed relay redirect")
 	}
 }

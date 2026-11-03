@@ -6,6 +6,7 @@
 export const s = {
   appName: "LCM",
   nav: {
+    security: "資安",
     overview: "總覽",
     services: "服務",
     machines: "機器",
@@ -742,4 +743,21 @@ export const s = {
     title: "找不到頁面",
     body: "這個網址沒有對應的頁面。",
   },
+} as const;
+
+/** Security console copy follows the application's Traditional Chinese convention. */
+export const sec = {
+  title: "資安", overview: "總覽", incidents: "事件", traffic: "流量", rules: "規則與通知", checks: "排程與檢查",
+  machine: "Machine", machineHelp: "使用不可變 Machine ID 篩選；留空查詢全部。主機管理只作用於已設定的本機。",
+  service: "Service", all: "全部", unassigned: "未指定", from: "開始時間", to: "結束時間", source: "來源", severity: "嚴重度", state: "偵測狀態",
+  applyFilters: "套用篩選", filterInvalid: "請輸入有效且由早到晚的時間區間。", unknown: "未知", disabled: "停用", enabled: "啟用", healthy: "正常", problem: "異常",
+  refresh: "重新整理", readOnly: "唯讀", unavailable: "主機 helper 不可用或不相容。", noCapability: "此操作尚未獲得主機授權。",
+  status: "監控狀態", notifications: "通知", pending: "待送", failed: "投遞失敗", overflow: "容量丟棄", expired: "過期", lastPoll: "最近檢查", lastDelivery: "最近投遞", observed: "最近觀測",
+  statusHelp: "停用、資料過期、讀取失敗與未知狀態，均不代表主機健康。",
+  summary: "摘要", opened: "首次發生", updated: "最近更新", occurrences: "次數", delivery: "投遞", handling: "人工處理", saveHandling: "儲存事件處理", acknowledged: "已確認", notAcknowledged: "未確認",
+  reason: "原因／註記", reasonHelp: "必填，1～500 字元。人工確認不會將偵測狀態改為恢復。", acknowledge: "確認已讀", note: "儲存註記", silence: "限時靜音", unsilence: "解除靜音", silenceMinutes: "靜音分鐘數", silenceUntil: "靜音至", history: "處理紀錄", settingsHistory: "通知設定版本紀錄（最近 100 筆）", actor: "操作者", version: "版本", noHistory: "尚無人工處理紀錄。", emptyIncidents: "此條件下沒有事件。", close: "關閉", more: "載入更多", invalidReason: "請填寫 1～500 字元的原因。", conflict: "資料已由其他操作者更新，請重新載入後確認，系統不會自動覆寫。", saved: "已儲存", detectionHelp: "已讀與靜音只影響人工處理／通知，不停止偵測或收集。", noDetail: "選擇事件以查閱詳情。",
+  window: "時間區間", oneHour: "最近 1 小時", day: "最近 24 小時", week: "最近 7 天", category: "路由分類", requests: "請求數", rate: "觀測每秒請求", status429: "HTTP 429", status5xx: "HTTP 5xx", dryRun: "dry-run 命中", average: "平均耗時（ms）", maximum: "最大耗時（ms）", requestBytes: "HTTP 接收位元組", responseBytes: "HTTP 傳送位元組", noTraffic: "此區間沒有觀測資料，無法判定為零流量。", gaps: "缺少觀測的區間保持空白。平均耗時按請求數加權，HTTP 位元組不代表整機網路頻寬。", observedWindows: "觀測窗口數", chartTable: "逐區間數據", chartHelp: "圖表支援左右方向鍵查看已觀測區間；空白表示沒有觀測。", chartPoint: "觀測值", observedSeconds: "觀測秒數", rateHelp: "每秒速率以實際觀測秒數計算；觀測窗口跨越分桶邊界時完整歸入起始桶，不能把窗口數當成完整覆蓋率。", auditLocked: "啟用（稽核規則已鎖定）", updatedWindow: "更新時間區間",
+  notificationHelp: "沿用既有 Konata 私人頻道；頁面不顯示或接受通知目的地與憑證。", cooldown: "冷卻秒數", minimumSeverity: "最低通知級別", notificationsEnabled: "啟用資安通知", rootDisabled: "root 設定已停用資安模組，網頁不能覆寫。", notConfigured: "尚未設定受保護的通知管道。", saveSettings: "儲存通知設定", test: "發送標示為測試的通知", testHelp: "會實際發送 Discord 訊息並更新恢復狀態。重複查詢不會新增測試事件。", confirmedTest: "我確認要發送測試通知", testState: "測試狀態", queryTest: "查詢既有測試", uncertain: "要求可能已被接受；請先查詢原操作，勿建立新要求。", testReceipt: "測試事件", severityLabels: { info: "資訊", warning: "警告", critical: "嚴重" }, stateLabels: { firing: "異常中", resolved: "已恢復", retired: "已退役" },
+  aide: "AIDE 完整性", audit: "auditd 稽核", nginx: "Nginx 入口", collector: "收集器", lastRun: "上次檢查", nextRun: "下次檢查", baseline: "基線建立", digest: "生效版本", baselineDigest: "基線版本", report: "受限檢查摘要", targets: "比對目標", queue: "收集器待送", dropped: "收集器丟棄", lost: "稽核遺失", backlog: "稽核積壓", rulesLoaded: "規則已載入",
+  profiles: "核准監控範本", required: "必要，不能移除", auditProfiles: "auditd 範本", aideProfiles: "AIDE 範本", profileHelp: "只可切換 root 預先核准的選用範本。AIDE 範圍變更不會接受既有差異或自動重建基線。", noProfiles: "未回報核准範本。", hostScope: "以下控制作用於本機 Machine", schedule: "每日檢查時段", hour: "小時", minute: "分鐘", scheduleHelp: "主機當地時間，每日一次；保留 systemd timer 的執行抖動與低優先權。", scheduleAction: "預覽排程變更", scan: "手動執行 AIDE 比對", baselineRequest: "申請更新基線", baselineHelp: "本頁只建立更新申請；實際接受差異仍需本機 sudo 核准。完整原始報告與檔案內容不透過網頁公開。", nginxHelp: "僅調整已核准分類。觀察模式不會阻擋請求；本頁不能略過 R11 的資料與門檻審閱。", nginxMode: "入口模式", r11: "R11 本機核准", burst: "Burst", connections: "連線上限", preview: "預覽變更", previewTitle: "確認主機變更", previewExpires: "預覽到期", localApproval: "此操作需要後續本機 sudo 核准。", confirmHost: "我已審閱差異、作用範圍與原因", applyHost: "套用已預覽的變更", cancel: "取消", operation: "主機操作", operations: "操作紀錄", operationEmpty: "尚無主機操作紀錄。", queryOperation: "查詢操作", operationId: "操作編號", machineLink: "機器設定", machineMore: "載入更多機器", collectionHealth: "收集來源健康摘要", serviceLink: "服務設定", stale: "資料超過 5 分鐘未更新", previewStale: "生效版本已變更或預覽已到期，請重新預覽。", invalidNumber: "請確認數值範圍。", retainAttempt: "原要求已保留在此瀏覽器，重新整理後可繼續查詢。", storageError: "無法保存操作編號，未送出變更。請允許此網站使用瀏覽器儲存空間。", operationStates: { prepared: "已準備", running: "執行中", succeeded: "已驗證成功", failed: "失敗", indeterminate: "結果未確定", "awaiting-local-approval": "等待本機核准" },
 } as const;

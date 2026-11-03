@@ -26,6 +26,9 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Restricted security helper
+        run: python3 -m unittest discover -s deploy/security-host -p 'test_*.py'
+
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.15

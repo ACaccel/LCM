@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/nodes/internal/httpcall"
 	"github.com/ACaccel/lcm/internal/secret"
@@ -319,19 +320,8 @@ func sendKonata(ctx context.Context, rc *node.RunContext, d Deps, p Props, targe
 	if stages == nil {
 		stages = []Stage{}
 	}
-	b := map[string]any{
-		"title":      truncate(title, konataTitleLimit),
-		"summary":    truncate(p.Message, konataSummaryLimit),
-		"status":     status,
-		"stages":     stages,
-		"occurredAt": rc.Now().UTC().Format(time.RFC3339),
-	}
-	if p.Link != "" {
-		b["url"] = p.Link
-	}
-	resp, err := d.do(ctx, rc, httpcall.Spec{
-		Method: http.MethodPut, URL: strings.TrimRight(target, "/") + "/" + konataKey(rc.RunID+"."+thread),
-		Body: b, BearerSecret: p.TokenSecret,
+	resp, err := SendKonata(ctx, d, rc.Clock, target, p.TokenSecret, konataKey(rc.RunID+"."+thread), KonataMessage{
+		Title: title, Summary: p.Message, Status: status, Stages: stages, URL: p.Link, OccurredAt: rc.Now(),
 	})
 	if err != nil {
 		return nil, err
@@ -346,6 +336,53 @@ func sendKonata(ctx context.Context, rc *node.RunContext, d Deps, p Props, targe
 		out["messageId"] = id
 	}
 	return out, nil
+}
+
+// KonataMessage is the relay's bounded notification envelope.
+type KonataMessage struct {
+	Title      string
+	Summary    string
+	Status     string
+	Stages     []Stage
+	URL        string
+	OccurredAt time.Time
+}
+
+// SendKonata reuses the notify adapter with an explicit durable message key.
+// Callers outside policy runs must persist this key before the first attempt.
+// Credentials are resolved by name; HTTP errors redact the destination URL.
+func SendKonata(ctx context.Context, d Deps, clk clock.Clock, target, tokenSecret, key string, message KonataMessage) (httpcall.Response, error) {
+	if key == "" || konataKey(key) != key {
+		return httpcall.Response{}, errors.New("invalid Konata message key")
+	}
+	p := Props{Target: TargetKonata, URL: target, TokenSecret: tokenSecret, Message: message.Summary, Title: message.Title, Status: message.Status, Stages: message.Stages, Link: message.URL}
+	if err := validate(p); err != nil {
+		return httpcall.Response{}, err
+	}
+	if clk == nil {
+		clk = clock.Real()
+	}
+	stages := message.Stages
+	if stages == nil {
+		stages = []Stage{}
+	}
+	status := message.Status
+	if status == "" {
+		status = "running"
+	}
+	b := map[string]any{"title": truncate(message.Title, konataTitleLimit), "summary": truncate(message.Summary, konataSummaryLimit), "status": status, "stages": stages, "occurredAt": message.OccurredAt.UTC().Format(time.RFC3339)}
+	if message.URL != "" {
+		b["url"] = message.URL
+	}
+	// A relay must not redirect a privileged shared bearer key, even to a
+	// different loopback listener on the same machine.
+	client := d.Client
+	if client == nil {
+		client = httpcall.NewClient()
+	}
+	copyClient := *client
+	copyClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	return httpcall.Do(ctx, clk, &copyClient, d.Secrets, httpcall.Spec{Method: http.MethodPut, URL: strings.TrimRight(target, "/") + "/" + key, Body: b, BearerSecret: tokenSecret, SecretURL: true, Timeout: 10 * time.Second})
 }
 
 // konataKey maps s to the relay's key alphabet [A-Za-z0-9._-], at most 100

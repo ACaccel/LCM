@@ -7,7 +7,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 # work and the binary serves a page that says how to build the console.
 HAVE_NODE := $(shell command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && echo yes)
 
-.PHONY: build web web-check test lint fmt fmt-check vet check
+.PHONY: build web web-check security-host-check test lint fmt fmt-check vet check
 
 # Builds the console first when Node is available, so the binary embeds it.
 build:
@@ -46,7 +46,10 @@ fmt-check:
 	@out="$$(golangci-lint fmt --diff 2>&1)"; \
 	if [ -n "$$out" ]; then echo "$$out"; echo "Run 'make fmt' to fix formatting."; exit 1; fi
 
-check: fmt-check vet lint test
+security-host-check:
+	python3 -m unittest discover -s deploy/security-host -p 'test_*.py'
+
+check: fmt-check vet lint test security-host-check
 ifeq ($(HAVE_NODE),yes)
 	$(MAKE) web-check
 else

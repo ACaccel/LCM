@@ -43,6 +43,8 @@ import (
 	"github.com/ACaccel/lcm/internal/nodes/stateful"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 	"github.com/ACaccel/lcm/internal/secret"
+	"github.com/ACaccel/lcm/internal/security"
+	"github.com/ACaccel/lcm/internal/securityhost"
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/state"
 	"github.com/ACaccel/lcm/internal/store"
@@ -104,6 +106,8 @@ func WithObservers(obs ...engine.Observer) Option {
 // App is a fully wired LCM process. The exported components are for the
 // HTTP layer and tests; callers must not Close them individually.
 type App struct {
+	Security       *security.Manager
+	SecurityHost   *securityhost.Client
 	Machines       *machine.Manager
 	Maintenance    *maintenance.Gate
 	controllerLock *os.File
@@ -301,6 +305,29 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	if err != nil {
 		return nil, err
 	}
+	securityCfg := security.Config{DB: a.DB, Audit: a.Audit, Clock: clk, Enabled: cfg.SecurityEnabled, MachineID: cfg.SecurityMachineID}
+	if cfg.SecurityEnabled && cfg.SecurityKonataURL != "" {
+		securityCfg.Send = func(ctx context.Context, i security.Incident) error {
+			status := "failed"
+			if i.State == "resolved" {
+				status = "succeeded"
+			}
+			_, sendErr := notify.SendKonata(ctx, notify.Deps{Client: o.client, Secrets: a.Secrets}, clk, cfg.SecurityKonataURL, cfg.SecurityTokenSecret, i.ID, notify.KonataMessage{
+				Title:   "LCM security: " + i.Source + " / " + i.Severity,
+				Summary: i.State + " | Machine " + i.MachineID + " | " + i.Service + " | " + i.Summary,
+				Status:  status, OccurredAt: i.ObservedAt,
+			})
+			return sendErr
+		}
+	}
+	if a.Security, err = security.New(securityCfg); err != nil {
+		return nil, err
+	}
+	if cfg.SecurityMachineID != "" {
+		if a.SecurityHost, err = securityhost.New(securityhost.Config{DB: a.DB, Audit: a.Audit, Clock: clk, MachineID: cfg.SecurityMachineID}); err != nil {
+			return nil, err
+		}
+	}
 	ready("monitor", "concurrency", cfg.MonitorConcurrency)
 	a.syncer = newMonitorSyncer(a.Catalog, a.Monitor, log.With("component", "monitor"))
 	kick.Store(a.syncer)
@@ -383,8 +410,10 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 
 	info := buildinfo.Get()
 	a.api = api.New(api.Deps{
-		Machines: a.Machines,
-		DB:       a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
+		Machines:     a.Machines,
+		Security:     a.Security,
+		SecurityHost: a.SecurityHost,
+		DB:           a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
 		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now,
 		Catalog: a.Catalog, Manager: a.Manager, Monitor: a.Monitor, Engine: a.Engine, Triggers: a.Triggers,
 		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
@@ -474,6 +503,24 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	spawn("triggers", func() { afterRecovery(a.Triggers.Run) })
 	spawn("machines", func() { a.Machines.Run(runCtx) })
+	if a.Config.SecurityEnabled {
+		spawn("security observations", func() {
+			every(runCtx, a.Clock, time.Minute, nil, func(ctx context.Context) {
+				actorCtx := auth.WithActor(ctx, auth.Actor{Kind: auth.KindSystem, ID: "security", Name: "security"})
+				if err := a.Security.Poll(actorCtx, a.Machines, a.Monitor); err != nil && ctx.Err() == nil {
+					a.log.Warn("security observation reconciliation failed", "error", err)
+				}
+			})
+		})
+		spawn("security delivery", func() {
+			every(runCtx, a.Clock, time.Minute, nil, func(ctx context.Context) {
+				actorCtx := auth.WithActor(ctx, auth.Actor{Kind: auth.KindSystem, ID: "security", Name: "security"})
+				if err := a.Security.Deliver(actorCtx); err != nil && ctx.Err() == nil {
+					a.log.Warn("security delivery processing failed", "error", err)
+				}
+			})
+		})
+	}
 	spawn("lock releaser", func() { a.releaser.Run(runCtx, a.Engine) })
 	spawn("monitor sync", func() {
 		every(runCtx, a.Clock, monitorSyncInterval, a.syncer.kick, a.syncer.syncQuietly)

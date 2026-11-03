@@ -65,6 +65,26 @@ func (s *Server) routes() http.Handler {
 	handle("GET", v1+"/services/{svc}/timeline", admin(s.handleServiceTimeline))
 	handle("GET", v1+"/timeline", admin(s.handleTimeline))
 
+	// Security incident state is admin-only; collectors can only submit.
+	handle("POST", v1+"/hooks/security", ingest(s.handleSecurityHook))
+	handle("POST", v1+"/hooks/security/traffic", ingest(s.handleSecurityTrafficHook))
+	handle("GET", v1+"/security/traffic", admin(s.handleSecurityTraffic))
+	handle("GET", v1+"/security/status", admin(s.handleSecurityStatus))
+	handle("GET", v1+"/security/incidents", admin(s.handleSecurityIncidents))
+	handle("GET", v1+"/security/incidents/{id}", admin(s.handleSecurityIncident))
+	handle("PUT", v1+"/security/incidents/{id}/handling", admin(s.handleSecurityHandling))
+	handle("GET", v1+"/security/traffic/series", admin(s.handleSecuritySeries))
+	handle("GET", v1+"/security/settings", admin(s.handleSecuritySettings))
+	handle("GET", v1+"/security/settings/history", admin(s.handleSecuritySettingsHistory))
+	handle("PUT", v1+"/security/settings", admin(s.handleSecurityPutSettings))
+	handle("POST", v1+"/security/test-notification", admin(s.handleSecurityTest))
+	handle("GET", v1+"/security/tests/{id}", admin(s.handleSecurityGetTest))
+
+	handle("GET", v1+"/security/host", admin(s.handleSecurityHost))
+	handle("POST", v1+"/security/host/preview", admin(s.handleSecurityHostPreview))
+	handle("POST", v1+"/security/host/apply", admin(s.handleSecurityHostApply))
+	handle("GET", v1+"/security/host/operations", admin(s.handleSecurityHostOperations))
+	handle("GET", v1+"/security/host/operations/{id}", admin(s.handleSecurityHostOperation))
 	// Monitoring.
 	handle("GET", v1+"/services/{svc}/checks", admin(s.handleServiceChecks))
 	handle("GET", v1+"/services/{svc}/checks/{check}/series", admin(s.handleCheckSeries))
@@ -130,6 +150,7 @@ func (s *Server) routes() http.Handler {
 	// The two webhook patterns overlap in a way that forbids it for both
 	// (a fixed name and a wildcard name); other methods on them get 404.
 	delete(methods, v1+"/hooks/github")
+	delete(methods, v1+"/hooks/security")
 	delete(methods, v1+"/hooks/{name}")
 	for path, ms := range methods {
 		if contains(ms, "GET") {

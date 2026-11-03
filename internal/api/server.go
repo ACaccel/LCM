@@ -20,6 +20,8 @@ import (
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/secret"
+	"github.com/ACaccel/lcm/internal/security"
+	"github.com/ACaccel/lcm/internal/securityhost"
 	"github.com/ACaccel/lcm/internal/state"
 	"github.com/ACaccel/lcm/internal/store"
 	"github.com/ACaccel/lcm/internal/trigger"
@@ -34,12 +36,14 @@ const (
 
 // Deps are the collaborators and settings of a Server.
 type Deps struct {
-	Machines *machine.Manager
-	DB       *store.DB
-	Auth     *auth.Service
-	Audit    *audit.Log
-	Logger   *slog.Logger
-	Version  string
+	Security     *security.Manager
+	SecurityHost *securityhost.Client
+	Machines     *machine.Manager
+	DB           *store.DB
+	Auth         *auth.Service
+	Audit        *audit.Log
+	Logger       *slog.Logger
+	Version      string
 
 	// CookieSecure sets the Secure attribute on the session cookie.
 	CookieSecure bool
@@ -88,12 +92,14 @@ type Deps struct {
 
 // Server is the HTTP API.
 type Server struct {
-	machines *machine.Manager
-	db       *store.DB
-	auth     *auth.Service
-	audit    *audit.Log
-	log      *slog.Logger
-	version  string
+	security     *security.Manager
+	securityHost *securityhost.Client
+	machines     *machine.Manager
+	db           *store.DB
+	auth         *auth.Service
+	audit        *audit.Log
+	log          *slog.Logger
+	version      string
 
 	cookieSecure   bool
 	now            func() time.Time
@@ -130,8 +136,10 @@ type Server struct {
 // New builds a Server.
 func New(d Deps) *Server {
 	s := &Server{
-		machines: d.Machines,
-		db:       d.DB, auth: d.Auth, audit: d.Audit, log: d.Logger, version: d.Version,
+		machines:     d.Machines,
+		security:     d.Security,
+		securityHost: d.SecurityHost,
+		db:           d.DB, auth: d.Auth, audit: d.Audit, log: d.Logger, version: d.Version,
 		cookieSecure: d.CookieSecure, now: d.Now, loginFailDelay: d.LoginFailDelay,
 		cop:     http.NewCrossOriginProtection(),
 		catalog: d.Catalog, manager: d.Manager, monitor: d.Monitor, engine: d.Engine, triggers: d.Triggers,

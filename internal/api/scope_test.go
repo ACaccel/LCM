@@ -12,6 +12,8 @@ const testPassword = "correct horse battery staple"
 
 // ingestRoutes are the only protected routes an ingest-scoped token may use.
 var ingestRoutes = map[string]bool{
+	"POST /api/v1/hooks/security/traffic":   true,
+	"POST /api/v1/hooks/security":           true,
 	"GET /api/v1/auth/me":                   true,
 	"POST /api/v1/hooks/alerts/{source}":    true,
 	"POST /api/v1/heartbeats/{svc}/{check}": true,

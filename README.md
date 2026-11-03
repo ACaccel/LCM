@@ -11,6 +11,7 @@ LCM manages self-hosted software services and the Linux workstation running the 
 | [docs/roadmap.md](docs/roadmap.md) | Planned capabilities, priorities, dependencies, and completion criteria |
 | [docs/services.md](docs/services.md) | Service documents: runtimes and the actions they allow, deployments, health checks, lifecycle states, reconciliation, timeline |
 | [docs/machines.md](docs/machines.md) | Local Machine registration, native monitoring, event coverage, maintenance, power evidence and archives |
+| [docs/security.md](docs/security.md) | Security console, incidents, traffic, notifications and restricted host controls |
 | [docs/policies.md](docs/policies.md) | Policies, built-in templates, policy-as-code (git config sources, ownership, drift) |
 | [docs/architecture.md](docs/architecture.md) | Components, data flow, engine semantics, security model (authentication, tokens, privileges, secrets) |
 | [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), backup, upgrade, remote access |

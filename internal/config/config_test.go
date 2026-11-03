@@ -300,3 +300,49 @@ func TestMemoryLimitBytes(t *testing.T) {
 		t.Errorf("default = %q", c.MemoryLimit)
 	}
 }
+
+func TestSecurityConfiguration(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		if Default().SecurityEnabled {
+			t.Fatal("security enabled without configuration")
+		}
+	})
+	for _, tc := range []struct {
+		name, url, secret, machine string
+		enabled                    bool
+		valid                      bool
+	}{
+		{name: "observe only", machine: "immutable-id", enabled: true, valid: true},
+		{name: "loopback relay", url: "http://127.0.0.1:4100/notifications/security-alerts", secret: "konata-key", machine: "immutable-id", enabled: true, valid: true},
+		{name: "missing identity", enabled: true},
+		{name: "public relay", url: "http://example.org/notifications/security-alerts", secret: "key", machine: "id", enabled: true},
+		{name: "missing secret", url: "http://127.0.0.1:4100/notifications/security-alerts", machine: "id", enabled: true},
+		{name: "query credential", url: "http://127.0.0.1:4100/notifications/security-alerts?token=secret", secret: "key", machine: "id", enabled: true},
+		{name: "userinfo", url: "http://user@127.0.0.1:4100/notifications/security-alerts", secret: "key", machine: "id", enabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			c.SecurityEnabled = tc.enabled
+			c.SecurityMachineID = tc.machine
+			c.SecurityKonataURL = tc.url
+			c.SecurityTokenSecret = tc.secret
+			if err := c.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+		})
+	}
+	c, err := FromEnv(func(k string) string {
+		return map[string]string{"LCM_SECURITY_ENABLED": "true", "LCM_SECURITY_MACHINE_ID": "immutable-id"}[k]
+	})
+	if err != nil || !c.SecurityEnabled || c.SecurityMachineID != "immutable-id" {
+		t.Fatalf("environment: %+v %v", c, err)
+	}
+	if _, err = FromEnv(func(k string) string {
+		if k == "LCM_SECURITY_ENABLED" {
+			return "invalid"
+		}
+		return ""
+	}); err == nil {
+		t.Fatal("accepted malformed flag")
+	}
+}

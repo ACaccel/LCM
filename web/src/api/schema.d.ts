@@ -1371,6 +1371,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/hooks/security/traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Persist typed Nginx traffic measurements without alert semantics
+         * @description Accepts sessions, admin and ingest tokens; maximum 16 KiB. Immutable
+         *     windows are deduplicated by Machine, Service, category and both window
+         *     timestamps. A different payload for an existing window returns 409.
+         *     Normal measurements never create incidents or notifications.
+         */
+        post: operations["ingestSecurityTraffic"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/traffic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded typed traffic history for Machine/Service correlation */
+        get: operations["listSecurityTraffic"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/hooks/security": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest a sanitized Machine-scoped security event
+         * @description Accepts sessions, admin and ingest tokens. Maximum body 16 KiB.
+         *     eventId is globally unique and stable across retries. A different body
+         *     for an existing id is a conflict. Events older than ten minutes or
+         *     explicitly historical are stored without changing live incidents.
+         *     Timestamps allow five minutes of future skew and thirty days of history.
+         *     No raw command output, authentication material or request bodies belong here.
+         */
+        post: operations["ingestSecurityEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read security ingestion and notification queue health */
+        get: operations["getSecurityStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded security incidents, newest first */
+        get: operations["listSecurityIncidents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/hooks/alerts/{source}": {
         parameters: {
             query?: never;
@@ -1540,10 +1639,543 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/security/incidents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * getSecurityIncident
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["getSecurityIncident"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/incidents/{id}/handling": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * updateSecurityHandling
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        put: operations["updateSecurityHandling"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * getSecuritySettings
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["getSecuritySettings"];
+        /**
+         * updateSecuritySettings
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        put: operations["updateSecuritySettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/test-notification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * startSecurityNotificationTest
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        post: operations["startSecurityNotificationTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/tests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * getSecurityNotificationTest
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["getSecurityNotificationTest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/traffic/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * getSecurityTrafficSeries
+         * @description Admin-only. At most seven days and 1000 nominal UTC buckets. Complete observation counters are assigned by window start; gaps remain absent. RPS uses the union of observed intervals, not nominal bucket width. No percentiles or NIC bandwidth.
+         */
+        get: operations["getSecurityTrafficSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/host": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * getSecurityHost
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["getSecurityHost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/host/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * previewSecurityHost
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        post: operations["previewSecurityHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/host/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * applySecurityHost
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        post: operations["applySecurityHost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/host/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * listSecurityHostOperations
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["listSecurityHostOperations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/host/operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * getSecurityHostOperation
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["getSecurityHostOperation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/security/settings/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the last hundred effective notification settings versions
+         * @description Admin-only. Ingest tokens cannot read or manage this resource.
+         */
+        get: operations["getSecuritySettingsHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        SecuritySettingsHistory: {
+            version: number;
+            actor: string;
+            /** Format: date-time */
+            at: string;
+            reason: string;
+            notificationsEnabled: boolean;
+            cooldownSeconds: number;
+            /** @enum {string} */
+            minimumSeverity: "info" | "warning" | "critical";
+        };
+        SecurityHandling: {
+            version: number;
+            acknowledged: boolean;
+            note: string;
+            /** Format: date-time */
+            silenceUntil: string | null;
+            /** Format: date-time */
+            updatedAt: string | null;
+            updatedBy: string;
+        };
+        SecurityHandlingHistory: {
+            id: number;
+            action: string;
+            reason: string;
+            actor: string;
+            /** Format: date-time */
+            at: string;
+            /** Format: date-time */
+            silenceUntil: string | null;
+        };
+        SecurityHandlingUpdate: {
+            /** @enum {string} */
+            action: "acknowledge" | "note" | "silence" | "unsilence";
+            reason: string;
+            /** Format: date-time */
+            silenceUntil?: string;
+        };
+        SecurityIncidentDetail: {
+            incident: components["schemas"]["SecurityIncident"];
+            history: components["schemas"]["SecurityHandlingHistory"][];
+        };
+        SecuritySettings: {
+            version: number;
+            notificationsEnabled: boolean;
+            cooldownSeconds: number;
+            /** @enum {string} */
+            minimumSeverity: "info" | "warning" | "critical";
+            rootEnabled: boolean;
+            notificationConfigured: boolean;
+            maxSilenceSeconds: number;
+        };
+        SecuritySettingsUpdate: {
+            notificationsEnabled: boolean;
+            cooldownSeconds: number;
+            /** @enum {string} */
+            minimumSeverity: "info" | "warning" | "critical";
+            reason: string;
+        };
+        SecurityNotificationTest: {
+            requestId: string;
+            incidentId: string;
+            state: string;
+            pending: boolean;
+        };
+        SecurityTestRequest: {
+            requestId: string;
+            reason: string;
+        };
+        SecuritySeriesPoint: {
+            /** Format: date-time */
+            windowStart: string;
+            /** Format: date-time */
+            windowEnd: string;
+            requests: number;
+            status429: number;
+            status5xx: number;
+            dryRunHits: number;
+            requestBytes: number;
+            responseBytes: number;
+            observedWindows: number;
+            requestTimeSumMs: number;
+            requestTimeMaxMs: number;
+            averageMs: number;
+            requestsPerSecond: number;
+            observedSeconds: number;
+        };
+        SecuritySeries: {
+            items: components["schemas"]["SecuritySeriesPoint"][];
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            bucketSeconds: number;
+        };
+        SecurityHostProfile: {
+            name: string;
+            enabled: boolean;
+            required: boolean;
+        };
+        SecurityHostLimit: {
+            /** @enum {string} */
+            category: "auth" | "api" | "upload" | "socket" | "static" | "other";
+            rate: string;
+            burst: number;
+            connections: number;
+        };
+        SecurityHostSchedule: {
+            hour: number;
+            minute: number;
+        };
+        SecurityHostStatus: {
+            available: boolean;
+            reason: string;
+            machineId: string;
+            effectiveDigest: string;
+            capabilities: {
+                /** @enum {string} */
+                action: "aide.check" | "aide.schedule" | "nginx.configure" | "audit.profile" | "aide.profile" | "baseline.request";
+                enabled: boolean;
+                reason: string;
+            }[];
+            aide: {
+                result: string | null;
+                /** Format: date-time */
+                lastRunAt: string | null;
+                /** Format: date-time */
+                nextRunAt: string | null;
+                /** Format: date-time */
+                baselineCreatedAt: string | null;
+                baselineDigest: string | null;
+                schedule: components["schemas"]["SecurityHostSchedule"] | null;
+                profiles: components["schemas"]["SecurityHostProfile"][];
+                targets: string[] | null;
+                reportSummary: string | null;
+            };
+            audit: {
+                enabled: number | null;
+                lost: number | null;
+                backlog: number | null;
+                rulesLoaded: boolean | null;
+                profiles: components["schemas"]["SecurityHostProfile"][];
+            };
+            nginx: {
+                mode: string | null;
+                dryRunOnly: boolean;
+                r11Approved: boolean;
+                limits: components["schemas"]["SecurityHostLimit"][];
+            };
+            collector: {
+                /** Format: date-time */
+                observedAt: string | null;
+                /** Format: date-time */
+                lastDelivery: string | null;
+                queued: number | null;
+                dropped: number | null;
+                deliveryError: string | null;
+                health: {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        SecurityHostPreviewRequest: {
+            requestId: string;
+            /** @enum {string} */
+            action: "aide.check" | "aide.schedule" | "nginx.configure" | "audit.profile" | "aide.profile" | "baseline.request";
+            reason: string;
+            expectedDigest: string;
+            /** @description Action-specific allowlisted typed settings; no paths, commands, configuration text or credentials. */
+            settings: {
+                [key: string]: unknown;
+            };
+        };
+        SecurityHostPreview: {
+            requestId: string;
+            /** @enum {string} */
+            action: "aide.check" | "aide.schedule" | "nginx.configure" | "audit.profile" | "aide.profile" | "baseline.request";
+            previewHash: string;
+            /** Format: date-time */
+            expiresAt: string;
+            changes: string[];
+            requiresLocalApproval: boolean;
+        };
+        SecurityHostApplyRequest: {
+            requestId: string;
+            previewHash: string;
+            reason: string;
+        };
+        SecurityHostOperation: {
+            seq: number;
+            id: string;
+            /** @enum {string} */
+            action: "aide.check" | "aide.schedule" | "nginx.configure" | "audit.profile" | "aide.profile" | "baseline.request";
+            /** @enum {string} */
+            state: "prepared" | "running" | "succeeded" | "failed" | "indeterminate" | "awaiting-local-approval";
+            reason: string;
+            actor: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            result: string;
+            error: string;
+            previewHash: string;
+            effectiveDigest: string;
+        };
+        SecurityHostOperations: {
+            items: components["schemas"]["SecurityHostOperation"][];
+            nextCursor: string | null;
+        };
+        SecurityTraffic: {
+            machineId: string;
+            service?: string;
+            /** Format: date-time */
+            windowStart: string;
+            /** Format: date-time */
+            windowEnd: string;
+            /** @enum {string} */
+            category: "auth" | "api" | "upload" | "socket" | "static" | "other";
+            requests: number;
+            status429: number;
+            status5xx: number;
+            requestTimeSumMs: number;
+            requestTimeMaxMs: number;
+            responseBytes: number;
+            requestBytes: number;
+            dryRunHits: number;
+        };
+        SecurityEvent: {
+            eventId: string;
+            machineId: string;
+            service?: string;
+            /** @enum {string} */
+            source: "nginx" | "auditd" | "aide" | "collector";
+            fingerprint: string;
+            /** @enum {string} */
+            status: "firing" | "resolved";
+            /** @enum {string} */
+            severity: "info" | "warning" | "critical";
+            summary: string;
+            /** Format: date-time */
+            observedAt: string;
+            /** @default false */
+            historical: boolean;
+        };
+        SecurityReceipt: {
+            accepted: boolean;
+            duplicate: boolean;
+            incidentId: string;
+            historical: boolean;
+        };
+        SecurityStatus: {
+            enabled: boolean;
+            notificationsEnabled: boolean;
+            machineId: string;
+            pending: number;
+            failed: number;
+            overflow: number;
+            expired: number;
+            lastError: string;
+            /** Format: date-time */
+            lastPollAt: string | null;
+        };
+        SecurityIncident: {
+            handling: components["schemas"]["SecurityHandling"];
+            seq: number;
+            id: string;
+            machineId: string;
+            service: string;
+            /** @enum {string} */
+            source: "nginx" | "auditd" | "aide" | "collector" | "machine" | "service";
+            fingerprint: string;
+            /** @enum {string} */
+            state: "firing" | "resolved" | "retired";
+            /** @enum {string} */
+            severity: "info" | "warning" | "critical";
+            summary: string;
+            /** Format: date-time */
+            openedAt: string;
+            /** Format: date-time */
+            observedAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            occurrences: number;
+            revision: number;
+            /** @enum {string} */
+            delivery: "disabled" | "pending" | "sent" | "failed" | "overflow" | "expired" | "filtered";
+            lastError: string;
+        };
         MachineMaintenancePreview: {
             machineId: string;
             version: number;
@@ -2695,6 +3327,24 @@ export interface components {
         };
     };
     responses: {
+        /** @description Internal server error. */
+        Internal: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description Component disabled, capacity exceeded or shutting down. */
+        Unavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description The request is malformed. */
         BadRequest: {
             headers: {
@@ -5759,6 +6409,179 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    ingestSecurityTraffic: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityTraffic"];
+            };
+        };
+        responses: {
+            /** @description Persisted observation or an identical retry */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        accepted: boolean;
+                        duplicate: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listSecurityTraffic: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                machineId?: string;
+                service?: string;
+                category?: string;
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest receipt first, with original observation window times */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: (components["schemas"]["SecurityTraffic"] & {
+                            id: number;
+                        })[];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    ingestSecurityEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityEvent"];
+            };
+        };
+        responses: {
+            /** @description Persisted event or an identical retry */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityReceipt"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecurityStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Delivery counters and latest observation progress */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityStatus"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listSecurityIncidents: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                machineId?: string;
+                service?: string;
+                source?: "machine" | "service" | "nginx" | "auditd" | "aide" | "collector";
+                severity?: "info" | "warning" | "critical";
+                state?: "firing" | "resolved" | "retired";
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Incident page, including delivery failures and recoveries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["SecurityIncident"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     ingestAlert: {
         parameters: {
             query?: never;
@@ -6005,6 +6828,444 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getSecurityIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityIncidentDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    updateSecurityHandling: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Strong quoted version; first version is "0". */
+                "If-Match": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityHandlingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityHandling"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecuritySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecuritySettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    updateSecuritySettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Strong quoted version; first version is "0". */
+                "If-Match": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecuritySettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecuritySettings"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    startSecurityNotificationTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful bounded response. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityNotificationTest"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecurityNotificationTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityNotificationTest"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecurityTrafficSeries: {
+        parameters: {
+            query?: {
+                machineId?: string;
+                service?: string;
+                category?: string;
+                from?: string;
+                to?: string;
+                bucketSeconds?: 60 | 300 | 900 | 3600;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecuritySeries"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecurityHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityHostStatus"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    previewSecurityHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityHostPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityHostPreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    applySecurityHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecurityHostApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful bounded response. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityHostOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listSecurityHostOperations: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityHostOperations"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecurityHostOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful bounded response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecurityHostOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getSecuritySettingsHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Durable change history. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["SecuritySettingsHistory"][];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["Internal"];
+            503: components["responses"]["Unavailable"];
         };
     };
 }

@@ -41,6 +41,8 @@ A typical loop: a health check fails, `monitor` publishes a `health.changed` sig
 | `internal/engine` | Compiles policies into plans and runs them; checkpoints every node so runs survive restarts. |
 | `internal/catalog` | Service documents and versions, the lifecycle state machine, deployments, timeline; the `Manager` performs actions under a durable lock and reconciles states with the runtimes ([services](services.md#lifecycle-states-and-actions)). |
 | `internal/runtime` | Adapters that control processes (systemd, docker, compose, command, external) and declare which actions each configuration supports. |
+| `internal/security` | Bounded incident/traffic storage, operator handling, versioned notification preferences and durable Konata outbox. |
+| `internal/securityhost` | Typed preview/apply/query client for the independent root security helper; durable operator intent without generic privilege. |
 | `internal/monitor` | Health checks, history, rollups, health aggregation and alert ingestion. |
 | `internal/machine` | Local Linux Machine documents, snapshots, health, journal checkpoints, history and durable power operations; `observe/` provides bounded read-only probes, `power/` the restricted root helper protocol and independent receipt store. |
 | `internal/maintenance` | Durable local Machine maintenance gate shared by Service writes, config sync and self-deploy; observations continue. |

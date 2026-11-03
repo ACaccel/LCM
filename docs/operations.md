@@ -154,3 +154,25 @@ The target is under 50 MB resident. `LCM_MEMORY_LIMIT` (default `40MiB`, `off` d
 ## Remote access
 
 LCM serves plain HTTP. For access beyond localhost run a TLS-terminating reverse proxy (nginx, Caddy) in front, keep LCM on `127.0.0.1`, and set `LCM_COOKIE_SECURE=true`. The event stream (`/api/v1/events`) needs response buffering turned off in the proxy.
+
+
+## Security console host controls
+
+Use the authenticated Security navigation for incident handling, measured traffic,
+notification versions and host checks. Handling and settings changes require the
+displayed version and a reason. A notification test uses the configured relay route;
+wait for its firing and recovery revisions on the same message before accepting it.
+
+Install the restricted security helper only through a reviewed release; follow its
+[deployment and recovery contract](../deploy/security-host/README.md). Verify actual
+LCM-context `GET /api/v1/security/host` availability after installation, rather than
+relying on a root-only status probe. Preserve existing timer jitter, required audit
+coverage, Nginx dry-run and locally reviewed AIDE baseline. The web baseline action
+records a review request only. No optional profiles are enabled by default.
+
+Schema 11→13 needs an explicit upgrade with maintenance, paused automation and a
+matching DB/binary/health-artifact snapshot. Preserve notification environment and
+credentials. Validate fresh Machine/security observations and host availability before
+exiting maintenance. After exit might have succeeded, reconcile rather than rewinding
+later database history. Keep LCM self-deploy paused until its source includes both the
+existing security backend and the console release. See [security semantics](security.md#security-console-and-operator-controls).
