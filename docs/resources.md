@@ -166,7 +166,7 @@ spec:
     thresholds: { cpuPercent: 90, memoryPercent: 90, consecutive: 3, hysteresis: 5 }   # defaults
 ```
 
-**Status.** Real-device acceptance (login, observation, reboot and recovery on actual hardware) is pending the operator's confirmation; steps in [review.md](review.md#xiaomi-router-on-real-hardware). Login (SHA-1 and SHA-256 modes), observation, reboot and unknown outcomes are covered by automated tests against a simulated router only.
+**Status.** Real-device acceptance (login, observation, reboot and recovery on actual hardware) is pending the operator's confirmation. Login (SHA-1 and SHA-256 modes), observation, reboot and unknown outcomes are covered by automated tests against a simulated router only.
 
 ### Observation
 

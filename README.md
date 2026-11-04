@@ -2,7 +2,7 @@
 
 LCM manages self-hosted software services, the Linux workstation running the controller and network routers as one kind of object, the `lcm/v2` [Resource](docs/resources.md). It checks resources and performs deployments, rollbacks, restarts, backups and jobs from the console, CLI or policies. The local machine adds OS observations, bounded event history, maintenance and durable manual power requests; routers add observation and controlled reboots. Relations between resources drive impact previews, acknowledgement of disruptive actions and ordered group actions. LCM ships as one Go binary with SQLite; Kubernetes is outside its scope.
 
-**Status.** Services and the local machine are complete and accepted (operator-confirmed on 2026-11-03; see the [validation record](docs/machine-validation.md), which predates the resource model). The unified Resource model and Xiaomi routers were delivered on 2026-11-05 with automated checks; router acceptance on real hardware is pending the operator's confirmation ([pending acceptance](docs/review.md)). Upgrading replaces `lcm/v1` documents, API paths and CLI commands without aliases; see the [upgrade notes](docs/operations.md#upgrade-to-lcmv2-resources). Power is disabled by default and requires a separately installed restricted helper. SSH machines, cloud VMs and other resource types remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
+**Status.** Services and the local machine are complete and accepted (operator-confirmed on 2026-11-03; see the [validation record](docs/machine-validation.md), which predates the resource model). The unified Resource model and Xiaomi routers were delivered on 2026-11-05 with automated checks; router acceptance on real hardware is pending the operator's confirmation. Upgrading replaces `lcm/v1` documents, API paths and CLI commands without aliases; see the [upgrade notes](docs/operations.md#upgrade-to-lcmv2-resources). Power is disabled by default and requires a separately installed restricted helper. SSH machines, cloud VMs and other resource types remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
 
 ## Documentation
 
@@ -15,7 +15,6 @@ LCM manages self-hosted software services, the Linux workstation running the con
 | [docs/security.md](docs/security.md) | Security console, incidents, traffic, notifications and restricted host controls |
 | [docs/policies.md](docs/policies.md) | Policies, built-in templates, policy-as-code (git config sources, ownership, drift) |
 | [docs/architecture.md](docs/architecture.md) | Components, data flow, engine semantics, security model (authentication, tokens, privileges, secrets) |
-| [docs/review.md](docs/review.md) | Pending operator acceptance: steps, pass criteria and results |
 | [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), router connections, backup, upgrade (including `lcm/v2`), remote access |
 | [`internal/api/openapi.yaml`](internal/api/openapi.yaml) | The API v1 reference, also served at `GET /api/v1/openapi.yaml` |
 

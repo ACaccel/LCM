@@ -71,7 +71,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/templates/` | Built-in policy templates: descriptors and the renderer over `examples/templates/*.yaml` (embedded through the data-only `examples` package) |
 | `internal/buildinfo/` | Version metadata |
 | `deploy/` | Host installation: `bootstrap.sh` (root, idempotent), `seed.sh`, `uninstall.sh`, `self-install` (the only sudo command of the `lcm` account), unit, env, sudoers and the self-deploy documents; tested by `internal/app/deploy_test.go`, opt-in end-to-end `LCM_IT_SELFDEPLOY=1 go test ./internal/app -run TestRealSelfDeploy` |
-| `docs/` | `roadmap.md` (Traditional Chinese long-term priorities/status), `resources.md` (shared Resource model, connections, routers), `services.md` (service behavior), `machines.md` (local machine monitoring/control/recovery), `policies.md` (policies/templates/Git), `architecture.md` (components/security), `operations.md` (install, helper readiness, router connections, self-deploy, backup, upgrade), `review.md` (pending operator acceptance: steps, pass criteria, results) |
+| `docs/` | `roadmap.md` (Traditional Chinese long-term priorities/status), `resources.md` (shared Resource model, connections, routers), `services.md` (service behavior), `machines.md` (local machine monitoring/control/recovery), `policies.md` (policies/templates/Git), `architecture.md` (components/security), `operations.md` (install, helper readiness, router connections, self-deploy, backup, upgrade) |
 
 See the README status for planned capabilities; export is currently the way back to git.
 

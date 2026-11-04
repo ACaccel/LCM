@@ -182,7 +182,7 @@ Storage schema 14 replaces Service and Machine with one `lcm/v2` Resource model 
 
 ### Router connections
 
-To manage a [router](resources.md#routers), store its web password as a secret (for example `/var/lib/lcm/secrets/home-router-password`, owned by `lcm`, mode 0600), write the connections file (for example `/etc/lcm/connections.yaml`, `root:lcm 0640`), set `LCM_CONNECTIONS_FILE` in `/etc/lcm/lcm.env` and restart LCM. A wrong file or unresolvable secret stops startup; check `journalctl -u lcm`. Then apply the router document. Real-device acceptance of the router adapter is still pending; see [review.md](review.md#xiaomi-router-on-real-hardware).
+To manage a [router](resources.md#routers), store its web password as a secret (for example `/var/lib/lcm/secrets/home-router-password`, owned by `lcm`, mode 0600), write the connections file (for example `/etc/lcm/connections.yaml`, `root:lcm 0640`), set `LCM_CONNECTIONS_FILE` in `/etc/lcm/lcm.env` and restart LCM. A wrong file or unresolvable secret stops startup; check `journalctl -u lcm`. Then apply the router document. Real-device acceptance of the router adapter is still pending.
 
 ## Resource use
 
