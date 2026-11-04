@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,8 +22,8 @@ import (
 // validated by the registry.
 func validateDef(d Def) model.Issues {
 	id := d.ID()
-	if !serviceNameRe.MatchString(d.Service) {
-		return model.Issues{{Path: id, Message: fmt.Sprintf("invalid service name %q", d.Service)}}
+	if !resourceNameRe.MatchString(d.Resource) {
+		return model.Issues{{Path: id, Message: fmt.Sprintf("invalid resource name %q", d.Resource)}}
 	}
 	err := model.ValidateChecks([]model.Check{d.Check}, "checks")
 	var is model.Issues
@@ -68,22 +69,24 @@ func (e *entry) restorePersisted(row checkRow, now time.Time) {
 	e.okRun, e.failRun = row.okRun, row.failRun
 }
 
-// serviceLocked returns the named service, creating it from stored state
-// when it is first seen.
-func (m *Monitor) serviceLocked(name string, now time.Time) *service {
-	if svc := m.services[name]; svc != nil {
-		return svc
+// resourceLocked returns the named resource, creating it from stored state
+// when it is first seen, so that a restart does not look like a health
+// change.
+func (m *Monitor) resourceLocked(name string, now time.Time) *resource {
+	if r := m.resources[name]; r != nil {
+		return r
 	}
-	svc := &service{name: name, health: HealthUnknown, since: now, checks: map[string]*entry{}}
-	if row, ok := m.persistedSvc[name]; ok {
-		svc.health, svc.since, svc.labels = row.health, row.since, row.labels
+	r := &resource{name: name, health: HealthUnknown, since: now, checks: map[string]*entry{}}
+	if row, ok := m.persistedRes[name]; ok {
+		r.health, r.since, r.labels = row.health, row.since, row.labels
+		delete(m.persistedRes, name)
 	}
-	m.services[name] = svc
-	return svc
+	m.resources[name] = r
+	return r
 }
 
-func (s *service) row(now time.Time) serviceRow {
-	return serviceRow{service: s.name, health: s.health, since: s.since, labels: s.labels, at: now}
+func (r *resource) row(now time.Time) resourceRow {
+	return resourceRow{resource: r.name, health: r.health, since: r.since, labels: r.labels, at: now}
 }
 
 func equalLabels(a, b map[string]string) bool { return maps.Equal(a, b) }
@@ -193,12 +196,12 @@ func (m *Monitor) finish(e *entry, res *Result) {
 }
 
 // applyLocked records one result: it updates the check, derives status and
-// service health changes, and queues the storage writes. Signals are
+// resource health changes, and queues the storage writes. Signals are
 // published after the writes commit, so a subscriber that reads storage
 // never sees a change that is not stored yet. The returned channel closes
 // once that has happened.
 func (m *Monitor) applyLocked(e *entry, now time.Time, res Result) <-chan struct{} {
-	svc := m.services[e.service]
+	r := m.resources[e.resource]
 	e.lastAt, e.lastOK, e.lastLatency, e.lastMessage = now, res.OK, res.Latency, res.Message
 	e.stale = false
 	target, run := StatusDown, 0
@@ -214,24 +217,24 @@ func (m *Monitor) applyLocked(e *entry, now time.Time, res Result) <-chan struct
 	if target != e.status && run >= e.check.Threshold {
 		prev, prevSince := e.status, e.since
 		e.status, e.since = target, now
-		sigs = append(sigs, m.checkSignal(svc, e, prev, prevSince))
-		sigs, recs = m.healthChangeLocked(svc, now, sigs, recs)
-		recs = append(recs, svc.row(now))
+		sigs = append(sigs, m.checkSignal(r, e, prev, prevSince))
+		sigs, recs = m.healthChangeLocked(r, now, sigs, recs)
+		recs = append(recs, r.row(now))
 	}
 	recs = append(recs, e.row())
 	return m.commitLocked(sigs, recs)
 }
 
-// healthChangeLocked recomputes the service health and, when it changed,
-// appends the signal and the stored row.
-func (m *Monitor) healthChangeLocked(svc *service, now time.Time, sigs []signal.Signal, recs []record) ([]signal.Signal, []record) {
-	h := healthOf(svc.checks, false)
-	if h == svc.health {
+// healthChangeLocked recomputes the combined health of a resource and,
+// when it changed, appends the signal and the stored row.
+func (m *Monitor) healthChangeLocked(r *resource, now time.Time, sigs []signal.Signal, recs []record) ([]signal.Signal, []record) {
+	h := r.combined(false)
+	if h == r.health {
 		return sigs, recs
 	}
-	prev, prevSince := svc.health, svc.since
-	svc.health, svc.since = h, now
-	return append(sigs, m.healthSignal(svc, prev, prevSince)), append(recs, svc.row(now))
+	prev, prevSince := r.health, r.since
+	r.health, r.since = h, now
+	return append(sigs, m.healthSignal(r, prev, prevSince)), append(recs, r.row(now))
 }
 
 func (m *Monitor) commitLocked(sigs []signal.Signal, recs []record) <-chan struct{} {
@@ -250,7 +253,7 @@ func (m *Monitor) commitLocked(sigs []signal.Signal, recs []record) <-chan struc
 	return committed
 }
 
-func (m *Monitor) checkSignal(svc *service, e *entry, prev Status, prevSince time.Time) signal.Signal {
+func (m *Monitor) checkSignal(r *resource, e *entry, prev Status, prevSince time.Time) signal.Signal {
 	sev := signal.SeverityInfo
 	if e.status == StatusDown {
 		sev = signal.SeverityWarning
@@ -259,8 +262,8 @@ func (m *Monitor) checkSignal(svc *service, e *entry, prev Status, prevSince tim
 		}
 	}
 	return signal.Signal{
-		Kind: signal.KindCheck, Time: e.since, Service: e.service, Source: signalSource, Severity: sev,
-		Labels: cloneLabels(svc.labels),
+		Kind: signal.KindCheck, Time: e.since, Resource: e.resource, ResourceType: r.typ, Source: signalSource, Severity: sev,
+		Labels: cloneLabels(r.labels),
 		Data: map[string]any{
 			"check":         e.check.Name,
 			"type":          e.check.Type,
@@ -274,41 +277,47 @@ func (m *Monitor) checkSignal(svc *service, e *entry, prev Status, prevSince tim
 	}
 }
 
-func (m *Monitor) healthSignal(svc *service, prev Health, prevSince time.Time) signal.Signal {
+func (m *Monitor) healthSignal(r *resource, prev Health, prevSince time.Time) signal.Signal {
 	sev := signal.SeverityInfo
-	switch svc.health {
+	switch r.health {
 	case HealthDown:
 		sev = signal.SeverityCritical
 	case HealthDegraded:
 		sev = signal.SeverityWarning
 	}
-	failing := failingChecks(svc.checks)
+	failing := failingChecks(r.checks)
 	if failing == nil {
 		failing = []string{}
 	}
+	data := map[string]any{
+		"health":        string(r.health),
+		"previous":      string(prev),
+		"failing":       failing,
+		"since":         r.since.UTC().Format(time.RFC3339Nano),
+		"previousSince": prevSince.UTC().Format(time.RFC3339Nano),
+	}
+	if r.native != nil {
+		data["native"] = string(r.native.Health)
+		if len(r.native.Reasons) > 0 {
+			data["reasons"] = slices.Clone(r.native.Reasons)
+		}
+	}
 	return signal.Signal{
-		Kind: signal.KindHealth, Time: svc.since, Service: svc.name, Source: signalSource, Severity: sev,
-		Labels: cloneLabels(svc.labels),
-		Data: map[string]any{
-			"health":        string(svc.health),
-			"previous":      string(prev),
-			"failing":       failing,
-			"since":         svc.since.UTC().Format(time.RFC3339Nano),
-			"previousSince": prevSince.UTC().Format(time.RFC3339Nano),
-		},
+		Kind: signal.KindHealth, Time: r.since, Resource: r.name, ResourceType: r.typ, Source: signalSource, Severity: sev,
+		Labels: cloneLabels(r.labels), Data: data,
 	}
 }
 
 // Heartbeat records a received heartbeat for a heartbeat check. payload is
 // whatever the sender posted; only a short single-line excerpt is kept as
 // the result message. It returns once the heartbeat is stored.
-func (m *Monitor) Heartbeat(ctx context.Context, service, check string, payload []byte) error {
+func (m *Monitor) Heartbeat(ctx context.Context, resource, check string, payload []byte) error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return ErrClosed
 	}
-	id := checkID(service, check)
+	id := checkID(resource, check)
 	e := m.checks[id]
 	switch {
 	case e == nil:

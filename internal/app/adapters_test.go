@@ -1,8 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +15,7 @@ import (
 	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/store/storetest"
 )
 
@@ -83,22 +88,64 @@ func TestMonitorRunnerTranslatesResults(t *testing.T) {
 }
 
 func TestMonitorDefsSkipRetiredAndCarryLabels(t *testing.T) {
-	svc := func(name string, checks ...string) *model.Service {
-		s := &model.Service{}
-		s.Metadata = model.Metadata{Name: name, Labels: map[string]string{"tier": "web"}}
+	rec := func(name, typ, phase string, checks ...string) resource.Record {
+		doc := &model.Resource{}
+		doc.Metadata = model.Metadata{Name: name, Labels: map[string]string{"tier": "web"}}
 		for _, c := range checks {
-			s.Spec.Checks = append(s.Spec.Checks, model.Check{Name: c, Type: "http"})
+			doc.Spec.Checks = append(doc.Spec.Checks, model.Check{Name: c, Type: "http"})
 		}
-		return s
+		return resource.Record{Name: name, Type: typ, Phase: phase, Document: doc}
 	}
-	recs := []catalog.Record{
-		{Name: "a", State: catalog.StateRunning, Spec: svc("a", "one", "two")},
-		{Name: "b", State: catalog.StateRetired, Spec: svc("b", "one")},
-		{Name: "c", State: catalog.StateStopped, Spec: svc("c")},
-		{Name: "d", State: catalog.StateFailed},
+	recs := []resource.Record{
+		rec("a", model.ResourceService, resource.PhaseManaged, "one", "two"),
+		rec("b", model.ResourceService, resource.PhaseRetired, "one"),
+		rec("c", model.ResourceService, resource.PhaseManaged),
+		rec("host", model.ResourceMachine, resource.PhaseManaged, "ping"),
+		{Name: "d", Type: model.ResourceService, Phase: resource.PhaseManaged},
 	}
 	defs := monitorDefs(recs)
-	if len(defs) != 2 || defs[0].ID() != "a/one" || defs[1].ID() != "a/two" || defs[0].Labels["tier"] != "web" {
+	if len(defs) != 3 || defs[0].ID() != "a/one" || defs[1].ID() != "a/two" || defs[0].Labels["tier"] != "web" ||
+		defs[0].ResourceType != model.ResourceService || defs[2].ID() != "host/ping" || defs[2].ResourceType != model.ResourceMachine {
 		t.Fatalf("defs = %+v", defs)
+	}
+}
+
+// Migration warnings are repeated only while the named document is still at
+// the version the warning was recorded for.
+func TestMigrationWarningsStopOnceFixed(t *testing.T) {
+	ctx := context.Background()
+	db := storetest.Open(t)
+	doc := func(kind, name string) string {
+		return `{"apiVersion":"lcm/v2","kind":"` + kind + `","metadata":{"name":"` + name + `"},"spec":{"nodes":[]}}`
+	}
+	if err := db.Write(ctx, func(tx *sql.Tx) error {
+		for _, q := range []struct {
+			query string
+			args  []any
+		}{
+			{`INSERT INTO policy_versions (name, version, document, created_at, created_by_kind, created_by_id, created_by_name) VALUES (?, ?, ?, 0, 'system', 'cli', 'cli')`, []any{"stale", 1, doc("Policy", "stale")}},
+			{`INSERT INTO policy_versions (name, version, document, created_at, created_by_kind, created_by_id, created_by_name) VALUES (?, ?, ?, 0, 'system', 'cli', 'cli')`, []any{"fixed", 1, doc("Policy", "fixed")}},
+			{`INSERT INTO policy_versions (name, version, document, created_at, created_by_kind, created_by_id, created_by_name) VALUES (?, ?, ?, 0, 'system', 'cli', 'cli')`, []any{"fixed", 2, doc("Policy", "fixed")}},
+			{`INSERT INTO module_versions (name, version, document, created_at, created_by_kind, created_by_id, created_by_name) VALUES (?, ?, ?, 0, 'system', 'cli', 'cli')`, []any{"mod", 1, doc("Module", "mod")}},
+		} {
+			if _, err := tx.ExecContext(ctx, q.query, q.args...); err != nil {
+				return err
+			}
+		}
+		for _, w := range [][]any{{"Policy", "stale", 1}, {"Policy", "fixed", 1}, {"Policy", "gone", 1}, {"Module", "mod", 1}} {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO migration_warnings (migration, kind, name, version, message, created_at) VALUES (14, ?, ?, ?, 'needs work', 0)`, w...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	logMigrationWarnings(ctx, db, slog.New(slog.NewTextHandler(&buf, nil)))
+	out := buf.String()
+	if strings.Count(out, "converted document needs review") != 2 || !strings.Contains(out, "name=stale") || !strings.Contains(out, "name=mod") ||
+		strings.Contains(out, "name=fixed") || strings.Contains(out, "name=gone") {
+		t.Fatalf("logged:\n%s", out)
 	}
 }

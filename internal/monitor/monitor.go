@@ -36,7 +36,7 @@ const signalSource = "monitor"
 // maxRun caps the consecutive-result counters.
 const maxRun = 1 << 20
 
-var serviceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var resourceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // Config configures a Monitor.
 type Config struct {
@@ -63,21 +63,21 @@ type Config struct {
 	// run, which keeps a restart from starting every probe at once; 0
 	// selects DefaultStartSpread and a negative value disables it.
 	StartSpread time.Duration
-	// AlertServiceLabels name the labels that map an external alert to a
-	// service; nil selects "lcm_service" and "service".
-	AlertServiceLabels []string
+	// AlertResourceLabels name the labels that map an external alert to a
+	// resource; nil selects alert.DefaultResourceLabels.
+	AlertResourceLabels []string
 }
 
 // entry is one active check.
 type entry struct {
-	id      string
-	service string
-	check   model.Check // defaults applied
-	fp      string
-	built   Built
-	timer   clock.Timer
-	removed bool
-	running bool
+	id       string
+	resource string
+	check    model.Check // defaults applied
+	fp       string
+	built    Built
+	timer    clock.Timer
+	removed  bool
+	running  bool
 
 	status  Status
 	since   time.Time
@@ -100,25 +100,30 @@ type entry struct {
 
 func (e *entry) row() checkRow {
 	return checkRow{
-		id: e.id, service: e.service, name: e.check.Name, typ: e.check.Type, critical: e.check.IsCritical(),
+		id: e.id, resource: e.resource, name: e.check.Name, typ: e.check.Type, critical: e.check.IsCritical(),
 		interval: e.check.Interval.D(), status: e.status, since: e.since, okRun: e.okRun, failRun: e.failRun,
 		lastAt: e.lastAt, lastOK: e.lastOK, lastLatency: e.lastLatency, lastMessage: e.lastMessage, lastBeat: e.lastBeat,
 	}
 }
 
-// service groups the checks of one service.
-type service struct {
+// resource groups the checks and the native health of one resource. It
+// exists while it has at least one check or native input.
+type resource struct {
 	name   string
+	typ    string
 	labels map[string]string
 	// health is the stored view (stale statuses count as they were), the
 	// one changes are detected and published on.
 	health Health
 	since  time.Time
 	checks map[string]*entry // by check name
+	// native is the health the resource type reported through SetNative;
+	// nil when it reports none.
+	native *NativeStatus
 }
 
-// Monitor runs health checks, derives service health and publishes
-// changes. Create it with New and release it with Close.
+// Monitor runs health checks, combines them with native health into
+// resource health and publishes changes. Create it with New and release it with Close.
 type Monitor struct {
 	db       *store.DB
 	bus      *signal.Bus
@@ -142,12 +147,17 @@ type Monitor struct {
 	mu           sync.Mutex
 	closed       bool
 	checks       map[string]*entry
-	services     map[string]*service
+	resources    map[string]*resource
 	persisted    map[string]checkRow
-	persistedSvc map[string]serviceRow
-	pruneTimer   clock.Timer
-	inflight     int
-	idle         chan struct{}
+	persistedRes map[string]resourceRow
+	// gen counts Forget calls; forgotten maps a forgotten resource to the
+	// generation of its Forget, so that a Sync built from an older snapshot
+	// does not bring it back (see SyncAt).
+	gen        uint64
+	forgotten  map[string]uint64
+	pruneTimer clock.Timer
+	inflight   int
+	idle       chan struct{}
 }
 
 // New creates a Monitor and loads the stored state. No check runs until
@@ -181,7 +191,7 @@ func New(ctx context.Context, cfg Config) (*Monitor, error) {
 		return nil, errors.New("monitor: rollup retention must not be shorter than raw retention")
 	}
 
-	checks, services, err := loadState(ctx, cfg.DB.Reader())
+	checks, resources, err := loadState(ctx, cfg.DB.Reader())
 	if err != nil {
 		return nil, err
 	}
@@ -190,10 +200,10 @@ func New(ctx context.Context, cfg Config) (*Monitor, error) {
 		db: cfg.DB, bus: cfg.Bus, registry: cfg.Registry, env: Env{Runner: cfg.Runner}, clock: cfg.Clock,
 		log: cfg.Logger, w: newWriter(cfg.DB, cfg.Logger),
 		rawRetention: cfg.RawRetention, rollupRetention: cfg.RollupRetention, pruneInterval: cfg.PruneInterval, pruneChunk: defaultPruneChunk,
-		startSpread: cfg.StartSpread, alertLabels: cfg.AlertServiceLabels,
+		startSpread: cfg.StartSpread, alertLabels: cfg.AlertResourceLabels,
 		ctx: runCtx, cancel: cancel, sem: make(chan struct{}, cfg.Concurrency),
-		checks: map[string]*entry{}, services: map[string]*service{},
-		persisted: checks, persistedSvc: services,
+		checks: map[string]*entry{}, resources: map[string]*resource{},
+		persisted: checks, persistedRes: resources, forgotten: map[string]uint64{},
 	}
 	m.mu.Lock()
 	m.pruneTimer = m.clock.AfterFunc(m.pruneInterval, m.pruneTick)
@@ -284,13 +294,47 @@ func (m *Monitor) Close() error {
 // but are rescheduled; checks no longer listed stop and are forgotten.
 //
 // Invalid definitions do not stop the rest from being applied: they are
-// reported in the returned model.Issues (paths are "service/check..."), and
-// a check that was running keeps running with its previous definition.
+// reported in the returned model.Issues (paths are "resource/check..."),
+// and a check that was running keeps running with its previous definition.
+//
+// Native health (SetNative) is independent of the definitions: a resource
+// without checks stays as long as its type reports native health.
 func (m *Monitor) Sync(ctx context.Context, defs []Def) error {
+	return m.SyncAt(ctx, m.Generation(), defs)
+}
+
+// Generation returns the current Forget generation. A caller that builds
+// definitions from a snapshot reads it before taking the snapshot and
+// passes it to SyncAt.
+func (m *Monitor) Generation() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gen
+}
+
+// SyncAt is Sync for definitions taken from a snapshot made at generation
+// gen. Definitions of a resource forgotten after gen are ignored, because
+// the snapshot predates the change that made the resource leave
+// observation; a snapshot made after the Forget applies normally.
+func (m *Monitor) SyncAt(ctx context.Context, gen uint64, defs []Def) error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		return ErrClosed
+	}
+	for name, at := range m.forgotten {
+		if at <= gen {
+			delete(m.forgotten, name)
+		}
+	}
+	if len(m.forgotten) > 0 {
+		kept := make([]Def, 0, len(defs))
+		for _, d := range defs {
+			if _, stale := m.forgotten[d.Resource]; !stale {
+				kept = append(kept, d)
+			}
+		}
+		defs = kept
 	}
 	now := m.clock.Now()
 	var issues model.Issues
@@ -302,12 +346,18 @@ func (m *Monitor) Sync(ctx context.Context, defs []Def) error {
 	}
 	desired := map[string]wanted{}
 	seen := map[string]bool{}
-	seenSvc := map[string]bool{}
+	seenRes := map[string]bool{}
+	// Stored resources that had checks before the restart; the others were
+	// native-only and wait for their type's first SetNative.
+	hadChecks := map[string]bool{}
+	for _, row := range m.persisted {
+		hadChecks[row.resource] = true
+	}
 	var order []string
 	for _, d := range defs {
 		id := d.ID()
 		seen[id] = true
-		seenSvc[d.Service] = true
+		seenRes[d.Resource] = true
 		if is := validateDef(d); len(is) > 0 {
 			issues = append(issues, is...)
 			continue
@@ -358,9 +408,9 @@ func (m *Monitor) Sync(ctx context.Context, defs []Def) error {
 			e.timer.Stop()
 		}
 		delete(m.checks, id)
-		delete(m.services[e.service].checks, e.check.Name)
+		delete(m.resources[e.resource].checks, e.check.Name)
 		recs = append(recs, deleteCheckRec{id: id})
-		touched[e.service] = true
+		touched[e.resource] = true
 	}
 
 	for _, id := range order {
@@ -369,7 +419,7 @@ func (m *Monitor) Sync(ctx context.Context, defs []Def) error {
 		if old != nil && old.fp == w.fp {
 			continue
 		}
-		e := &entry{id: id, service: w.def.Service, check: w.check, fp: w.fp, built: w.built, status: StatusUnknown, since: now, anchor: now}
+		e := &entry{id: id, resource: w.def.Resource, check: w.check, fp: w.fp, built: w.built, status: StatusUnknown, since: now, anchor: now}
 		switch {
 		case old != nil:
 			old.removed = true
@@ -382,26 +432,29 @@ func (m *Monitor) Sync(ctx context.Context, defs []Def) error {
 		}
 		delete(m.persisted, id)
 		m.checks[id] = e
-		svc := m.serviceLocked(w.def.Service, now)
-		svc.checks[w.check.Name] = e
-		touched[w.def.Service] = true
+		r := m.resourceLocked(w.def.Resource, now)
+		r.checks[w.check.Name] = e
+		touched[w.def.Resource] = true
 		e.timer = m.clock.AfterFunc(m.firstDelay(id, w.check.Interval.D()), func() { m.fire(e) })
 		recs = append(recs, e.row())
 	}
 
-	// Labels follow the definitions even when no check changed.
-	labels := map[string]map[string]string{}
+	// Labels and types follow the definitions even when no check changed.
+	described := map[string]Def{}
 	for _, id := range order {
 		w := desired[id]
-		if _, ok := labels[w.def.Service]; !ok {
-			labels[w.def.Service] = w.def.Labels
+		if _, ok := described[w.def.Resource]; !ok {
+			described[w.def.Resource] = w.def
 		}
 	}
-	for name, l := range labels {
-		svc := m.serviceLocked(name, now)
-		if !equalLabels(svc.labels, l) {
-			svc.labels = cloneLabels(l)
+	for name, d := range described {
+		r := m.resourceLocked(name, now)
+		if !equalLabels(r.labels, d.Labels) {
+			r.labels = cloneLabels(d.Labels)
 			touched[name] = true
+		}
+		if d.ResourceType != "" {
+			r.typ = d.ResourceType
 		}
 	}
 
@@ -409,32 +462,36 @@ func (m *Monitor) Sync(ctx context.Context, defs []Def) error {
 	for id, row := range m.persisted {
 		if !seen[id] {
 			recs = append(recs, deleteCheckRec{id: id})
-			touched[row.service] = true
+			touched[row.resource] = true
 		}
 		delete(m.persisted, id)
 	}
 
 	var sigs []signal.Signal
 	for name := range touched {
-		svc := m.services[name]
-		if svc == nil {
+		r := m.resources[name]
+		if r == nil {
 			continue
 		}
-		if len(svc.checks) == 0 {
-			delete(m.services, name)
-			recs = append(recs, deleteServiceRec{service: name})
+		if len(r.checks) == 0 && r.native == nil {
+			delete(m.resources, name)
+			recs = append(recs, deleteResourceRec{resource: name})
 			continue
 		}
-		sigs, recs = m.healthChangeLocked(svc, now, sigs, recs)
-		recs = append(recs, svc.row(now))
+		sigs, recs = m.healthChangeLocked(r, now, sigs, recs)
+		recs = append(recs, r.row(now))
 	}
-	// Stored services whose checks all disappeared while the monitor was
-	// down. A service with only invalid definitions keeps its row.
-	for name := range m.persistedSvc {
-		if m.services[name] == nil && !seenSvc[name] {
-			recs = append(recs, deleteServiceRec{service: name})
+	// Stored resources whose checks all disappeared while the monitor was
+	// down. A resource with only invalid definitions keeps its row, and so
+	// does a native-only one until its type reports again or clears it.
+	for name := range m.persistedRes {
+		if !hadChecks[name] {
+			continue
 		}
-		delete(m.persistedSvc, name)
+		if m.resources[name] == nil && !seenRes[name] {
+			recs = append(recs, deleteResourceRec{resource: name})
+		}
+		delete(m.persistedRes, name)
 	}
 
 	var committed <-chan struct{}

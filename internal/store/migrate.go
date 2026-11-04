@@ -124,6 +124,11 @@ func apply(ctx context.Context, db *sql.DB, m migration) error {
 	if _, err := tx.ExecContext(ctx, m.sql); err != nil {
 		return fmt.Errorf("store: migration %s: %w", m.name, err)
 	}
+	if fn := goMigrations[m.version]; fn != nil {
+		if err := fn(ctx, tx); err != nil {
+			return fmt.Errorf("store: migration %s: %w", m.name, err)
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
 		m.version, m.name, time.Now().UnixMilli()); err != nil {

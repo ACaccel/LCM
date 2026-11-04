@@ -8,7 +8,7 @@ import (
 	"github.com/ACaccel/lcm/internal/signal"
 )
 
-// signalBuffer absorbs bursts (for example every check of a service
+// signalBuffer absorbs bursts (for example every check of a resource
 // flipping at once) while the engine writes each run to disk.
 const signalBuffer = 256
 
@@ -45,14 +45,19 @@ func (w *signalWatcher) run(ctx context.Context) {
 
 // matchSignal reports whether sig passes every configured filter.
 func matchSignal(p SignalProps, sig signal.Signal) bool {
-	// New machine sources must not widen legacy service wildcard subscriptions.
-	if strings.HasPrefix(string(sig.Kind), "machine.") && !slices.Contains(p.Kinds, string(sig.Kind)) {
+	// Config sync notifications (resource.<conflict>) are not part of the
+	// signal kinds a filter can name, so filters without kinds must not
+	// start receiving them.
+	if strings.HasPrefix(string(sig.Kind), "resource.") && !slices.Contains(p.Kinds, string(sig.Kind)) {
 		return false
 	}
 	if len(p.Kinds) > 0 && !slices.Contains(p.Kinds, string(sig.Kind)) {
 		return false
 	}
-	if len(p.Services) > 0 && !slices.Contains(p.Services, sig.Service) {
+	if len(p.Resources) > 0 && !slices.Contains(p.Resources, sig.Resource) {
+		return false
+	}
+	if len(p.Types) > 0 && !slices.Contains(p.Types, sig.ResourceType) {
 		return false
 	}
 	if len(p.Severities) > 0 && !slices.Contains(p.Severities, sig.Severity) {

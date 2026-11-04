@@ -12,11 +12,11 @@ import (
 
 func TestActionLifecycle(t *testing.T) {
 	x := newSite(t)
-	x.createService(serviceDoc("web", "  backup: { command: backup-web.sh }\n  jobs:\n    reindex: { command: reindex-web.sh }\n"))
+	x.createService(serviceDoc("web", "    backup: { command: backup-web.sh }\n    jobs:\n      reindex: { command: reindex-web.sh }\n"))
 	acts := x.collect(events.TypeAction)
 
 	// A dry run returns the plan and changes nothing.
-	plan := x.call("POST", v1+"/services/web/actions/start?dryRun=true", nil).want(http.StatusOK).obj()
+	plan := x.call("POST", v1+"/resources/web/actions/start?dryRun=true", nil).want(http.StatusOK).obj()
 	if plan["from"] != "registered" || plan["to"] != "running" || len(plan["steps"].([]any)) == 0 {
 		t.Fatalf("plan = %v", plan)
 	}
@@ -34,13 +34,13 @@ func TestActionLifecycle(t *testing.T) {
 	if res["from"] != "registered" || res["to"] != "running" || res["action"] != "start" {
 		t.Fatalf("result = %v", res)
 	}
-	if st := x.call("GET", v1+"/services/web", nil).obj()["state"]; st != "running" {
+	if st := x.call("GET", v1+"/resources/web", nil).obj()["state"]; st != "running" {
 		t.Fatalf("state after start = %v", st)
 	}
 
 	// Allowed in the new state, refused in the wrong one.
-	x.call("POST", v1+"/services/web/actions/start", nil).wantError(http.StatusConflict, "invalid_state")
-	x.call("POST", v1+"/services/web/actions/restart?dryRun=true", nil).want(http.StatusOK)
+	x.call("POST", v1+"/resources/web/actions/start", nil).wantError(http.StatusConflict, "invalid_state")
+	x.call("POST", v1+"/resources/web/actions/restart?dryRun=true", nil).want(http.StatusOK)
 
 	for _, step := range []struct {
 		action string
@@ -62,7 +62,7 @@ func TestActionLifecycle(t *testing.T) {
 	}
 
 	// The outcome is on the timeline and in the audit log.
-	tl := x.call("GET", v1+"/services/web/timeline?kinds=action,backup,job", nil).want(http.StatusOK).items()
+	tl := x.call("GET", v1+"/resources/web/timeline?kinds=action,backup,job", nil).want(http.StatusOK).items()
 	if len(tl) < 4 {
 		t.Fatalf("timeline = %v", tl)
 	}
@@ -90,36 +90,36 @@ func TestActionErrors(t *testing.T) {
 	x.createService(serviceDoc("web", ""))
 	acts := x.collect(events.TypeAction)
 
-	x.call("POST", v1+"/services/web/actions/explode", nil).wantError(http.StatusNotFound, "not_found")
-	x.call("POST", v1+"/services/ghost/actions/start", nil).wantError(http.StatusNotFound, "not_found")
-	x.call("POST", v1+"/services/web/actions/start", `{"nope":1}`).wantError(http.StatusBadRequest, "bad_request")
-	x.call("POST", v1+"/services/web/actions/start?dryRun=maybe", nil).wantError(http.StatusBadRequest, "bad_request")
-	x.call("POST", v1+"/services/web/actions/start", map[string]string{"version": "abc1234"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
-	x.call("POST", v1+"/services/web/actions/start", map[string]string{"job": "x"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
-	x.call("POST", v1+"/services/web/actions/run-job", nil).wantError(http.StatusUnprocessableEntity, "validation_failed")
-	x.call("POST", v1+"/services/web/actions/run-job", map[string]string{"job": "ghost"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	x.call("POST", v1+"/resources/web/actions/explode", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("POST", v1+"/resources/ghost/actions/start", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("POST", v1+"/resources/web/actions/start", `{"nope":1}`).wantError(http.StatusBadRequest, "bad_request")
+	x.call("POST", v1+"/resources/web/actions/start?dryRun=maybe", nil).wantError(http.StatusBadRequest, "bad_request")
+	x.call("POST", v1+"/resources/web/actions/start", map[string]string{"version": "abc1234"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	x.call("POST", v1+"/resources/web/actions/start", map[string]string{"job": "x"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	x.call("POST", v1+"/resources/web/actions/run-job", nil).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	x.call("POST", v1+"/resources/web/actions/run-job", map[string]string{"job": "ghost"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	// Missing configuration is a precondition, not a bad request.
-	x.call("POST", v1+"/services/web/actions/backup", nil).wantError(http.StatusConflict, "precondition_failed")
-	x.call("POST", v1+"/services/web/actions/deploy", nil).wantError(http.StatusConflict, "precondition_failed")
-	x.createService(serviceDoc("app", "  source: { repo: /srv/app, branch: main }\n"))
-	x.call("POST", v1+"/services/app/actions/deploy", map[string]string{"version": "nothex!"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
-	x.call("POST", v1+"/services/app/actions/rollback", nil).wantError(http.StatusConflict, "invalid_state")
-	plan := x.call("POST", v1+"/services/app/actions/deploy?dryRun=true", map[string]string{"version": "abc1234"}).want(http.StatusOK).obj()
+	x.call("POST", v1+"/resources/web/actions/backup", nil).wantError(http.StatusConflict, "precondition_failed")
+	x.call("POST", v1+"/resources/web/actions/deploy", nil).wantError(http.StatusConflict, "precondition_failed")
+	x.createService(serviceDoc("app", "    source: { repo: /srv/app, branch: main }\n"))
+	x.call("POST", v1+"/resources/app/actions/deploy", map[string]string{"version": "nothex!"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	x.call("POST", v1+"/resources/app/actions/rollback", nil).wantError(http.StatusConflict, "invalid_state")
+	plan := x.call("POST", v1+"/resources/app/actions/deploy?dryRun=true", map[string]string{"version": "abc1234"}).want(http.StatusOK).obj()
 	if plan["to"] != "running" || len(plan["steps"].([]any)) < 3 {
 		t.Fatalf("deploy plan = %v", plan)
 	}
 	x.call("GET", v1+"/actions/act_unknown", nil).wantError(http.StatusNotFound, "not_found")
 
 	// A held lock is reported before anything starts.
-	if _, err := x.app.Locks.TryAcquire(x.ctx, "service:web", "someone-else", time.Hour); err != nil {
+	if _, err := x.app.Locks.TryAcquire(x.ctx, "resource:web", "someone-else", time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	d := x.call("POST", v1+"/services/web/actions/start", nil).wantError(http.StatusConflict, "lock_held")
-	if d["owner"] != "someone-else" || d["lock"] != "service:web" {
+	d := x.call("POST", v1+"/resources/web/actions/start", nil).wantError(http.StatusConflict, "lock_held")
+	if d["owner"] != "someone-else" || d["lock"] != "resource:web" {
 		t.Fatalf("lock details = %v", d)
 	}
-	x.call("POST", v1+"/services/web/actions/start?dryRun=true", nil).want(http.StatusOK)
-	if _, err := x.app.Locks.Release(x.ctx, "service:web", "someone-else"); err != nil {
+	x.call("POST", v1+"/resources/web/actions/start?dryRun=true", nil).want(http.StatusOK)
+	if _, err := x.app.Locks.Release(x.ctx, "resource:web", "someone-else"); err != nil {
 		t.Fatal(err)
 	}
 

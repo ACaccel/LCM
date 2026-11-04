@@ -1,5 +1,5 @@
 // Package signal carries events that may trigger policies or appear on a
-// service timeline: check and health changes, lifecycle state changes and
+// resource timeline: check and health changes, lifecycle state changes and
 // external alerts. Producers publish to a Bus; consumers such as the
 // trigger manager and the timeline subscribe.
 //
@@ -25,9 +25,9 @@ type Kind string
 const (
 	// KindCheck: one check changed status. Data: check, status, previous, message.
 	KindCheck Kind = "check.changed"
-	// KindHealth: a service's aggregated health changed. Data: health, previous.
+	// KindHealth: a resource's combined health changed. Data: health, previous.
 	KindHealth Kind = "health.changed"
-	// KindLifecycle: a service's lifecycle state changed. Data: state, previous, action.
+	// KindLifecycle: a service resource's lifecycle state changed. Data: state, previous, action.
 	KindLifecycle Kind = "lifecycle.changed"
 	// KindAlert: an external alert fired or resolved. Data: alert, status, source-specific fields.
 	KindAlert Kind = "alert"
@@ -43,14 +43,17 @@ const (
 // Signal is one event. Data must be JSON-serializable; it becomes the
 // trigger payload of runs started by the signal.
 type Signal struct {
-	ID       string            `json:"id"`
-	Kind     Kind              `json:"kind"`
-	Time     time.Time         `json:"time"`
-	Service  string            `json:"service,omitempty"`
-	Source   string            `json:"source"`
-	Severity string            `json:"severity,omitempty"`
-	Labels   map[string]string `json:"labels,omitempty"`
-	Data     map[string]any    `json:"data,omitempty"`
+	ID   string    `json:"id"`
+	Kind Kind      `json:"kind"`
+	Time time.Time `json:"time"`
+	// Resource names the resource the signal is about, if any.
+	Resource string `json:"resource,omitempty"`
+	// ResourceType is the type of Resource, such as "service".
+	ResourceType string            `json:"resourceType,omitempty"`
+	Source       string            `json:"source"`
+	Severity     string            `json:"severity,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+	Data         map[string]any    `json:"data,omitempty"`
 }
 
 // Bus fans signals out to subscribers.
@@ -120,7 +123,7 @@ func (b *Bus) Publish(sig Signal) Signal {
 		default:
 			if n := s.dropped.Add(1); n == 1 || n%100 == 0 {
 				b.log.Warn("signal subscriber is falling behind; signal dropped",
-					"subscriber", s.name, "kind", sig.Kind, "service", sig.Service, "dropped", n)
+					"subscriber", s.name, "kind", sig.Kind, "resource", sig.Resource, "dropped", n)
 			}
 		}
 	}

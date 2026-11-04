@@ -10,13 +10,14 @@
 //     the operator configures, so LCM defines the expected shape:
 //     {"endpoint":"[ENDPOINT_NAME]","group":"[ENDPOINT_GROUP]",
 //     "url":"[ENDPOINT_URL]","description":"[ALERT_DESCRIPTION]",
-//     "status":"[ALERT_TRIGGERED_OR_RESOLVED]"}; "service", "severity" and
-//     "message" are optional extra fields.
-//   - generic: {"service","alert","status":"firing|resolved","severity",
-//     "labels","message"} as one object or an array of objects.
+//     "status":"[ALERT_TRIGGERED_OR_RESOLVED]"}; "resource" (or "service"),
+//     "severity" and "message" are optional extra fields.
+//   - generic: {"resource","alert","status":"firing|resolved","severity",
+//     "labels","message"} as one object or an array of objects; "service"
+//     is accepted in place of "resource".
 //
-// A payload maps to a service through the first label of
-// Options.ServiceLabels that is present.
+// A payload without an explicit resource maps to one through the first
+// label of Options.ResourceLabels that is present.
 package alert
 
 import (
@@ -52,8 +53,9 @@ const (
 	DataMessage     = "message"
 )
 
-// DefaultServiceLabels are the labels that name the service of an alert.
-var DefaultServiceLabels = []string{"lcm_service", "service"}
+// DefaultResourceLabels are the labels that name the resource of an alert.
+// The service labels stay accepted because existing alert rules use them.
+var DefaultResourceLabels = []string{"lcm_resource", "resource", "lcm_service", "service"}
 
 // Errors returned by Parse.
 var (
@@ -63,21 +65,22 @@ var (
 
 // Options tunes parsing.
 type Options struct {
-	// ServiceLabels lists the labels (or tag names) that carry the service
-	// name, in order of preference; nil selects DefaultServiceLabels.
-	ServiceLabels []string
+	// ResourceLabels lists the labels (or tag names) that carry the
+	// resource name, in order of preference; nil selects
+	// DefaultResourceLabels.
+	ResourceLabels []string
 }
 
-func (o Options) serviceLabels() []string {
-	if len(o.ServiceLabels) == 0 {
-		return DefaultServiceLabels
+func (o Options) resourceLabels() []string {
+	if len(o.ResourceLabels) == 0 {
+		return DefaultResourceLabels
 	}
-	return o.ServiceLabels
+	return o.ResourceLabels
 }
 
-// serviceOf returns the first service label present in labels.
-func (o Options) serviceOf(labels map[string]string) string {
-	for _, k := range o.serviceLabels() {
+// resourceOf returns the first resource label present in labels.
+func (o Options) resourceOf(labels map[string]string) string {
+	for _, k := range o.resourceLabels() {
 		if v := strings.TrimSpace(labels[k]); v != "" {
 			return v
 		}
@@ -155,7 +158,16 @@ func labelFingerprint(labels map[string]string) string {
 	return fingerprint(parts...)
 }
 
-func build(source, service, name, status, severity, message, fp string, labels map[string]string, extra map[string]any) signal.Signal {
+// explicitResource returns the resource named by a payload field: resource
+// is preferred, service is its older name.
+func explicitResource(resource, service string) string {
+	if r := strings.TrimSpace(resource); r != "" {
+		return r
+	}
+	return strings.TrimSpace(service)
+}
+
+func build(source, resource, name, status, severity, message, fp string, labels map[string]string, extra map[string]any) signal.Signal {
 	data := map[string]any{
 		DataAlert:       name,
 		DataStatus:      status,
@@ -169,7 +181,7 @@ func build(source, service, name, status, severity, message, fp string, labels m
 	}
 	return signal.Signal{
 		Kind:     signal.KindAlert,
-		Service:  service,
+		Resource: resource,
 		Source:   source,
 		Severity: severity,
 		Labels:   labels,

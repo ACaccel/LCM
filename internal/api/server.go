@@ -12,6 +12,7 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/configsync"
+	"github.com/ACaccel/lcm/internal/connection"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/lock"
@@ -19,6 +20,7 @@ import (
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/node"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/secret"
 	"github.com/ACaccel/lcm/internal/security"
 	"github.com/ACaccel/lcm/internal/securityhost"
@@ -38,12 +40,16 @@ const (
 type Deps struct {
 	Security     *security.Manager
 	SecurityHost *securityhost.Client
-	Machines     *machine.Manager
-	DB           *store.DB
-	Auth         *auth.Service
-	Audit        *audit.Log
-	Logger       *slog.Logger
-	Version      string
+	// Machines serves the maintenance routes of the local machine.
+	Machines *machine.Manager
+	// Connections are the host-configured connections, listed without
+	// addresses or secrets; nil is none.
+	Connections *connection.Set
+	DB          *store.DB
+	Auth        *auth.Service
+	Audit       *audit.Log
+	Logger      *slog.Logger
+	Version     string
 
 	// CookieSecure sets the Secure attribute on the session cookie.
 	CookieSecure bool
@@ -60,17 +66,21 @@ type Deps struct {
 	// Components behind the resource endpoints. Handlers of a resource
 	// need its component; the foundation endpoints (health, auth, tokens,
 	// audit) work without them.
-	Catalog  *catalog.Catalog
-	Manager  *catalog.Manager
-	Monitor  *monitor.Monitor
-	Engine   *engine.Engine
-	Triggers *trigger.Manager
-	Modules  *modules.Store
-	State    *state.Store
-	Locks    *lock.Manager
-	Registry *node.Registry
-	Secrets  secret.Source
-	Events   *events.Hub
+	// Resources holds every resource's identity, documents and phase;
+	// ResourceTypes connects the types' state, actions and operations.
+	Resources     *resource.Store
+	ResourceTypes []ResourceType
+	Catalog       *catalog.Catalog
+	Manager       *catalog.Manager
+	Monitor       *monitor.Monitor
+	Engine        *engine.Engine
+	Triggers      *trigger.Manager
+	Modules       *modules.Store
+	State         *state.Store
+	Locks         *lock.Manager
+	Registry      *node.Registry
+	Secrets       secret.Source
+	Events        *events.Hub
 	// ConfigSync serves apply, export and the config source endpoints.
 	ConfigSync *configsync.Syncer
 
@@ -95,6 +105,7 @@ type Server struct {
 	security     *security.Manager
 	securityHost *securityhost.Client
 	machines     *machine.Manager
+	connections  *connection.Set
 	db           *store.DB
 	auth         *auth.Service
 	audit        *audit.Log
@@ -107,24 +118,27 @@ type Server struct {
 	limiter        *failureLimiter
 	cop            *http.CrossOriginProtection
 
-	catalog  *catalog.Catalog
-	manager  *catalog.Manager
-	monitor  *monitor.Monitor
-	engine   *engine.Engine
-	triggers *trigger.Manager
-	modules  *modules.Store
-	state    *state.Store
-	locks    *lock.Manager
-	registry *node.Registry
-	secrets  secret.Source
-	hub      *events.Hub
-	sync     *configsync.Syncer
-	ctx      context.Context
+	resources *resource.Store
+	types     map[string]ResourceType
+	catalog   *catalog.Catalog
+	manager   *catalog.Manager
+	monitor   *monitor.Monitor
+	engine    *engine.Engine
+	triggers  *trigger.Manager
+	modules   *modules.Store
+	state     *state.Store
+	locks     *lock.Manager
+	registry  *node.Registry
+	secrets   secret.Source
+	hub       *events.Hub
+	sync      *configsync.Syncer
+	ctx       context.Context
 
 	eventHeartbeat time.Duration
 	eventBuffer    int
 	githubSecret   string
 	actions        *actionTracker
+	groups         *groupTracker
 	// docMu serializes policy and module writes so that the If-Match check
 	// and the save form one step.
 	docMu sync.Mutex
@@ -137,6 +151,7 @@ type Server struct {
 func New(d Deps) *Server {
 	s := &Server{
 		machines:     d.Machines,
+		connections:  d.Connections,
 		security:     d.Security,
 		securityHost: d.SecurityHost,
 		db:           d.DB, auth: d.Auth, audit: d.Audit, log: d.Logger, version: d.Version,
@@ -145,7 +160,14 @@ func New(d Deps) *Server {
 		catalog: d.Catalog, manager: d.Manager, monitor: d.Monitor, engine: d.Engine, triggers: d.Triggers,
 		modules: d.Modules, state: d.State, locks: d.Locks, registry: d.Registry, secrets: d.Secrets,
 		hub: d.Events, sync: d.ConfigSync, ctx: d.Context, githubSecret: d.GitHubWebhookSecret,
-		actions: newActionTracker(maxTrackedActions),
+		actions:   newActionTracker(maxTrackedActions),
+		groups:    newGroupTracker(),
+		resources: d.Resources, types: map[string]ResourceType{},
+	}
+	for _, t := range d.ResourceTypes {
+		if t.Type != nil {
+			s.types[t.Type.Name()] = t
+		}
 	}
 	s.eventBuffer = d.EventBuffer
 	if s.eventBuffer <= 0 {

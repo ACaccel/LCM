@@ -1,6 +1,6 @@
 # Operations
 
-How to run LCM on a host. Build and general configuration reference: [README](../README.md). Local Machine configuration and control: [machines.md](machines.md). Design and security notes: [architecture.md](architecture.md).
+How to run LCM on a host. Build and general configuration reference: [README](../README.md). Resource model, connections and routers: [resources.md](resources.md). Local machine configuration and control: [machines.md](machines.md). Design and security notes: [architecture.md](architecture.md).
 
 ## Install
 
@@ -39,7 +39,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 Later admin password changes: `sudo -u lcm /usr/local/bin/lcm admin set-password --data-dir /var/lib/lcm`. Run the `lcm` CLI's database commands as `lcm` (`sudo -u lcm`), never as root: the binary is replaced by self-deploy.
 
-**Monitoring-only services.** `seed.sh` lists the systemd units of `card-together*`, `personal-quant-desk*`, `pleiades@*` and `mongodb-pleiades` that exist, and registers one service per application with runtime `external` (LCM only monitors them, so their start, stop and restart are disabled; see [runtimes](services.md#runtime)) and no policies. Long-running units get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. `http` checks are added only for URLs that answer at seed time (card-together `/health`, metube). The docker check for `metube` is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
+**Monitoring-only services.** `seed.sh` lists the systemd units of `card-together*`, `personal-quant-desk*`, `pleiades@*` and `mongodb-pleiades` that exist, and registers one service resource per application with adapter `external` (LCM only monitors them, so their start, stop and restart are disabled; see [runtimes](services.md#runtime)) and no policies. Long-running units get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. `http` checks are added only for URLs that answer at seed time (card-together `/health`, metube). The docker check for `metube` is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
 
 ### Self-deploy
 
@@ -47,11 +47,11 @@ The `lcm` service builds and installs LCM like any other service; the auto-deplo
 
 1. `trigger.git` sees the commit; `ci.status` waits for CI (unauthenticated GitHub API, 60 requests per hour per IP).
 2. `lifecycle.deploy` fetches and detaches `work/lcm` at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`.
-3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation; use the [manual upgrade procedure](#upgrade). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared Service write gate blocks this self-deploy path during Machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
+3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation; use the [manual upgrade procedure](#upgrade). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared write gate blocks this self-deploy path during machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
 4. The verification restarts `lcm.service` and waits up to 60 s for `/api/v1/health` to report the new version. If it does not, it restores `lcm.prev` (keeping the rejected binary as `lcm.failed`), restarts again, logs at error priority and leaves the transient unit failed.
 5. The policy's `wait.until` was suspended across the restart and resumes in the new process. The service's `version` check passes only when the running server reports the version of the binary built in the checkout, so after a verification rollback the service stays unhealthy, the wait times out after 3 minutes and `lifecycle.rollback` rebuilds and reinstalls the previous successful commit.
 
-**Trust boundary.** Code on `main` that passes CI is built and run by LCM as `lcm`, the same model as the other auto-deployed projects on this host, and installed as the root-owned `/usr/local/bin/lcm`. Anyone who can push to `main`, or write the `lcm` Service document, therefore controls the `lcm` account and the content of that binary: never run it as root (bootstrap and self-install run it only as `lcm` or `nobody`). The sudoers rule accepts one fixed argv; rules for other units are separate, reviewed changes.
+**Trust boundary.** Code on `main` that passes CI is built and run by LCM as `lcm`, the same model as the other auto-deployed projects on this host, and installed as the root-owned `/usr/local/bin/lcm`. Anyone who can push to `main`, or write the `lcm` service Resource document, therefore controls the `lcm` account and the content of that binary: never run it as root (bootstrap and self-install run it only as `lcm` or `nobody`). The sudoers rule accepts one fixed argv; rules for other units are separate, reviewed changes.
 
 **Inspect and recover.**
 
@@ -61,7 +61,7 @@ journalctl -u 'lcm-self-update-*' -n 50 --no-pager     # restarts and verificati
 systemctl list-units --failed 'lcm-self-update-*'      # rejected updates; clear with systemctl reset-failed
 ```
 
-- A manual binary-only rollback is appropriate only for a verified equal-schema update. For schema changes or unknown compatibility, follow [Upgrade](#upgrade) and restore the matching database and binary. After a safe equal-schema rollback, deploy the matching commit from the console or `lcm action lcm deploy --version <sha>` so that the catalog agrees.
+- A manual binary-only rollback is appropriate only for a verified equal-schema update. For schema changes or unknown compatibility, follow [Upgrade](#upgrade) and restore the matching database and binary. After a safe equal-schema rollback, deploy the matching commit from the console or `lcm resource action lcm deploy --version <sha>` so that the catalog agrees.
 - To pause self-deploy, pause the policy `lcm-auto-deploy` in the console.
 - Progress goes to the BotFleet konata relay route `lcm-deploy`, one Discord message per deployment ([template notifications](policies.md#templates)). It needs the route in konata's `notificationRoutes` (installed settings and the deployer's build snapshot, then a konata restart; see BotFleet's notification relay docs) and konata's `NOTIFY_API_KEY` in the LCM secret `konata-notify-key`:
 
@@ -71,7 +71,7 @@ systemctl list-units --failed 'lcm-self-update-*'      # rejected updates; clear
   ```
 
   Without them the deployment still runs, but the run ends failed on its last notification.
-- A manual `lcm action lcm deploy` has no policy to roll back: if the verification restores `lcm.prev`, the catalog still records the new commit, and the failing `version` check shows the mismatch until you deploy a good commit.
+- A manual `lcm resource action lcm deploy` has no policy to roll back: if the verification restores `lcm.prev`, the catalog still records the new commit, and the failing `version` check shows the mismatch until you deploy a good commit.
 - Verification restores only the binary; it does not restore the database. The schema-equality guard is therefore required, and the installed `self-install` script must itself include that guard. Existing deployments with an older script need an operator-reviewed script update before relying on this protection. It cannot make an older unguarded installation safe retroactively.
 
 ### Local Machine power helper
@@ -114,7 +114,7 @@ The unit sets neither `NoNewPrivileges=` (it would disable sudo) nor `ProtectSys
 
 | Path | Contents |
 |---|---|
-| `lcm.db` (+ `-wal`, `-shm`) | Controller state: services, machines, policies, runs, history, audit log, locks, tokens, maintenance and operations; privileged helper receipts are stored separately |
+| `lcm.db` (+ `-wal`, `-shm`) | Controller state: resources, policies, modules, runs, history, audit log, locks, tokens, maintenance and operations; privileged helper receipts are stored separately |
 | `controller.lock` | Exclusive file lock held by `serve`; a second controller using this directory is refused. Do not delete/replace it to bypass the lock. |
 | `secrets/` | Secret files (unless `LCM_SECRETS_DIR` moves them) |
 | `calendars/` | Calendar files for `trigger.cron` |
@@ -130,7 +130,7 @@ sudo -u lcm sqlite3 /var/lib/lcm/lcm.db ".backup '/var/backups/lcm/lcm-$(date +%
 sudo tar -C /var/lib/lcm -czf /var/backups/lcm/secrets-$(date +%F).tgz secrets calendars
 ```
 
-Back up `secrets/` separately and store it more carefully than the database. Preserve the matching binary and host configuration too. A normal same-version restore stops LCM, replaces the database (removing stale `-wal` and `-shm` files), then starts it. Reconcile Machine operations/maintenance before restoring automation; a database backup can predate an accepted OS request. Services and policies kept in git config sources can be rebuilt, but Git cannot reconstruct runtime state or power receipts. The root helper ledger is independent: preserve its current state, never roll it back with a controller backup. Schema rollback follows [Upgrade](#upgrade).
+Back up `secrets/` separately and store it more carefully than the database. Preserve the matching binary and host configuration too, including the connections file. A normal same-version restore stops LCM, replaces the database (removing stale `-wal` and `-shm` files), then starts it. Reconcile Machine operations/maintenance before restoring automation; a database backup can predate an accepted OS request. Resources and policies kept in git config sources can be rebuilt, but Git cannot reconstruct runtime state or power receipts. The root helper ledger is independent: preserve its current state, never roll it back with a controller backup. Schema rollback follows [Upgrade](#upgrade).
 
 ## Upgrade
 
@@ -145,7 +145,44 @@ For a schema-changing or unknown-version upgrade:
 
 Rollback cannot undo an OS reboot/shutdown request the helper already accepted. A timeout, restored database or older binary does not cancel it. Keep unknown outcomes unverified and require explicit maintenance exit under the [Machine recovery contract](machines.md#maintenance-and-power-requests).
 
-At startup LCM recovers Machine operation/maintenance state before writes and automation, then [reconciles Service states](services.md#lifecycle-states-and-actions) and resumes interrupted policy runs where permitted by the gate. Reconciliation continues every minute; an interrupted deployment is recorded rather than assumed complete.
+At startup LCM recovers machine and router operation/maintenance state before writes and automation, then [reconciles service states](services.md#lifecycle-states-and-actions) and resumes interrupted policy runs where permitted by the gate. Reconciliation continues every minute; an interrupted deployment is recorded rather than assumed complete.
+
+### Upgrade to lcm/v2 resources
+
+Storage schema 14 replaces Service and Machine with one `lcm/v2` Resource model ([resources.md](resources.md)). The schema changes, so self-install refuses it: follow the manual procedure above, including the backup, and keep the pre-upgrade database/binary pair. Older binaries refuse the migrated database. There is no compatibility layer.
+
+**What the migration does.** Migration 0014 runs at the first start in one transaction:
+
+- Services become `type: service` resources with new IDs; retired services become phase `retired` (state `stopped`); deleted services that left versions become `unmanaged` archives. Machines become `type: machine` resources and keep their IDs, so helper `controllerID` and `LCM_SECURITY_MACHINE_ID` stay valid.
+- Every stored document version, Policy and Module (including the module snapshots deployed plans load from), Git ownership record and stored repository document is converted to `lcm/v2` with the same rules as `lcm convert`; timeline, deployments, checks, alerts, run events and machine history are carried over. Queued, running and suspended runs get their signal events and their lifecycle nodes' checkpointed output and props renamed (`service` to `resource`), so they resume against the converted policy.
+- It stops with an error, leaving the database unchanged, when a Service and a Machine share a name or both are Git-owned under one name; rename or release one with the old binary first.
+- What the conversion reports (expressions it cannot rewrite, such as a resource name built from strings, and the added `acknowledgeImpact`) is stored and logged as `converted document needs review` warnings at every start, naming the document and version, as long as that version is the policy's or module's latest. Saving a new version ends the warning; fix each named policy or module and check it with `lcm validate`.
+
+**Git config sources.** After the upgrade, a source that holds any `lcm/v1` document is not synced at all: nothing is applied, no ownership or orphan flag changes, and the source's `lastError` names the files and `lcm convert`. Resources keep their migrated configuration. Convert the files with [`lcm convert`](policies.md#policy-as-code), commit and sync. Converted documents equal the migrated ones, so they produce no drift.
+
+**Interface changes** (no aliases):
+
+| Area | Before | Now |
+|---|---|---|
+| Documents | `lcm/v1` `Service`, `Machine` | `lcm/v2` `Resource` (`type`, `adapter`, `config`, `relations`); Policy and Module are `lcm/v2`; `lcm/v1` is refused |
+| API | `/services*`, `/machines*`, `/machine-archives`, `/hosts`, `/heartbeats/{svc}/{check}` | `/resources*`, `/resource-archives`, `/resource-types`, `/connections`, `/resource-groups/actions`, `/heartbeats/{resource}/{check}`; export and ownership kind `resource` |
+| CLI | `lcm action`, `lcm machine`, `lcm get services\|machines` | `lcm resource ...`, `lcm get resources [--type t]`, `lcm get connections`, `lcm convert` |
+| Policies | `service` variable, `lifecycle.*` prop and output `service`, `trigger.signal` `services`, `trigger.service`, template param `service` | `resource` (variable adds `type`, `adapter`, `phase`), `resources` plus `types`, `trigger.resource`, template param `resource`; converted automatically |
+| Signals and SSE | field `service`; machine events in their own category | fields `resource` and `resourceType`; SSE types `resource` and `observation`, filters `resource` and `resourceId` |
+| Config sync | conflicts as `alert` signals | `resource.config.conflict` / `resource.config.invalid` signals for resources |
+| Configuration | `LCM_ALERT_SERVICE_LABELS` | `LCM_ALERT_RESOURCE_LABELS` (default `lcm_resource,resource,lcm_service,service`); setting the old variable stops startup with an error naming the new one |
+| Lock | `service:<name>` | `resource:<name>`; `lock`/`unlock` nodes with a literal `service:` name are converted, computed names are reported for a manual change |
+
+**Behavior changes.**
+
+- Unmanaging requires a retired resource, machines included; DELETE is gone.
+- Retiring a service stops it first when its runtime can; a running service whose runtime cannot stop it stays retired and `running` and cannot be unmanaged until it is resumed and stopped ([phases](services.md#lifecycle-states-and-actions)).
+- Disruptive actions on resources with dependents or control dependents need `acknowledgeImpact` ([impact](resources.md#relations)). A v1 `dependsOn` becomes a `dependsOn` relation, so conversion adds `acknowledgeImpact: true` to every `lifecycle.*` node that stops, restarts, deploys, rolls back or runs a job and did not set it; such policies behave as in v1 and are named in the migration warnings. Remove the prop where an action on a service with dependents should stop the policy; review `lcm resource impact <name>` before re-enabling automation.
+- Check, timeline and deployment history stays keyed by name; machine and router observations, events and operations are keyed by immutable ID.
+
+### Router connections
+
+To manage a [router](resources.md#routers), store its web password as a secret (for example `/var/lib/lcm/secrets/home-router-password`, owned by `lcm`, mode 0600), write the connections file (for example `/etc/lcm/connections.yaml`, `root:lcm 0640`), set `LCM_CONNECTIONS_FILE` in `/etc/lcm/lcm.env` and restart LCM. A wrong file or unresolvable secret stops startup; check `journalctl -u lcm`. Then apply the router document. Real-device acceptance of the router adapter is still pending; see [review.md](review.md#xiaomi-router-on-real-hardware).
 
 ## Resource use
 

@@ -41,7 +41,6 @@ func TestReconcileAfterCrash(t *testing.T) {
 		{"registered, inactive", nil, rt.StateInactive, nil, catalog.StateRegistered},
 		{"registered, broken unit", nil, rt.StateFailed, nil, catalog.StateFailed},
 		{"failed stays failed", []catalog.State{catalog.StateFailed}, rt.StateActive, nil, catalog.StateFailed},
-		{"retired is left alone", []catalog.State{catalog.StateRetired}, rt.StateActive, nil, catalog.StateRetired},
 	}
 	names := map[string]tc{}
 	for i, c := range cases {
@@ -64,7 +63,7 @@ func TestReconcileAfterCrash(t *testing.T) {
 
 	changed := map[string]catalog.Change{}
 	for _, ch := range changes {
-		changed[ch.Service] = ch
+		changed[ch.Resource] = ch
 	}
 	var keys []string
 	for k := range names {
@@ -87,7 +86,7 @@ func TestReconcileAfterCrash(t *testing.T) {
 	if ch.From != catalog.StateDeploying || ch.To != catalog.StateRunning || !strings.Contains(ch.Reason, "interrupted while deploying") {
 		t.Fatalf("change = %+v", ch)
 	}
-	page, _ := e.cat.Timeline(ctx, catalog.TimelineQuery{Service: "svca0", Kinds: []string{catalog.KindLifecycle}, Limit: 1})
+	page, _ := e.cat.Timeline(ctx, catalog.TimelineQuery{Resource: "svca0", Kinds: []string{catalog.KindLifecycle}, Limit: 1})
 	if got := page.Entries[0]; got.Data["action"] != "reconcile" || !strings.Contains(got.Summary, "deploying -> running") {
 		t.Fatalf("timeline = %+v", got)
 	}
@@ -118,7 +117,7 @@ func TestReconcileInterruptsRunningDeployments(t *testing.T) {
 	e.put(svcDoc("app", ""), 0)
 	e.setState("app", catalog.StateRunning, catalog.StateUpdating)
 	e.runtime.adapter("app").set(func(a *fakeAdapter) { a.state = rt.StateActive })
-	id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: "app", Action: "deploy", Version: "abc1234", Actor: alice})
+	id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "app", Action: "deploy", Version: "abc1234", Actor: alice})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +142,7 @@ func TestReconcileInterruptsRunningDeployments(t *testing.T) {
 func TestFinishDeploymentOnlyOnce(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	id, _ := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: "app", Action: "deploy", Actor: alice})
+	id, _ := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "app", Action: "deploy", Actor: alice})
 	if err := e.cat.FinishDeployment(ctx, id, catalog.OutcomeSucceeded, "", "log"); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +160,7 @@ func TestFinishDeploymentOnlyOnce(t *testing.T) {
 func TestDeploymentLogIsCapped(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	id, _ := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: "app", Action: "deploy", Actor: alice})
+	id, _ := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "app", Action: "deploy", Actor: alice})
 	big := strings.Repeat("noise line\n", 5000) + "the actual failure\n"
 	if err := e.cat.FinishDeployment(ctx, id, catalog.OutcomeFailed, strings.Repeat("e", 10_000), big); err != nil {
 		t.Fatal(err)
@@ -180,7 +179,7 @@ func TestPruneDeployments(t *testing.T) {
 	ctx := context.Background()
 	finished := func(service string, n int) {
 		for range n {
-			id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: service, Action: "deploy", Actor: alice})
+			id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: service, Action: "deploy", Actor: alice})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +191,7 @@ func TestPruneDeployments(t *testing.T) {
 	finished("a", 5)
 	finished("b", 2)
 	// The oldest deployment of a is still running: it must survive.
-	running, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Service: "c", Action: "deploy", Actor: alice})
+	running, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "c", Action: "deploy", Actor: alice})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,8 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/events"
+	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 // maxTrackedActions bounds the action history kept in memory.
@@ -29,20 +31,14 @@ const (
 	actionFailed    = "failed"
 )
 
-// serviceActions are the actions accepted under /services/{svc}/actions.
-var serviceActions = []string{
-	catalog.ActionDeploy, catalog.ActionRollback, catalog.ActionStart, catalog.ActionStop,
-	catalog.ActionRestart, catalog.ActionBackup, catalog.ActionRunJob, catalog.ActionRetire,
-}
-
 // actionDTO is the state of an API-started service action. It is the
 // response of GET /actions/{id} and the payload of action events.
 type actionDTO struct {
-	ID      string   `json:"id"`
-	Service string   `json:"service"`
-	Action  string   `json:"action"`
-	Status  string   `json:"status"`
-	Actor   actorDTO `json:"actor"`
+	ID       string   `json:"id"`
+	Resource string   `json:"resource"`
+	Action   string   `json:"action"`
+	Status   string   `json:"status"`
+	Actor    actorDTO `json:"actor"`
 	// Version and Job echo the request options.
 	Version    string                `json:"version,omitempty"`
 	Job        string                `json:"job,omitempty"`
@@ -116,12 +112,12 @@ func (t *actionTracker) get(id string) (actionDTO, bool) {
 	return *a, true
 }
 
-// runningOn reports whether an action on the service is still running.
-func (t *actionTracker) runningOn(service string) bool {
+// runningOn reports whether an action on the resource is still running.
+func (t *actionTracker) runningOn(name string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, a := range t.byID {
-		if a.Service == service && a.Status == actionRunning {
+		if a.Resource == name && a.Status == actionRunning {
 			return true
 		}
 	}
@@ -134,20 +130,27 @@ func (s *Server) Close() { s.actions.wg.Wait() }
 
 func (s *Server) publishAction(a actionDTO) {
 	if s.hub != nil {
-		s.hub.Publish(events.Event{Type: events.TypeAction, Service: a.Service, Data: a})
+		s.hub.Publish(events.Event{Type: events.TypeAction, Resource: a.Resource, Data: a})
 	}
 }
 
 type actionRequest struct {
-	Version string `json:"version"`
-	Job     string `json:"job"`
+	Version           string `json:"version"`
+	Job               string `json:"job"`
+	AcknowledgeImpact bool   `json:"acknowledgeImpact"`
 }
 
-func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
-	name, action := r.PathValue("svc"), r.PathValue("action")
-	if !slices.Contains(serviceActions, action) {
+// actionPlanDTO is the dry run of an action: its steps and its impact.
+type actionPlanDTO struct {
+	catalog.Plan
+	Impact impactDTO `json:"impact"`
+}
+
+func (s *Server) handleResourceAction(w http.ResponseWriter, r *http.Request) {
+	action := r.PathValue("action")
+	if !slices.Contains(catalog.Actions, action) {
 		writeError(w, http.StatusNotFound, codeNotFound, "unknown action",
-			map[string]any{"action": action, "actions": serviceActions})
+			map[string]any{"action": action, "actions": catalog.Actions})
 		return
 	}
 	dry, ok := boolParam(w, r, "dryRun")
@@ -170,6 +173,17 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := catalog.ActionOptions{Version: req.Version, Job: req.Job}
+	rec, _, ok := s.writableRef(w, r)
+	if !ok {
+		return
+	}
+	// Lifecycle actions belong to services; other types act through
+	// durable operations.
+	if rec.Type != model.ResourceService {
+		s.fail(w, r, unsupported(rec, "lifecycle actions"), nil)
+		return
+	}
+	name := rec.Name
 
 	// Plan is the precondition check: it fails for an unknown service, a
 	// state the action does not allow and missing configuration, all of
@@ -179,30 +193,42 @@ func (s *Server) handleServiceAction(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err, nil)
 		return
 	}
+	// The impact guard comes after the plan, so a state the action does
+	// not allow is reported first; a dry run shows the impact instead of
+	// refusing it.
+	imp, err := s.manager.CheckImpact(r.Context(), name, action, req.AcknowledgeImpact || dry)
+	if err != nil {
+		s.fail(w, r, err, nil)
+		return
+	}
 	if dry {
-		writeJSON(w, http.StatusOK, plan)
+		writeJSON(w, http.StatusOK, actionPlanDTO{Plan: plan, Impact: actionImpactDTO(imp, catalog.ActionInfo(action))})
 		return
 	}
 	if holder, held, err := s.locks.Holder(r.Context(), catalog.LockName(name)); err != nil {
 		s.internalError(w, r, err)
 		return
 	} else if held {
-		writeError(w, http.StatusConflict, codeLockHeld, fmt.Sprintf("service %s is busy: lock held by %s", name, holder.Owner),
+		writeError(w, http.StatusConflict, codeLockHeld, fmt.Sprintf("resource %s is busy: lock held by %s", name, holder.Owner),
 			lockDetails(holder))
 		return
 	}
 	if s.actions.runningOn(name) {
-		writeError(w, http.StatusConflict, codeLockHeld, "another action is running on service "+name, nil)
+		writeError(w, http.StatusConflict, codeLockHeld, "another action is running on resource "+name, nil)
 		return
 	}
 
 	actor := actorOf(r)
 	started := s.actions.begin(actionDTO{
-		Service: name, Action: action, Actor: toActorDTO(actor), Version: req.Version, Job: req.Job, StartedAt: s.now().UTC(),
+		Resource: name, Action: action, Actor: toActorDTO(actor), Version: req.Version, Job: req.Job, StartedAt: s.now().UTC(),
 	})
 	s.publishAction(started)
 	s.actions.wg.Add(1)
-	go s.runAction(auth.WithActor(s.ctx, actor), started.ID, name, action, opts)
+	ctx := auth.WithActor(s.ctx, actor)
+	if req.AcknowledgeImpact {
+		ctx = resource.WithAcknowledgedImpact(ctx, imp)
+	}
+	go s.runAction(ctx, started.ID, name, action, opts)
 
 	w.Header().Set("Location", "/api/v1/actions/"+started.ID)
 	writeJSON(w, http.StatusAccepted, map[string]any{"actionId": started.ID, "status": actionRunning})
@@ -220,14 +246,14 @@ func (s *Server) runAction(ctx context.Context, id, name, action string, opts ca
 	func() {
 		defer func() {
 			if p := recover(); p != nil {
-				s.log.Error("panic in service action", "action", action, "service", name, "panic", p)
+				s.log.Error("panic in service action", "action", action, "resource", name, "panic", p)
 				err = fmt.Errorf("internal error while running %s", action)
 			}
 		}()
 		res, err = s.dispatchAction(ctx, name, action, opts)
 	}()
 	if err != nil {
-		s.log.Warn("service action failed", "action", action, "service", name, "action_id", id, "error", err)
+		s.log.Warn("service action failed", "action", action, "resource", name, "action_id", id, "error", err)
 	}
 	var out *catalog.ActionResult
 	if res.Action != "" {
@@ -237,25 +263,7 @@ func (s *Server) runAction(ctx context.Context, id, name, action string, opts ca
 }
 
 func (s *Server) dispatchAction(ctx context.Context, name, action string, opts catalog.ActionOptions) (catalog.ActionResult, error) {
-	switch action {
-	case catalog.ActionDeploy:
-		return s.manager.Deploy(ctx, name, opts)
-	case catalog.ActionRollback:
-		return s.manager.Rollback(ctx, name, opts)
-	case catalog.ActionStart:
-		return s.manager.Start(ctx, name, opts)
-	case catalog.ActionStop:
-		return s.manager.Stop(ctx, name, opts)
-	case catalog.ActionRestart:
-		return s.manager.Restart(ctx, name, opts)
-	case catalog.ActionBackup:
-		return s.manager.Backup(ctx, name, opts)
-	case catalog.ActionRunJob:
-		return s.manager.RunJob(ctx, name, opts)
-	case catalog.ActionRetire:
-		return s.manager.Retire(ctx, name, opts)
-	}
-	return catalog.ActionResult{}, fmt.Errorf("unknown action %q", action)
+	return s.manager.Do(ctx, name, action, opts)
 }
 
 func (s *Server) handleGetAction(w http.ResponseWriter, r *http.Request) {
@@ -277,4 +285,10 @@ func truncate(s string, n int) string {
 		cut--
 	}
 	return s[:cut] + "..."
+}
+
+// actorOf returns the caller, which the middleware guarantees.
+func actorOf(r *http.Request) auth.Actor {
+	a, _ := auth.ActorFrom(r.Context())
+	return a
 }

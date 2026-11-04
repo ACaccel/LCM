@@ -17,8 +17,8 @@ import (
 
 func enterMaintenance(t *testing.T, h *enginetest.Harness) {
 	t.Helper()
-	writeSQL(t, h, `INSERT INTO machines(id,name,version,created_at,updated_at) VALUES('m','local',1,0,0)`)
-	writeSQL(t, h, `INSERT INTO machine_maintenance(host,machine_id,state,entered_at,body) VALUES('local','m','active',0,'{}')`)
+	writeSQL(t, h, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('m','local','machine','local','managed',1,0,0)`)
+	writeSQL(t, h, `INSERT INTO machine_maintenance(host,resource_id,state,entered_at,body) VALUES('local','m','active',0,'{}')`)
 }
 
 func TestPolicyMaintenanceGuard(t *testing.T) {

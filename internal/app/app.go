@@ -24,6 +24,7 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/configsync"
+	"github.com/ACaccel/lcm/internal/connection"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/execx"
@@ -31,6 +32,7 @@ import (
 	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/machine/power"
 	"github.com/ACaccel/lcm/internal/maintenance"
+	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/node"
@@ -41,6 +43,8 @@ import (
 	"github.com/ACaccel/lcm/internal/nodes/network"
 	"github.com/ACaccel/lcm/internal/nodes/notify"
 	"github.com/ACaccel/lcm/internal/nodes/stateful"
+	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/router"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 	"github.com/ACaccel/lcm/internal/secret"
 	"github.com/ACaccel/lcm/internal/security"
@@ -61,6 +65,7 @@ type Option func(*options)
 type options struct {
 	machineObserver machine.Observer
 	machinePower    machine.PowerBackend
+	routerHTTP      *http.Client
 	clock           clock.Clock
 	log             *slog.Logger
 	runner          execx.Runner
@@ -91,6 +96,10 @@ func WithMachinePower(backend machine.PowerBackend) Option {
 	return func(o *options) { o.machinePower = backend }
 }
 
+// WithRouterHTTPClient replaces the HTTP client that router clients use to
+// reach router web interfaces.
+func WithRouterHTTPClient(c *http.Client) Option { return func(o *options) { o.routerHTTP = c } }
+
 // WithHTTPClient replaces the HTTP client of the network, notify and
 // flow nodes.
 func WithHTTPClient(c *http.Client) Option { return func(o *options) { o.client = c } }
@@ -106,10 +115,16 @@ func WithObservers(obs ...engine.Observer) Option {
 // App is a fully wired LCM process. The exported components are for the
 // HTTP layer and tests; callers must not Close them individually.
 type App struct {
-	Security       *security.Manager
-	SecurityHost   *securityhost.Client
-	Machines       *machine.Manager
-	Maintenance    *maintenance.Gate
+	Security     *security.Manager
+	SecurityHost *securityhost.Client
+	Machines     *machine.Manager
+	// Routers observes and reboots router resources through Connections,
+	// the host-configured connections.
+	Routers     *router.Manager
+	Connections *connection.Set
+	Maintenance *maintenance.Gate
+	// Resources holds the identity, documents and phase of every resource.
+	Resources      *resource.Store
 	controllerLock *os.File
 	Config         config.Config
 	DB             *store.DB
@@ -238,9 +253,61 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Events = events.NewHub(log.With("component", "events"), clk.Now)
 	a.Events.FollowBus(a.Bus)
 	a.Secrets = secret.New(cfg.SecretsPath(), secret.WithLogger(log.With("component", "secret")))
+	// Connections are host configuration: a broken file or an unresolvable
+	// password secret stops the server instead of failing later.
+	if a.Connections, err = connection.Load(cfg.ConnectionsFile, a.Secrets); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
 	a.State = state.New(a.DB, state.WithClock(clk.Now))
 	a.Locks = lock.New(a.DB, lock.WithClock(clk), lock.WithAudit(a.Audit))
 	a.Maintenance = maintenance.New(a.DB)
+	// The monitor comes first: the resource store validates every saved
+	// document's checks against its check types, and the machine type feeds
+	// it native health.
+	a.Monitor, err = monitor.New(ctx, monitor.Config{
+		DB: a.DB, Bus: a.Bus, Logger: log.With("component", "monitor"), Clock: clk,
+		Runner:      monitorRunner{run: o.runner, binaries: map[string]string{"systemctl": cfg.Systemctl, "docker": cfg.Docker}},
+		Concurrency: cfg.MonitorConcurrency, RawRetention: cfg.MonitorRawRetention,
+		RollupRetention: cfg.MonitorRollupRetention, PruneInterval: cfg.PruneInterval,
+		AlertResourceLabels: cfg.AlertResourceLabels,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ready("monitor", "concurrency", cfg.MonitorConcurrency)
+
+	// A committed resource change is announced on the event stream, lets
+	// the machine type publish the control events its hooks staged, and
+	// resyncs the monitor's checks. The machine manager and the syncer need
+	// the store, so the hook reaches them through pointers set once they
+	// exist; a change before that is covered by the initial sync in Run.
+	var (
+		kick         atomic.Pointer[monitorSyncer]
+		machinesLate atomic.Pointer[machine.Manager]
+		routersLate  atomic.Pointer[router.Manager]
+	)
+	a.Resources, err = resource.New(resource.Config{
+		DB: a.DB, Gate: a.Maintenance, Audit: a.Audit, Clock: clk, Log: log.With("component", "resource"),
+		Checks: a.Monitor,
+		OnChange: func(c resource.Change) {
+			a.Events.ResourceChanged(c)
+			if m := machinesLate.Load(); m != nil {
+				m.Changed(c)
+			}
+			if r := routersLate.Load(); r != nil {
+				r.Changed(c)
+			}
+			if s := kick.Load(); s != nil {
+				s.Changed(context.Background(), c)
+				s.Kick()
+			}
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	logMigrationWarnings(ctx, a.DB, log)
+
 	observer := o.machineObserver
 	if observer == nil {
 		observer = machineObserver{runner: machineRunner{runner: o.runner, systemctl: cfg.Systemctl, journalctl: cfg.Journalctl}, clock: clk}
@@ -249,37 +316,35 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	if backend == nil {
 		backend = machinePower{enabled: cfg.MachinePower, client: power.Client{Runner: o.runner}, runner: o.runner, pending: "/run/lcm-self-install.pending"}
 	}
-	a.Machines, err = machine.New(machine.Config{DB: a.DB, Audit: a.Audit, Clock: clk, Gate: a.Maintenance, Observer: observer, Power: backend, MaintenancePreflight: controllerUpdatePending, Log: log.With("component", "machine"), RawRetention: cfg.MonitorRawRetention, RollupRetention: cfg.MonitorRollupRetention, EventRetention: cfg.TimelineRetention, OnEvent: func(e machine.Event) {
-		a.Events.Publish(events.Event{Type: events.TypeMachine, Machine: e.MachineID, Data: e})
-	}})
+	a.Machines, err = machine.New(machine.Config{
+		DB: a.DB, Resources: a.Resources, Native: a.Monitor, Audit: a.Audit, Clock: clk, Gate: a.Maintenance,
+		Observer: observer, Power: backend, MaintenancePreflight: controllerUpdatePending, Log: log.With("component", "machine"),
+		RawRetention: cfg.MonitorRawRetention, RollupRetention: cfg.MonitorRollupRetention, EventRetention: cfg.TimelineRetention,
+		OnEvent: func(e machine.Event) { publishObservation(a.Events, a.Resources, e) },
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err = a.Machines.Reconcile(ctx); err != nil {
-		return nil, fmt.Errorf("machine recovery: %w", err)
+	machinesLate.Store(a.Machines)
+	a.Routers, err = router.New(router.Config{
+		DB: a.DB, Resources: a.Resources, Audit: a.Audit, Gate: a.Maintenance, Connections: a.Connections,
+		Secrets: a.Secrets, Native: a.Monitor, Clock: clk, Log: log.With("component", "router"), HTTP: o.routerHTTP,
+		OnEvent: func(e resource.Event) { publishObservation(a.Events, a.Resources, e) },
+	})
+	if err != nil {
+		return nil, err
 	}
+	routersLate.Store(a.Routers)
+	ready("connections", "count", len(a.Connections.List()))
 	ready("secrets", "dir", cfg.SecretsPath())
 
 	a.Runtimes = rt.NewRegistry(o.runner, rt.Options{
 		Systemctl: cfg.Systemctl, Privilege: cfg.Privilege(), Docker: cfg.Docker,
 		StatusTimeout: cfg.RuntimeStatusTimeout, ActionTimeout: cfg.RuntimeActionTimeout,
 	})
-
-	// The catalog's change hook needs the syncer and the syncer needs the
-	// catalog and monitor, so the hook indirects through a variable that is
-	// set once the syncer exists. A change before that point is covered by
-	// the initial sync in Run.
-	var kick atomic.Pointer[monitorSyncer]
 	a.Catalog, err = catalog.New(catalog.Config{
-		Gate: a.Maintenance,
-		DB:   a.DB, Audit: a.Audit, Bus: a.Bus, Clock: clk, Log: log.With("component", "catalog"),
-		OnChange: func() {
-			if s := kick.Load(); s != nil {
-				s.Kick()
-			}
-		},
-		OnDocument: a.Events.Document,
-		OnTimeline: a.Events.Timeline,
+		Gate: a.Maintenance, DB: a.DB, Audit: a.Audit, Resources: a.Resources, Bus: a.Bus, Clock: clk,
+		Log: log.With("component", "catalog"), OnTimeline: a.Events.Timeline,
 	})
 	if err != nil {
 		return nil, err
@@ -292,18 +357,19 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	if err != nil {
 		return nil, err
 	}
+	// Hooks before anything writes: every save and phase change of a
+	// service or machine passes through its type.
+	a.Resources.RegisterHooks(model.ResourceService, a.Manager.Hooks())
+	a.Resources.RegisterHooks(model.ResourceMachine, a.Machines.Hooks())
+	a.Resources.RegisterHooks(model.ResourceRouter, a.Routers.Hooks())
 	a.follower = a.Catalog.FollowSignals(a.ctx, a.Bus)
 	ready("catalog")
 
-	a.Monitor, err = monitor.New(ctx, monitor.Config{
-		DB: a.DB, Bus: a.Bus, Logger: log.With("component", "monitor"), Clock: clk,
-		Runner:      monitorRunner{run: o.runner, binaries: map[string]string{"systemctl": cfg.Systemctl, "docker": cfg.Docker}},
-		Concurrency: cfg.MonitorConcurrency, RawRetention: cfg.MonitorRawRetention,
-		RollupRetention: cfg.MonitorRollupRetention, PruneInterval: cfg.PruneInterval,
-		AlertServiceLabels: cfg.AlertServiceLabels,
-	})
-	if err != nil {
-		return nil, err
+	if err = a.Machines.Reconcile(ctx); err != nil {
+		return nil, fmt.Errorf("machine recovery: %w", err)
+	}
+	if err = a.Routers.Reconcile(ctx); err != nil {
+		return nil, fmt.Errorf("router recovery: %w", err)
 	}
 	securityCfg := security.Config{DB: a.DB, Audit: a.Audit, Clock: clk, Enabled: cfg.SecurityEnabled, MachineID: cfg.SecurityMachineID}
 	if cfg.SecurityEnabled && cfg.SecurityKonataURL != "" {
@@ -328,9 +394,15 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 			return nil, err
 		}
 	}
-	ready("monitor", "concurrency", cfg.MonitorConcurrency)
-	a.syncer = newMonitorSyncer(a.Catalog, a.Monitor, log.With("component", "monitor"))
+	a.syncer = newMonitorSyncer(a.Resources, a.Monitor, log.With("component", "monitor"))
 	kick.Store(a.syncer)
+	// One registration per resource type: its state, actions and phase
+	// changes, and the optional observation and operation backends.
+	resourceTypes := []api.ResourceType{
+		{Type: a.Manager.Type()},
+		{Type: a.Machines.Type(), Observations: machineObservations{m: a.Machines}, Operations: machineOperations{m: a.Machines}},
+		{Type: a.Routers.Type(), Observations: routerObservations{m: a.Routers}, Operations: routerOperations{m: a.Routers}},
+	}
 
 	if a.Modules, err = modules.New(a.DB, a.Audit, clk, modules.WithGate(a.Maintenance)); err != nil {
 		return nil, err
@@ -356,7 +428,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		DB:   a.DB, Registry: a.Registry, Modules: a.Modules, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
 		Logger:    log.With("component", "engine"),
 		Observers: append([]engine.Observer{a.releaser, &triggers, a.Events.Observer()}, o.observers...),
-		Vars:      []engine.Var{a.State.Var(), serviceVar(a.Catalog, a.Monitor)},
+		Vars:      []engine.Var{a.State.Var(), resourceVar(a.Resources, stateTypes(resourceTypes), a.Monitor)},
 	})
 	if err != nil {
 		return nil, err
@@ -378,7 +450,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	// The sync loop starts in Run, after recovery, so that a pulled
 	// document never races a recovering run.
 	a.ConfigSync, err = configsync.New(configsync.Config{
-		Machines: a.Machines, Gate: a.Maintenance,
+		Resources: a.Resources, Gate: a.Maintenance,
 		DB: a.DB, Audit: a.Audit, Catalog: a.Catalog, Modules: a.Modules, Engine: a.Engine,
 		Checks: a.Monitor, Bus: a.Bus, Runner: o.runner, Git: cfg.Git, Dir: cfg.SourcesPath(),
 		Clock: clk, Log: log.With("component", "configsync"),
@@ -410,10 +482,13 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 
 	info := buildinfo.Get()
 	a.api = api.New(api.Deps{
-		Machines:     a.Machines,
-		Security:     a.Security,
-		SecurityHost: a.SecurityHost,
-		DB:           a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
+		Machines:      a.Machines,
+		Connections:   a.Connections,
+		Resources:     a.Resources,
+		ResourceTypes: resourceTypes,
+		Security:      a.Security,
+		SecurityHost:  a.SecurityHost,
+		DB:            a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
 		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now,
 		Catalog: a.Catalog, Manager: a.Manager, Monitor: a.Monitor, Engine: a.Engine, Triggers: a.Triggers,
 		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
@@ -454,8 +529,8 @@ func (a *App) PprofAddr() net.Addr {
 	return a.pprofListener.Addr()
 }
 
-// SyncMonitor applies the catalog's checks to the monitor now. The catalog
-// change hook does this in the background; callers that need the checks
+// SyncMonitor applies the managed resources' checks to the monitor now. The
+// resource change hook does this in the background; callers that need the checks
 // scheduled before they continue use this.
 func (a *App) SyncMonitor(ctx context.Context) error { return a.syncer.Sync(ctx) }
 
@@ -492,7 +567,7 @@ func (a *App) Run(ctx context.Context) error {
 			fn()
 		}()
 	}
-	a.log.Info("starting background loops", "loops", []string{"triggers", "machines", "lock releaser", "monitor sync", "config sync", "retention", "reconcile"})
+	a.log.Info("starting background loops", "loops", []string{"triggers", "machines", "routers", "lock releaser", "monitor sync", "config sync", "retention", "reconcile"})
 	afterRecovery := func(fn func(context.Context)) {
 		select {
 		case <-runCtx.Done():
@@ -503,6 +578,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	spawn("triggers", func() { afterRecovery(a.Triggers.Run) })
 	spawn("machines", func() { a.Machines.Run(runCtx) })
+	spawn("routers", func() { a.Routers.Run(runCtx) })
 	if a.Config.SecurityEnabled {
 		spawn("security observations", func() {
 			every(runCtx, a.Clock, time.Minute, nil, func(ctx context.Context) {

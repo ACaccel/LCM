@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { client, unwrap } from "../api/client";
-import { qk, servicesQuery, templatesQuery } from "../api/queries";
+import { qk, resourcesQuery, templatesQuery } from "../api/queries";
 import type { Template, TemplateInstance, TemplateParam } from "../api/types";
 import { Dialog } from "../components/dialog";
 import { ErrorBox, Field, Spinner } from "../components/ui";
@@ -77,23 +77,23 @@ function ParamField({ param, values, services, error, onChange }: FieldProps) {
   );
 }
 
-function Form({ templates, services, service, onClose }: { templates: Template[]; services: string[]; service?: string; onClose: () => void }) {
+function Form({ templates, services, resource, onClose }: { templates: Template[]; services: string[]; resource?: string; onClose: () => void }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const template = templates.find((t) => t.id === templateId);
-  const [values, setValues] = useState<FormValues>(() => (templates[0] ? initialValues(templates[0], service) : {}));
-  // The name follows the template and service until the user types one.
+  const [values, setValues] = useState<FormValues>(() => (templates[0] ? initialValues(templates[0], resource) : {}));
+  // The name follows the template and target resource until the user types one.
   const [typedName, setTypedName] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
-  const serviceValue = template ? values[template.serviceParam] : undefined;
-  const name = typedName ?? suggestName(templateId, typeof serviceValue === "string" && serviceValue !== "" ? serviceValue : undefined);
+  const target = template ? values[template.resourceParam] : undefined;
+  const name = typedName ?? suggestName(templateId, typeof target === "string" && target !== "" ? target : undefined);
   const [preview, setPreview] = useState<{ yaml: string; warnings: TemplateInstance["warnings"]; key: string } | null>(null);
 
   const existing = useQuery({ queryKey: qk.policies(), queryFn: async () => (await unwrap(client.GET("/policies", { params: { query: { limit: 500 } } }))).items });
   const taken = useMemo(() => new Set((existing.data ?? []).map((p) => p.name)), [existing.data]);
 
-  const built = useMemo(() => (template ? buildParams(template, values, service) : { params: {}, errors: {} }), [template, values, service]);
+  const built = useMemo(() => (template ? buildParams(template, values, resource) : { params: {}, errors: {} }), [template, values, resource]);
   const nameProblem = name === "" ? "" : !NAME_RE.test(name) ? s.templates.policyNameHelp : taken.has(name) ? s.templates.exists : "";
   const key = JSON.stringify([templateId, name, built.params]);
   const hasErrors = Object.keys(built.errors).length > 0 || name === "" || nameProblem !== "";
@@ -102,7 +102,7 @@ function Form({ templates, services, service, onClose }: { templates: Template[]
     const t = templates.find((x) => x.id === id);
     if (!t) return;
     setTemplateId(id);
-    setValues(initialValues(t, service));
+    setValues(initialValues(t, resource));
     setPreview(null);
   }
 
@@ -195,11 +195,11 @@ function Form({ templates, services, service, onClose }: { templates: Template[]
 /**
  * Creates a policy from a built-in template: a form generated from the
  * parameter descriptors, a YAML preview from a dry run, then the deployment.
- * With `service` the target service is preset.
+ * With `resource` the target service is preset; template targets are services.
  */
-export function TemplateDialog({ service, onClose }: { service?: string; onClose: () => void }) {
+export function TemplateDialog({ resource, onClose }: { resource?: string; onClose: () => void }) {
   const templates = useQuery(templatesQuery());
-  const services = useQuery(servicesQuery());
+  const services = useQuery(resourcesQuery({ type: "service" }));
   return (
     <Dialog title={s.templates.title} onClose={onClose} wide>
       {templates.isError ? (
@@ -207,7 +207,7 @@ export function TemplateDialog({ service, onClose }: { service?: string; onClose
       ) : !templates.data || !services.data ? (
         <Spinner />
       ) : (
-        <Form templates={templates.data} services={services.data.map((x) => x.name)} service={service} onClose={onClose} />
+        <Form templates={templates.data} services={services.data.filter((x) => x.phase === "managed").map((x) => x.name)} resource={resource} onClose={onClose} />
       )}
     </Dialog>
   );

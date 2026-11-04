@@ -3,7 +3,7 @@ info:
   title: LCM API
   version: "1"
   description: |
-    HTTP API of LCM, the self-hosted service lifecycle control plane.
+    HTTP API of LCM, the self-hosted lifecycle control plane for services, the local machine and routers.
 
     **Conventions**
 
@@ -14,17 +14,20 @@ info:
       resource, 409 conflict (version mismatch, lock held, invalid state), 413 body
       too large, 422 validation failed (`details.issues` lists `{path, message}`),
       429 rate limited, 500 internal error, 503 shutting down.
-    - Documents (Service, Policy, Module) are sent as `application/yaml` or
-      `application/json` and returned as JSON: `{document, version, updatedAt,
-      updatedBy}` plus resource-specific fields. The `ETag` response header carries
-      the version.
+    - Documents (`lcm/v2` Resource, Policy, Module) are sent as `application/yaml`
+      or `application/json` and returned as JSON. Policies and modules answer
+      `{document, version, updatedAt, updatedBy}` plus their own fields; resources
+      answer a `ResourceDetail`. The `ETag` response header carries the version.
     - Optimistic locking: `PUT` needs `If-Match: <version>` (quoted or not). A stale
       version answers 409 `version_conflict` with `details.currentVersion`.
       Policies and modules are created by `PUT` without `If-Match` (or with `*`);
-      services are created by `POST /services`.
+      resources are created by `POST /resources`. `{resource}` in a path is a name, or
+      `@<id>` for any incarnation (archives are read only).
+    - A route that the resource's type does not offer (observing a service,
+      deploying a machine) answers 409 `unsupported`.
     - Lists take `limit` (default 50, maximum 500) and an opaque `cursor`, and
       answer `{items, nextCursor}`; `nextCursor` is null on the last page. Short
-      enumerations (`/hosts`, `/node-types`, `/check-types`) answer `{items}` only.
+      enumerations (`/resource-types`, `/node-types`, `/check-types`) answer `{items}` only.
       `/audit` predates this convention and pages with `before` and `nextBefore`.
     - Actions on services run in the background: they answer 202 with an
       `actionId` that `GET /actions/{id}` reports on. Their outcome also appears on
@@ -44,8 +47,7 @@ security:
 tags:
   - name: Meta
   - name: Auth
-  - name: Services
-  - name: Machines
+  - name: Resources
   - name: Actions
   - name: Monitoring
   - name: Policies
@@ -57,1168 +59,6 @@ tags:
   - name: Events
 
 paths:
-  /machines:
-    get:
-      tags:
-      - Machines
-      operationId: listMachines
-      summary: list Machines
-      parameters:
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                - nextCursor
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineRecord'
-                  nextCursor:
-                    anyOf:
-                    - type: string
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-    post:
-      tags:
-      - Machines
-      operationId: createMachine
-      summary: create Machine
-      parameters: []
-      responses:
-        '201':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineRecord'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MachineDocumentInput'
-          application/yaml:
-            schema:
-              $ref: '#/components/schemas/MachineDocumentInput'
-  /machines/{machine}:
-    get:
-      tags:
-      - Machines
-      operationId: getMachine
-      summary: get Machine
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineRecord'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-    put:
-      tags:
-      - Machines
-      operationId: putMachine
-      summary: put Machine
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineRecord'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MachineDocumentInput'
-          application/yaml:
-            schema:
-              $ref: '#/components/schemas/MachineDocumentInput'
-    delete:
-      tags:
-      - Machines
-      operationId: unmanageMachine
-      summary: unmanage Machine
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '204':
-          description: Successful response.
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/phase:
-    post:
-      tags:
-      - Machines
-      operationId: setMachinePhase
-      summary: set Machine Phase
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineRecord'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-              - phase
-              properties:
-                phase:
-                  type: string
-                  enum:
-                  - managed
-                  - retired
-  /machines/{machine}/versions:
-    get:
-      tags:
-      - Machines
-      operationId: listMachineVersions
-      summary: list Machine Versions
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                - nextCursor
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineVersion'
-                  nextCursor:
-                    anyOf:
-                    - type: string
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/versions/{v}:
-    get:
-      tags:
-      - Machines
-      operationId: getMachineVersion
-      summary: get Machine Version
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: v
-        in: path
-        required: true
-        schema:
-          type: integer
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineVersion'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/restore:
-    post:
-      tags:
-      - Machines
-      operationId: restoreMachine
-      summary: restore Machine
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineRecord'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-              - version
-              properties:
-                version:
-                  type: integer
-  /machines/{machine}/observe:
-    post:
-      tags:
-      - Machines
-      operationId: observeMachine
-      summary: observe Machine
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineRecord'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/history:
-    get:
-      tags:
-      - Machines
-      operationId: listMachineHistory
-      summary: list Machine History
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      - name: resolution
-        in: query
-        schema:
-          type: string
-          enum:
-          - raw
-          - minute
-          default: raw
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                - nextCursor
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineSnapshot'
-                  nextCursor:
-                    anyOf:
-                    - type: string
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/events:
-    get:
-      tags:
-      - Machines
-      operationId: listMachineEvents
-      summary: list Machine Events
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                - nextCursor
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineEvent'
-                  nextCursor:
-                    anyOf:
-                    - type: string
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/capabilities:
-    get:
-      tags:
-      - Machines
-      operationId: getMachineCapabilities
-      summary: get Machine Capabilities
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineCapability'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/maintenance:
-    get:
-      tags:
-      - Machines
-      operationId: getMachineMaintenance
-      summary: get Machine Maintenance
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - maintenance
-                properties:
-                  maintenance:
-                    anyOf:
-                    - $ref: '#/components/schemas/MachineMaintenance'
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-    post:
-      tags:
-      - Machines
-      operationId: enterMachineMaintenance
-      summary: enter Machine Maintenance
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - maintenance
-                properties:
-                  maintenance:
-                    $ref: '#/components/schemas/MachineMaintenance'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-              - reason
-              - acknowledged
-              - previewHash
-              properties:
-                reason:
-                  type: string
-                acknowledged:
-                  type: boolean
-                previewHash:
-                  type: string
-                  minLength: 64
-                  maxLength: 64
-  /machines/{machine}/maintenance/exit:
-    post:
-      tags:
-      - Machines
-      operationId: exitMachineMaintenance
-      summary: exit Machine Maintenance
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '204':
-          description: Successful response.
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-              - reason
-              properties:
-                reason:
-                  type: string
-  /machines/{machine}/operations:
-    get:
-      tags:
-      - Machines
-      operationId: listMachineOperations
-      summary: list Machine Operations
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                - nextCursor
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineOperation'
-                  nextCursor:
-                    anyOf:
-                    - type: string
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-    post:
-      tags:
-      - Machines
-      operationId: submitMachineOperation
-      summary: submit Machine Operation
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '202':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineOperation'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-              - action
-              - idempotencyKey
-              properties:
-                action:
-                  type: string
-                  enum:
-                  - reboot
-                  - graceful-shutdown
-                idempotencyKey:
-                  type: string
-  /machines/{machine}/operations/{id}:
-    get:
-      tags:
-      - Machines
-      operationId: getMachineOperation
-      summary: get Machine Operation
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineOperation'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /machines/{machine}/operations/{id}/resolve:
-    post:
-      tags:
-      - Machines
-      operationId: resolveMachineOperation
-      summary: resolve Machine Operation
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: If-Match
-        in: header
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineOperation'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required:
-              - reason
-              properties:
-                reason:
-                  type: string
   /health:
     get:
       tags: [Meta]
@@ -1385,14 +225,34 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
-  /hosts:
+  /actions/{id}:
     get:
-      tags: [Services]
-      operationId: listHosts
-      summary: Hosts services run on
+      tags: [Actions]
+      operationId: getAction
+      summary: Progress and outcome of an action
+      description: Only the most recent 500 actions are remembered, and not across restarts.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
       responses:
         "200":
-          description: Hosts.
+          description: The action.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Action" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /check-types:
+    get:
+      tags: [Monitoring]
+      operationId: listCheckTypes
+      summary: Registered check types
+      responses:
+        "200":
+          description: Check types.
           content:
             application/json:
               schema:
@@ -1401,44 +261,92 @@ paths:
                 properties:
                   items:
                     type: array
-                    items: { $ref: "#/components/schemas/Host" }
+                    items: { $ref: "#/components/schemas/CheckType" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-
-  /services:
+  /alerts:
     get:
-      tags: [Services]
-      operationId: listServices
-      summary: List services
+      tags: [Monitoring]
+      operationId: listAlerts
+      summary: Firing external alerts
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - name: resource
+          in: query
+          description: Only alerts of this resource.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Alerts, oldest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /resource-types:
+    get:
+      tags: [Resources]
+      operationId: listResourceTypes
+      summary: Registered resource types
+      description: Types, their adapters and the actions they offer. Clients build forms and menus from it instead of repeating server rules.
+      responses:
+        "200":
+          description: Resource types in display order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ResourceType" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /resources:
+    get:
+      tags: [Resources]
+      operationId: listResources
+      summary: List managed and retired resources
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: type
+          in: query
+          schema: { type: string, enum: [service, machine, router] }
         - name: label
           in: query
-          description: "Keep services with this label, as `key=value`. May be repeated; all must match."
+          description: "Keep resources with this label, as `key=value`. May be repeated; all must match."
           schema: { type: array, items: { type: string } }
           style: form
           explode: true
+        - name: phase
+          in: query
+          schema: { type: string, enum: [managed, retired] }
         - name: state
           in: query
-          schema: { $ref: "#/components/schemas/ServiceState" }
+          description: Type-specific state, such as `running` or `online`.
+          schema: { type: string }
         - name: health
           in: query
           schema: { $ref: "#/components/schemas/Health" }
       responses:
         "200":
-          description: Services ordered by name.
+          description: Resources ordered by name.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceList" }
+              schema: { $ref: "#/components/schemas/ResourceList" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
-      tags: [Services]
-      operationId: createService
-      summary: Create a service
-      requestBody: { $ref: "#/components/requestBodies/ServiceDocument" }
+      tags: [Resources]
+      operationId: createResource
+      summary: Create a resource
+      requestBody: { $ref: "#/components/requestBodies/ResourceDocument" }
       responses:
         "201":
           description: Created.
@@ -1447,39 +355,63 @@ paths:
             Location: { schema: { type: string } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceDoc" }
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "413": { $ref: "#/components/responses/TooLarge" }
         "422": { $ref: "#/components/responses/Unprocessable" }
-  /services/{svc}:
-    parameters:
-      - $ref: "#/components/parameters/Service"
+  /resource-archives:
     get:
-      tags: [Services]
-      operationId: getService
-      summary: A service with its state, health, checks and alerts
+      tags: [Resources]
+      operationId: listResourceArchives
+      summary: List unmanaged (archived) resources
+      description: Read them with `GET /resources/@{id}`; archives are read only.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: type
+          in: query
+          schema: { type: string, enum: [service, machine, router] }
       responses:
         "200":
-          description: The service.
+          description: Archives ordered by name, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /resources/{resource}:
+    parameters:
+      - $ref: "#/components/parameters/Resource"
+    get:
+      tags: [Resources]
+      operationId: getResource
+      summary: A resource with its phase, state, health, checks, actions and open operation
+      responses:
+        "200":
+          description: The resource.
           headers:
             ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceDetail" }
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
-      tags: [Services]
-      operationId: updateService
-      summary: Replace a service document
-      description: The name in the document must match the URL. `If-Match` is required.
+      tags: [Resources]
+      operationId: updateResource
+      summary: Replace a resource document
+      description: The name in the document must match the URL; type and adapter cannot change. `If-Match` is required.
       parameters:
-        - $ref: "#/components/parameters/IfMatch"
-      requestBody: { $ref: "#/components/requestBodies/ServiceDocument" }
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody: { $ref: "#/components/requestBodies/ResourceDocument" }
       responses:
         "200":
           description: Saved. An unchanged document keeps its version.
@@ -1487,7 +419,7 @@ paths:
             ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceDoc" }
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1495,24 +427,13 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "413": { $ref: "#/components/responses/TooLarge" }
         "422": { $ref: "#/components/responses/Unprocessable" }
-    delete:
-      tags: [Services]
-      operationId: deleteService
-      summary: Delete a service
-      description: Only services that are registered, stopped, failed or retired can be deleted. History is kept.
-      responses:
-        "204": { description: Deleted. }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-  /services/{svc}/versions:
+  /resources/{resource}/versions:
     parameters:
-      - $ref: "#/components/parameters/Service"
+      - $ref: "#/components/parameters/Resource"
     get:
-      tags: [Services]
-      operationId: listServiceVersions
-      summary: Stored versions of a service document
+      tags: [Resources]
+      operationId: listResourceVersions
+      summary: Stored versions of a resource document
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
@@ -1521,35 +442,35 @@ paths:
           description: Versions, newest first.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceVersionList" }
+              schema: { $ref: "#/components/schemas/ResourceVersionList" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /services/{svc}/versions/{v}:
+  /resources/{resource}/versions/{v}:
     parameters:
-      - $ref: "#/components/parameters/Service"
+      - $ref: "#/components/parameters/Resource"
       - $ref: "#/components/parameters/Version"
     get:
-      tags: [Services]
-      operationId: getServiceVersion
-      summary: One stored version of a service document
+      tags: [Resources]
+      operationId: getResourceVersion
+      summary: One stored version of a resource document
       responses:
         "200":
           description: The version.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceVersion" }
+              schema: { $ref: "#/components/schemas/ResourceVersion" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /services/{svc}/restore:
+  /resources/{resource}/restore:
     post:
-      tags: [Services]
-      operationId: restoreService
+      tags: [Resources]
+      operationId: restoreResource
       summary: Restore an old version as a new one
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
         - name: If-Match
           in: header
           required: false
@@ -1567,31 +488,74 @@ paths:
                 version: { type: integer, minimum: 1 }
       responses:
         "200":
-          description: The new current version.
+          description: The resource at its new current version.
           headers:
             ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceDoc" }
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
-
-  /services/{svc}/actions/{action}:
+  /resources/{resource}/phase:
+    post:
+      tags: [Resources]
+      operationId: setResourcePhase
+      summary: Retire, resume or unmanage a resource
+      description: |
+        `retired` stops observation and control and keeps the records (a running
+        service is stopped first when its runtime can); `managed` resumes;
+        `unmanaged` archives the resource and releases its name. Unmanaging requires a
+        retired resource that no config source owns and, for a service, no running
+        action and a registered, stopped or failed state. Retiring a service other managed
+        resources depend on or are controlled through needs `acknowledgeImpact`
+        (409 `impact_unacknowledged` otherwise; see `GET /resources/{resource}/impact`).
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - name: If-Match
+          in: header
+          required: false
+          description: The current version, when the body does not carry it.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourcePhaseRequest" }
+      responses:
+        "200":
+          description: The resource in its new phase.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /resources/{resource}/actions/{action}:
     post:
       tags: [Actions]
-      operationId: runServiceAction
-      summary: Run a lifecycle action
+      operationId: runResourceAction
+      summary: Run a service lifecycle action
       description: |
         Starts the action in the background and answers 202 with an action id.
-        Preconditions that can be checked up front (unknown service, wrong state,
-        missing configuration, busy service) fail synchronously. With
-        `dryRun=true` nothing is started and the plan is returned.
+        Preconditions that can be checked up front (unknown resource, a type other
+        than service (409 `unsupported`), wrong state, missing configuration, busy
+        resource) fail synchronously. A disruptive action (stop, restart, deploy,
+        rollback, run-job) on a service other managed resources depend on or are
+        controlled through needs `acknowledgeImpact: true` in the body; without it the
+        answer is 409 `impact_unacknowledged` with the impact in `error.details.impact`.
+        With `dryRun=true` nothing is started and the plan, including the impact, is
+        returned.
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
         - name: action
           in: path
           required: true
@@ -1628,12 +592,78 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
-  /actions/{id}:
+  /resources/{resource}/impact:
+    get:
+      tags: [Resources]
+      operationId: getResourceImpact
+      summary: Resources an action on this one reaches
+      description: |
+        Managed resources that depend on this one directly or transitively (`dependsOn`,
+        `runsOn`) and the managed resources controlled through it or through one of its
+        dependents (`controlPath`). Retired resources are neither observed nor controlled
+        and do not count. With `action`, `acknowledgementRequired` tells whether that
+        action needs `acknowledgeImpact`: disruptive and destructive actions and
+        operations, and retiring a service, when the impact is not empty.
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - name: action
+          in: query
+          description: An action, operation or phase change of the resource's type (see `GET /resource-types`).
+          schema: { type: string }
+      responses:
+        "200":
+          description: The impact.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceImpact" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /resource-groups/actions:
+    post:
+      tags: [Actions]
+      operationId: runResourceGroupAction
+      summary: Run one service action on a group of services
+      description: |
+        Selects the managed services matching every label of the selector and runs the
+        action on them one after another: the services a service depends on first,
+        except for `stop`, which stops dependents first. Only service lifecycle actions
+        run in groups; machine and router operations are refused. Nothing starts unless
+        every step can run as planned and, when a step's impact needs it,
+        `acknowledgeImpact` is set. The group stops at the first failed step; the steps
+        after it are reported as `notRun`. With `dryRun` the ordered plan is returned.
+        Every step is also a tracked action under `/actions/{id}`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceGroupActionRequest" }
+      responses:
+        "200":
+          description: The plan (only with `dryRun`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceGroupPlan" }
+        "202":
+          description: Started.
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceGroupAction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /resource-groups/actions/{id}:
     get:
       tags: [Actions]
-      operationId: getAction
-      summary: Progress and outcome of an action
-      description: Only the most recent 500 actions are remembered, and not across restarts.
+      operationId: getResourceGroupAction
+      summary: State of a group action
+      description: Group actions are kept in memory; the most recent 100 are available until restart.
       parameters:
         - name: id
           in: path
@@ -1641,38 +671,39 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: The action.
+          description: The group action.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Action" }
+              schema: { $ref: "#/components/schemas/ResourceGroupAction" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /services/{svc}/deployments:
+  /resources/{resource}/deployments:
     get:
       tags: [Actions]
       operationId: listDeployments
       summary: Deployment history of a service
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
-          description: Deployments, newest first.
+          description: Deployments of the resource's name, newest first; empty for other types.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeploymentList" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-  /services/{svc}/timeline:
+        "404": { $ref: "#/components/responses/NotFound" }
+  /resources/{resource}/timeline:
     get:
-      tags: [Services]
-      operationId: listServiceTimeline
-      summary: Timeline of one service
+      tags: [Resources]
+      operationId: listResourceTimeline
+      summary: Timeline of one resource
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/TimelineKinds"
@@ -1687,14 +718,19 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /timeline:
     get:
-      tags: [Services]
+      tags: [Resources]
       operationId: listTimeline
-      summary: Timeline of all services
+      summary: Timeline of all resources
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - name: resource
+          in: query
+          description: Only entries of this resource.
+          schema: { type: string }
         - $ref: "#/components/parameters/TimelineKinds"
         - $ref: "#/components/parameters/TimelineFrom"
         - $ref: "#/components/parameters/TimelineTo"
@@ -1707,31 +743,30 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-
-  /services/{svc}/checks:
+  /resources/{resource}/checks:
     get:
       tags: [Monitoring]
       operationId: listChecks
-      summary: Current status of a service's health checks
+      summary: Current health and checks of a resource
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
       responses:
         "200":
-          description: Checks; empty for a service without checks.
+          description: Checks; empty for a resource without checks.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Checks" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /services/{svc}/checks/{check}/series:
+  /resources/{resource}/checks/{check}/series:
     get:
       tags: [Monitoring]
       operationId: getCheckSeries
       summary: Result history of one check
       description: Ranges up to six hours inside raw retention use raw results; anything else uses one-minute rollups.
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
         - name: check
           in: path
           required: true
@@ -1758,34 +793,114 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /services/{svc}/summary:
+  /resources/{resource}/summary:
     get:
       tags: [Monitoring]
-      operationId: getServiceSummary
+      operationId: getResourceSummary
       summary: Uptime and latency over a window
       parameters:
-        - $ref: "#/components/parameters/Service"
+        - $ref: "#/components/parameters/Resource"
         - name: window
           in: query
           schema: { type: string, enum: [24h, 7d, 30d], default: 24h }
       responses:
         "200":
-          description: Totals for the service and per check.
+          description: Totals for the resource and per check.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ServiceSummaryStats" }
+              schema: { $ref: "#/components/schemas/ResourceSummaryStats" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-  /check-types:
-    get:
-      tags: [Monitoring]
-      operationId: listCheckTypes
-      summary: Registered check types
+  /resources/{resource}/observe:
+    post:
+      tags: [Resources]
+      operationId: observeResource
+      summary: Observe a machine or router now
+      description: Other types answer 409 `unsupported`.
+      parameters:
+        - $ref: "#/components/parameters/Resource"
       responses:
         "200":
-          description: Check types.
+          description: The resource after the observation.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /resources/{resource}/history:
+    get:
+      tags: [Resources]
+      operationId: listResourceHistory
+      summary: Stored observations of a machine or router
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: resolution
+          in: query
+          schema: { type: string, enum: [raw, minute], default: raw }
+      responses:
+        "200":
+          description: Snapshots, oldest first; at most 199 per page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ResourceSnapshot" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /resources/{resource}/events:
+    get:
+      tags: [Resources]
+      operationId: listResourceEvents
+      summary: Stored events of a machine or router
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Events, oldest first; at most 199 per page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ResourceEvent" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /resources/{resource}/capabilities:
+    get:
+      tags: [Resources]
+      operationId: getResourceCapabilities
+      summary: Prerequisites of the durable operations of a machine or router
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+      responses:
+        "200":
+          description: One entry per operation.
           content:
             application/json:
               schema:
@@ -1794,27 +909,278 @@ paths:
                 properties:
                   items:
                     type: array
-                    items: { $ref: "#/components/schemas/CheckType" }
+                    items: { $ref: "#/components/schemas/ResourceCapability" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-  /alerts:
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /resources/{resource}/maintenance:
+    parameters:
+      - $ref: "#/components/parameters/Resource"
     get:
-      tags: [Monitoring]
-      operationId: listAlerts
-      summary: Firing external alerts
+      tags: [Resources]
+      operationId: getResourceMaintenance
+      summary: Maintenance state of the local machine
+      responses:
+        "200":
+          description: The active maintenance, or null.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [maintenance]
+                properties:
+                  maintenance:
+                    oneOf:
+                      - $ref: "#/components/schemas/MachineMaintenance"
+                      - type: "null"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    post:
+      tags: [Resources]
+      operationId: enterResourceMaintenance
+      summary: Enter maintenance on the local machine
+      description: Direct administrator requests only; policies are refused.
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, acknowledged, previewHash]
+              properties:
+                reason: { type: string }
+                acknowledged: { type: boolean }
+                previewHash: { type: string, minLength: 64, maxLength: 64 }
+      responses:
+        "200":
+          description: The active maintenance.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [maintenance]
+                properties:
+                  maintenance: { $ref: "#/components/schemas/MachineMaintenance" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /resources/{resource}/maintenance/preview:
+    get:
+      tags: [Resources]
+      operationId: previewResourceMaintenance
+      summary: Workloads affected by maintenance of the local machine
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+      responses:
+        "200":
+          description: Current known local workloads and partial coverage; review before entering maintenance.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MachineMaintenancePreview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /resources/{resource}/maintenance/exit:
+    post:
+      tags: [Resources]
+      operationId: exitResourceMaintenance
+      summary: Exit maintenance on the local machine
+      description: Direct administrator requests only; policies are refused.
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "204": { description: Exited. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /resources/{resource}/operations:
+    parameters:
+      - $ref: "#/components/parameters/Resource"
+    get:
+      tags: [Resources]
+      operationId: listResourceOperations
+      summary: Durable operations of a machine or router
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
-        - name: service
-          in: query
-          description: Only alerts of this service.
+      responses:
+        "200":
+          description: Operations, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ResourceOperation" }
+                  nextCursor: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    post:
+      tags: [Resources]
+      operationId: submitResourceOperation
+      summary: Submit a durable operation such as a reboot
+      description: |
+        The intent is stored before anything is sent; the outcome is observed and an
+        unknown one needs `resolve`. Direct administrator requests only; policies are
+        refused. A disruptive or destructive operation (reboot, graceful-shutdown) on a
+        resource other managed resources depend on or are controlled through needs
+        `acknowledgeImpact` (409 `impact_unacknowledged` otherwise); send it again when
+        retrying with the same idempotency key.
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, idempotencyKey]
+              properties:
+                action: { type: string, description: "For example `reboot` or `graceful-shutdown`; see `GET /resource-types`." }
+                idempotencyKey: { type: string }
+                acknowledgeImpact:
+                  type: boolean
+                  description: Accept the impact reported by `GET /resources/{resource}/impact?action=`.
+      responses:
+        "202":
+          description: The stored operation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /resources/{resource}/operations/{id}:
+    get:
+      tags: [Resources]
+      operationId: getResourceOperation
+      summary: One durable operation
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - name: id
+          in: path
+          required: true
           schema: { type: string }
       responses:
         "200":
-          description: Alerts, oldest first.
+          description: The operation.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AlertList" }
+              schema: { $ref: "#/components/schemas/ResourceOperation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /resources/{resource}/operations/{id}/resolve:
+    post:
+      tags: [Resources]
+      operationId: resolveResourceOperation
+      summary: Settle an operation whose outcome is unknown
+      description: Direct administrator requests only; policies are refused.
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: The resolved operation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceOperation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /connections:
+    get:
+      tags: [Resources]
+      operationId: listConnections
+      summary: Host-configured connections
+      description: |
+        Connections come from the host's connections file (`LCM_CONNECTIONS_FILE`) and
+        cannot be changed through the API. Addresses, usernames and passwords are never
+        returned.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Connections in file order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Connection" }
+                  nextCursor: { type: [string, "null"] }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -2044,10 +1410,11 @@ paths:
       operationId: validateDocument
       summary: Validate any single document without side effects
       description: |
-        Decodes and checks a Policy, Module or Service. Problems are a normal result
+        Decodes and checks a Policy, Module or Resource. Problems are a normal result
         and answer 200 with `valid: false`; only a request that cannot be read is an
-        error. Policies are compiled against the module store, and services are
-        checked against the hosts and the check types.
+        error. Policies are compiled against the module store; resources are checked
+        against the check types, and relation targets that do not exist yet are
+        warnings.
       requestBody:
         required: true
         content:
@@ -2207,7 +1574,7 @@ paths:
       description: |
         Fills the template with `params` (defaults for the rest), compiles the
         result and deploys it as a new policy. With `dryRun` nothing is stored and
-        the concrete document is returned for review. The named service must exist.
+        the concrete document is returned for review. The named resource must exist and be a service.
       parameters:
         - { name: t, in: path, required: true, schema: { type: string }, description: Template id. }
       requestBody:
@@ -2248,10 +1615,10 @@ paths:
     post:
       tags: [Config]
       operationId: applyDocuments
-      summary: Apply Service, Policy and Module documents
+      summary: Apply Resource, Policy and Module documents
       description: |
         Applies a multi-document YAML stream (documents separated by `---`): modules
-        first, then services, then policies, whatever the order in the body. It is not
+        first, then resources, then policies, whatever the order in the body. It is not
         transactional; every document gets its own result and a failing one does not
         stop the others, so the response is 200 even when documents failed. Only a
         body without any usable document is a 422.
@@ -2289,13 +1656,13 @@ paths:
       summary: Export resources as YAML
       description: |
         Canonical YAML of existing resources as one multi-document stream, in apply
-        order (modules, services, policies) and by name within a kind. Only document
+        order (modules, resources, policies) and by name within a kind. Only document
         fields are written. Applying the output back changes nothing, so it is the way
         to move resources that were created in the web UI under git.
       parameters:
         - name: kind
           in: query
-          description: service, policy or module (plural and any case are accepted). Omit for everything.
+          description: resource, policy or module (plural and any case are accepted). Omit for everything.
           schema: { type: string }
         - name: name
           in: query
@@ -2333,7 +1700,7 @@ paths:
       operationId: createConfigSource
       summary: Register a config source
       description: |
-        A source is a repository location LCM pulls Service, Policy and Module documents
+        A source is a repository location LCM pulls Resource, Policy and Module documents
         from. LCM keeps its own clone under its data directory and never touches the
         repository's working copy. The first sync starts at once when the server runs.
         The repository URL must not embed a password; use an SSH key or a git
@@ -2888,39 +2255,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "413": { $ref: "#/components/responses/TooLarge" }
-  /heartbeats/{svc}/{check}:
-    parameters:
-      - $ref: "#/components/parameters/Service"
-      - name: check
-        in: path
-        required: true
-        schema: { type: string }
-    post:
-      tags: [Ingest]
-      operationId: postHeartbeat
-      summary: Report a heartbeat
-      description: The body, if any, is kept as a short message. Allowed for `admin` and `ingest` tokens.
-      requestBody:
-        required: false
-        content:
-          "*/*":
-            schema: { type: string }
-      responses:
-        "202": { $ref: "#/components/responses/HeartbeatAccepted" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "413": { $ref: "#/components/responses/TooLarge" }
-    get:
-      tags: [Ingest]
-      operationId: getHeartbeat
-      summary: Report a heartbeat without a body
-      description: For senders that can only issue GET, such as `curl` in a cron line.
-      responses:
-        "202": { $ref: "#/components/responses/HeartbeatAccepted" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
   /hooks/github:
     post:
       tags: [Ingest]
@@ -3003,16 +2337,37 @@ paths:
       - Events
       operationId: streamEvents
       summary: Live events (server-sent events)
-      description: "A `text/event-stream` of what happens in LCM. Each frame has an `id`, an\n`event` name (the event type) and `data` holding an `EventEnvelope`. Comment\nlines (`: heartbeat`) keep idle connections open every 15 seconds. A client\nthat cannot keep up receives `event: overflow` and is disconnected; it must\nreload its data from the REST API and reconnect. `Last-Event-ID` is not\nsupported: reload after reconnecting.\n\nEvent types and their `data` payloads:\n\n- `machine`: a committed normalized Machine event; reload durable APIs after reconnect.\n- `signal`: a signal from the bus (check, health, lifecycle, alert).\n- `run`: a run event (`run.queued`, `run.started`, `run.suspended`,\n  `run.resumed`, `run.finished`).\n- `node`: a node event (`node.started`, `node.finished`, `node.retrying`,\n  `node.suspended`, `node.dead`).\n- `timeline`: a stored timeline entry.\n- `action`: progress of an action started through the API.\n- `catalog`: a service document was created, updated, restored or deleted,\n  or a policy was deployed or undeployed.\n"
+      description: |
+        A `text/event-stream` of what happens in LCM. Each frame has an `id`, an
+        `event` name (the event type) and `data` holding an `EventEnvelope`. Comment
+        lines (`: heartbeat`) keep idle connections open every 15 seconds. A client
+        that cannot keep up receives `event: overflow` and is disconnected; it must
+        reload its data from the REST API and reconnect. `Last-Event-ID` is not
+        supported: reload after reconnecting.
+
+        Event types and their `data` payloads:
+
+        - `signal`: a signal from the bus (check, health, lifecycle, alert, resource.config.*).
+        - `run`: a run event (`run.queued`, `run.started`, `run.suspended`,
+          `run.resumed`, `run.finished`).
+        - `node`: a node event (`node.started`, `node.finished`, `node.retrying`,
+          `node.suspended`, `node.dead`).
+        - `timeline`: a stored timeline entry.
+        - `action`: progress of an action started through the API.
+        - `resource`: a resource document was created, updated or restored, or its
+          phase changed (`ResourceChange`).
+        - `observation`: a committed machine or router event (`ResourceEvent`);
+          reload durable APIs after reconnect.
+        - `catalog`: a policy was deployed or undeployed.
       parameters:
-      - name: machine
+      - name: resource
         in: query
-        description: Only committed events for this immutable Machine ID.
+        description: Only events about the resource with this name.
         schema:
           type: string
-      - name: service
+      - name: resourceId
         in: query
-        description: Only events about this service.
+        description: Only events that carry this immutable resource ID (resource changes, observations).
         schema:
           type: string
       - name: policy
@@ -3047,88 +2402,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-  /machine-archives:
-    get:
-      tags:
-      - Machines
-      operationId: listMachineArchives
-      summary: List archived machine registrations
-      parameters:
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      responses:
-        '200':
-          description: Successful response.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - items
-                - nextCursor
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineRecord'
-                  nextCursor:
-                    anyOf:
-                    - type: string
-                    - type: 'null'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '413':
-          $ref: '#/components/responses/TooLarge'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '500':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '503':
-          description: Request rejected or unavailable.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-
-  /machines/{machine}/maintenance/preview:
-    get:
-      tags:
-      - Machines
-      operationId: previewMachineMaintenance
-      parameters:
-      - name: machine
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Active name, or @ followed by immutable ID for archived read-only history.
-      responses:
-        '200':
-          description: Current known local workloads and partial coverage; review before entering maintenance.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MachineMaintenancePreview'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   /security/incidents/{id}:
     get:
       tags:
@@ -3685,6 +2958,40 @@ paths:
         '503':
           $ref: '#/components/responses/Unavailable'
 
+  /heartbeats/{resource}/{check}:
+    parameters:
+      - $ref: "#/components/parameters/Resource"
+      - name: check
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Ingest]
+      operationId: postHeartbeat
+      summary: Report a heartbeat
+      description: The body, if any, is kept as a short message. Allowed for `admin` and `ingest` tokens.
+      requestBody:
+        required: false
+        content:
+          "*/*":
+            schema: { type: string }
+      responses:
+        "202": { $ref: "#/components/responses/HeartbeatAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+    get:
+      tags: [Ingest]
+      operationId: getHeartbeat
+      summary: Report a heartbeat without a body
+      description: For senders that can only issue GET, such as `curl` in a cron line.
+      responses:
+        "202": { $ref: "#/components/responses/HeartbeatAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -3723,10 +3030,11 @@ components:
       required: false
       description: The version the change is based on, or `*` to create.
       schema: { type: string }
-    Service:
-      name: svc
+    Resource:
+      name: resource
       in: path
       required: true
+      description: Name of an active resource, or `@<id>` for any incarnation including archives.
       schema: { type: string }
     Policy:
       name: p
@@ -3747,7 +3055,7 @@ components:
       name: kind
       in: path
       required: true
-      schema: { type: string, enum: [service, policy, module, machine] }
+      schema: { type: string, enum: [resource, policy, module] }
     OwnedName:
       name: name
       in: path
@@ -3782,13 +3090,13 @@ components:
       schema: { type: string, format: date-time }
 
   requestBodies:
-    ServiceDocument:
+    ResourceDocument:
       required: true
       content:
         application/yaml:
           schema: { type: string }
         application/json:
-          schema: { $ref: "#/components/schemas/ServiceDocument" }
+          schema: { $ref: "#/components/schemas/ResourceDocument" }
     PolicyDocument:
       required: true
       content:
@@ -3839,7 +3147,8 @@ components:
       description: |
         Conflict. `error.code` tells which: `version_conflict` (details carry
         `currentVersion`), `already_exists`, `lock_held`, `invalid_state`,
-        `precondition_failed` or `conflict`.
+        `precondition_failed`, `impact_unacknowledged` (details carry `resource`,
+        `action` and `impact`, a `ResourceImpact`) or `conflict`.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorEnvelope" }
@@ -4622,7 +3931,7 @@ components:
       type: object
       additionalProperties: false
       required:
-      - machineId
+      - resourceId
       - version
       - hash
       - partialCoverage
@@ -4630,7 +3939,7 @@ components:
       - manualPowerOn
       - workloads
       properties:
-        machineId:
+        resourceId:
           type: string
         version:
           type: integer
@@ -4671,99 +3980,6 @@ components:
           type: string
         reason:
           type: string
-    MachineThresholds:
-      type: object
-      additionalProperties: false
-      required:
-      - cpuPercent
-      - memoryPercent
-      - diskPercent
-      - consecutive
-      - hysteresis
-      properties:
-        cpuPercent:
-          type: number
-        memoryPercent:
-          type: number
-        diskPercent:
-          type: number
-        consecutive:
-          type: integer
-        hysteresis:
-          type: number
-    MachineMonitoring:
-      type: object
-      additionalProperties: false
-      required:
-      - interval
-      - staleAfter
-      - filesystems
-      - journal
-      - thresholds
-      properties:
-        interval:
-          type: string
-        staleAfter:
-          type: string
-        filesystems:
-          type: array
-          items:
-            type: string
-        interfaces:
-          type: array
-          items:
-            type: string
-        units:
-          type: array
-          items:
-            type: string
-        journal:
-          type: boolean
-        thresholds:
-          $ref: '#/components/schemas/MachineThresholds'
-    MachineDocument:
-      type: object
-      additionalProperties: false
-      required:
-      - apiVersion
-      - kind
-      - metadata
-      - spec
-      properties:
-        apiVersion:
-          type: string
-          const: lcm/v1
-        kind:
-          type: string
-          const: Machine
-        metadata:
-          type: object
-          additionalProperties: false
-          required:
-          - name
-          properties:
-            name:
-              type: string
-            labels:
-              type: object
-              additionalProperties:
-                type: string
-            annotations:
-              type: object
-              additionalProperties:
-                type: string
-        spec:
-          type: object
-          additionalProperties: false
-          required:
-          - host
-          - monitoring
-          properties:
-            host:
-              type: string
-              const: local
-            monitoring:
-              $ref: '#/components/schemas/MachineMonitoring'
     MachineFilesystem:
       type: object
       additionalProperties: false
@@ -4889,123 +4105,11 @@ components:
           $ref: '#/components/schemas/MachineCoverage'
         fresh:
           type: boolean
-    MachineRecord:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - name
-      - host
-      - version
-      - phase
-      - createdAt
-      - updatedAt
-      - document
-      - status
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        host:
-          type: string
-        version:
-          type: integer
-        phase:
-          type: string
-          enum:
-          - managed
-          - retired
-          - unmanaged
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-        document:
-          $ref: '#/components/schemas/MachineDocument'
-        status:
-          $ref: '#/components/schemas/MachineStatus'
-    MachineVersion:
-      type: object
-      additionalProperties: false
-      required:
-      - version
-      - createdAt
-      - createdBy
-      - restoredFrom
-      - document
-      properties:
-        version:
-          type: integer
-        createdAt:
-          type: string
-          format: date-time
-        createdBy:
-          $ref: '#/components/schemas/Actor'
-        restoredFrom:
-          type: integer
-        document:
-          $ref: '#/components/schemas/MachineDocument'
-    MachineEvent:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - machineId
-      - source
-      - kind
-      - severity
-      - occurredAt
-      - ingestedAt
-      - historical
-      properties:
-        operationId:
-          type: string
-        id:
-          type: integer
-        machineId:
-          type: string
-        source:
-          type: string
-        kind:
-          type: string
-        severity:
-          type: string
-        occurredAt:
-          type: string
-          format: date-time
-        ingestedAt:
-          type: string
-          format: date-time
-        bootId:
-          type: string
-        unit:
-          type: string
-        historical:
-          type: boolean
-        reason:
-          type: string
-    MachineCapability:
-      type: object
-      additionalProperties: false
-      required:
-      - action
-      - available
-      - reason
-      properties:
-        action:
-          type: string
-        available:
-          type: boolean
-        reason:
-          type: string
     MachineMaintenance:
       type: object
       additionalProperties: false
       required:
-      - machineId
+      - resourceId
       - state
       - enteredAt
       - actor
@@ -5013,7 +4117,7 @@ components:
       - acknowledged
       - preview
       properties:
-        machineId:
+        resourceId:
           type: string
         state:
           type: string
@@ -5075,141 +4179,6 @@ components:
           format: date-time
         bootId:
           type: string
-    MachineOperation:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - machineId
-      - action
-      - state
-      - unresolved
-      - version
-      - createdAt
-      - updatedAt
-      - actor
-      - request
-      - receipt
-      - reason
-      properties:
-        id:
-          type: string
-        machineId:
-          type: string
-        action:
-          type: string
-        state:
-          type: string
-        unresolved:
-          type: boolean
-        version:
-          type: integer
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-        actor:
-          $ref: '#/components/schemas/Actor'
-        request:
-          $ref: '#/components/schemas/MachinePowerRequest'
-        receipt:
-          anyOf:
-          - $ref: '#/components/schemas/MachineReceipt'
-          - type: 'null'
-        reason:
-          type: string
-        resolution:
-          type: string
-        resolvedBy:
-          $ref: '#/components/schemas/Actor'
-        resolvedAt:
-          type: string
-          format: date-time
-        evidence:
-          $ref: '#/components/schemas/MachineStatus'
-    MachineThresholdsInput:
-      type: object
-      additionalProperties: false
-      required: []
-      properties:
-        cpuPercent:
-          type: number
-        memoryPercent:
-          type: number
-        diskPercent:
-          type: number
-        consecutive:
-          type: integer
-        hysteresis:
-          type: number
-    MachineMonitoringInput:
-      type: object
-      additionalProperties: false
-      required: []
-      properties:
-        interval:
-          type: string
-        staleAfter:
-          type: string
-        filesystems:
-          type: array
-          items:
-            type: string
-        interfaces:
-          type: array
-          items:
-            type: string
-        units:
-          type: array
-          items:
-            type: string
-        journal:
-          type: boolean
-        thresholds:
-          $ref: '#/components/schemas/MachineThresholdsInput'
-    MachineDocumentInput:
-      type: object
-      additionalProperties: false
-      required:
-      - apiVersion
-      - kind
-      - metadata
-      - spec
-      properties:
-        apiVersion:
-          type: string
-          const: lcm/v1
-        kind:
-          type: string
-          const: Machine
-        metadata:
-          type: object
-          additionalProperties: false
-          required:
-          - name
-          properties:
-            name:
-              type: string
-            labels:
-              type: object
-              additionalProperties:
-                type: string
-            annotations:
-              type: object
-              additionalProperties:
-                type: string
-        spec:
-          type: object
-          additionalProperties: false
-          required: []
-          properties:
-            host:
-              type: string
-              const: local
-            monitoring:
-              $ref: '#/components/schemas/MachineMonitoringInput'
     ErrorEnvelope:
       type: object
       required: [error]
@@ -5318,14 +4287,6 @@ components:
         target: { type: string }
         details: { type: object, additionalProperties: true }
         outcome: { type: string, enum: [ok, denied, error] }
-    Host:
-      type: object
-      required: [name, kind, address]
-      properties:
-        name: { type: string }
-        kind: { type: string, enum: [local, ssh] }
-        address: { type: string }
-
     Duration:
       type: string
       description: Go duration such as `30s` or `5m`.
@@ -5371,53 +4332,6 @@ components:
         critical: { type: boolean, description: "Default true." }
         threshold: { type: integer, minimum: 1 }
         props: { type: object, additionalProperties: true }
-    ServiceDocument:
-      type: object
-      description: A `lcm/v1` Service.
-      required: [apiVersion, kind, metadata, spec]
-      properties:
-        apiVersion: { type: string, enum: [lcm/v1] }
-        kind: { type: string, enum: [Service] }
-        metadata: { $ref: "#/components/schemas/Metadata" }
-        spec:
-          type: object
-          required: [runtime]
-          properties:
-            host: { type: string }
-            runtime:
-              type: object
-              required: [type]
-              properties:
-                type: { type: string, enum: [systemd, docker, compose, command] }
-                unit: { type: string }
-                scope: { type: string }
-                container: { type: string }
-                project: { type: string }
-                file: { type: string }
-                start: { type: string }
-                stop: { type: string }
-                restart: { type: string }
-                status: { type: string }
-            source:
-              type: object
-              required: [repo, branch]
-              properties:
-                repo: { type: string }
-                remote: { type: string }
-                branch: { type: string }
-                build: { type: string }
-                install: { type: string }
-                timeout: { $ref: "#/components/schemas/Duration" }
-            backup: { $ref: "#/components/schemas/Command" }
-            jobs:
-              type: object
-              additionalProperties: { $ref: "#/components/schemas/Command" }
-            dependsOn:
-              type: array
-              items: { type: string }
-            checks:
-              type: array
-              items: { $ref: "#/components/schemas/Check" }
     PolicyNode:
       type: object
       required: [id, type]
@@ -5442,10 +4356,10 @@ components:
         joinMode: { type: string, enum: [all, any] }
     PolicyDocument:
       type: object
-      description: A `lcm/v1` Policy.
+      description: A `lcm/v2` Policy.
       required: [apiVersion, kind, metadata, spec]
       properties:
-        apiVersion: { type: string, enum: [lcm/v1] }
+        apiVersion: { type: string, enum: [lcm/v2] }
         kind: { type: string, enum: [Policy] }
         metadata: { $ref: "#/components/schemas/Metadata" }
         spec:
@@ -5465,10 +4379,10 @@ components:
               items: { $ref: "#/components/schemas/PolicyNode" }
     ModuleDocument:
       type: object
-      description: A `lcm/v1` Module.
+      description: A `lcm/v2` Module.
       required: [apiVersion, kind, metadata, spec]
       properties:
-        apiVersion: { type: string, enum: [lcm/v1] }
+        apiVersion: { type: string, enum: [lcm/v2] }
         kind: { type: string, enum: [Module] }
         metadata: { $ref: "#/components/schemas/Metadata" }
         spec:
@@ -5488,114 +4402,15 @@ components:
         name: { type: string }
         default: {}
         description: { type: string }
-
     ServiceState:
       type: string
-      enum: [registered, deploying, running, updating, rolling_back, stopped, failed, retired]
+      enum: [registered, deploying, running, updating, rolling_back, stopped, failed]
     Health:
       type: string
       enum: [unknown, healthy, degraded, down]
-    ServiceSummary:
-      type: object
-      required: [name, host, labels, state, stateSince, health, version, updatedAt, deployedVersion, managedBy]
-      properties:
-        name: { type: string }
-        host: { type: string }
-        labels: { $ref: "#/components/schemas/Labels" }
-        state: { $ref: "#/components/schemas/ServiceState" }
-        stateSince: { type: string, format: date-time }
-        health: { $ref: "#/components/schemas/Health" }
-        version:
-          type: integer
-          description: Version of the configuration document.
-        updatedAt: { type: string, format: date-time }
-        deployedVersion:
-          type: string
-          description: Commit of the last successful deployment; empty if none.
-        managedBy: { $ref: "#/components/schemas/ManagedBy" }
-    ServiceList:
-      type: object
-      required: [items, nextCursor]
-      properties:
-        items:
-          type: array
-          items: { $ref: "#/components/schemas/ServiceSummary" }
-        nextCursor: { type: [string, "null"] }
-    ServiceDoc:
-      allOf:
-        - $ref: "#/components/schemas/DocMeta"
-        - type: object
-          required: [document]
-          properties:
-            document: { $ref: "#/components/schemas/ServiceDocument" }
-    ServiceVersion:
-      allOf:
-        - $ref: "#/components/schemas/ServiceDoc"
-        - type: object
-          required: [restoredFrom]
-          properties:
-            restoredFrom:
-              type: [integer, "null"]
-              description: The version this one was restored from.
-    ServiceDetail:
-      allOf:
-        - $ref: "#/components/schemas/ServiceDoc"
-        - type: object
-          required: [name, host, state, stateSince, createdAt, health, healthSince, checks, alerts, deployedVersion, lastDeployment, managedBy, actions]
-          properties:
-            name: { type: string }
-            host: { type: string }
-            state: { $ref: "#/components/schemas/ServiceState" }
-            stateSince: { type: string, format: date-time }
-            createdAt: { type: string, format: date-time }
-            health: { $ref: "#/components/schemas/Health" }
-            healthSince: { type: [string, "null"], format: date-time }
-            checks:
-              type: array
-              items: { $ref: "#/components/schemas/CheckStatus" }
-            alerts:
-              type: array
-              items: { $ref: "#/components/schemas/Alert" }
-            deployedVersion: { type: string }
-            lastDeployment:
-              oneOf:
-                - $ref: "#/components/schemas/Deployment"
-                - type: "null"
-            managedBy: { $ref: "#/components/schemas/ManagedBy" }
-            actions:
-              description: Whether each action can start now. Rollback may still find no target; the dry-run is definitive.
-              type: array
-              items: { $ref: "#/components/schemas/ActionAvailability" }
-    ActionAvailability:
-      type: object
-      required: [action, allowed, reason]
-      properties:
-        action: { $ref: "#/components/schemas/ActionName" }
-        allowed: { type: boolean }
-        reason:
-          description: "Why the action is unavailable: notConfigured (no source, backup or jobs), unsupported (the runtime cannot do it), invalidState (not allowed in the current state); null when allowed."
-          type: [string, "null"]
-          enum: [notConfigured, unsupported, invalidState, null]
-    ServiceVersionInfo:
-      type: object
-      required: [version, createdAt, createdBy, restoredFrom]
-      properties:
-        version: { type: integer }
-        createdAt: { type: string, format: date-time }
-        createdBy: { $ref: "#/components/schemas/Actor" }
-        restoredFrom: { type: [integer, "null"] }
-    ServiceVersionList:
-      type: object
-      required: [items, nextCursor]
-      properties:
-        items:
-          type: array
-          items: { $ref: "#/components/schemas/ServiceVersionInfo" }
-        nextCursor: { type: [string, "null"] }
-
     ActionName:
       type: string
-      enum: [deploy, rollback, start, stop, restart, backup, run-job, retire]
+      enum: [deploy, rollback, start, stop, restart, backup, run-job]
     ActionRequest:
       type: object
       additionalProperties: false
@@ -5606,22 +4421,147 @@ components:
         job:
           type: string
           description: Name of the job; run-job only, and required there.
-    ActionPlan:
+        acknowledgeImpact:
+          type: boolean
+          description: Accept the impact of a disruptive action; see the dry run's `impact`.
+    ActionSteps:
       type: object
-      required: [service, action, from, to, steps]
+      required: [resource, action, from, to, steps]
       properties:
-        service: { type: string }
+        resource: { type: string }
         action: { $ref: "#/components/schemas/ActionName" }
         from: { $ref: "#/components/schemas/ServiceState" }
         to: { $ref: "#/components/schemas/ServiceState" }
         steps:
           type: array
           items: { type: string }
+    ActionPlan:
+      allOf:
+        - $ref: "#/components/schemas/ActionSteps"
+        - type: object
+          required: [impact]
+          properties:
+            impact: { $ref: "#/components/schemas/ResourceImpact" }
+    ImpactEntry:
+      type: object
+      required: [name, type, relation, via, depth]
+      properties:
+        name: { type: string }
+        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        relation:
+          type: string
+          enum: [dependsOn, runsOn, controlPath]
+          description: The relation of this resource to `via`.
+        via: { type: string, description: The resource the relation targets. }
+        depth: { type: integer, minimum: 1, description: "1 when the relation targets the acted-on resource." }
+    ResourceImpact:
+      type: object
+      required: [resource, dependents, controlDependents, unresolved, acknowledgementRequired]
+      properties:
+        resource: { type: string }
+        dependents:
+          type: array
+          description: Managed resources that depend on the resource, nearest first.
+          items: { $ref: "#/components/schemas/ImpactEntry" }
+        controlDependents:
+          type: array
+          description: Managed resources LCM reaches through the resource or one of its dependents.
+          items: { $ref: "#/components/schemas/ImpactEntry" }
+        unresolved:
+          type: array
+          description: Relation targets of the resource that do not exist.
+          items: { type: string }
+        action: { type: string, description: The action the guard was evaluated for. }
+        acknowledgementRequired:
+          type: boolean
+          description: The action needs `acknowledgeImpact`; always false without an action.
+    ResourceGroupActionRequest:
+      type: object
+      required: [selector, action]
+      additionalProperties: false
+      properties:
+        selector:
+          type: object
+          required: [labels]
+          additionalProperties: false
+          properties:
+            type: { type: string, enum: [service], description: Only services run group actions. }
+            labels:
+              type: object
+              minProperties: 1
+              additionalProperties: { type: string }
+        action: { $ref: "#/components/schemas/ActionName" }
+        params:
+          type: object
+          additionalProperties: false
+          properties:
+            version: { type: string, description: Commit to deploy; deploy only. }
+            job: { type: string, description: Job to run; run-job only, and required there. }
+        dryRun: { type: boolean, default: false }
+        acknowledgeImpact: { type: boolean, default: false }
+    ResourceGroupSelector:
+      type: object
+      required: [type, labels]
+      properties:
+        type: { type: string, enum: [service] }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+    ResourceGroupPlan:
+      type: object
+      required: [action, selector, steps, acknowledgementRequired]
+      properties:
+        action: { $ref: "#/components/schemas/ActionName" }
+        selector: { $ref: "#/components/schemas/ResourceGroupSelector" }
+        steps:
+          type: array
+          description: In execution order.
+          items:
+            type: object
+            required: [resource, plan, error, impact]
+            properties:
+              resource: { type: string }
+              plan:
+                oneOf:
+                  - $ref: "#/components/schemas/ActionSteps"
+                  - type: "null"
+              error: { type: string, description: Why the step could not run now; empty when it can. }
+              impact: { $ref: "#/components/schemas/ResourceImpact" }
+        acknowledgementRequired:
+          type: boolean
+          description: Some step needs `acknowledgeImpact`.
+    ResourceGroupAction:
+      type: object
+      required: [id, action, status, actor, selector, startedAt, finishedAt, steps]
+      properties:
+        id: { type: string }
+        action: { $ref: "#/components/schemas/ActionName" }
+        status: { type: string, enum: [running, succeeded, failed] }
+        actor: { $ref: "#/components/schemas/Actor" }
+        selector: { $ref: "#/components/schemas/ResourceGroupSelector" }
+        version: { type: string }
+        job: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [resource, status, actionId, result, error]
+            properties:
+              resource: { type: string }
+              status: { type: string, enum: [pending, running, succeeded, failed, notRun] }
+              actionId: { type: string, description: The step's tracked action; empty until it starts. }
+              result:
+                oneOf:
+                  - $ref: "#/components/schemas/ActionResult"
+                  - type: "null"
+              error: { type: string }
     ActionResult:
       type: object
-      required: [service, action, from, to, durationMs]
+      required: [resource, action, from, to, durationMs]
       properties:
-        service: { type: string }
+        resource: { type: string }
         action: { $ref: "#/components/schemas/ActionName" }
         from: { $ref: "#/components/schemas/ServiceState" }
         to: { $ref: "#/components/schemas/ServiceState" }
@@ -5633,10 +4573,10 @@ components:
         replayed: { type: boolean }
     Action:
       type: object
-      required: [id, service, action, status, actor, startedAt, finishedAt, result, error]
+      required: [id, resource, action, status, actor, startedAt, finishedAt, result, error]
       properties:
         id: { type: string }
-        service: { type: string }
+        resource: { type: string }
         action: { $ref: "#/components/schemas/ActionName" }
         status: { type: string, enum: [running, succeeded, failed] }
         actor: { $ref: "#/components/schemas/Actor" }
@@ -5651,10 +4591,10 @@ components:
         error: { type: string }
     Deployment:
       type: object
-      required: [id, service, action, version, previousVersion, startedAt, finishedAt, outcome, actor, runId, error, logExcerpt]
+      required: [id, resource, action, version, previousVersion, startedAt, finishedAt, outcome, actor, runId, error, logExcerpt]
       properties:
         id: { type: integer, format: int64 }
-        service: { type: string }
+        resource: { type: string }
         action: { type: string, enum: [deploy, rollback] }
         version: { type: string }
         previousVersion: { type: string }
@@ -5675,13 +4615,13 @@ components:
         nextCursor: { type: [string, "null"] }
     TimelineEntry:
       type: object
-      required: [id, service, time, kind, summary, data, ref]
+      required: [id, resource, time, kind, summary, data, ref]
       properties:
         id:
           type: integer
           format: int64
           description: Row id; 0 in `timeline` events for entries whose id is not known.
-        service: { type: string }
+        resource: { type: string }
         time: { type: string, format: date-time }
         kind:
           type: string
@@ -5699,7 +4639,6 @@ components:
           type: array
           items: { $ref: "#/components/schemas/TimelineEntry" }
         nextCursor: { type: [string, "null"] }
-
     CheckStatus:
       type: object
       required: [name, type, critical, intervalMs, status, stale, since, message, lastResult, lastLatencyMs, consecutiveFailures]
@@ -5719,9 +4658,9 @@ components:
         consecutiveFailures: { type: integer }
     Checks:
       type: object
-      required: [service, health, since, checks]
+      required: [resource, health, since, checks]
       properties:
-        service: { type: string }
+        resource: { type: string }
         health: { $ref: "#/components/schemas/Health" }
         since: { type: [string, "null"], format: date-time }
         checks:
@@ -5739,9 +4678,9 @@ components:
         maxLatencyMs: { type: number }
     Series:
       type: object
-      required: [service, check, from, to, source, stepMs, points]
+      required: [resource, check, from, to, source, stepMs, points]
       properties:
-        service: { type: string }
+        resource: { type: string }
         check: { type: string }
         from: { type: string, format: date-time }
         to: { type: string, format: date-time }
@@ -5765,13 +4704,13 @@ components:
         avgLatencyMs: { type: number }
         minLatencyMs: { type: number }
         maxLatencyMs: { type: number }
-    ServiceSummaryStats:
+    ResourceSummaryStats:
       allOf:
         - $ref: "#/components/schemas/SummaryStats"
         - type: object
-          required: [service, window, checks]
+          required: [resource, window, checks]
           properties:
-            service: { type: string }
+            resource: { type: string }
             window: { type: string, enum: [24h, 7d, 30d] }
             checks:
               type: object
@@ -5788,7 +4727,7 @@ components:
       properties:
         source: { type: string }
         fingerprint: { type: string }
-        service: { type: string }
+        resource: { type: string }
         name: { type: string }
         severity: { type: string, enum: [info, warning, critical] }
         labels: { $ref: "#/components/schemas/Labels" }
@@ -5804,7 +4743,6 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Alert" }
         nextCursor: { type: [string, "null"] }
-
     Trigger:
       type: object
       required: [id, type, props]
@@ -5836,7 +4774,7 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Trigger" }
         targets:
-          description: Nodes of the deployed version that act on a service; empty when not deployed.
+          description: Nodes of the deployed version that act on a resource; empty when not deployed.
           type: array
           items: { $ref: "#/components/schemas/PolicyTarget" }
         lastRun:
@@ -5846,12 +4784,12 @@ components:
         managedBy: { $ref: "#/components/schemas/ManagedBy" }
     PolicyTarget:
       type: object
-      required: [node, type, service]
+      required: [node, type, resource]
       properties:
         node: { type: string, description: Scoped node id such as deploy or mod/restart. }
         type: { type: string }
-        service:
-          description: The service the node acts on; null when the policy decides it while running (for example from the trigger event).
+        resource:
+          description: The resource the node acts on; null when the policy decides it while running (for example from the trigger event).
           type: [string, "null"]
     PolicyList:
       type: object
@@ -6035,7 +4973,7 @@ components:
       type: object
       required: [kind, name, source, path, commit, appliedVersion, appliedAt, drifted, missing, conflict, conflictCommit, acknowledged, orphaned]
       properties:
-        kind: { type: string, enum: [Service, Policy, Module] }
+        kind: { type: string, enum: [Resource, Policy, Module] }
         name: { type: string }
         source: { type: string }
         path: { type: string }
@@ -6073,17 +5011,16 @@ components:
         warnings:
           type: array
           items: { $ref: "#/components/schemas/Issue" }
-
     Template:
       type: object
-      required: [id, title, description, serviceParam, params]
+      required: [id, title, description, resourceParam, params]
       properties:
         id: { type: string }
         title: { type: string }
         description: { type: string }
-        serviceParam:
+        resourceParam:
           type: string
-          description: Name of the parameter that selects the target service.
+          description: Name of the parameter that selects the target resource, a service.
         params:
           type: array
           items: { $ref: "#/components/schemas/TemplateParam" }
@@ -6096,8 +5033,8 @@ components:
           type: string
           enum: [string, boolean, duration, secret, service, strings, json]
           description: |
-            `secret` is the name of a secret, `service` the name of a catalog
-            service, `duration` Go syntax such as `5m`, `strings` a list of
+            `secret` is the name of a secret, `service` the name of a service
+            resource, `duration` Go syntax such as `5m`, `strings` a list of
             strings and `json` any JSON value.
         description: { type: string }
         required: { type: boolean }
@@ -6122,7 +5059,6 @@ components:
         warnings:
           type: array
           items: { $ref: "#/components/schemas/Issue" }
-
     ModuleSummary:
       type: object
       required: [name, labels, params, version, updatedAt, updatedBy]
@@ -6190,7 +5126,6 @@ components:
         additionalProps:
           type: boolean
           description: The props are a free-form object.
-
     RunStatus:
       type: string
       enum: [queued, running, suspended, succeeded, failed, cancelled, interrupted, dropped]
@@ -6283,7 +5218,6 @@ components:
               type: array
               description: In topological order.
               items: { $ref: "#/components/schemas/RunNode" }
-
     LockInfo:
       type: object
       required: [name, owner, acquiredAt, expiresAt]
@@ -6300,7 +5234,6 @@ components:
           type: array
           items: { $ref: "#/components/schemas/LockInfo" }
         nextCursor: { type: [string, "null"] }
-
     GitHubAck:
       type: object
       required: [event]
@@ -6318,7 +5251,6 @@ components:
         sources:
           type: integer
           description: Number of config sources that will sync because of this push.
-
     EventType:
       type: string
       enum:
@@ -6327,8 +5259,9 @@ components:
       - node
       - timeline
       - action
+      - resource
+      - observation
       - catalog
-      - machine
     EngineEvent:
       type: object
       description: Payload of `run` and `node` events, and of policy deployments in `catalog` events.
@@ -6367,20 +5300,16 @@ components:
       required: [id, kind, time, source]
       properties:
         id: { type: string }
-        kind: { type: string, enum: [check.changed, health.changed, lifecycle.changed, alert] }
+        kind:
+          type: string
+          description: "check.changed, health.changed, lifecycle.changed, alert, or resource.config.conflict / resource.config.invalid from config sync."
         time: { type: string, format: date-time }
-        service: { type: string }
+        resource: { type: string }
+        resourceType: { $ref: "#/components/schemas/ResourceTypeName" }
         source: { type: string }
         severity: { type: string }
         labels: { $ref: "#/components/schemas/Labels" }
         data: { type: object, additionalProperties: true }
-    CatalogChange:
-      type: object
-      description: Payload of `catalog` events about services.
-      required: [service, change]
-      properties:
-        service: { type: string }
-        change: { type: string, enum: [created, updated, restored, deleted] }
     EventEnvelope:
       type: object
       description: The `data` of every server-sent event.
@@ -6390,9 +5319,6 @@ components:
       - time
       - data
       properties:
-        machine:
-          type: string
-          description: Immutable Machine ID.
         id:
           type: integer
           format: int64
@@ -6402,8 +5328,12 @@ components:
         time:
           type: string
           format: date-time
-        service:
+        resource:
           type: string
+          description: Name of the resource the event is about.
+        resourceId:
+          type: string
+          description: Immutable resource ID, for resource changes and observations.
         policy:
           type: string
         run:
@@ -6415,5 +5345,383 @@ components:
           - $ref: '#/components/schemas/EngineEvent'
           - $ref: '#/components/schemas/TimelineEntry'
           - $ref: '#/components/schemas/Action'
-          - $ref: '#/components/schemas/CatalogChange'
-          - $ref: '#/components/schemas/MachineEvent'
+          - $ref: '#/components/schemas/ResourceChange'
+          - $ref: '#/components/schemas/ResourceEvent'
+    ResourceTypeName:
+      type: string
+      enum: [service, machine, router]
+    ResourcePhase:
+      type: string
+      enum: [managed, retired, unmanaged]
+      description: "`managed` is observed and controlled; `retired` keeps records without observation or control and can be resumed; `unmanaged` is archived and has released its name."
+    ResourceAction:
+      type: object
+      required: [name, available, reason, risk, policy, kind]
+      properties:
+        name: { type: string, description: "Action, operation or phase change, such as `restart`, `reboot` or `retire`." }
+        available: { type: boolean }
+        reason:
+          type: string
+          description: "Why the action is unavailable now; empty when available. Services use notConfigured, unsupported, invalidState, notManaged or busy."
+        risk: { type: string, enum: [read, reversible, disruptive, destructive] }
+        policy: { type: boolean, description: Whether policies may run it. }
+        kind:
+          type: string
+          enum: [action, operation, phase]
+          description: "`action` runs through `POST /resources/{resource}/actions/{action}` (services) or its own route (observe, maintenance); `operation` through `POST /resources/{resource}/operations`; `phase` through `POST /resources/{resource}/phase`."
+    ResourceType:
+      type: object
+      required: [type, adapters, needsConnection, description, actions]
+      properties:
+        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        adapters:
+          type: array
+          items: { type: string }
+        needsConnection:
+          type: boolean
+          description: The adapter reaches the resource through a connection named in `spec.connection` and defined in host configuration.
+        description: { type: string }
+        actions:
+          type: array
+          description: Everything the type offers; `available` and `reason` are only meaningful on a resource.
+          items: { $ref: "#/components/schemas/ResourceAction" }
+    Relation:
+      type: object
+      required: [type, target]
+      additionalProperties: false
+      properties:
+        type: { type: string, enum: [dependsOn, runsOn, controlPath] }
+        target: { type: string, description: Name of another resource. }
+    ResourceDocument:
+      type: object
+      description: A `lcm/v2` Resource.
+      required: [apiVersion, kind, metadata, spec]
+      properties:
+        apiVersion: { type: string, enum: [lcm/v2] }
+        kind: { type: string, enum: [Resource] }
+        metadata: { $ref: "#/components/schemas/Metadata" }
+        spec:
+          type: object
+          required: [type, adapter]
+          properties:
+            type: { $ref: "#/components/schemas/ResourceTypeName" }
+            adapter:
+              type: string
+              description: "service: systemd, docker, compose, command or external; machine: local; router: xiaomi. See `GET /resource-types`."
+            connection:
+              type: string
+              description: Name of a host-configured connection; only for adapters that need one.
+            config:
+              type: object
+              additionalProperties: true
+              description: |
+                Typed by `type` and `adapter` and validated strictly by the server (unknown
+                fields are refused). service: the runtime fields valid for the adapter
+                (`unit`, `scope`, `container`, `project`, `file`, `start`, `stop`,
+                `restart`, `status`) plus `source`, `backup` and `jobs`. machine:
+                `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
+                `thresholds`. router: `interval`, `staleAfter`, `thresholds`
+                (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).
+            checks:
+              type: array
+              items: { $ref: "#/components/schemas/Check" }
+            relations:
+              type: array
+              items: { $ref: "#/components/schemas/Relation" }
+    ResourceSummary:
+      type: object
+      required: [id, name, type, adapter, phase, labels, state, stateSince, health, version, updatedAt, deployedVersion, managedBy]
+      properties:
+        id: { type: string, description: Immutable ID; `@<id>` addresses any incarnation, including archives. }
+        name: { type: string }
+        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        adapter: { type: string }
+        phase: { $ref: "#/components/schemas/ResourcePhase" }
+        labels: { $ref: "#/components/schemas/Labels" }
+        state:
+          type: string
+          description: "service: registered, deploying, running, updating, rolling_back, stopped or failed; machine and router: online, offline or unknown. Empty when not known."
+        stateSince: { type: [string, "null"], format: date-time }
+        health: { $ref: "#/components/schemas/Health" }
+        version:
+          type: integer
+          description: Version of the configuration document.
+        updatedAt: { type: string, format: date-time }
+        deployedVersion:
+          type: string
+          description: Commit of a service's last successful deployment; empty if none and for other types.
+        managedBy: { $ref: "#/components/schemas/ManagedBy" }
+    ResourceList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceSummary" }
+        nextCursor: { type: [string, "null"] }
+    ResourceHealth:
+      type: object
+      required: [status, since, reasons]
+      properties:
+        status: { $ref: "#/components/schemas/Health" }
+        since: { type: [string, "null"], format: date-time }
+        reasons:
+          type: array
+          description: The type's own findings (thresholds, reachability) followed by failing checks.
+          items: { type: string }
+    ResourceDetail:
+      type: object
+      required: [id, name, type, adapter, connection, phase, labels, document, version, createdAt, updatedAt, updatedBy, state, stateSince, health, checks, alerts, actions, operation, managedBy, unresolvedRelations]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        adapter: { type: string }
+        connection: { type: string, description: Empty when the adapter needs none. }
+        phase: { $ref: "#/components/schemas/ResourcePhase" }
+        labels: { $ref: "#/components/schemas/Labels" }
+        document: { $ref: "#/components/schemas/ResourceDocument" }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        updatedBy: { $ref: "#/components/schemas/Actor" }
+        state: { type: string, description: See `ResourceSummary.state`. }
+        stateSince: { type: [string, "null"], format: date-time }
+        health: { $ref: "#/components/schemas/ResourceHealth" }
+        checks:
+          type: array
+          items: { $ref: "#/components/schemas/CheckStatus" }
+        alerts:
+          type: array
+          items: { $ref: "#/components/schemas/Alert" }
+        actions:
+          description: What can be done now. A service rollback may still find no target; the dry-run is definitive.
+          type: array
+          items: { $ref: "#/components/schemas/ResourceAction" }
+        operation:
+          description: The durable operation whose outcome is still open, if any.
+          oneOf:
+            - $ref: "#/components/schemas/ResourceOperation"
+            - type: "null"
+        managedBy: { $ref: "#/components/schemas/ManagedBy" }
+        unresolvedRelations:
+          description: Relation targets of the document that name no resource yet, sorted; such a relation counts once the target exists. Empty for archives.
+          type: array
+          items: { type: string }
+        service:
+          type: object
+          description: Services only.
+          required: [deployedVersion, lastDeployment]
+          properties:
+            deployedVersion: { type: string }
+            lastDeployment:
+              oneOf:
+                - $ref: "#/components/schemas/Deployment"
+                - type: "null"
+        machine:
+          type: object
+          description: Machines only.
+          required: [status]
+          properties:
+            status:
+              oneOf:
+                - $ref: "#/components/schemas/MachineStatus"
+                - type: "null"
+        router:
+          type: object
+          description: Routers only.
+          required: [status]
+          properties:
+            status:
+              oneOf:
+                - $ref: "#/components/schemas/RouterStatus"
+                - type: "null"
+    ResourcePhaseRequest:
+      type: object
+      required: [phase]
+      additionalProperties: false
+      properties:
+        phase: { $ref: "#/components/schemas/ResourcePhase" }
+        version:
+          type: integer
+          minimum: 1
+          description: The current document version; `If-Match` may carry it instead.
+        reason: { type: string, maxLength: 1000 }
+        acknowledgeImpact:
+          type: boolean
+          description: Accept the impact of retiring a service (it is stopped first).
+    ResourceVersion:
+      allOf:
+        - $ref: "#/components/schemas/DocMeta"
+        - type: object
+          required: [document, restoredFrom]
+          properties:
+            document: { $ref: "#/components/schemas/ResourceDocument" }
+            restoredFrom:
+              type: [integer, "null"]
+              description: The version this one was restored from.
+    ResourceVersionInfo:
+      type: object
+      required: [version, createdAt, createdBy, restoredFrom]
+      properties:
+        version: { type: integer }
+        createdAt: { type: string, format: date-time }
+        createdBy: { $ref: "#/components/schemas/Actor" }
+        restoredFrom: { type: [integer, "null"] }
+    ResourceVersionList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceVersionInfo" }
+        nextCursor: { type: [string, "null"] }
+    ResourceSnapshot:
+      type: object
+      additionalProperties: false
+      required: [id, resourceId, type, observedAt]
+      description: One stored observation; the measurements are under the field named after `type`.
+      properties:
+        id: { type: integer, format: int64 }
+        resourceId: { type: string }
+        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        observedAt: { type: string, format: date-time }
+        machine: { $ref: "#/components/schemas/MachineSnapshot" }
+        router: { $ref: "#/components/schemas/RouterSnapshot" }
+    ResourceEvent:
+      type: object
+      additionalProperties: false
+      required: [id, resourceId, source, kind, severity, occurredAt, ingestedAt, historical]
+      properties:
+        id: { type: integer, format: int64 }
+        resourceId: { type: string }
+        source: { type: string, description: "`control`, `journal` or `health`." }
+        kind: { type: string }
+        severity: { type: string }
+        occurredAt: { type: string, format: date-time }
+        ingestedAt: { type: string, format: date-time }
+        bootId: { type: string }
+        unit: { type: string }
+        historical: { type: boolean }
+        reason: { type: string }
+        operationId: { type: string }
+    ResourceCapability:
+      type: object
+      additionalProperties: false
+      required: [action, available, reason]
+      properties:
+        action: { type: string }
+        available: { type: boolean }
+        reason: { type: string }
+    ResourceOperation:
+      type: object
+      additionalProperties: false
+      description: A durable operation. `request`, `receipt` and `evidence` are type-specific.
+      required: [id, resourceId, action, state, unresolved, version, createdAt, updatedAt, actor, request, receipt, reason]
+      properties:
+        id: { type: string }
+        resourceId: { type: string }
+        action: { type: string }
+        state: { type: string, description: "For example pending, submitted, succeeded, failed or indeterminate." }
+        unresolved: { type: boolean, description: The outcome is not known yet or needs `resolve`. }
+        version: { type: integer, description: Document version the operation was submitted against. }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        actor: { $ref: "#/components/schemas/Actor" }
+        request: { type: object, additionalProperties: true }
+        receipt:
+          type: [object, "null"]
+          additionalProperties: true
+        reason: { type: string }
+        resolution: { type: string }
+        resolvedBy: { $ref: "#/components/schemas/Actor" }
+        resolvedAt: { type: string, format: date-time }
+        evidence: { type: object, additionalProperties: true }
+    RouterWAN:
+      type: object
+      additionalProperties: false
+      required: [link, status, uptimeSeconds, upBytesPerSec, downBytesPerSec, uploadedBytes, downloadedBytes]
+      description: WAN link and traffic; addresses, DNS servers and MAC addresses are never read.
+      properties:
+        link: { type: [boolean, "null"] }
+        status: { type: [integer, "null"] }
+        uptimeSeconds: { type: [number, "null"] }
+        type: { type: string, description: "Connection type the router reports, such as `dhcp` or `pppoe`." }
+        upBytesPerSec: { type: [number, "null"] }
+        downBytesPerSec: { type: [number, "null"] }
+        uploadedBytes: { type: [integer, "null"], format: int64 }
+        downloadedBytes: { type: [integer, "null"], format: int64 }
+    RouterSnapshot:
+      type: object
+      additionalProperties: false
+      required: [id, observedAt, outcome, cpuPercent, cpuCores, memoryPercent, uptimeSeconds, temperatureC, clients, wan, sources, model, firmware]
+      description: One observation attempt; measurements the router did not report are null.
+      properties:
+        id: { type: integer, format: int64 }
+        observedAt: { type: string, format: date-time }
+        outcome:
+          type: string
+          enum: [ok, unreachable, auth-failed, unavailable, not-configured]
+          description: "`unreachable`: no HTTP answer; `unavailable`: an answer without usable status; `not-configured`: no usable connection or password secret on this host."
+        reason: { type: string, description: Fixed description of a failed attempt. }
+        cpuPercent: { type: [number, "null"] }
+        cpuCores: { type: [integer, "null"] }
+        memoryPercent: { type: [number, "null"] }
+        uptimeSeconds: { type: [number, "null"] }
+        temperatureC: { type: [number, "null"] }
+        clients: { type: [integer, "null"], description: Online clients. }
+        wan: { $ref: "#/components/schemas/RouterWAN" }
+        sources:
+          type: object
+          description: Availability of each status source (`status`, `wan`).
+          additionalProperties: { $ref: "#/components/schemas/MachineCoverage" }
+        model: { type: string }
+        firmware: { type: string }
+    RouterStatus:
+      type: object
+      additionalProperties: false
+      required: [snapshot, health, reasons, fresh, reachability, bootAt]
+      properties:
+        snapshot:
+          description: The latest observation attempt.
+          oneOf:
+            - $ref: "#/components/schemas/RouterSnapshot"
+            - type: "null"
+        health: { $ref: "#/components/schemas/Health" }
+        reasons:
+          type: array
+          items: { type: string }
+        fresh: { type: boolean, description: The latest attempt is younger than `staleAfter`. }
+        reachability: { type: string, enum: [reachable, unreachable, unknown] }
+        bootAt:
+          type: [string, "null"]
+          format: date-time
+          description: Last boot estimated from the reported uptime.
+    Connection:
+      type: object
+      additionalProperties: false
+      required: [name, type, allowActions, allowResources, resources]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [xiaomi] }
+        allowActions:
+          type: array
+          description: Write actions resources may perform through the connection; others are refused.
+          items: { type: string }
+        allowResources:
+          type: array
+          description: Resource names that may use the connection; empty allows all.
+          items: { type: string }
+        resources:
+          type: array
+          description: Managed and retired resources whose document names the connection.
+          items: { type: string }
+    ResourceChange:
+      type: object
+      description: Payload of `resource` events.
+      required: [id, name, type, change]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        change: { type: string, enum: [created, updated, restored, phase, unmanaged] }

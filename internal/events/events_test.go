@@ -11,6 +11,7 @@ import (
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
 )
 
@@ -37,19 +38,21 @@ func recv(t *testing.T, s *events.Subscription) events.Event {
 }
 
 func TestFilterMatch(t *testing.T) {
-	e := events.Event{Type: events.TypeRun, Service: "web", Policy: "heal", Run: "r1"}
+	e := events.Event{Type: events.TypeRun, Resource: "web", ResourceID: "id-1", Policy: "heal", Run: "r1"}
 	for name, tc := range map[string]struct {
 		f    events.Filter
 		want bool
 	}{
-		"empty":         {events.Filter{}, true},
-		"service":       {events.Filter{Service: "web"}, true},
-		"other service": {events.Filter{Service: "db"}, false},
-		"policy":        {events.Filter{Policy: "heal"}, true},
-		"other run":     {events.Filter{Run: "r2"}, false},
-		"type":          {events.Filter{Types: []events.Type{events.TypeSignal, events.TypeRun}}, true},
-		"other type":    {events.Filter{Types: []events.Type{events.TypeNode}}, false},
-		"all must hold": {events.Filter{Service: "web", Run: "r2"}, false},
+		"empty":          {events.Filter{}, true},
+		"resource":       {events.Filter{Resource: "web"}, true},
+		"other resource": {events.Filter{Resource: "db"}, false},
+		"resource id":    {events.Filter{ResourceID: "id-1"}, true},
+		"other id":       {events.Filter{ResourceID: "id-2"}, false},
+		"policy":         {events.Filter{Policy: "heal"}, true},
+		"other run":      {events.Filter{Run: "r2"}, false},
+		"type":           {events.Filter{Types: []events.Type{events.TypeSignal, events.TypeRun}}, true},
+		"other type":     {events.Filter{Types: []events.Type{events.TypeNode}}, false},
+		"all must hold":  {events.Filter{Resource: "web", Run: "r2"}, false},
 	} {
 		if got := tc.f.Match(e); got != tc.want {
 			t.Errorf("%s: Match = %v, want %v", name, got, tc.want)
@@ -61,16 +64,16 @@ func TestPublishStampsAndFilters(t *testing.T) {
 	h := newHub()
 	defer h.Close()
 	all := h.Subscribe(events.Filter{}, 8)
-	web := h.Subscribe(events.Filter{Service: "web"}, 8)
+	web := h.Subscribe(events.Filter{Resource: "web"}, 8)
 	defer all.Close()
 	defer web.Close()
 
-	h.Publish(events.Event{Type: events.TypeAction, Service: "db", Data: 1})
-	got := h.Publish(events.Event{Type: events.TypeAction, Service: "web", Data: 2})
+	h.Publish(events.Event{Type: events.TypeAction, Resource: "db", Data: 1})
+	got := h.Publish(events.Event{Type: events.TypeAction, Resource: "web", Data: 2})
 	if got.ID != 2 || !got.Time.Equal(epoch) {
 		t.Fatalf("stamped event = %+v", got)
 	}
-	if e := recv(t, all); e.Service != "db" {
+	if e := recv(t, all); e.Resource != "db" {
 		t.Fatalf("all[0] = %+v", e)
 	}
 	if e := recv(t, all); e.ID != 2 {
@@ -135,10 +138,10 @@ func TestFollowBus(t *testing.T) {
 	defer s.Close()
 
 	local := time.Date(2026, 3, 1, 20, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
-	bus.Publish(signal.Signal{Kind: signal.KindHealth, Service: "web", Source: "monitor", Time: local})
+	bus.Publish(signal.Signal{Kind: signal.KindHealth, Resource: "web", Source: "monitor", Time: local})
 	e := recv(t, s)
 	sig, ok := e.Data.(signal.Signal)
-	if e.Type != events.TypeSignal || e.Service != "web" || !ok || sig.Kind != signal.KindHealth {
+	if e.Type != events.TypeSignal || e.Resource != "web" || !ok || sig.Kind != signal.KindHealth {
 		t.Fatalf("event = %+v", e)
 	}
 	if sig.Time.Location() != time.UTC || !sig.Time.Equal(local) || e.Time.Location() != time.UTC {
@@ -147,7 +150,7 @@ func TestFollowBus(t *testing.T) {
 	h.Close()
 }
 
-func TestObserverAndCatalogSources(t *testing.T) {
+func TestSources(t *testing.T) {
 	h := newHub()
 	defer h.Close()
 	s := h.Subscribe(events.Filter{}, 16)
@@ -157,24 +160,26 @@ func TestObserverAndCatalogSources(t *testing.T) {
 	obs.Observe(engine.Event{Kind: engine.EventRunStarted, Policy: "heal", RunID: "r1", Time: time.Now()})
 	obs.Observe(engine.Event{Kind: engine.EventNodeFinished, Policy: "heal", RunID: "r1", NodeID: "n"})
 	obs.Observe(engine.Event{Kind: engine.EventPolicyDeployed, Policy: "heal", Version: 2})
-	h.Document("web", catalog.ChangeUpdated)
-	h.Timeline(catalog.Entry{Service: "web", Kind: catalog.KindAction, Summary: "restart succeeded"})
+	h.ResourceChanged(resource.Change{ID: "id-1", Name: "web", Type: "service", Change: resource.ChangeUpdated})
+	h.Timeline(catalog.Entry{Resource: "web", Kind: catalog.KindAction, Summary: "restart succeeded"})
+	h.Observation("ws", "id-2", map[string]any{"kind": "boot"})
 
 	want := []struct {
-		typ     events.Type
-		service string
-		policy  string
-		run     string
+		typ          events.Type
+		resource, id string
+		policy       string
+		run          string
 	}{
-		{events.TypeRun, "", "heal", "r1"},
-		{events.TypeNode, "", "heal", "r1"},
-		{events.TypeCatalog, "", "heal", ""},
-		{events.TypeCatalog, "web", "", ""},
-		{events.TypeTimeline, "web", "", ""},
+		{events.TypeRun, "", "", "heal", "r1"},
+		{events.TypeNode, "", "", "heal", "r1"},
+		{events.TypeCatalog, "", "", "heal", ""},
+		{events.TypeResource, "web", "id-1", "", ""},
+		{events.TypeTimeline, "web", "", "", ""},
+		{events.TypeObservation, "ws", "id-2", "", ""},
 	}
 	for i, w := range want {
 		e := recv(t, s)
-		if e.Type != w.typ || e.Service != w.service || e.Policy != w.policy || e.Run != w.run {
+		if e.Type != w.typ || e.Resource != w.resource || e.ResourceID != w.id || e.Policy != w.policy || e.Run != w.run {
 			t.Errorf("event %d = %+v, want %+v", i, e, w)
 		}
 	}

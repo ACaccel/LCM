@@ -138,7 +138,7 @@ func fakeDef(service, name string, mod ...func(*model.Check)) Def {
 	for _, f := range mod {
 		f(&c)
 	}
-	return Def{Service: service, Check: c}
+	return Def{Resource: service, ResourceType: "service", Check: c}
 }
 
 func nonCritical(c *model.Check) { f := false; c.Critical = &f }
@@ -189,7 +189,7 @@ func kinds(sigs []signal.Signal, k signal.Kind) []signal.Signal {
 
 func (h *harness) check(service, name string) CheckStatus {
 	h.t.Helper()
-	s, ok := h.m.Service(service)
+	s, ok := h.m.Resource(service)
 	if !ok {
 		h.t.Fatalf("service %s not found", service)
 	}
@@ -204,7 +204,7 @@ func (h *harness) check(service, name string) CheckStatus {
 
 func (h *harness) health(service string) Health {
 	h.t.Helper()
-	s, ok := h.m.Service(service)
+	s, ok := h.m.Resource(service)
 	if !ok {
 		h.t.Fatalf("service %s not found", service)
 	}

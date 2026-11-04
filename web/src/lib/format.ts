@@ -73,3 +73,17 @@ export function shortVersion(v: string | null | undefined): string {
 export function startOfDay(now: Date = new Date()): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
+
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+
+/** Binary byte size such as 512 B, 1.5 MiB; "-" without a value. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return "-";
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${BYTE_UNITS[unit]}`;
+}

@@ -8,13 +8,13 @@ import (
 	"testing"
 
 	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 // statusOnlyDoc is a command runtime that can report status but neither
 // start, stop nor restart the process, as LCM's own service does.
 func statusOnlyDoc(name, extra string) string {
-	return "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: " + name + " }\nspec:\n" +
-		"  runtime: { type: command, status: \"true\" }\n" + extra
+	return serviceDoc(name, "command", "    status: \"true\"\n"+indent(extra), "")
 }
 
 func TestUnsupportedRuntimeActionsAreRefused(t *testing.T) {
@@ -50,12 +50,9 @@ func TestUnsupportedRuntimeActionsAreRefused(t *testing.T) {
 		t.Fatalf("deploy plan must skip the restart:\n%s", joined)
 	}
 
-	p, err = e.mgr.Plan(ctx, "self", catalog.ActionRetire, catalog.ActionOptions{})
-	if err != nil || strings.Contains(strings.Join(p.Steps, "\n"), "stop ") {
-		t.Fatalf("retire plan must not stop: %+v %v", p, err)
-	}
-	if _, err := e.mgr.Retire(e.ctx, "self", catalog.ActionOptions{}); err != nil || len(ad.Calls()) != 0 {
-		t.Fatalf("retire = %v, calls %v", err, ad.Calls())
+	// Retiring cannot stop the process, so the state stays running.
+	if err := e.phase(e.ctx, "self", resource.PhaseRetired); err != nil || len(ad.Calls()) != 0 || e.state("self") != catalog.StateRunning {
+		t.Fatalf("retire = %v, calls %v, state %s", err, ad.Calls(), e.state("self"))
 	}
 }
 
@@ -90,12 +87,11 @@ func TestAvailableActions(t *testing.T) {
 			catalog.ActionStart: catalog.ReasonUnsupported, catalog.ActionStop: catalog.ReasonUnsupported,
 			catalog.ActionRestart: catalog.ReasonUnsupported, catalog.ActionDeploy: "", catalog.ActionRollback: "",
 			catalog.ActionBackup: catalog.ReasonNotConfigured, catalog.ActionRunJob: catalog.ReasonNotConfigured,
-			catalog.ActionRetire: "",
 		},
 		"app": {
 			catalog.ActionStart: catalog.ReasonInvalidState, catalog.ActionStop: "", catalog.ActionRestart: "",
 			catalog.ActionDeploy: catalog.ReasonNotConfigured, catalog.ActionRollback: catalog.ReasonNotConfigured,
-			catalog.ActionBackup: "", catalog.ActionRunJob: catalog.ReasonNotConfigured, catalog.ActionRetire: "",
+			catalog.ActionBackup: "", catalog.ActionRunJob: catalog.ReasonNotConfigured,
 		},
 	}
 	for name, want := range cases {

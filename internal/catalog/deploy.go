@@ -86,7 +86,7 @@ func (s *session) git(dir string, timeout time.Duration, args ...string) execx.C
 // deploy runs the pipeline for deploy (version may be empty) and rollback
 // (version is the target).
 func (s *session) deploy(ctx context.Context, res *ActionResult, version string) error {
-	src := s.svc.Spec.Source
+	src := s.cfg.Source
 	if src == nil {
 		return ErrNoSource
 	}
@@ -123,7 +123,7 @@ func (s *session) deploy(ctx context.Context, res *ActionResult, version string)
 		return err
 	}
 	id, err := s.m.cat.BeginDeployment(ctx, Deployment{
-		Service: s.name, Action: s.action, Version: version, PreviousVersion: previous,
+		Resource: s.name, Action: s.action, Version: version, PreviousVersion: previous,
 		Actor: s.actor, RunID: s.opts.RunID,
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, log *stepLog,
 		}
 	}
 
-	if !rt.CapabilitiesOf(s.svc.Spec.Runtime).Restart {
+	if !rt.CapabilitiesOf(s.rt).Restart {
 		log.note("skipping restart: the runtime cannot restart this service")
 		return sha, nil
 	}

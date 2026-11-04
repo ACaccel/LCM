@@ -14,9 +14,9 @@ import (
 func minimal(id string) map[string]any {
 	switch id {
 	case "auto-deploy":
-		return map[string]any{"service": "web", "repo": "git@host:me/web.git", "requireCI": false}
+		return map[string]any{"resource": "web", "repo": "git@host:me/web.git", "requireCI": false}
 	default:
-		return map[string]any{"service": "web"}
+		return map[string]any{"resource": "web"}
 	}
 }
 
@@ -51,10 +51,10 @@ func TestRenderProducesADecodablePolicy(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
-			if pol.Metadata.Name != "web-"+tpl.ID || pol.Metadata.Labels["service"] != "web" || pol.Metadata.Annotations[templates.Annotation] != tpl.ID {
+			if pol.Metadata.Name != "web-"+tpl.ID || pol.Metadata.Labels["resource"] != "web" || pol.Metadata.Annotations[templates.Annotation] != tpl.ID {
 				t.Errorf("metadata = %+v", pol.Metadata)
 			}
-			if pol.Spec.Params["service"] != "web" {
+			if pol.Spec.Params["resource"] != "web" {
 				t.Errorf("params = %v", pol.Spec.Params)
 			}
 			for _, n := range pol.Spec.Nodes {
@@ -73,7 +73,7 @@ func TestRenderProducesADecodablePolicy(t *testing.T) {
 func TestRenderSubstitutesTriggerPropsAndKeepsOthersAsParams(t *testing.T) {
 	tpl, _ := templates.Get("scheduled-backup")
 	out, err := tpl.Render("nightly", map[string]any{
-		"service": "db", "schedule": "30 2 * * *", "timezone": "UTC", "heartbeatCheck": "dump", "notifySecret": "discord-ops",
+		"resource": "db", "schedule": "30 2 * * *", "timezone": "UTC", "heartbeatCheck": "dump", "notifySecret": "discord-ops",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,13 +95,13 @@ func TestRenderSubstitutesTriggerPropsAndKeepsOthersAsParams(t *testing.T) {
 	}
 	// A parameter used by both a trigger and other nodes appears in both.
 	dep, _ := templates.Get("restart-on-down")
-	out, _ = dep.Render("r", map[string]any{"service": "web"})
+	out, _ = dep.Render("r", map[string]any{"resource": "web"})
 	pol, _ = model.DecodePolicy(out)
-	if got := pol.Spec.Nodes[0].Props["services"]; !slices.Equal(toStrings(got), []string{"web"}) {
-		t.Errorf("trigger services = %v", got)
+	if got := pol.Spec.Nodes[0].Props["resources"]; !slices.Equal(toStrings(got), []string{"web"}) {
+		t.Errorf("trigger resources = %v", got)
 	}
-	if pol.Spec.Params["service"] != "web" {
-		t.Errorf("service missing from spec.params: %v", pol.Spec.Params)
+	if pol.Spec.Params["resource"] != "web" {
+		t.Errorf("resource missing from spec.params: %v", pol.Spec.Params)
 	}
 }
 
@@ -120,16 +120,16 @@ func TestRenderRejectsBadParameters(t *testing.T) {
 		values map[string]any
 		path   string
 	}{
-		{"required missing", map[string]any{"service": "web"}, "params.repo"},
-		{"service missing", map[string]any{"repo": "x"}, "params.service"},
-		{"unknown", map[string]any{"service": "web", "repo": "x", "nope": 1}, "params.nope"},
-		{"bad service name", map[string]any{"service": "Web App", "repo": "x"}, "params.service"},
-		{"wrong type", map[string]any{"service": "web", "repo": "x", "requireCI": "yes"}, "params.requireCI"},
-		{"bad duration", map[string]any{"service": "web", "repo": "x", "ciRepo": "a/b", "healthTimeout": "soon"}, "params.healthTimeout"},
-		{"negative duration", map[string]any{"service": "web", "repo": "x", "ciRepo": "a/b", "healthTimeout": "-5m"}, "params.healthTimeout"},
-		{"bad secret name", map[string]any{"service": "web", "repo": "x", "ciRepo": "a/b", "notifySecret": "../etc"}, "params.notifySecret"},
-		{"list of numbers", map[string]any{"service": "web", "repo": "x", "ciRepo": "a/b", "ciWorkflows": []any{1}}, "params.ciWorkflows"},
-		{"ciRepo needed while requireCI", map[string]any{"service": "web", "repo": "x"}, "params.ciRepo"},
+		{"required missing", map[string]any{"resource": "web"}, "params.repo"},
+		{"resource missing", map[string]any{"repo": "x"}, "params.resource"},
+		{"unknown", map[string]any{"resource": "web", "repo": "x", "nope": 1}, "params.nope"},
+		{"bad resource name", map[string]any{"resource": "Web App", "repo": "x"}, "params.resource"},
+		{"wrong type", map[string]any{"resource": "web", "repo": "x", "requireCI": "yes"}, "params.requireCI"},
+		{"bad duration", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "healthTimeout": "soon"}, "params.healthTimeout"},
+		{"negative duration", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "healthTimeout": "-5m"}, "params.healthTimeout"},
+		{"bad secret name", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "notifySecret": "../etc"}, "params.notifySecret"},
+		{"list of numbers", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "ciWorkflows": []any{1}}, "params.ciWorkflows"},
+		{"ciRepo needed while requireCI", map[string]any{"resource": "web", "repo": "x"}, "params.ciRepo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestRenderRejectsBadParameters(t *testing.T) {
 func TestRenderEmptyValuesFallBackOrOverride(t *testing.T) {
 	tpl, _ := templates.Get("auto-deploy")
 	out, err := tpl.Render("p", map[string]any{
-		"service": "web", "repo": "x", "requireCI": false, "branch": "", "healthTimeout": "", "notifySecret": "",
+		"resource": "web", "repo": "x", "requireCI": false, "branch": "", "healthTimeout": "", "notifySecret": "",
 	})
 	if err != nil {
 		t.Fatal(err)

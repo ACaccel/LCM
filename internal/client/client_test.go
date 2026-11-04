@@ -28,7 +28,7 @@ func TestNewValidatesTheServerURL(t *testing.T) {
 }
 
 func TestPathEscapesSegments(t *testing.T) {
-	if got := client.Path("services", "a b/c"); got != "/services/a%20b%2Fc" {
+	if got := client.Path("resources", "a b/c"); got != "/resources/a%20b%2Fc" {
 		t.Fatalf("Path = %q", got)
 	}
 }
@@ -133,7 +133,7 @@ func TestRequestHeadersKeepAuthenticationOwnedByClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	headers := http.Header{"If-Match": {`"7"`}, "Authorization": {"Bearer wrong-token"}, "User-Agent": {"untrusted"}}
-	if _, err := c.Do(context.Background(), client.Request{Method: "POST", Path: "/machines/workstation/maintenance", Header: headers}); err != nil {
+	if _, err := c.Do(context.Background(), client.Request{Method: "POST", Path: "/resources/workstation/maintenance", Header: headers}); err != nil {
 		t.Fatal(err)
 	}
 	if headers.Get("Authorization") != "Bearer wrong-token" {

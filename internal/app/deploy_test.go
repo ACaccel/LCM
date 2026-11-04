@@ -31,7 +31,7 @@ func readDeploy(t *testing.T, name string) []byte {
 // deployPolicyParams are the auto-deploy template parameters of
 // deploy/lcm-auto-deploy.yaml.
 var deployPolicyParams = map[string]any{ //nolint:gosec // notifyTokenSecret is a secret name, not a value
-	"service": "lcm", "repo": "https://github.com/ACaccel/LCM.git", "branch": "main",
+	"resource": "lcm", "repo": "https://github.com/ACaccel/LCM.git", "branch": "main",
 	"requireCI": true, "ciRepo": "ACaccel/LCM", "ciWorkflows": []any{"ci.yml"}, "healthTimeout": "3m",
 	"notifyTarget": "konata", "notifyUrl": "http://127.0.0.1:4100/notifications/lcm-deploy", "notifyTokenSecret": "konata-notify-key",
 }
@@ -74,7 +74,7 @@ func TestDeployDocumentsApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := rec.Spec.Spec.Source
+	src := rec.Config.Source
 	if src == nil || src.Install != "sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm" {
 		t.Errorf("install command = %+v, want exactly the argv the sudoers rule allows", src)
 	}

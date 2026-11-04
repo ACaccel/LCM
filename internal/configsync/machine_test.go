@@ -15,17 +15,22 @@ import (
 	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
-	"github.com/ACaccel/lcm/internal/signal"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
-const machineDoc = "apiVersion: lcm/v1\nkind: Machine\nmetadata: {name: workstation}\nspec: {}\n"
+const machineDoc = "apiVersion: lcm/v2\nkind: Resource\nmetadata: {name: workstation}\nspec: {type: machine, adapter: local}\n"
+
+// machineDocWith returns machineDoc with a config.
+func machineDocWith(config string) string {
+	return strings.Replace(machineDoc, "adapter: local}", "adapter: local, config: "+config+"}", 1)
+}
 
 type syntheticObserver struct{}
 
-func (syntheticObserver) Observe(context.Context, model.MachineMonitoring) (machine.Snapshot, error) {
+func (syntheticObserver) Observe(context.Context, model.MachineConfig) (machine.Snapshot, error) {
 	return machine.Snapshot{DeviceHash: "synthetic-device", BootID: "synthetic-boot", Init: "systemd", CPUTotal: 100, CPUIdle: 90, CPUCount: 1, MemoryTotal: 100, MemoryAvailable: 90}, nil
 }
-func (syntheticObserver) ReadJournal(context.Context, model.MachineMonitoring, string, time.Time) (machine.JournalBatch, error) {
+func (syntheticObserver) ReadJournal(context.Context, model.MachineConfig, string, time.Time) (machine.JournalBatch, error) {
 	return machine.JournalBatch{}, nil
 }
 
@@ -40,15 +45,20 @@ func newMachineEnv(t *testing.T) *machineEnv {
 	e := &machineEnv{env: newEnv(t)}
 	e.gate = maintenance.New(e.db)
 	var err error
-	e.machines, err = machine.New(machine.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Gate: e.gate, Observer: syntheticObserver{}})
+	e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Gate: e.gate})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Gate: e.gate})
+	e.machines, err = machine.New(machine.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Gate: e.gate, Resources: e.res, Observer: syntheticObserver{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.sync, err = configsync.New(configsync.Config{DB: e.db, Audit: e.audit, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Bus: e.bus, Clock: e.clk, Machines: e.machines, Gate: e.gate, Runner: execx.New(), Dir: filepath.Join(t.TempDir(), "sources")})
+	e.res.RegisterHooks(model.ResourceMachine, e.machines.Hooks())
+	e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Gate: e.gate, Resources: e.res})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.sync, err = configsync.New(configsync.Config{DB: e.db, Audit: e.audit, Resources: e.res, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Bus: e.bus, Clock: e.clk, Gate: e.gate, Runner: execx.New(), Dir: filepath.Join(t.TempDir(), "sources")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,17 +68,11 @@ func newMachineEnv(t *testing.T) *machineEnv {
 
 func TestMachineRoundTripAndObservationDoesNotDrift(t *testing.T) {
 	e := newMachineEnv(t)
-	for _, alias := range []string{"machine", "machines", " Machine "} {
-		k, err := configsync.ParseKind(alias)
-		if err != nil || k != model.KindMachine {
-			t.Fatalf("ParseKind(%q): %v %v", alias, k, err)
-		}
-	}
 	r := newRepo(t)
 	r.commit("initial", map[string]string{"machine.yaml": machineDoc, "service.yaml": serviceYAML("web", "")})
 	e.addSource("infra", r, ".")
 	rep := e.syncNow("infra")
-	wantAction(t, rep.Items, "Machine/workstation", configsync.ActionCreate)
+	wantAction(t, rep.Items, "Resource/workstation", configsync.ActionCreate)
 	original, err := e.machines.Get(e.ctx, "workstation")
 	if err != nil {
 		t.Fatal(err)
@@ -79,14 +83,14 @@ func TestMachineRoundTripAndObservationDoesNotDrift(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if own := e.owner("machine", "workstation"); own.Drifted {
+	if own := e.owner("resource", "workstation"); own.Drifted {
 		t.Fatalf("observation caused drift: %+v", own)
 	}
 	exported, err := e.sync.Export(e.ctx, configsync.Selector{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(exported), "kind: Machine") || strings.Contains(string(exported), "synthetic-device") || strings.Contains(string(exported), "\nstatus:") {
+	if !strings.Contains(string(exported), "type: machine") || strings.Contains(string(exported), "synthetic-device") || strings.Contains(string(exported), "\nstatus:") {
 		t.Fatalf("export leaked state: %s", exported)
 	}
 	results, err := e.sync.Apply(e.ctx, configsync.SplitDocuments("export.yaml", exported), configsync.Options{})
@@ -102,9 +106,9 @@ func TestMachineRoundTripAndObservationDoesNotDrift(t *testing.T) {
 	if current.Version != original.Version || current.ID != original.ID {
 		t.Fatalf("roundtrip changed record: %+v", current)
 	}
-	vs, err := e.cat.Versions(e.ctx, "web")
+	vs, err := e.res.Versions(e.ctx, "web")
 	if err != nil || len(vs) != 1 {
-		t.Fatalf("Service churn: %v %v", vs, err)
+		t.Fatalf("service churn: %v %v", vs, err)
 	}
 }
 
@@ -116,76 +120,56 @@ func TestMachineDriftResolveAndOrphan(t *testing.T) {
 	r.commit("initial", map[string]string{"machine.yaml": machineDoc})
 	e.addSource("infra", r, ".")
 	e.syncNow("infra")
-	local := strings.Replace(machineDoc, "spec: {}", "spec: {monitoring: {interval: 40s}}", 1)
-	if _, err := e.machines.Put(e.ctx, []byte(local), 1); err != nil {
+	local := machineDocWith("{interval: 40s}")
+	if _, err := e.res.Put(e.ctx, []byte(local), 1); err != nil {
 		t.Fatal(err)
 	}
-	wantAction(t, e.apply(configsync.Options{}, machineDoc), "Machine/workstation", configsync.ActionSkipped)
-	pending := strings.Replace(machineDoc, "spec: {}", "spec: {monitoring: {interval: 50s}}", 1)
+	wantAction(t, e.apply(configsync.Options{}, machineDoc), "Resource/workstation", configsync.ActionSkipped)
+	pending := machineDocWith("{interval: 50s}")
 	r.commit("remote edit", map[string]string{"machine.yaml": pending})
 	rep := e.syncNow("infra")
-	result := wantAction(t, rep.Items, "Machine/workstation", configsync.ActionSkipped)
+	result := wantAction(t, rep.Items, "Resource/workstation", configsync.ActionSkipped)
 	if !result.Conflict || !result.Drifted {
 		t.Fatalf("missing conflict: %+v", result)
 	}
-	for _, sig := range alerts(sub) {
-		if sig.Kind == signal.KindAlert || sig.Service != "" {
-			t.Fatalf("Machine conflict became a legacy alert: %+v", sig)
-		}
+	sigs := alerts(sub)
+	if len(sigs) != 1 || sigs[0].Kind != "resource.config.conflict" || sigs[0].Resource != "workstation" || sigs[0].ResourceType != model.ResourceMachine {
+		t.Fatalf("machine conflict signals: %+v", sigs)
 	}
-	own, err := e.sync.Resolve(e.ctx, model.KindMachine, "workstation", false)
+	tl, err := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Resource: "workstation", Kinds: []string{configsync.KindConflict}})
+	if err != nil || len(tl.Entries) != 1 {
+		t.Fatalf("machine conflict timeline: %+v %v", tl, err)
+	}
+	own, err := e.sync.Resolve(e.ctx, model.KindResource, "workstation", false)
 	if err != nil || !own.Drifted || !own.Acknowledged || own.Conflict {
 		t.Fatalf("resolve current: %+v %v", own, err)
 	}
-	own, err = e.sync.Resolve(e.ctx, model.KindMachine, "workstation", true)
+	own, err = e.sync.Resolve(e.ctx, model.KindResource, "workstation", true)
 	if err != nil || own.Drifted {
 		t.Fatalf("resolve git: %+v %v", own, err)
 	}
 	before, _ := e.machines.Get(e.ctx, "workstation")
 	r.commit("remove document", map[string]string{"machine.yaml": "", "notes.txt": "keep repository"})
 	rep = e.syncNow("infra")
-	if len(rep.Orphaned) != 1 || rep.Orphaned[0].Kind != model.KindMachine {
+	if len(rep.Orphaned) != 1 || rep.Orphaned[0].Kind != model.KindResource {
 		t.Fatalf("orphan report: %+v", rep)
 	}
 	after, err := e.machines.Get(e.ctx, "workstation")
 	if err != nil || after.ID != before.ID || after.Version != before.Version || after.Phase != before.Phase {
-		t.Fatalf("orphan changed Machine: %+v %v", after, err)
+		t.Fatalf("orphan changed the machine: %+v %v", after, err)
 	}
 	ops, err := e.machines.Operations(e.ctx, "workstation")
 	if err != nil || len(ops) != 0 {
 		t.Fatalf("orphan submitted power: %+v %v", ops, err)
 	}
-	if err := e.machines.SetPhase(e.ctx, "workstation", "unmanaged", 1); err == nil {
-		t.Fatal("unmanaged a Git-owned machine")
-	}
-	if err := e.sync.Release(e.ctx, model.KindMachine, "workstation"); err != nil {
+	if err := e.res.SetPhase(e.ctx, "workstation", resource.PhaseRetired, after.Version, ""); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestMachineRequestsFailClosedWithoutManager(t *testing.T) {
-	e := newEnv(t)
-	for _, dry := range []bool{false, true} {
-		res := e.apply(configsync.Options{DryRun: dry}, machineDoc, serviceYAML("web", ""))
-		failed := wantAction(t, res, "Machine/workstation", configsync.ActionFailed)
-		if !strings.Contains(failed.Issues.Error(), configsync.ErrMachinesUnavailable.Error()) {
-			t.Fatalf("failure: %+v", failed)
-		}
+	if err := e.res.SetPhase(e.ctx, "workstation", resource.PhaseUnmanaged, after.Version, ""); !errors.Is(err, resource.ErrPrecondition) {
+		t.Fatalf("unmanaged a Git-owned machine: %v", err)
 	}
-	if _, err := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindMachine}); !errors.Is(err, configsync.ErrMachinesUnavailable) {
-		t.Fatalf("export: %v", err)
-	}
-	if _, err := e.sync.Owner(e.ctx, model.KindMachine, "workstation"); !errors.Is(err, configsync.ErrMachinesUnavailable) {
-		t.Fatalf("owner: %v", err)
-	}
-	if _, err := e.sync.Resolve(e.ctx, model.KindMachine, "workstation", true); !errors.Is(err, configsync.ErrMachinesUnavailable) {
-		t.Fatalf("resolve: %v", err)
-	}
-	if err := e.sync.Release(e.ctx, model.KindMachine, "workstation"); !errors.Is(err, configsync.ErrMachinesUnavailable) {
-		t.Fatalf("release: %v", err)
-	}
-	if _, err := e.sync.Export(e.ctx, configsync.Selector{}); err != nil {
-		t.Fatalf("legacy export: %v", err)
+	if err := e.sync.Release(e.ctx, model.KindResource, "workstation"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -199,7 +183,7 @@ func TestConfigWritesRespectMachineGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, useGit := range []bool{true, false} {
-		if _, err := e.sync.Resolve(e.ctx, model.KindMachine, "workstation", useGit); !errors.Is(err, maintenance.ErrActive) {
+		if _, err := e.sync.Resolve(e.ctx, model.KindResource, "workstation", useGit); !errors.Is(err, maintenance.ErrActive) {
 			t.Fatalf("resolve(%v): %v", useGit, err)
 		}
 	}
@@ -212,7 +196,7 @@ func TestConfigWritesRespectMachineGate(t *testing.T) {
 			_, err := e.sync.Apply(e.ctx, docs("service.yaml", serviceYAML("blocked", "")), configsync.Options{})
 			return err
 		},
-		"release": func() error { return e.sync.Release(e.ctx, model.KindMachine, "workstation") },
+		"release": func() error { return e.sync.Release(e.ctx, model.KindResource, "workstation") },
 		"create source": func() error {
 			_, err := e.sync.CreateSource(e.ctx, configsync.Source{Name: "other", Repo: r.remote})
 			return err
@@ -254,7 +238,7 @@ func (c *gateCheck) ValidateChecks([]model.Check, string) model.Issues {
 func TestConfigApplyHoldsAndPreservesGateLease(t *testing.T) {
 	e := newMachineEnv(t)
 	check := &gateCheck{gate: e.gate}
-	s, err := configsync.New(configsync.Config{DB: e.db, Audit: e.audit, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Machines: e.machines, Gate: e.gate, Checks: check})
+	s, err := configsync.New(configsync.Config{DB: e.db, Audit: e.audit, Resources: e.res, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Gate: e.gate, Checks: check})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +247,8 @@ func TestConfigApplyHoldsAndPreservesGateLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAction(t, results, "Machine/workstation", configsync.ActionCreate)
-	wantAction(t, results, "Service/web", configsync.ActionCreate)
+	wantAction(t, results, "Resource/workstation", configsync.ActionCreate)
+	wantAction(t, results, "Resource/web", configsync.ActionCreate)
 	if !check.held {
 		t.Fatal("configsync did not acquire the gate before validation")
 	}
@@ -273,12 +257,12 @@ func TestConfigApplyHoldsAndPreservesGateLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	results, err = s.Apply(ctx, docs("all.yaml", strings.Replace(serviceYAML("web", ""), "web-status", "web-status-updated", 1), strings.Replace(machineDoc, "spec: {}", "spec: {monitoring: {interval: 40s}}", 1)), configsync.Options{})
+	results, err = s.Apply(ctx, docs("all.yaml", strings.Replace(serviceYAML("web", ""), "web-status", "web-status-updated", 1), machineDocWith("{interval: 40s}")), configsync.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAction(t, results, "Machine/workstation", configsync.ActionUpdate)
-	wantAction(t, results, "Service/web", configsync.ActionUpdate)
+	wantAction(t, results, "Resource/workstation", configsync.ActionUpdate)
+	wantAction(t, results, "Resource/web", configsync.ActionUpdate)
 	if !check.held {
 		t.Fatal("configsync did not hold the gate during validation")
 	}
@@ -299,7 +283,7 @@ func TestConfigSyncHoldsGateDuringGit(t *testing.T) {
 		held = errors.Is(e.gate.Exclusive(e.ctx, func(*sql.Tx) error { return nil }), maintenance.ErrActive)
 		return execx.Result{}, errors.New("synthetic git failure")
 	})
-	s, err := configsync.New(configsync.Config{DB: e.db, Audit: e.audit, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Machines: e.machines, Gate: e.gate, Runner: runner, Dir: filepath.Join(t.TempDir(), "sources")})
+	s, err := configsync.New(configsync.Config{DB: e.db, Audit: e.audit, Resources: e.res, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Gate: e.gate, Runner: runner, Dir: filepath.Join(t.TempDir(), "sources")})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,8 +26,7 @@ func (s *systemd) base(rt model.Runtime, privileged bool) []string {
 	return append(argv, s.opts.Systemctl)
 }
 
-func (s *systemd) Status(ctx context.Context, svc *model.Service) (Status, error) {
-	rt := svc.Spec.Runtime
+func (s *systemd) Status(ctx context.Context, rt model.Runtime) (Status, error) {
 	argv := append(s.base(rt, false), "show",
 		"-p", "LoadState,ActiveState,SubState,MainPID,ActiveEnterTimestamp", rt.Unit)
 	res, err := run(ctx, s.run, execx.Cmd{Argv: argv, Timeout: s.opts.StatusTimeout})
@@ -85,21 +84,20 @@ func detailKey(k string) string {
 	return k
 }
 
-func (s *systemd) action(ctx context.Context, svc *model.Service, verb string) error {
-	rt := svc.Spec.Runtime
+func (s *systemd) action(ctx context.Context, rt model.Runtime, verb string) error {
 	argv := append(s.base(rt, true), verb, rt.Unit)
 	_, err := run(ctx, s.run, execx.Cmd{Argv: argv, Timeout: s.opts.ActionTimeout})
 	return err
 }
 
-func (s *systemd) Start(ctx context.Context, svc *model.Service) error {
-	return s.action(ctx, svc, "start")
+func (s *systemd) Start(ctx context.Context, rt model.Runtime) error {
+	return s.action(ctx, rt, "start")
 }
 
-func (s *systemd) Stop(ctx context.Context, svc *model.Service) error {
-	return s.action(ctx, svc, "stop")
+func (s *systemd) Stop(ctx context.Context, rt model.Runtime) error {
+	return s.action(ctx, rt, "stop")
 }
 
-func (s *systemd) Restart(ctx context.Context, svc *model.Service) error {
-	return s.action(ctx, svc, "restart")
+func (s *systemd) Restart(ctx context.Context, rt model.Runtime) error {
+	return s.action(ctx, rt, "restart")
 }

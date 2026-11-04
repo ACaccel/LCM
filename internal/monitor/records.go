@@ -63,7 +63,7 @@ func (r resultRec) exec(ctx context.Context, st *stmts) error {
 // checkRow is the persisted state of one check.
 type checkRow struct {
 	id          string
-	service     string
+	resource    string
 	name        string
 	typ         string
 	critical    bool
@@ -79,18 +79,18 @@ type checkRow struct {
 	lastBeat    time.Time
 }
 
-const upsertCheckSQL = `INSERT INTO monitor_checks (check_id, service, name, type, critical, interval_ms, status, since_ms,
+const upsertCheckSQL = `INSERT INTO monitor_checks (check_id, resource, name, type, critical, interval_ms, status, since_ms,
     consecutive_ok, consecutive_fail, last_at, last_ok, last_latency_us, last_message, last_beat_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (check_id) DO UPDATE SET
-    service = excluded.service, name = excluded.name, type = excluded.type, critical = excluded.critical,
+    resource = excluded.resource, name = excluded.name, type = excluded.type, critical = excluded.critical,
     interval_ms = excluded.interval_ms, status = excluded.status, since_ms = excluded.since_ms,
     consecutive_ok = excluded.consecutive_ok, consecutive_fail = excluded.consecutive_fail,
     last_at = excluded.last_at, last_ok = excluded.last_ok, last_latency_us = excluded.last_latency_us,
     last_message = excluded.last_message, last_beat_at = excluded.last_beat_at`
 
 func (c checkRow) exec(ctx context.Context, st *stmts) error {
-	err := st.exec(ctx, upsertCheckSQL, c.id, c.service, c.name, c.typ, boolInt(c.critical), c.interval.Milliseconds(),
+	err := st.exec(ctx, upsertCheckSQL, c.id, c.resource, c.name, c.typ, boolInt(c.critical), c.interval.Milliseconds(),
 		string(c.status), c.since.UnixMilli(), c.okRun, c.failRun, nullMillis(c.lastAt), boolInt(c.lastOK),
 		c.lastLatency.Microseconds(), c.lastMessage, nullMillis(c.lastBeat))
 	if err != nil {
@@ -99,26 +99,26 @@ func (c checkRow) exec(ctx context.Context, st *stmts) error {
 	return nil
 }
 
-// serviceRow is the persisted state of one service.
-type serviceRow struct {
-	service string
-	health  Health
-	since   time.Time
-	labels  map[string]string
-	at      time.Time
+// resourceRow is the persisted state of one resource: its combined health.
+type resourceRow struct {
+	resource string
+	health   Health
+	since    time.Time
+	labels   map[string]string
+	at       time.Time
 }
 
-const upsertServiceSQL = `INSERT INTO monitor_services (service, health, since_ms, labels, updated_at) VALUES (?, ?, ?, ?, ?)
-ON CONFLICT (service) DO UPDATE SET health = excluded.health, since_ms = excluded.since_ms,
+const upsertResourceSQL = `INSERT INTO monitor_resources (resource, health, since_ms, labels, updated_at) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (resource) DO UPDATE SET health = excluded.health, since_ms = excluded.since_ms,
     labels = excluded.labels, updated_at = excluded.updated_at`
 
-func (s serviceRow) exec(ctx context.Context, st *stmts) error {
+func (s resourceRow) exec(ctx context.Context, st *stmts) error {
 	labels, err := json.Marshal(nonNilLabels(s.labels))
 	if err != nil {
 		return fmt.Errorf("encode labels: %w", err)
 	}
-	if err := st.exec(ctx, upsertServiceSQL, s.service, string(s.health), s.since.UnixMilli(), string(labels), s.at.UnixMilli()); err != nil {
-		return fmt.Errorf("save service %s: %w", s.service, err)
+	if err := st.exec(ctx, upsertResourceSQL, s.resource, string(s.health), s.since.UnixMilli(), string(labels), s.at.UnixMilli()); err != nil {
+		return fmt.Errorf("save resource %s: %w", s.resource, err)
 	}
 	return nil
 }
@@ -131,16 +131,16 @@ func (d deleteCheckRec) exec(ctx context.Context, st *stmts) error {
 	return st.exec(ctx, `DELETE FROM monitor_checks WHERE check_id = ?`, d.id)
 }
 
-type deleteServiceRec struct{ service string }
+type deleteResourceRec struct{ resource string }
 
-func (d deleteServiceRec) exec(ctx context.Context, st *stmts) error {
-	return st.exec(ctx, `DELETE FROM monitor_services WHERE service = ?`, d.service)
+func (d deleteResourceRec) exec(ctx context.Context, st *stmts) error {
+	return st.exec(ctx, `DELETE FROM monitor_resources WHERE resource = ?`, d.resource)
 }
 
-// loadState reads the persisted check and service state.
-func loadState(ctx context.Context, db *sql.DB) (map[string]checkRow, map[string]serviceRow, error) {
+// loadState reads the persisted check and resource state.
+func loadState(ctx context.Context, db *sql.DB) (map[string]checkRow, map[string]resourceRow, error) {
 	checks := map[string]checkRow{}
-	rows, err := db.QueryContext(ctx, `SELECT check_id, service, name, type, critical, interval_ms, status, since_ms,
+	rows, err := db.QueryContext(ctx, `SELECT check_id, resource, name, type, critical, interval_ms, status, since_ms,
         consecutive_ok, consecutive_fail, last_at, last_ok, last_latency_us, last_message, last_beat_at FROM monitor_checks`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("monitor: load checks: %w", err)
@@ -151,7 +151,7 @@ func loadState(ctx context.Context, db *sql.DB) (map[string]checkRow, map[string
 		var intervalMs, sinceMs int64
 		var status string
 		var lastAt, latencyUs, beat sql.NullInt64
-		if err := rows.Scan(&c.id, &c.service, &c.name, &c.typ, &critical, &intervalMs, &status, &sinceMs,
+		if err := rows.Scan(&c.id, &c.resource, &c.name, &c.typ, &critical, &intervalMs, &status, &sinceMs,
 			&c.okRun, &c.failRun, &lastAt, &lastOK, &latencyUs, &c.lastMessage, &beat); err != nil {
 			_ = rows.Close()
 			return nil, nil, fmt.Errorf("monitor: load checks: %w", err)
@@ -170,18 +170,18 @@ func loadState(ctx context.Context, db *sql.DB) (map[string]checkRow, map[string
 		return nil, nil, fmt.Errorf("monitor: load checks: %w", err)
 	}
 
-	services := map[string]serviceRow{}
-	rows, err = db.QueryContext(ctx, `SELECT service, health, since_ms, labels, updated_at FROM monitor_services`)
+	resources := map[string]resourceRow{}
+	rows, err = db.QueryContext(ctx, `SELECT resource, health, since_ms, labels, updated_at FROM monitor_resources`)
 	if err != nil {
-		return nil, nil, fmt.Errorf("monitor: load services: %w", err)
+		return nil, nil, fmt.Errorf("monitor: load resources: %w", err)
 	}
 	for rows.Next() {
-		var s serviceRow
+		var s resourceRow
 		var health, labels string
 		var sinceMs, updated int64
-		if err := rows.Scan(&s.service, &health, &sinceMs, &labels, &updated); err != nil {
+		if err := rows.Scan(&s.resource, &health, &sinceMs, &labels, &updated); err != nil {
 			_ = rows.Close()
-			return nil, nil, fmt.Errorf("monitor: load services: %w", err)
+			return nil, nil, fmt.Errorf("monitor: load resources: %w", err)
 		}
 		s.health = Health(health)
 		s.since = fromMillis(sinceMs)
@@ -189,12 +189,12 @@ func loadState(ctx context.Context, db *sql.DB) (map[string]checkRow, map[string
 		if err := json.Unmarshal([]byte(labels), &s.labels); err != nil {
 			s.labels = nil
 		}
-		services[s.service] = s
+		resources[s.resource] = s
 	}
 	if err := closeRows(rows); err != nil {
-		return nil, nil, fmt.Errorf("monitor: load services: %w", err)
+		return nil, nil, fmt.Errorf("monitor: load resources: %w", err)
 	}
-	return checks, services, nil
+	return checks, resources, nil
 }
 
 func closeRows(rows *sql.Rows) error {

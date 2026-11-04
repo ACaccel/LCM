@@ -6,7 +6,7 @@ export function TimelinePage() {
   return (
     <div className="page">
       <PageHead title={s.timeline.title} />
-      <TimelinePanel withServiceFilter />
+      <TimelinePanel withResourceFilter />
     </div>
   );
 }

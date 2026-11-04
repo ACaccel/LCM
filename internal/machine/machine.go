@@ -1,4 +1,7 @@
-// Package machine manages the local physical controller host independently of services.
+// Package machine implements the machine resource type: the local physical
+// controller host, observed and controlled independently of services. Its
+// identity, documents and phase live in the resource store; this package
+// owns observations, maintenance and power operations.
 package machine
 
 import (
@@ -18,13 +21,14 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/monitor"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/store"
 )
 
 // Domain errors have stable API mappings.
 var (
 	ErrNotFound     = errors.New("machine: not found")
-	ErrExists       = errors.New("machine: an active local machine already exists")
 	ErrConflict     = errors.New("machine: version conflict")
 	ErrPrecondition = errors.New("machine: precondition failed")
 	ErrUnsupported  = errors.New("machine: capability unsupported or not configured")
@@ -38,13 +42,9 @@ type Coverage struct {
 }
 
 // Actor is the public representation of an authenticated principal.
-type Actor struct {
-	Kind auth.Kind `json:"kind"`
-	ID   string    `json:"id"`
-	Name string    `json:"name"`
-}
+type Actor = resource.Actor
 
-func actorInfo(a auth.Actor) Actor { return Actor{Kind: a.Kind, ID: a.ID, Name: a.Name} }
+func actorInfo(a auth.Actor) Actor { return resource.ActorOf(a) }
 
 // Filesystem is one explicitly selected filesystem, with available capacity.
 type Filesystem struct {
@@ -81,21 +81,7 @@ type Snapshot struct {
 }
 
 // Event is persisted before being announced to best-effort subscribers.
-type Event struct {
-	ID          int64     `json:"id"`
-	MachineID   string    `json:"machineId"`
-	Source      string    `json:"source"`
-	Key         string    `json:"-"`
-	Kind        string    `json:"kind"`
-	Severity    string    `json:"severity"`
-	OccurredAt  time.Time `json:"occurredAt"`
-	IngestedAt  time.Time `json:"ingestedAt"`
-	BootID      string    `json:"bootId,omitempty"`
-	Unit        string    `json:"unit,omitempty"`
-	Historical  bool      `json:"historical"`
-	Reason      string    `json:"reason,omitempty"`
-	OperationID string    `json:"operationId,omitempty"`
-}
+type Event = resource.Event
 
 // JournalBatch leaves checkpoint ownership to the transactional machine store.
 type JournalBatch struct {
@@ -107,8 +93,8 @@ type JournalBatch struct {
 
 // Observer provides read-only snapshots and bounded journal batches.
 type Observer interface {
-	Observe(context.Context, model.MachineMonitoring) (Snapshot, error)
-	ReadJournal(context.Context, model.MachineMonitoring, string, time.Time) (JournalBatch, error)
+	Observe(context.Context, model.MachineConfig) (Snapshot, error)
+	ReadJournal(context.Context, model.MachineConfig, string, time.Time) (JournalBatch, error)
 }
 
 // Status is the current observed state; Fresh is computed at read time.
@@ -129,51 +115,54 @@ type storedStatus struct {
 	Status
 	Baseline        map[string]transition `json:"baseline"`
 	DocumentVersion int                   `json:"documentVersion"`
+	// OnlineSince is the observation time that started the current run of
+	// fresh successful samples; zero when the last sample failed.
+	OnlineSince time.Time `json:"onlineSince,omitzero"`
 }
 
-// Record is an active machine document and its current status.
+// Record is a machine resource with its current status.
 type Record struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	Host      string         `json:"host"`
-	Version   int            `json:"version"`
-	Phase     string         `json:"phase"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
-	Document  *model.Machine `json:"document"`
-	Status    Status         `json:"status"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Version   int             `json:"version"`
+	Phase     string          `json:"phase"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+	Document  *model.Resource `json:"document"`
+	// Config is the machine config of Document.
+	Config *model.MachineConfig `json:"-"`
+	Status Status               `json:"status"`
+	// onlineSince mirrors storedStatus.OnlineSince for Type.Status.
+	onlineSince time.Time
 }
 
-// Version records the actor and origin of a document revision.
-type Version struct {
-	Version      int            `json:"version"`
-	CreatedAt    time.Time      `json:"createdAt"`
-	CreatedBy    Actor          `json:"createdBy"`
-	RestoredFrom int            `json:"restoredFrom"`
-	Document     *model.Machine `json:"document"`
-}
-
-// PutResult identifies a committed document revision.
-type PutResult struct {
-	Version int  `json:"version"`
-	Created bool `json:"created"`
-	Changed bool `json:"changed"`
+// NativeHealth receives the machine's native health for the monitor, which
+// combines it with the resource's checks; *monitor.Monitor implements it.
+type NativeHealth interface {
+	SetNative(resource, typ string, labels map[string]string, h monitor.Health, reasons []string)
+	// Forget drops the resource's native input, checks and health without
+	// a signal, when the resource leaves observation.
+	Forget(resource string)
 }
 
 // Config supplies dependencies; platform permissions belong to deployment config.
 type Config struct {
 	MaintenancePreflight func(context.Context) error
 	DB                   *store.DB
-	Audit                *audit.Log
-	Clock                clock.Clock
-	Gate                 *maintenance.Gate
-	Observer             Observer
-	Power                PowerBackend
-	Log                  *slog.Logger
-	OnEvent              func(Event)
-	RawRetention         time.Duration
-	RollupRetention      time.Duration
-	EventRetention       time.Duration
+	// Resources holds machine identities, documents and phases.
+	Resources *resource.Store
+	// Native, when set, receives every native health evaluation.
+	Native          NativeHealth
+	Audit           *audit.Log
+	Clock           clock.Clock
+	Gate            *maintenance.Gate
+	Observer        Observer
+	Power           PowerBackend
+	Log             *slog.Logger
+	OnEvent         func(Event)
+	RawRetention    time.Duration
+	RollupRetention time.Duration
+	EventRetention  time.Duration
 }
 
 // Manager owns machine state, but starts no goroutines until Run is called.
@@ -187,16 +176,29 @@ type Manager struct {
 	power                PowerBackend
 	log                  *slog.Logger
 	onEvent              func(Event)
+	resources            *resource.Store
+	native               NativeHealth
 	rawRetention         time.Duration
 	rollupRetention      time.Duration
 	eventRetention       time.Duration
 	pollMu               sync.Mutex
 	controlMu            sync.Mutex
+
+	// staged holds control events written by hooks inside a resource store
+	// transaction; they are published once found committed.
+	stagedMu sync.Mutex
+	staged   []stagedEvent
 }
 
+type stagedEvent struct {
+	event    Event
+	stagedAt time.Time
+}
+
+// New returns a Manager.
 func New(c Config) (*Manager, error) {
-	if c.DB == nil || c.Audit == nil || c.Gate == nil {
-		return nil, errors.New("machine: DB, Audit and Gate are required")
+	if c.DB == nil || c.Audit == nil || c.Gate == nil || c.Resources == nil {
+		return nil, errors.New("machine: DB, Audit, Gate and Resources are required")
 	}
 	if c.Clock == nil {
 		c.Clock = clock.Real()
@@ -216,7 +218,7 @@ func New(c Config) (*Manager, error) {
 	if c.RawRetention <= 0 || c.EventRetention <= 0 || c.RollupRetention < c.RawRetention {
 		return nil, errors.New("machine: invalid retention")
 	}
-	return &Manager{db: c.DB, audit: c.Audit, clk: c.Clock, gate: c.Gate, observer: c.Observer, power: c.Power, log: c.Log, onEvent: c.OnEvent, rawRetention: c.RawRetention, eventRetention: c.EventRetention, rollupRetention: c.RollupRetention, maintenancePreflight: c.MaintenancePreflight}, nil
+	return &Manager{db: c.DB, audit: c.Audit, clk: c.Clock, gate: c.Gate, observer: c.Observer, power: c.Power, log: c.Log, onEvent: c.OnEvent, resources: c.Resources, native: c.Native, rawRetention: c.RawRetention, eventRetention: c.EventRetention, rollupRetention: c.RollupRetention, maintenancePreflight: c.MaintenancePreflight}, nil
 }
 
 func newID() string {
@@ -250,7 +252,7 @@ func (m *Manager) record(ctx context.Context, action, name string, details map[s
 	if err := m.audit.Record(ctx, "machine."+action, name, audit.OutcomeOK, details); err != nil {
 		return err
 	}
-	id, _ := details["machineId"].(string)
+	id, _ := details["resourceId"].(string)
 	if id == "" {
 		r, err := m.Get(ctx, name)
 		if err != nil {
@@ -258,7 +260,7 @@ func (m *Manager) record(ctx context.Context, action, name string, details map[s
 		}
 		id = r.ID
 	}
-	e := Event{MachineID: id, Source: "control", Key: newID(), Kind: "machine." + action, Severity: "info", OccurredAt: m.clk.Now().UTC(), IngestedAt: m.clk.Now().UTC()}
+	e := Event{ResourceID: id, Source: "control", Key: newID(), Kind: "machine." + action, Severity: "info", OccurredAt: m.clk.Now().UTC(), IngestedAt: m.clk.Now().UTC()}
 	if id, ok := details["operationId"].(string); ok {
 		e.OperationID = id
 	}
@@ -274,26 +276,7 @@ func precondition(reason string) error { return fmt.Errorf("%w: %s", ErrPrecondi
 func encode(v any) (string, error) { b, err := json.Marshal(v); return string(b), err }
 
 func insertEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
-	body, err := encode(e)
-	if err != nil {
-		return err
-	}
-	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO machine_events(machine_id,source,source_key,occurred_at,ingested_at,kind,body) VALUES(?,?,?,?,?,?,?)`, e.MachineID, e.Source, e.Key, e.OccurredAt.UnixMilli(), e.IngestedAt.UnixMilli(), e.Kind, body)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		e.ID = 0
-		return nil
-	}
-	e.ID, err = res.LastInsertId()
-	if err == nil && e.Source == "control" {
-		err = trimEvents(ctx, tx)
-	}
-	return err
+	return resource.InsertEvent(ctx, tx, e)
 }
 
-func trimEvents(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM machine_events WHERE id <= (SELECT MAX(id)-200000 FROM machine_events)`)
-	return err
-}
+func trimEvents(ctx context.Context, tx *sql.Tx) error { return resource.TrimEvents(ctx, tx) }

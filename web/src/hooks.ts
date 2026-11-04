@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { seriesQuery, serviceQuery } from "./api/queries";
+import { resourceQuery, seriesQuery } from "./api/queries";
 import { bucketUptime, mergeSeries, overallUptime } from "./lib/series";
 import type { Bucket } from "./lib/series";
 
 const DAY = 24 * 3_600_000;
 
-/** Hourly availability over the last 24 hours, combined over all checks of a service. */
-export function useServiceSpark(name: string): { buckets: Bucket[]; uptime: number | undefined; hasChecks: boolean; pending: boolean } {
-  const detail = useQuery(serviceQuery(name));
+/** Hourly availability over the last 24 hours, combined over all checks of a resource. */
+export function useResourceSpark(name: string): { buckets: Bucket[]; uptime: number | undefined; hasChecks: boolean; pending: boolean } {
+  const detail = useQuery(resourceQuery(name));
   const checks = detail.data?.checks ?? [];
   const series = useQueries({ queries: checks.map((c) => seriesQuery(name, c.name, DAY, 24)) });
   const loaded = series.map((q) => q.data).filter((d): d is NonNullable<typeof d> => !!d);

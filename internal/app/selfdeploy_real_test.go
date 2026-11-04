@@ -370,14 +370,24 @@ func (e *selfEnv) serviceDoc() string {
 }
 
 type serviceView struct {
-	State           string `json:"state"`
-	Health          string `json:"health"`
-	DeployedVersion string `json:"deployedVersion"`
+	State           string
+	Health          string
+	DeployedVersion string
 }
 
+// service reads the parts of the lcm resource's detail this test uses.
 func (e *selfEnv) service() (serviceView, bool) {
-	var v serviceView
-	return v, e.api("GET", "/services/lcm", nil, &v)
+	var d struct {
+		State  string `json:"state"`
+		Health struct {
+			Status string `json:"status"`
+		} `json:"health"`
+		Service struct {
+			DeployedVersion string `json:"deployedVersion"`
+		} `json:"service"`
+	}
+	ok := e.api("GET", "/resources/lcm", nil, &d)
+	return serviceView{State: d.State, Health: d.Health.Status, DeployedVersion: d.Service.DeployedVersion}, ok
 }
 
 func (e *selfEnv) waitServiceHealthy(timeout time.Duration) {
@@ -399,7 +409,7 @@ func (e *selfEnv) firstDeploy() {
 	e.t.Helper()
 	e.lcm("apply", "-f", e.writeDoc("service.yaml", e.serviceDoc()))
 	pid := e.mainPID()
-	e.t.Log(strings.TrimSpace(e.lcm("action", "lcm", "deploy", "--version", e.sha["A"], "--wait")))
+	e.t.Log(strings.TrimSpace(e.lcm("resource", "action", "lcm", "deploy", "--version", e.sha["A"], "--wait")))
 	e.eventually("the self-update restart", time.Minute, func() bool { return e.mainPID() != pid && e.pendingGone() })
 	e.waitHealthy("vA", time.Minute)
 	e.waitServiceHealthy(time.Minute)

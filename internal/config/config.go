@@ -46,15 +46,19 @@ const (
 	EnvMonitorConcurrency     = "LCM_MONITOR_CONCURRENCY"
 	EnvMonitorRawRetention    = "LCM_MONITOR_RAW_RETENTION"
 	EnvMonitorRollupRetention = "LCM_MONITOR_ROLLUP_RETENTION"
-	EnvAlertServiceLabels     = "LCM_ALERT_SERVICE_LABELS"
-	EnvTimelineRetention      = "LCM_TIMELINE_RETENTION"
-	EnvRunRetentionKeep       = "LCM_RUN_RETENTION_KEEP"
-	EnvRunRetentionAge        = "LCM_RUN_RETENTION_AGE"
-	EnvDeploymentKeep         = "LCM_DEPLOYMENT_RETENTION_KEEP"
-	EnvMemoryLimit            = "LCM_MEMORY_LIMIT"
-	EnvPprofListen            = "LCM_PPROF_LISTEN"
-	EnvPruneInterval          = "LCM_PRUNE_INTERVAL"
-	EnvGitHubWebhookSecret    = "LCM_GITHUB_WEBHOOK_SECRET" //nolint:gosec // names an environment variable, not a credential
+	EnvAlertResourceLabels    = "LCM_ALERT_RESOURCE_LABELS"
+	// envAlertServiceLabelsRemoved is the name EnvAlertResourceLabels had
+	// before resources replaced services; setting it is an error.
+	envAlertServiceLabelsRemoved = "LCM_ALERT_SERVICE_LABELS"
+	EnvTimelineRetention         = "LCM_TIMELINE_RETENTION"
+	EnvRunRetentionKeep          = "LCM_RUN_RETENTION_KEEP"
+	EnvRunRetentionAge           = "LCM_RUN_RETENTION_AGE"
+	EnvDeploymentKeep            = "LCM_DEPLOYMENT_RETENTION_KEEP"
+	EnvMemoryLimit               = "LCM_MEMORY_LIMIT"
+	EnvPprofListen               = "LCM_PPROF_LISTEN"
+	EnvPruneInterval             = "LCM_PRUNE_INTERVAL"
+	EnvGitHubWebhookSecret       = "LCM_GITHUB_WEBHOOK_SECRET" //nolint:gosec // names an environment variable, not a credential
+	EnvConnectionsFile           = "LCM_CONNECTIONS_FILE"
 )
 
 // Defaults.
@@ -103,9 +107,10 @@ const (
 	DefaultPruneInterval = time.Hour
 )
 
-// DefaultAlertServiceLabels name the alert labels that map an external alert
-// to a service.
-var DefaultAlertServiceLabels = []string{"lcm_service", "service"}
+// DefaultAlertResourceLabels name the alert labels that map an external
+// alert to a resource. The service labels stay because existing alert rules
+// use them.
+var DefaultAlertResourceLabels = []string{"lcm_resource", "resource", "lcm_service", "service"}
 
 // Config is the validated runtime configuration.
 type Config struct {
@@ -150,8 +155,9 @@ type Config struct {
 	MonitorConcurrency     int
 	MonitorRawRetention    time.Duration
 	MonitorRollupRetention time.Duration
-	// AlertServiceLabels name the alert labels that map an alert to a service.
-	AlertServiceLabels []string
+	// AlertResourceLabels name the alert labels that map an alert to a
+	// resource.
+	AlertResourceLabels []string
 
 	TimelineRetention time.Duration
 	// RunRetentionKeep and RunRetentionAge together decide which finished
@@ -175,6 +181,11 @@ type Config struct {
 	// verifies GitHub push webhooks. Empty means pushes must authenticate
 	// with an API token like any other ingest call.
 	GitHubWebhookSecret string
+
+	// ConnectionsFile is the YAML file of host-configured connections
+	// (routers and the like); empty means no connections. It is loaded and
+	// validated at startup by internal/connection.
+	ConnectionsFile string
 }
 
 // Default returns the configuration used when nothing is set.
@@ -198,7 +209,7 @@ func Default() Config {
 		MonitorConcurrency:     DefaultMonitorConcurrency,
 		MonitorRawRetention:    DefaultMonitorRawRetention,
 		MonitorRollupRetention: DefaultMonitorRollupRetention,
-		AlertServiceLabels:     slices.Clone(DefaultAlertServiceLabels),
+		AlertResourceLabels:    slices.Clone(DefaultAlertResourceLabels),
 
 		TimelineRetention: DefaultTimelineRetention,
 		RunRetentionKeep:  DefaultRunRetentionKeep,
@@ -213,6 +224,11 @@ func Default() Config {
 // It reports unparsable values but does not validate semantics; call Validate
 // after flags have been applied.
 func FromEnv(getenv func(string) string) (Config, error) {
+	// A removed variable would otherwise be ignored silently, and alerts
+	// labelled the old way would stop reaching their resources.
+	if getenv(envAlertServiceLabelsRemoved) != "" {
+		return Config{}, fmt.Errorf("%s was removed; rename it to %s", envAlertServiceLabelsRemoved, EnvAlertResourceLabels)
+	}
 	c := Default()
 	if v := getenv(EnvListen); v != "" {
 		c.Listen = v
@@ -313,8 +329,8 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	num(&c.MonitorConcurrency, EnvMonitorConcurrency)
 	dur(&c.MonitorRawRetention, EnvMonitorRawRetention)
 	dur(&c.MonitorRollupRetention, EnvMonitorRollupRetention)
-	if v := getenv(EnvAlertServiceLabels); v != "" {
-		c.AlertServiceLabels = splitList(v)
+	if v := getenv(EnvAlertResourceLabels); v != "" {
+		c.AlertResourceLabels = splitList(v)
 	}
 	dur(&c.TimelineRetention, EnvTimelineRetention)
 	num(&c.RunRetentionKeep, EnvRunRetentionKeep)
@@ -324,6 +340,7 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	str(&c.GitHubWebhookSecret, EnvGitHubWebhookSecret)
 	str(&c.MemoryLimit, EnvMemoryLimit)
 	str(&c.PprofListen, EnvPprofListen)
+	str(&c.ConnectionsFile, EnvConnectionsFile)
 	return errors.Join(errs...)
 }
 
@@ -380,7 +397,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.MonitorConcurrency, "monitor-concurrency", c.MonitorConcurrency, "simultaneously running health probes ("+EnvMonitorConcurrency+")")
 	fs.DurationVar(&c.MonitorRawRetention, "monitor-raw-retention", c.MonitorRawRetention, "how long raw check results are kept ("+EnvMonitorRawRetention+")")
 	fs.DurationVar(&c.MonitorRollupRetention, "monitor-rollup-retention", c.MonitorRollupRetention, "how long one-minute rollups are kept ("+EnvMonitorRollupRetention+")")
-	fs.Var(stringList{&c.AlertServiceLabels}, "alert-service-labels", "comma-separated alert labels that name the service ("+EnvAlertServiceLabels+")")
+	fs.Var(stringList{&c.AlertResourceLabels}, "alert-resource-labels", "comma-separated alert labels that name the resource ("+EnvAlertResourceLabels+")")
 	fs.DurationVar(&c.TimelineRetention, "timeline-retention", c.TimelineRetention, "how long timeline entries are kept ("+EnvTimelineRetention+")")
 	fs.IntVar(&c.RunRetentionKeep, "run-retention-keep", c.RunRetentionKeep, "finished runs kept per policy regardless of age ("+EnvRunRetentionKeep+")")
 	fs.IntVar(&c.DeploymentKeep, "deployment-retention-keep", c.DeploymentKeep, "deployment records kept per service ("+EnvDeploymentKeep+")")
@@ -388,6 +405,8 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.PruneInterval, "prune-interval", c.PruneInterval, "how often retention jobs run ("+EnvPruneInterval+")")
 	fs.StringVar(&c.MemoryLimit, "memory-limit", c.MemoryLimit, "soft memory limit such as 40MiB, 0 or off to disable ("+EnvMemoryLimit+")")
 	fs.StringVar(&c.PprofListen, "pprof-listen", c.PprofListen, "serve pprof on this loopback address, off when empty ("+EnvPprofListen+")")
+	fs.StringVar(&c.ConnectionsFile, "connections-file", c.ConnectionsFile,
+		"YAML file of host-configured connections such as routers, none when empty ("+EnvConnectionsFile+")")
 	fs.StringVar(&c.GitHubWebhookSecret, "github-webhook-secret", c.GitHubWebhookSecret,
 		"name of the secret that verifies GitHub push webhooks ("+EnvGitHubWebhookSecret+")")
 }
@@ -453,8 +472,8 @@ func (c Config) validateComponents() []error {
 		errs = append(errs, fmt.Errorf("monitor rollup retention %s: must not be shorter than raw retention %s",
 			c.MonitorRollupRetention, c.MonitorRawRetention))
 	}
-	if len(c.AlertServiceLabels) == 0 {
-		errs = append(errs, errors.New("alert service labels must not be empty"))
+	if len(c.AlertResourceLabels) == 0 {
+		errs = append(errs, errors.New("alert resource labels must not be empty"))
 	}
 	positive("timeline retention", c.TimelineRetention)
 	if c.RunRetentionKeep < 1 {

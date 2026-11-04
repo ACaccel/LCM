@@ -31,7 +31,7 @@ func TestIngestAlerts(t *testing.T) {
 		t.Fatalf("signals = %+v", sigs)
 	}
 	published := h.drain()
-	if len(published) != 2 || published[0].Kind != signal.KindAlert || published[0].Service != "api" {
+	if len(published) != 2 || published[0].Kind != signal.KindAlert || published[0].Resource != "api" {
 		t.Fatalf("published = %+v", published)
 	}
 	api, err := h.m.FiringAlerts(h.ctx, "api")
@@ -95,11 +95,11 @@ func TestIngestAlertErrors(t *testing.T) {
 	}
 }
 
-func TestIngestAlertServiceLabelOption(t *testing.T) {
-	h := newHarness(t, func(c *Config) { c.AlertServiceLabels = []string{"team"} })
+func TestIngestAlertResourceLabelOption(t *testing.T) {
+	h := newHarness(t, func(c *Config) { c.AlertResourceLabels = []string{"team"} })
 	sigs, err := h.m.IngestAlert(h.ctx, alert.SourceGeneric,
 		[]byte(`{"alert":"a","status":"firing","labels":{"team":"payments","service":"ignored"}}`))
-	if err != nil || len(sigs) != 1 || sigs[0].Service != "payments" {
+	if err != nil || len(sigs) != 1 || sigs[0].Resource != "payments" {
 		t.Fatalf("signals = %+v, %v", sigs, err)
 	}
 }

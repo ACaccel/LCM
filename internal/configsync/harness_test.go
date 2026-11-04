@@ -22,6 +22,7 @@ import (
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/nodes/core"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/store"
 	"github.com/ACaccel/lcm/internal/store/storetest"
@@ -39,6 +40,7 @@ type env struct {
 	db    *store.DB
 	clk   *clock.Fake
 	bus   *signal.Bus
+	res   *resource.Store
 	cat   *catalog.Catalog
 	mods  *modules.Store
 	eng   *engine.Engine
@@ -58,7 +60,10 @@ func newEnv(t *testing.T) *env {
 	e.audit = audit.New(e.db, audit.WithClock(e.clk.Now))
 	e.bus = signal.NewBus(discardLogger(), e.clk.Now)
 	var err error
-	if e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk}); err != nil {
+	if e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk}); err != nil {
+		t.Fatal(err)
+	}
+	if e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Resources: e.res}); err != nil {
 		t.Fatal(err)
 	}
 	if e.mods, err = modules.New(e.db, e.audit, e.clk); err != nil {
@@ -77,7 +82,7 @@ func newEnv(t *testing.T) *env {
 		}
 	})
 	e.sync, err = configsync.New(configsync.Config{
-		DB: e.db, Audit: e.audit, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Bus: e.bus,
+		DB: e.db, Audit: e.audit, Resources: e.res, Catalog: e.cat, Modules: e.mods, Engine: e.eng, Bus: e.bus,
 		Runner: execx.New(), Dir: filepath.Join(t.TempDir(), "sources"), Clock: e.clk,
 	})
 	if err != nil {
@@ -87,8 +92,8 @@ func newEnv(t *testing.T) *env {
 }
 
 func serviceYAML(name, extra string) string {
-	return "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: " + name + " }\nspec:\n" +
-		"  runtime: { type: command, start: " + name + "-start, stop: " + name + "-stop, restart: " + name + "-restart, status: " + name + "-status }\n" + extra
+	return "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: " + name + " }\nspec:\n  type: service\n  adapter: command\n" +
+		"  config: { start: " + name + "-start, stop: " + name + "-stop, restart: " + name + "-restart, status: " + name + "-status }\n" + extra
 }
 
 const echoNodes = `    - { id: start, type: trigger.manual, next: { out: [echo] } }
@@ -96,11 +101,11 @@ const echoNodes = `    - { id: start, type: trigger.manual, next: { out: [echo] 
 `
 
 func policyYAML(name, nodes string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" + nodes
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" + nodes
 }
 
 func moduleYAML(name, value string) string {
-	return "apiVersion: lcm/v1\nkind: Module\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" +
+	return "apiVersion: lcm/v2\nkind: Module\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" +
 		"    - { id: in, type: module.input, next: { out: [set] } }\n" +
 		"    - { id: set, type: data.set, props: { values: { v: " + value + " } }, next: { out: [out] } }\n" +
 		"    - { id: out, type: module.output, props: { port: out } }\n"
@@ -235,15 +240,15 @@ func (e *env) owner(kind, name string) *configsync.Ownership {
 	return o
 }
 
-// editService changes a service the way the web UI does: a plain save
+// editService changes a resource the way the web UI does: a plain save
 // based on the current version.
 func (e *env) editService(name, doc string) {
 	e.t.Helper()
-	rec, err := e.cat.Get(e.ctx, name)
+	rec, err := e.res.Get(e.ctx, name)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	if _, err := e.cat.Put(e.ctx, []byte(doc), rec.Version); err != nil {
+	if _, err := e.res.Put(e.ctx, []byte(doc), rec.Version); err != nil {
 		e.t.Fatalf("edit service: %v", err)
 	}
 }

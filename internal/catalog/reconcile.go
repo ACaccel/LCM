@@ -5,18 +5,19 @@ import (
 	"fmt"
 
 	"github.com/ACaccel/lcm/internal/audit"
+	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
 // Change is one correction made by Reconcile.
 type Change struct {
-	Service string
-	From    State
-	To      State
-	Reason  string
+	Resource string
+	From     State
+	To       State
+	Reason   string
 }
 
-// Reconcile compares every service's stored state with what its runtime
+// Reconcile compares every managed service's stored state with what its runtime
 // reports and corrects states that cannot be true any more. Call it at
 // startup, before actions are accepted, and on demand afterwards.
 //
@@ -31,8 +32,9 @@ type Change struct {
 //   - failed stays failed until an action or the operator changes it, so
 //     that a failure is never silently forgotten.
 //
-// Services with an action in flight are skipped, and an unknown runtime
-// status leaves the state alone except for transient states.
+// Retired services and services with an action in flight are skipped,
+// and an unknown runtime status leaves the state alone except for
+// transient states.
 func (m *Manager) Reconcile(ctx context.Context) ([]Change, error) {
 	ctx = withActor(ctx)
 	recs, err := m.cat.List(ctx)
@@ -60,14 +62,15 @@ func (m *Manager) Reconcile(ctx context.Context) ([]Change, error) {
 }
 
 func (m *Manager) reconcileOne(ctx context.Context, rec Record) (*Change, error) {
-	if rec.State == StateRetired || rec.State == StateFailed {
+	if rec.Phase != resource.PhaseManaged || rec.State == StateFailed {
 		return nil, nil
 	}
-	adapter, err := m.runtimes.For(rec.Spec)
+	r := rec.Runtime()
+	adapter, err := m.runtimes.For(r)
 	if err != nil {
 		return nil, err
 	}
-	st, statusErr := adapter.Status(ctx, rec.Spec)
+	st, statusErr := adapter.Status(ctx, r)
 	if statusErr != nil {
 		st.State = rt.StateUnknown
 	}
@@ -105,7 +108,7 @@ func (m *Manager) reconcileOne(ctx context.Context, rec Record) (*Change, error)
 	}
 	m.recordAudit(ctx, "reconcile", rec.Name, audit.OutcomeOK,
 		map[string]any{"from": string(rec.State), "to": string(to), "reason": reason})
-	return &Change{Service: rec.Name, From: rec.State, To: to, Reason: reason}, nil
+	return &Change{Resource: rec.Name, From: rec.State, To: to, Reason: reason}, nil
 }
 
 // interruptDeployments closes deployments that were running when the
@@ -116,7 +119,7 @@ func (m *Manager) interruptDeployments(ctx context.Context) error {
 		return err
 	}
 	for _, d := range deps {
-		if m.isBusy(d.Service) {
+		if m.isBusy(d.Resource) {
 			continue
 		}
 		if err := m.cat.FinishDeployment(ctx, d.ID, OutcomeInterrupted, "interrupted by a restart of LCM", d.LogExcerpt); err != nil {

@@ -43,7 +43,7 @@ func TestAlertmanager(t *testing.T) {
 		t.Fatalf("got %d signals", len(sigs))
 	}
 	a, b := sigs[0], sigs[1]
-	if a.Service != "api" || data(a, DataAlert) != "HighErrorRate" || data(a, DataStatus) != StatusFiring ||
+	if a.Resource != "api" || data(a, DataAlert) != "HighErrorRate" || data(a, DataStatus) != StatusFiring ||
 		a.Severity != signal.SeverityCritical || data(a, DataFingerprint) != "3a5f1c0e7b9d2c41" ||
 		data(a, DataMessage) != "Error rate above 5% for 5m" {
 		t.Errorf("first alert = %+v", a)
@@ -51,22 +51,22 @@ func TestAlertmanager(t *testing.T) {
 	if a.Labels["env"] != "prod" || a.Labels["job"] != "api" {
 		t.Errorf("labels = %v (common labels must merge, alert labels win)", a.Labels)
 	}
-	// No service label: unmapped, message falls back to the description.
-	if b.Service != "" || b.Severity != signal.SeverityWarning || data(b, DataMessage) != "/ is 91% full" {
+	// No resource label: unmapped, message falls back to the description.
+	if b.Resource != "" || b.Severity != signal.SeverityWarning || data(b, DataMessage) != "/ is 91% full" {
 		t.Errorf("second alert = %+v", b)
 	}
 
 	res := mustParse(t, SourceAlertmanager, "alertmanager_resolved.json", Options{})
-	if res[0].Service != "api" || data(res[0], DataStatus) != StatusResolved ||
+	if res[0].Resource != "api" || data(res[0], DataStatus) != StatusResolved ||
 		res[0].Severity != signal.SeverityInfo || data(res[0], DataFingerprint) != data(a, DataFingerprint) {
 		t.Errorf("resolved = %+v", res[0])
 	}
 }
 
-func TestAlertmanagerCustomServiceLabel(t *testing.T) {
-	sigs := mustParse(t, SourceAlertmanager, "alertmanager_firing.json", Options{ServiceLabels: []string{"job"}})
-	if sigs[0].Service != "api" || sigs[1].Service != "node" {
-		t.Errorf("services = %q, %q; want the alert's own job label", sigs[0].Service, sigs[1].Service)
+func TestAlertmanagerCustomResourceLabel(t *testing.T) {
+	sigs := mustParse(t, SourceAlertmanager, "alertmanager_firing.json", Options{ResourceLabels: []string{"job"}})
+	if sigs[0].Resource != "api" || sigs[1].Resource != "node" {
+		t.Errorf("resources = %q, %q; want the alert's own job label", sigs[0].Resource, sigs[1].Resource)
 	}
 }
 
@@ -87,7 +87,7 @@ func TestUptimeKuma(t *testing.T) {
 		t.Fatalf("got %d signals", len(down))
 	}
 	d := down[0]
-	if d.Service != "blog" || data(d, DataAlert) != "Blog" || data(d, DataStatus) != StatusFiring ||
+	if d.Resource != "blog" || data(d, DataAlert) != "Blog" || data(d, DataStatus) != StatusFiring ||
 		d.Severity != signal.SeverityCritical || data(d, DataMessage) != "connect ECONNREFUSED 127.0.0.1:8080" {
 		t.Errorf("down = %+v", d)
 	}
@@ -103,9 +103,13 @@ func TestUptimeKuma(t *testing.T) {
 func TestGatus(t *testing.T) {
 	sigs := mustParse(t, SourceGatus, "gatus_triggered.json", Options{})
 	s := sigs[0]
-	if s.Service != "api" || data(s, DataAlert) != "api-health" || data(s, DataStatus) != StatusFiring ||
+	if s.Resource != "api" || data(s, DataAlert) != "api-health" || data(s, DataStatus) != StatusFiring ||
 		data(s, DataMessage) != "health endpoint down" || s.Labels["group"] != "core" {
 		t.Errorf("signal = %+v", s)
+	}
+	explicit, err := Parse(SourceGatus, []byte(`{"endpoint":"e","status":"TRIGGERED","resource":"router"}`), Options{})
+	if err != nil || explicit[0].Resource != "router" {
+		t.Errorf("explicit resource: %v %+v", err, explicit)
 	}
 	resolved, err := Parse(SourceGatus, []byte(`{"endpoint":"api-health","group":"core","status":"RESOLVED"}`), Options{})
 	if err != nil {
@@ -121,15 +125,23 @@ func TestGeneric(t *testing.T) {
 	if len(sigs) != 2 {
 		t.Fatalf("got %d signals", len(sigs))
 	}
-	if sigs[0].Service != "worker" || sigs[0].Severity != signal.SeverityCritical || sigs[0].Labels["queue"] != "mail" {
+	if sigs[0].Resource != "worker" || sigs[0].Severity != signal.SeverityCritical || sigs[0].Labels["queue"] != "mail" {
 		t.Errorf("first = %+v", sigs[0])
 	}
-	if sigs[1].Service != "proxy" || data(sigs[1], DataStatus) != StatusResolved {
+	if sigs[1].Resource != "proxy" || data(sigs[1], DataStatus) != StatusResolved {
 		t.Errorf("second = %+v", sigs[1])
 	}
 	one, err := Parse(SourceGeneric, []byte(`{"service":"s","alert":"a","status":"firing"}`), Options{})
-	if err != nil || len(one) != 1 || one[0].Severity != signal.SeverityWarning {
+	if err != nil || len(one) != 1 || one[0].Severity != signal.SeverityWarning || one[0].Resource != "s" {
 		t.Errorf("single object: %v %+v", err, one)
+	}
+	both, err := Parse(SourceGeneric, []byte(`{"resource":"r","service":"s","alert":"a","status":"firing"}`), Options{})
+	if err != nil || both[0].Resource != "r" {
+		t.Errorf("resource field must win over service: %v %+v", err, both)
+	}
+	byLabel, err := Parse(SourceGeneric, []byte(`{"alert":"a","status":"firing","labels":{"lcm_resource":"router","service":"x"}}`), Options{})
+	if err != nil || byLabel[0].Resource != "router" {
+		t.Errorf("lcm_resource label must be preferred: %v %+v", err, byLabel)
 	}
 }
 

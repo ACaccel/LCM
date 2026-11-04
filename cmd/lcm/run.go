@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/client"
@@ -127,101 +126,6 @@ func (a *app) waitRun(ctx context.Context, cl *client.Client, id string) error {
 		}
 		if err := sleep(ctx, a.pollInterval()); err != nil {
 			return fmt.Errorf("stopped waiting for run %s: %w", id, err)
-		}
-	}
-}
-
-func (a *app) action(ctx context.Context, args []string) error {
-	fs, conn := a.clientFlags("action")
-	version := fs.String("version", "", "commit or tag to deploy (deploy only)")
-	job := fs.String("job", "", "name of the job to run (run-job only)")
-	dry := fs.Bool("dry-run", false, "show the plan without performing the action")
-	wait := fs.Bool("wait", false, "wait for the action to finish; exits with status 1 when it failed")
-	pos, err := parseArgs(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(pos) != 2 {
-		return usagef("action: expected <service> <action>")
-	}
-	body := map[string]any{}
-	if *version != "" {
-		body["version"] = *version
-	}
-	if *job != "" {
-		body["job"] = *job
-	}
-	q := url.Values{}
-	if *dry {
-		q.Set("dryRun", "true")
-	}
-	cl, err := a.newClient(conn)
-	if err != nil {
-		return err
-	}
-	svc, act := pos[0], pos[1]
-	path := client.Path("services", svc, "actions", act)
-	if *dry {
-		var plan struct {
-			From  string   `json:"from"`
-			To    string   `json:"to"`
-			Steps []string `json:"steps"`
-		}
-		if err := cl.JSON(ctx, "POST", path, q, body, &plan); err != nil {
-			return apiError(err)
-		}
-		_, _ = fmt.Fprintf(a.stdout, "plan: %s %s (%s -> %s)\n", act, svc, plan.From, plan.To)
-		for i, s := range plan.Steps {
-			_, _ = fmt.Fprintf(a.stdout, "  %d. %s\n", i+1, s)
-		}
-		return nil
-	}
-	var started struct {
-		ActionID string `json:"actionId"`
-	}
-	if err := cl.JSON(ctx, "POST", path, nil, body, &started); err != nil {
-		return apiError(err)
-	}
-	_, _ = fmt.Fprintf(a.stdout, "action %s started (%s %s)\n", started.ActionID, act, svc)
-	if !*wait {
-		return nil
-	}
-	return a.waitAction(ctx, cl, started.ActionID)
-}
-
-func (a *app) waitAction(ctx context.Context, cl *client.Client, id string) error {
-	for {
-		var act struct {
-			Status string `json:"status"`
-			Error  string `json:"error"`
-			Result *struct {
-				From            string `json:"from"`
-				To              string `json:"to"`
-				Version         string `json:"version"`
-				PreviousVersion string `json:"previousVersion"`
-				DurationMs      int64  `json:"durationMs"`
-			} `json:"result"`
-		}
-		if err := cl.JSON(ctx, "GET", client.Path("actions", id), nil, nil, &act); err != nil {
-			return apiError(err)
-		}
-		switch act.Status {
-		case "succeeded":
-			line := fmt.Sprintf("action %s succeeded", id)
-			if r := act.Result; r != nil {
-				line += fmt.Sprintf(" (%s -> %s", r.From, r.To)
-				if r.Version != "" {
-					line += ", version " + r.Version
-				}
-				line += fmt.Sprintf(", %s)", (time.Duration(r.DurationMs) * time.Millisecond).Round(time.Millisecond))
-			}
-			_, err := fmt.Fprintln(a.stdout, line)
-			return err
-		case "failed":
-			return fmt.Errorf("action %s failed: %s", id, act.Error)
-		}
-		if err := sleep(ctx, a.pollInterval()); err != nil {
-			return fmt.Errorf("stopped waiting for action %s: %w", id, err)
 		}
 	}
 }

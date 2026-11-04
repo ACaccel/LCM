@@ -1,4 +1,4 @@
-import type { Health, NodeStatus, RunStatus, ServiceState } from "../api/types";
+import type { Health, NodeStatus, ResourcePhase, RunStatus } from "../api/types";
 import { s } from "../strings";
 
 /** Visual tone of a badge. Every tone is paired with an icon and text. */
@@ -23,11 +23,18 @@ export function healthView(h: Health): StatusView {
   }
 }
 
-export function stateView(st: ServiceState): StatusView {
-  const label = s.state[st] ?? st;
+/** A type-specific state: service lifecycle states, or online/offline/unknown for observed resources. */
+export function stateView(st: string): StatusView {
+  const label = st ? (s.state[st] ?? st) : s.state["unknown"]!;
   switch (st) {
     case "running":
+    case "online":
       return { tone: "ok", icon: "●", label };
+    case "offline":
+      return { tone: "bad", icon: "✕", label };
+    case "unknown":
+    case "":
+      return { tone: "neutral", icon: "?", label };
     case "deploying":
     case "updating":
     case "rolling_back":
@@ -38,6 +45,18 @@ export function stateView(st: ServiceState): StatusView {
       return { tone: "neutral", icon: "■", label };
     default:
       return { tone: "neutral", icon: "○", label };
+  }
+}
+
+export function phaseView(p: ResourcePhase): StatusView {
+  const label = s.phase[p];
+  switch (p) {
+    case "managed":
+      return { tone: "ok", icon: "●", label };
+    case "retired":
+      return { tone: "warn", icon: "‖", label };
+    default:
+      return { tone: "neutral", icon: "■", label };
   }
 }
 

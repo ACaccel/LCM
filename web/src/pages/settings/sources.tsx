@@ -109,7 +109,7 @@ export function SourcesPanel() {
       if (src.lastError) toast.error(`${s.settings.sources.syncFailed}: ${src.lastError}`);
       else toast.success(s.settings.sources.syncDone);
       void qc.invalidateQueries({ queryKey: qk.ownership() });
-      void qc.invalidateQueries({ queryKey: qk.servicesAll() });
+      void qc.invalidateQueries({ queryKey: qk.resourcesAll() });
       void qc.invalidateQueries({ queryKey: qk.policies() });
     }
   }, [q.data, toast, qc]);

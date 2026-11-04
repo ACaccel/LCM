@@ -1,4 +1,11 @@
-import type { Labels, PolicySummary, Trigger } from "../api/types";
+import type { Labels, PolicySummary, ResourceTypeName, Trigger } from "../api/types";
+
+/** The fields of a resource that trigger filters select on. */
+export interface ResourceRef {
+  name: string;
+  type: ResourceTypeName;
+  labels: Labels;
+}
 
 function mentions(value: unknown, name: string): boolean {
   if (typeof value === "string") return value === name;
@@ -7,39 +14,50 @@ function mentions(value: unknown, name: string): boolean {
 }
 
 /**
- * Whether a trigger listens to a service: a prop that lists or equals the
- * service name (such as `services` or `service`), or a `labels` selector
- * that the service's labels satisfy. Trigger props are always static.
+ * Whether a trigger listens to a resource. Trigger props are static, and
+ * the resource selectors (`resource`/`resources` by name, `types`, and a
+ * `labels` selector) all have to match, as the server combines them; a
+ * trigger without any resource selector is not attributed to one resource.
  */
-export function triggerConcernsService(trigger: Trigger, service: string, labels: Labels): boolean {
+export function triggerConcernsResource(trigger: Trigger, r: ResourceRef): boolean {
+  let selectors = 0;
   for (const [key, value] of Object.entries(trigger.props ?? {})) {
     if (key === "labels" && value && typeof value === "object" && !Array.isArray(value)) {
       const sel = Object.entries(value as Record<string, unknown>);
-      if (sel.length > 0 && sel.every(([k, v]) => labels[k] === v)) return true;
+      if (sel.length === 0) continue;
+      selectors++;
+      if (!sel.every(([k, v]) => r.labels[k] === v)) return false;
       continue;
     }
-    if (key === "service" || key === "services") {
-      if (mentions(value, service)) return true;
+    if (key === "resource" || key === "resources") {
+      if (Array.isArray(value) && value.length === 0) continue;
+      selectors++;
+      if (!mentions(value, r.name)) return false;
+      continue;
+    }
+    if (key === "types" && Array.isArray(value) && value.length > 0) {
+      selectors++;
+      if (!mentions(value, r.type)) return false;
     }
   }
-  return false;
+  return selectors > 0;
 }
 
 export type PolicyRelation =
-  /** Nodes of the policy act on the service; `types` are their node types. */
+  /** Nodes of the policy act on the resource; `types` are their node types. */
   | { kind: "acts"; types: string[] }
-  /** A trigger listens to the service and some node picks its service at run time. */
+  /** A trigger listens to the resource and some node picks its resource at run time. */
   | { kind: "dynamic" }
-  /** A trigger listens to the service; no node acts on it. */
+  /** A trigger listens to the resource; no node acts on it. */
   | { kind: "watches" };
 
 /**
- * How a deployed policy relates to a service, from the targets the server
+ * How a deployed policy relates to a resource, from the targets the server
  * resolved and the trigger filters; null when it does not concern it.
  */
-export function policyRelation(policy: Pick<PolicySummary, "targets" | "triggers">, service: string, labels: Labels): PolicyRelation | null {
-  const acting = policy.targets.filter((t) => t.service === service);
+export function policyRelation(policy: Pick<PolicySummary, "targets" | "triggers">, r: ResourceRef): PolicyRelation | null {
+  const acting = policy.targets.filter((t) => t.resource === r.name);
   if (acting.length > 0) return { kind: "acts", types: [...new Set(acting.map((t) => t.type))] };
-  if (!policy.triggers.some((t) => triggerConcernsService(t, service, labels))) return null;
-  return policy.targets.some((t) => t.service === null) ? { kind: "dynamic" } : { kind: "watches" };
+  if (!policy.triggers.some((t) => triggerConcernsResource(t, r))) return null;
+  return policy.targets.some((t) => t.resource === null) ? { kind: "dynamic" } : { kind: "watches" };
 }

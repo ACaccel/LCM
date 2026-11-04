@@ -11,6 +11,7 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 // Action is what happened (or, in a dry run, would happen) to a document.
@@ -135,22 +136,7 @@ func (o overlayModules) ResolveModule(ctx context.Context, name string) (*model.
 // structural ones Decode already did.
 func (s *Syncer) validate(ctx context.Context, it *item, overlay engine.ModuleResolver) (issues, warnings model.Issues) {
 	switch d := it.parsed.(type) {
-	case *model.Machine:
-		if s.machines == nil {
-			return model.Issues{{Message: ErrMachinesUnavailable.Error()}}, nil
-		}
-	case *model.Service:
-		hosts, err := s.cat.Hosts(ctx)
-		if err != nil {
-			return model.Issues{{Message: err.Error()}}, nil
-		}
-		known := false
-		for _, h := range hosts {
-			known = known || h.Name == d.Spec.EffectiveHost()
-		}
-		if !known {
-			issues = append(issues, model.Issue{Path: "spec.host", Message: fmt.Sprintf("unknown host %q", d.Spec.EffectiveHost())})
-		}
+	case *model.Resource:
 		if s.checks != nil {
 			issues = append(issues, s.checks.ValidateChecks(d.Spec.Checks, "spec.checks")...)
 		}
@@ -177,14 +163,8 @@ func (s *Syncer) write(ctx context.Context, it *item, expected int) (int, error)
 	}
 	defer release()
 	switch it.Kind {
-	case model.KindMachine:
-		if s.machines == nil {
-			return 0, ErrMachinesUnavailable
-		}
-		res, err := s.machines.Put(ctx, it.doc.Data, expected)
-		return res.Version, err
-	case model.KindService:
-		res, err := s.cat.Put(ctx, it.doc.Data, expected)
+	case model.KindResource:
+		res, err := s.res.Put(ctx, it.doc.Data, expected)
 		return res.Version, err
 	case model.KindModule:
 		res, err := s.mods.Put(ctx, it.doc.Data, expected)
@@ -225,8 +205,8 @@ type batch struct {
 	overlay       engine.ModuleResolver
 }
 
-// Apply validates and applies documents: modules first, then services,
-// machines, then policies. It is not transactional; every document gets its own
+// Apply validates and applies documents: modules first, then resources,
+// then policies. It is not transactional; every document gets its own
 // result, and a failure does not stop the others. The error is only for
 // problems with the call itself, such as a missing actor.
 func (s *Syncer) Apply(ctx context.Context, docs []Document, opts Options) ([]Result, error) {
@@ -572,16 +552,13 @@ type Selector struct {
 }
 
 // Export returns the canonical YAML of existing resources as one
-// multi-document stream, in apply order (modules, services, machines, policies) and
+// multi-document stream, in apply order (modules, resources, policies) and
 // by name within a kind, so repeated exports of an unchanged system are
 // identical. Only document fields are written; versions and state are not
 // part of a document. Applying the output back changes nothing.
 func (s *Syncer) Export(ctx context.Context, sel Selector) ([]byte, error) {
 	if sel.Name != "" && sel.Kind == "" {
 		return nil, model.Issues{{Path: "kind", Message: "a name needs a kind"}}
-	}
-	if sel.Kind == model.KindMachine && s.machines == nil {
-		return nil, ErrMachinesUnavailable
 	}
 	var docs []string
 	add := func(ref Ref, canon string) error {
@@ -612,38 +589,22 @@ func (s *Syncer) Export(ctx context.Context, sel Selector) ([]byte, error) {
 			return nil, err
 		}
 	}
-	svcs, err := s.cat.List(ctx)
+	// Retired resources are exported too: they still have a document that
+	// a repository may own.
+	recs, err := s.res.List(ctx, resource.Filter{IncludeRetired: true})
 	if err != nil {
 		return nil, err
 	}
-	for _, r := range svcs {
-		if !want(model.KindService, r.Name) {
+	for _, r := range recs {
+		if !want(model.KindResource, r.Name) {
 			continue
 		}
-		b, err := model.Encode(r.Spec)
+		b, err := model.Encode(r.Document)
 		if err == nil {
-			err = add(Ref{model.KindService, r.Name}, string(b))
+			err = add(Ref{model.KindResource, r.Name}, string(b))
 		}
 		if err != nil {
 			return nil, err
-		}
-	}
-	if s.machines != nil && (sel.Kind == "" || sel.Kind == model.KindMachine) {
-		machines, err := s.machines.List(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range machines {
-			if !want(model.KindMachine, r.Name) {
-				continue
-			}
-			b, err := model.Encode(r.Document)
-			if err == nil {
-				err = add(Ref{model.KindMachine, r.Name}, string(b))
-			}
-			if err != nil {
-				return nil, err
-			}
 		}
 	}
 	pols, err := s.eng.Policies(ctx)

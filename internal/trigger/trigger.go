@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/signal"
 )
@@ -39,7 +40,8 @@ const (
 // match; all given fields must match.
 type SignalProps struct {
 	Kinds      []string          `json:"kinds" desc:"signal kinds: check.changed, health.changed, lifecycle.changed, alert"`
-	Services   []string          `json:"services" desc:"service names"`
+	Resources  []string          `json:"resources" desc:"resource names"`
+	Types      []string          `json:"types" desc:"resource types: service, machine or router"`
 	Labels     map[string]string `json:"labels" desc:"signal labels that must all be present with these values"`
 	Severities []string          `json:"severities" desc:"info, warning or critical"`
 	Statuses   []string          `json:"statuses" desc:"resulting status: data.status of checks and alerts, data.health of health changes, data.state of lifecycle changes"`
@@ -103,7 +105,7 @@ func Register(r *node.Registry) {
 }
 
 func validateSignal(p SignalProps) error {
-	if len(p.Kinds)+len(p.Services)+len(p.Labels)+len(p.Severities)+len(p.Statuses) == 0 {
+	if len(p.Kinds)+len(p.Resources)+len(p.Types)+len(p.Labels)+len(p.Severities)+len(p.Statuses) == 0 {
 		return fmt.Errorf("at least one filter is required; an unfiltered signal trigger would start a run for every signal")
 	}
 	if err := oneOf("kinds", p.Kinds, signalKinds); err != nil {
@@ -112,12 +114,23 @@ func validateSignal(p SignalProps) error {
 	if err := oneOf("severities", p.Severities, severities); err != nil {
 		return err
 	}
-	for name, list := range map[string][]string{"services": p.Services, "statuses": p.Statuses} {
+	if err := oneOf("types", p.Types, resourceTypes()); err != nil {
+		return err
+	}
+	for name, list := range map[string][]string{"resources": p.Resources, "statuses": p.Statuses} {
 		if slices.Contains(list, "") {
 			return fmt.Errorf("%s: empty value", name)
 		}
 	}
 	return nil
+}
+
+func resourceTypes() []string {
+	var out []string
+	for _, t := range model.ResourceTypes() {
+		out = append(out, t.Type)
+	}
+	return out
 }
 
 func oneOf(field string, got, allowed []string) error {

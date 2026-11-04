@@ -8,7 +8,7 @@ import (
 )
 
 func moduleDoc(name, param string) string {
-	return "apiVersion: lcm/v1\nkind: Module\nmetadata: { name: " + name + " }\nspec:\n  params: [ { name: " + param + " } ]\n" +
+	return "apiVersion: lcm/v2\nkind: Module\nmetadata: { name: " + name + " }\nspec:\n  params: [ { name: " + param + " } ]\n" +
 		"  nodes:\n    - { id: in, type: module.input, next: { out: [o] } }\n    - { id: o, type: module.output, props: { port: out } }\n"
 }
 
@@ -80,15 +80,19 @@ func TestValidateEndpoint(t *testing.T) {
 	}
 
 	svc := validate(serviceDoc("web", "  checks:\n    - { name: c, type: http, props: { nope: 1 } }\n"))
-	if svc["valid"] != false || svc["kind"] != "Service" || svc["name"] != "web" || len(issues(svc)) != 1 {
+	if svc["valid"] != false || svc["kind"] != "Resource" || svc["name"] != "web" || len(issues(svc)) != 1 {
 		t.Fatalf("invalid service = %v", svc)
 	}
 	// Structural failures still say which document they belong to.
-	if host := validate(serviceDoc("web", "  host: mars\n")); host["valid"] != false || host["kind"] != "Service" || host["name"] != "web" {
-		t.Fatalf("unknown host = %v", host)
+	if host := validate(serviceDoc("web", "  host: mars\n")); host["valid"] != false || host["kind"] != "Resource" || host["name"] != "web" {
+		t.Fatalf("unknown field = %v", host)
 	}
-	if v := validate(serviceDoc("web", "")); v["valid"] != true {
+	if v := validate(serviceDoc("web", "")); v["valid"] != true || len(v["warnings"].([]any)) != 0 {
 		t.Fatalf("valid service = %v", v)
+	}
+	// A relation to a resource that does not exist yet is only a warning.
+	if v := validate(serviceDoc("web", "  relations: [{ type: dependsOn, target: db }]\n")); v["valid"] != true || len(v["warnings"].([]any)) != 1 {
+		t.Fatalf("unresolved relation = %v", v)
 	}
 	if m := validate(moduleDoc("m", "x")); m["valid"] != true || m["kind"] != "Module" {
 		t.Fatalf("module = %v", m)
@@ -98,7 +102,7 @@ func TestValidateEndpoint(t *testing.T) {
 		t.Fatalf("unknown kind = %v", broken)
 	}
 	x.call("POST", v1+"/validate", "", yamlBody()).wantError(http.StatusBadRequest, "bad_request")
-	if n := len(x.call("GET", v1+"/services", nil).items()); n != 0 {
+	if n := len(x.call("GET", v1+"/resources", nil).items()); n != 0 {
 		t.Fatalf("validate stored %d services", n)
 	}
 }
@@ -125,7 +129,7 @@ func TestLocks(t *testing.T) {
 	if n := len(x.call("GET", v1+"/locks", nil).want(http.StatusOK).items()); n != 0 {
 		t.Fatalf("locks = %d", n)
 	}
-	if _, err := x.app.Locks.TryAcquire(x.ctx, "service:web", "run:abc", time.Hour); err != nil {
+	if _, err := x.app.Locks.TryAcquire(x.ctx, "resource:web", "run:abc", time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := x.app.Locks.TryAcquire(x.ctx, "deploys/prod", "run:def", time.Hour); err != nil {
@@ -138,8 +142,8 @@ func TestLocks(t *testing.T) {
 
 	// Names may contain slashes and colons; clients percent-encode them.
 	x.call("DELETE", v1+"/locks/deploys%2Fprod", nil).want(http.StatusNoContent)
-	x.call("DELETE", v1+"/locks/service:web", nil).want(http.StatusNoContent)
-	x.call("DELETE", v1+"/locks/service:web", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("DELETE", v1+"/locks/resource:web", nil).want(http.StatusNoContent)
+	x.call("DELETE", v1+"/locks/resource:web", nil).wantError(http.StatusNotFound, "not_found")
 	if n := len(x.call("GET", v1+"/locks", nil).items()); n != 0 {
 		t.Fatalf("locks after release = %d", n)
 	}
@@ -162,14 +166,14 @@ func TestTimelineAndDeployments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tl := x.call("GET", v1+"/services/web/timeline", nil).want(http.StatusOK).items()
-	if len(tl) < 3 || tl[0]["service"] != "web" || tl[0]["data"] == nil {
+	tl := x.call("GET", v1+"/resources/web/timeline", nil).want(http.StatusOK).items()
+	if len(tl) < 3 || tl[0]["resource"] != "web" || tl[0]["data"] == nil {
 		t.Fatalf("service timeline = %v", tl)
 	}
 	all := x.call("GET", v1+"/timeline", nil).want(http.StatusOK).items()
 	services := map[any]bool{}
 	for _, e := range all {
-		services[e["service"]] = true
+		services[e["resource"]] = true
 	}
 	if !services["web"] || !services["db"] {
 		t.Fatalf("global timeline services = %v", services)
@@ -178,11 +182,11 @@ func TestTimelineAndDeployments(t *testing.T) {
 		t.Fatalf("lifecycle entries = %d", n)
 	}
 	// Paging by cursor, and the time window.
-	page := x.call("GET", v1+"/services/web/timeline?limit=1", nil).want(http.StatusOK).obj()
+	page := x.call("GET", v1+"/resources/web/timeline?limit=1", nil).want(http.StatusOK).obj()
 	if page["nextCursor"] == nil {
 		t.Fatalf("expected a next page: %v", page)
 	}
-	next := x.call("GET", v1+"/services/web/timeline?limit=1&cursor="+page["nextCursor"].(string), nil).items()
+	next := x.call("GET", v1+"/resources/web/timeline?limit=1&cursor="+page["nextCursor"].(string), nil).items()
 	if len(next) != 1 || next[0]["id"] == page["items"].([]any)[0].(map[string]any)["id"] {
 		t.Fatalf("second timeline page = %v", next)
 	}
@@ -193,7 +197,7 @@ func TestTimelineAndDeployments(t *testing.T) {
 	x.call("GET", v1+"/timeline?from=nope", nil).wantError(http.StatusBadRequest, "bad_request")
 	x.call("GET", v1+"/timeline?cursor=bm9wZQ", nil).wantError(http.StatusBadRequest, "bad_request")
 
-	if n := len(x.call("GET", v1+"/services/web/deployments", nil).want(http.StatusOK).items()); n != 0 {
+	if n := len(x.call("GET", v1+"/resources/web/deployments", nil).want(http.StatusOK).items()); n != 0 {
 		t.Fatalf("deployments = %d", n)
 	}
 	// Deployments are recorded by the catalog; list one.
@@ -204,15 +208,16 @@ func TestTimelineAndDeployments(t *testing.T) {
 	if err := x.app.Catalog.FinishDeployment(x.ctx, id, "succeeded", "", "built"); err != nil {
 		t.Fatal(err)
 	}
-	deps := x.call("GET", v1+"/services/web/deployments", nil).want(http.StatusOK).items()
+	deps := x.call("GET", v1+"/resources/web/deployments", nil).want(http.StatusOK).items()
 	if len(deps) != 1 || deps[0]["version"] != "abc1234" || deps[0]["outcome"] != "succeeded" || deps[0]["finishedAt"] == nil {
 		t.Fatalf("deployments = %v", deps)
 	}
-	detail := x.call("GET", v1+"/services/web", nil).obj()
-	if detail["deployedVersion"] != "abc1234" || detail["lastDeployment"].(map[string]any)["id"] != float64(id) {
+	detail := x.call("GET", v1+"/resources/web", nil).obj()
+	extras := detail["service"].(map[string]any)
+	if extras["deployedVersion"] != "abc1234" || extras["lastDeployment"].(map[string]any)["id"] != float64(id) {
 		t.Fatalf("detail = %v", detail)
 	}
-	if sum := x.call("GET", v1+"/services", nil).items()[1]; sum["deployedVersion"] != "abc1234" {
+	if sum := x.call("GET", v1+"/resources", nil).items()[1]; sum["deployedVersion"] != "abc1234" {
 		t.Fatalf("summary = %v", sum)
 	}
 }

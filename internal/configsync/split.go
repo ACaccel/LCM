@@ -96,18 +96,16 @@ func Head(data []byte) (kind model.Kind, name string) {
 	return head.Kind, head.Metadata.Name
 }
 
-// ParseKind reads a kind as clients write it: "service", "Services",
+// ParseKind reads a kind as clients write it: "resource", "Resources",
 // "policies" and so on.
 func ParseKind(s string) (model.Kind, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "machine", "machines":
-		return model.KindMachine, nil
-	case "service", "services", "svc":
-		return model.KindService, nil
+	case "resource", "resources", "res":
+		return model.KindResource, nil
 	case "policy", "policies":
 		return model.KindPolicy, nil
 	case "module", "modules":
 		return model.KindModule, nil
 	}
-	return "", errors.New("kind must be service, machine, policy or module")
+	return "", errors.New("kind must be resource, policy or module")
 }

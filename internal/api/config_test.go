@@ -81,20 +81,20 @@ func TestApplyEndpoint(t *testing.T) {
 	}
 	// Results follow the order of the documents in the body.
 	first := items[1].(map[string]any)
-	if first["kind"] != "Service" || first["action"] != "create" || !strings.Contains(first["diff"].(string), "+kind: Service") || first["index"] != float64(1) {
+	if first["kind"] != "Resource" || first["action"] != "create" || !strings.Contains(first["diff"].(string), "+kind: Resource") || first["index"] != float64(1) {
 		t.Fatalf("service result = %v", first)
 	}
 	if items[2].(map[string]any)["action"] != "failed" || len(items[2].(map[string]any)["issues"].([]any)) == 0 {
 		t.Fatalf("bad document = %v", items[2])
 	}
-	x.call("GET", v1+"/services/web", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("GET", v1+"/resources/web", nil).wantError(http.StatusNotFound, "not_found")
 
 	// For real; the failed document does not stop the others (still a 200).
 	r = x.call("POST", v1+"/apply", body, yamlBody()).want(http.StatusOK).obj()
 	if r["dryRun"] != false {
 		t.Fatalf("apply = %v", r)
 	}
-	x.call("GET", v1+"/services/web", nil).want(http.StatusOK)
+	x.call("GET", v1+"/resources/web", nil).want(http.StatusOK)
 	x.call("GET", v1+"/policies/echo", nil).want(http.StatusOK)
 	again := x.call("POST", v1+"/apply", body, yamlBody()).want(http.StatusOK).items()
 	if again[0]["action"] != "unchanged" || again[1]["action"] != "unchanged" || again[2]["action"] != "failed" {
@@ -116,7 +116,7 @@ func TestApplyEndpoint(t *testing.T) {
 func TestExportEndpoint(t *testing.T) {
 	x := newSite(t)
 	x.createService(serviceDoc("web", ""))
-	x.createService(serviceDoc("api", "  dependsOn: [web]\n"))
+	x.createService(serviceDoc("api", "  relations: [{ type: dependsOn, target: web }]\n"))
 	x.putPolicy("echo", manualPolicyNodes)
 
 	r := x.call("GET", v1+"/export", nil).want(http.StatusOK)
@@ -134,16 +134,16 @@ func TestExportEndpoint(t *testing.T) {
 		}
 	}
 
-	one := x.call("GET", v1+"/export?kind=services&name=web", nil).want(http.StatusOK).String()
+	one := x.call("GET", v1+"/export?kind=resources&name=web", nil).want(http.StatusOK).String()
 	if strings.Count(one, "kind:") != 1 || !strings.Contains(one, "name: web") {
 		t.Fatalf("export web =\n%s", one)
 	}
-	if got := x.call("GET", v1+"/export?kind=Policy", nil).want(http.StatusOK).String(); !strings.Contains(got, "kind: Policy") || strings.Contains(got, "Service") {
+	if got := x.call("GET", v1+"/export?kind=Policy", nil).want(http.StatusOK).String(); !strings.Contains(got, "kind: Policy") || strings.Contains(got, "kind: Resource") {
 		t.Fatalf("export policies =\n%s", got)
 	}
 	x.call("GET", v1+"/export?kind=host", nil).wantError(http.StatusBadRequest, "bad_request")
 	x.call("GET", v1+"/export?name=web", nil).wantError(http.StatusBadRequest, "bad_request")
-	x.call("GET", v1+"/export?kind=service&name=ghost", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("GET", v1+"/export?kind=resource&name=ghost", nil).wantError(http.StatusNotFound, "not_found")
 	x.call("GET", v1+"/export", nil, bearer(x.ingest)).wantError(http.StatusForbidden, "forbidden")
 }
 
@@ -204,7 +204,7 @@ func TestConfigSyncDriftAndResolve(t *testing.T) {
 	}
 
 	// The resources show who manages them.
-	mb := x.call("GET", v1+"/services/web", nil).want(http.StatusOK).obj()["managedBy"].(map[string]any)
+	mb := x.call("GET", v1+"/resources/web", nil).want(http.StatusOK).obj()["managedBy"].(map[string]any)
 	if mb["source"] != "infra" || mb["path"] != "lcm/web.yaml" || mb["drifted"] != false || mb["conflict"] != false || mb["commit"] != commit {
 		t.Fatalf("managedBy = %v", mb)
 	}
@@ -212,26 +212,26 @@ func TestConfigSyncDriftAndResolve(t *testing.T) {
 		t.Fatalf("policies = %v", got)
 	}
 	x.createService(serviceDoc("free", ""))
-	for _, sv := range x.call("GET", v1+"/services", nil).items() {
+	for _, sv := range x.call("GET", v1+"/resources", nil).items() {
 		if (sv["name"] == "free") != (sv["managedBy"] == nil) {
 			t.Fatalf("managedBy of %v = %v", sv["name"], sv["managedBy"])
 		}
 	}
 
 	// An edit through the API marks the service drifted; apply refuses it.
-	x.call("PUT", v1+"/services/web", serviceDoc("web", "  dependsOn: [local]\n"), yamlBody(), ifMatch("1")).want(http.StatusOK)
-	if mb := x.call("GET", v1+"/services/web", nil).obj()["managedBy"].(map[string]any); mb["drifted"] != true || mb["conflict"] != false {
+	x.call("PUT", v1+"/resources/web", serviceDoc("web", "  relations: [{ type: dependsOn, target: local }]\n"), yamlBody(), ifMatch("1")).want(http.StatusOK)
+	if mb := x.call("GET", v1+"/resources/web", nil).obj()["managedBy"].(map[string]any); mb["drifted"] != true || mb["conflict"] != false {
 		t.Fatalf("after edit = %v", mb)
 	}
-	res := x.call("POST", v1+"/apply", serviceDoc("web", "  dependsOn: [apply]\n"), yamlBody()).want(http.StatusOK).items()
+	res := x.call("POST", v1+"/apply", serviceDoc("web", "  relations: [{ type: dependsOn, target: apply }]\n"), yamlBody()).want(http.StatusOK).items()
 	if res[0]["action"] != "skipped" || !strings.Contains(res[0]["reason"].(string), "infra") {
 		t.Fatalf("apply on owned = %v", res[0])
 	}
 
 	// A commit on the drifted service is a conflict, not an overwrite.
-	repo.commit(map[string]string{"lcm/web.yaml": serviceDoc("web", "  dependsOn: [repo]\n")})
+	repo.commit(map[string]string{"lcm/web.yaml": serviceDoc("web", "  relations: [{ type: dependsOn, target: repo }]\n")})
 	x.syncSource("infra")
-	own := x.call("GET", v1+"/config/ownership?kind=service", nil).want(http.StatusOK).items()
+	own := x.call("GET", v1+"/config/ownership?kind=resource", nil).want(http.StatusOK).items()
 	if len(own) != 1 || own[0]["conflict"] != true || own[0]["drifted"] != true || own[0]["conflictCommit"] == "" {
 		t.Fatalf("ownership = %v", own)
 	}
@@ -244,27 +244,27 @@ func TestConfigSyncDriftAndResolve(t *testing.T) {
 	x.call("GET", v1+"/config/ownership?kind=host", nil).wantError(http.StatusBadRequest, "bad_request")
 
 	// Resolve: invalid choices first, then keep current, then use git.
-	resolve := v1 + "/config/ownership/service/web/resolve"
+	resolve := v1 + "/config/ownership/resource/web/resolve"
 	x.call("POST", resolve, map[string]string{"use": "both"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
-	x.call("POST", v1+"/config/ownership/service/ghost/resolve", map[string]string{"use": "git"}).wantError(http.StatusNotFound, "not_found")
+	x.call("POST", v1+"/config/ownership/resource/ghost/resolve", map[string]string{"use": "git"}).wantError(http.StatusNotFound, "not_found")
 	x.call("POST", v1+"/config/ownership/host/web/resolve", map[string]string{"use": "git"}).wantError(http.StatusNotFound, "not_found")
 	kept := x.call("POST", resolve, map[string]string{"use": "current"}).want(http.StatusOK).obj()
 	if kept["conflict"] != false || kept["acknowledged"] != true || kept["drifted"] != true {
 		t.Fatalf("keep current = %v", kept)
 	}
 	back := x.call("POST", resolve, map[string]string{"use": "git"}).want(http.StatusOK).obj()
-	if back["drifted"] != false || back["kind"] != "Service" {
+	if back["drifted"] != false || back["kind"] != "Resource" {
 		t.Fatalf("use git = %v", back)
 	}
-	doc := x.call("GET", v1+"/services/web", nil).obj()["document"].(map[string]any)["spec"].(map[string]any)
-	if deps := doc["dependsOn"].([]any); len(deps) != 1 || deps[0] != "repo" {
+	doc := x.call("GET", v1+"/resources/web", nil).obj()["document"].(map[string]any)["spec"].(map[string]any)
+	if rels := doc["relations"].([]any); len(rels) != 1 || rels[0].(map[string]any)["target"] != "repo" {
 		t.Fatalf("service after use git = %v", doc)
 	}
 
 	// Release hands the service back to the web UI.
-	x.call("DELETE", v1+"/config/ownership/service/web", nil).want(http.StatusNoContent)
-	x.call("DELETE", v1+"/config/ownership/service/web", nil).wantError(http.StatusNotFound, "not_found")
-	if x.call("GET", v1+"/services/web", nil).obj()["managedBy"] != nil {
+	x.call("DELETE", v1+"/config/ownership/resource/web", nil).want(http.StatusNoContent)
+	x.call("DELETE", v1+"/config/ownership/resource/web", nil).wantError(http.StatusNotFound, "not_found")
+	if x.call("GET", v1+"/resources/web", nil).obj()["managedBy"] != nil {
 		t.Fatal("still managed after release")
 	}
 
@@ -360,7 +360,7 @@ func TestSyncRequestsAreAsynchronousAndCoalesce(t *testing.T) {
 	if src["syncing"] != false || src["lastCommit"] == "" || src["lastError"] != "" {
 		t.Fatalf("after syncing = %v", src)
 	}
-	x.call("GET", v1+"/services/web", nil).want(http.StatusOK)
+	x.call("GET", v1+"/resources/web", nil).want(http.StatusOK)
 
 	// A later request starts a new sync.
 	x.call("POST", v1+"/config/sources/infra/sync", nil).want(http.StatusAccepted)
@@ -370,7 +370,7 @@ func TestSyncRequestsAreAsynchronousAndCoalesce(t *testing.T) {
 func TestAnnotationsSurviveStoreAndExport(t *testing.T) {
 	x := newSite(t)
 	const annot = "lcm.dev/layout"
-	doc := "apiVersion: lcm/v1\nkind: Policy\nmetadata:\n  name: laid-out\n  annotations:\n    " + annot + ` : '{"start":{"x":10,"y":20}}'` + "\nspec:\n  nodes:\n" + manualPolicyNodes
+	doc := "apiVersion: lcm/v2\nkind: Policy\nmetadata:\n  name: laid-out\n  annotations:\n    " + annot + ` : '{"start":{"x":10,"y":20}}'` + "\nspec:\n  nodes:\n" + manualPolicyNodes
 	x.call("PUT", v1+"/policies/laid-out", doc, yamlBody()).want(http.StatusCreated)
 
 	got := x.call("GET", v1+"/policies/laid-out", nil).want(http.StatusOK).obj()

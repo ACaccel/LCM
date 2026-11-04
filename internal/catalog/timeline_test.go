@@ -15,19 +15,21 @@ func TestTimelineFollowsSignals(t *testing.T) {
 	e.put(svcDoc("app", ""), 0)
 	f := e.cat.FollowSignals(context.Background(), e.bus)
 
-	e.bus.Publish(signal.Signal{Kind: signal.KindCheck, Service: "app", Source: "monitor", Severity: signal.SeverityCritical,
+	e.bus.Publish(signal.Signal{Kind: signal.KindCheck, Resource: "app", Source: "monitor", Severity: signal.SeverityCritical,
 		Data: map[string]any{"check": "http", "status": "down", "previous": "up", "message": "HTTP 502"}})
-	e.bus.Publish(signal.Signal{Kind: signal.KindHealth, Service: "app", Source: "monitor",
+	e.bus.Publish(signal.Signal{Kind: signal.KindHealth, Resource: "app", Source: "monitor",
 		Data: map[string]any{"health": "down", "previous": "healthy"}})
-	e.bus.Publish(signal.Signal{Kind: signal.KindAlert, Service: "app", Source: "webhook",
+	e.bus.Publish(signal.Signal{Kind: signal.KindAlert, Resource: "app", Source: "webhook",
 		Data: map[string]any{"alert": "HighLatency", "status": "firing"}})
-	e.bus.Publish(signal.Signal{Kind: signal.KindAlert, Source: "webhook", Data: map[string]any{"alert": "global"}}) // no service
+	e.bus.Publish(signal.Signal{Kind: signal.KindAlert, Source: "webhook", Data: map[string]any{"alert": "global"}}) // no resource
+	// Config sync writes the timeline entry of its own signals.
+	e.bus.Publish(signal.Signal{Kind: "resource.config.conflict", Resource: "app", ResourceType: "service", Source: "configsync"})
 	// The catalog writes its own lifecycle entries; the follower must not duplicate them.
 	e.setState("app", catalog.StateRunning)
 	f.Close()
 	f.Close()
 
-	page, err := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Service: "app"})
+	page, err := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Resource: "app"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,7 @@ func TestTimelineFollowsSignals(t *testing.T) {
 		t.Fatalf("timeline =\n%v\nwant\n%v", summaries, want)
 	}
 	check := page.Entries[3]
-	if check.Ref == "" || check.Data["severity"] != "critical" || check.Data["source"] != "monitor" {
+	if check.Ref == "" || check.Data["severity"] != "critical" || check.Data["source"] != "monitor" || check.Resource != "app" {
 		t.Fatalf("check entry = %+v", check)
 	}
 }
@@ -57,7 +59,7 @@ func TestTimelineQueryAndPagination(t *testing.T) {
 	add := func(service, kind string, at time.Duration) {
 		t.Helper()
 		if err := e.cat.AppendTimeline(ctx, catalog.Entry{
-			Service: service, Kind: kind, Summary: fmt.Sprintf("%s %s +%s", service, kind, at), Time: epoch.Add(at),
+			Resource: service, Kind: kind, Summary: fmt.Sprintf("%s %s +%s", service, kind, at), Time: epoch.Add(at),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +75,7 @@ func TestTimelineQueryAndPagination(t *testing.T) {
 	var before int64
 	pages := 0
 	for {
-		page, err := e.cat.Timeline(ctx, catalog.TimelineQuery{Service: "a", Limit: 3, Before: before})
+		page, err := e.cat.Timeline(ctx, catalog.TimelineQuery{Resource: "a", Limit: 3, Before: before})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,11 +97,11 @@ func TestTimelineQueryAndPagination(t *testing.T) {
 		}
 	}
 
-	page, _ := e.cat.Timeline(ctx, catalog.TimelineQuery{Service: "a", Kinds: []string{"k2"}})
+	page, _ := e.cat.Timeline(ctx, catalog.TimelineQuery{Resource: "a", Kinds: []string{"k2"}})
 	if len(page.Entries) != 1 || page.Entries[0].Kind != "k2" || page.Next != 0 {
 		t.Fatalf("kind filter = %+v", page)
 	}
-	page, _ = e.cat.Timeline(ctx, catalog.TimelineQuery{Service: "a", Kinds: []string{"k1", "k2"}, From: epoch.Add(2 * time.Minute), To: epoch.Add(5 * time.Minute)})
+	page, _ = e.cat.Timeline(ctx, catalog.TimelineQuery{Resource: "a", Kinds: []string{"k1", "k2"}, From: epoch.Add(2 * time.Minute), To: epoch.Add(5 * time.Minute)})
 	if len(page.Entries) != 3 {
 		t.Fatalf("time range [2m,5m) = %d entries", len(page.Entries))
 	}
@@ -107,7 +109,7 @@ func TestTimelineQueryAndPagination(t *testing.T) {
 	if len(page.Entries) != 9 {
 		t.Fatalf("all services = %d entries", len(page.Entries))
 	}
-	page, _ = e.cat.Timeline(ctx, catalog.TimelineQuery{Service: "nobody"})
+	page, _ = e.cat.Timeline(ctx, catalog.TimelineQuery{Resource: "nobody"})
 	if page.Entries == nil || len(page.Entries) != 0 {
 		t.Fatalf("empty result must be a non-nil empty slice: %+v", page)
 	}
@@ -120,7 +122,7 @@ func TestPruneTimeline(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	for _, age := range []time.Duration{-10 * 24 * time.Hour, -8 * 24 * time.Hour, -time.Hour, 0} {
-		if err := e.cat.AppendTimeline(ctx, catalog.Entry{Service: "a", Kind: "k", Summary: "s", Time: epoch.Add(age)}); err != nil {
+		if err := e.cat.AppendTimeline(ctx, catalog.Entry{Resource: "a", Kind: "k", Summary: "s", Time: epoch.Add(age)}); err != nil {
 			t.Fatal(err)
 		}
 	}

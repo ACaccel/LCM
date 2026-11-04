@@ -67,6 +67,23 @@ func New(db *store.DB, opts ...Option) *Log {
 	return l
 }
 
+type detailsKey struct{}
+
+// WithDetail returns a context whose audit entries all carry key=value in
+// their details. It lets a caller attach a fact about the request, such as
+// an acknowledged impact, to the entries a component records further down
+// without changing every component's signature. Details passed to Record
+// take precedence over context details with the same key.
+func WithDetail(ctx context.Context, key string, value any) context.Context {
+	prev, _ := ctx.Value(detailsKey{}).(map[string]any)
+	next := make(map[string]any, len(prev)+1)
+	for k, v := range prev {
+		next[k] = v
+	}
+	next[key] = value
+	return context.WithValue(ctx, detailsKey{}, next)
+}
+
 // Record appends an entry. The actor comes from ctx; details must never
 // contain secrets.
 func (l *Log) Record(ctx context.Context, action, target string, outcome Outcome, details map[string]any) error {
@@ -77,10 +94,16 @@ func (l *Log) Record(ctx context.Context, action, target string, outcome Outcome
 	if !actor.Kind.Valid() {
 		return fmt.Errorf("audit: invalid actor kind %q", actor.Kind)
 	}
-	if details == nil {
-		details = map[string]any{}
+	merged := map[string]any{}
+	if extra, _ := ctx.Value(detailsKey{}).(map[string]any); extra != nil {
+		for k, v := range extra {
+			merged[k] = v
+		}
 	}
-	blob, err := json.Marshal(details)
+	for k, v := range details {
+		merged[k] = v
+	}
+	blob, err := json.Marshal(merged)
 	if err != nil {
 		return fmt.Errorf("audit: encode details: %w", err)
 	}

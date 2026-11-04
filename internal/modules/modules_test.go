@@ -29,7 +29,7 @@ func newStore(t *testing.T) (*modules.Store, *audit.Log, context.Context) {
 }
 
 func doc(name, param string) []byte {
-	return []byte(`apiVersion: lcm/v1
+	return []byte(`apiVersion: lcm/v2
 kind: Module
 metadata: { name: ` + name + ` }
 spec:
@@ -99,7 +99,7 @@ func TestPutRejectsInvalidDocumentsAndMissingActor(t *testing.T) {
 		t.Fatalf("invalid document error = %v, want model.Issues", err)
 	}
 	// A policy document is not a module.
-	pol := []byte("apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: p }\nspec: { nodes: [ { id: t, type: trigger.manual } ] }\n")
+	pol := []byte("apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: p }\nspec: { nodes: [ { id: t, type: trigger.manual } ] }\n")
 	if _, err := s.Put(ctx, pol, 0); !errors.As(err, &is) {
 		t.Fatalf("policy as module error = %v", err)
 	}

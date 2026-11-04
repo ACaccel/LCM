@@ -1,16 +1,13 @@
 package model
 
 import (
-	"fmt"
 	"path"
 	"regexp"
 	"time"
 )
 
-// KindService is the document kind of a managed service.
-const KindService Kind = "Service"
-
-// RuntimeType selects how LCM controls a service's process.
+// RuntimeType selects how LCM controls a service's process. The adapter of a
+// service resource is one of these values.
 type RuntimeType string
 
 // Runtime types.
@@ -28,9 +25,6 @@ const (
 	ScopeUser   = "user"
 )
 
-// HostLocal is the only host supported so far.
-const HostLocal = "local"
-
 // Defaults applied by the accessors below when a field is left empty.
 const (
 	DefaultSourceRemote   = "origin"
@@ -38,34 +32,10 @@ const (
 	DefaultCommandTimeout = Duration(30 * time.Minute)
 )
 
-// Service describes one managed service: how to control it, where its
-// source comes from, how to back it up and how to check it.
-type Service struct {
-	Header `yaml:",inline"`
-	Spec   ServiceSpec `yaml:"spec" json:"spec"`
-}
-
-// DocKind implements Document.
-func (s *Service) DocKind() Kind { return KindService }
-
-// DocName implements Document.
-func (s *Service) DocName() string { return s.Metadata.Name }
-
-// ServiceSpec is the body of a Service.
-type ServiceSpec struct {
-	Host      string             `yaml:"host,omitempty" json:"host,omitempty"`
-	Runtime   Runtime            `yaml:"runtime" json:"runtime"`
-	Source    *Source            `yaml:"source,omitempty" json:"source,omitempty"`
-	Backup    *Command           `yaml:"backup,omitempty" json:"backup,omitempty"`
-	Jobs      map[string]Command `yaml:"jobs,omitempty" json:"jobs,omitempty"`
-	DependsOn []string           `yaml:"dependsOn,omitempty" json:"dependsOn,omitempty"`
-	Checks    []Check            `yaml:"checks,omitempty" json:"checks,omitempty"`
-}
-
-// Runtime configures the adapter. Only the fields of the chosen type may be
-// set.
-type Runtime struct {
-	Type RuntimeType `yaml:"type" json:"type"`
+// ServiceConfig is the config of a service resource: the runtime fields of
+// its adapter, where its source comes from, how to back it up and which jobs
+// it offers. Only the runtime fields of the chosen adapter may be set.
+type ServiceConfig struct {
 	// systemd
 	Unit  string `yaml:"unit,omitempty" json:"unit,omitempty"`
 	Scope string `yaml:"scope,omitempty" json:"scope,omitempty"`
@@ -80,6 +50,51 @@ type Runtime struct {
 	Stop    string `yaml:"stop,omitempty" json:"stop,omitempty"`
 	Restart string `yaml:"restart,omitempty" json:"restart,omitempty"`
 	Status  string `yaml:"status,omitempty" json:"status,omitempty"`
+
+	Source *Source            `yaml:"source,omitempty" json:"source,omitempty"`
+	Backup *Command           `yaml:"backup,omitempty" json:"backup,omitempty"`
+	Jobs   map[string]Command `yaml:"jobs,omitempty" json:"jobs,omitempty"`
+}
+
+func (*ServiceConfig) resourceConfig() {}
+
+// Runtime returns the runtime value the adapters consume for the given
+// adapter name.
+func (c *ServiceConfig) Runtime(adapter string) Runtime {
+	return Runtime{
+		Type: RuntimeType(adapter),
+		Unit: c.Unit, Scope: c.Scope,
+		Container: c.Container,
+		Project:   c.Project, File: c.File,
+		Start: c.Start, Stop: c.Stop, Restart: c.Restart, Status: c.Status,
+	}
+}
+
+// Runtime configures a runtime adapter. Only the fields of the chosen type
+// may be set.
+type Runtime struct {
+	Type RuntimeType `yaml:"type" json:"type"`
+	// systemd
+	Unit  string `yaml:"unit,omitempty" json:"unit,omitempty"`
+	Scope string `yaml:"scope,omitempty" json:"scope,omitempty"`
+	// docker
+	Container string `yaml:"container,omitempty" json:"container,omitempty"`
+	// compose
+	Project string `yaml:"project,omitempty" json:"project,omitempty"`
+	File    string `yaml:"file,omitempty" json:"file,omitempty"`
+	// command
+	Start   string `yaml:"start,omitempty" json:"start,omitempty"`
+	Stop    string `yaml:"stop,omitempty" json:"stop,omitempty"`
+	Restart string `yaml:"restart,omitempty" json:"restart,omitempty"`
+	Status  string `yaml:"status,omitempty" json:"status,omitempty"`
+}
+
+// EffectiveScope returns the systemd scope, defaulting to system.
+func (r Runtime) EffectiveScope() string {
+	if r.Scope == "" {
+		return ScopeSystem
+	}
+	return r.Scope
 }
 
 // Source is the local working copy LCM deploys from. LCM owns this
@@ -123,28 +138,11 @@ func (c Command) EffectiveTimeout() time.Duration {
 	return c.Timeout.D()
 }
 
-// EffectiveHost returns the host name, defaulting to local.
-func (s ServiceSpec) EffectiveHost() string {
-	if s.Host == "" {
-		return HostLocal
-	}
-	return s.Host
-}
-
-// EffectiveScope returns the systemd scope, defaulting to system.
-func (r Runtime) EffectiveScope() string {
-	if r.Scope == "" {
-		return ScopeSystem
-	}
-	return r.Scope
-}
-
-// Limits on service documents.
+// Limits on service configs.
 const (
-	MaxJobs      = 50
-	MaxDependsOn = 100
-	maxCmdLen    = 16 << 10
-	maxPathLen   = 4096
+	MaxJobs    = 50
+	maxCmdLen  = 16 << 10
+	maxPathLen = 4096
 )
 
 var (
@@ -159,59 +157,43 @@ var (
 	jobRe       = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 )
 
-// ValidateService checks the structure of a decoded service.
-func ValidateService(s *Service) error {
-	var is Issues
-	validateHeader(&s.Header, KindService, &is)
-	sp := &s.Spec
+func (c *ServiceConfig) normalize(adapter string) {
+	if RuntimeType(adapter) == RuntimeSystemd && c.Scope == "" {
+		c.Scope = ScopeSystem
+	}
+	if c.Source != nil && c.Source.Remote == "" {
+		c.Source.Remote = DefaultSourceRemote
+	}
+}
 
-	if sp.Host != "" && sp.Host != HostLocal {
-		is.addf("spec.host", "only %q is supported", HostLocal)
+func (c *ServiceConfig) validate(adapter string, base string, is *Issues) {
+	validateRuntime(c.Runtime(adapter), base, is)
+	if c.Source != nil {
+		validateSource(c.Source, base+".source", is)
 	}
-	validateRuntime(&sp.Runtime, &is)
-	if sp.Source != nil {
-		validateSource(sp.Source, &is)
+	if c.Backup != nil {
+		validateCommand(*c.Backup, base+".backup", is)
 	}
-	if sp.Backup != nil {
-		validateCommand(*sp.Backup, "spec.backup", &is)
+	if len(c.Jobs) > MaxJobs {
+		is.addf(base+".jobs", "at most %d jobs are allowed", MaxJobs)
 	}
-	if len(sp.Jobs) > MaxJobs {
-		is.addf("spec.jobs", "at most %d jobs are allowed", MaxJobs)
-	}
-	for _, name := range sortedKeys(sp.Jobs) {
-		p := "spec.jobs." + name
+	for _, name := range sortedKeys(c.Jobs) {
+		p := base + ".jobs." + name
 		if !jobRe.MatchString(name) || len(name) > maxNameLen {
 			is.addf(p, "job names are lowercase letters, digits, '-' and '_', starting with a letter (max %d)", maxNameLen)
 		}
-		validateCommand(sp.Jobs[name], p, &is)
+		validateCommand(c.Jobs[name], p, is)
 	}
-	if len(sp.DependsOn) > MaxDependsOn {
-		is.addf("spec.dependsOn", "at most %d dependencies are allowed", MaxDependsOn)
-	}
-	seen := map[string]bool{}
-	for i, d := range sp.DependsOn {
-		p := fmt.Sprintf("spec.dependsOn[%d]", i)
-		switch {
-		case !nameRe.MatchString(d) || len(d) > maxNameLen:
-			is.addf(p, "invalid service name %q", d)
-		case d == s.Metadata.Name:
-			is.addf(p, "a service cannot depend on itself")
-		case seen[d]:
-			is.addf(p, "duplicate dependency %q", d)
-		}
-		seen[d] = true
-	}
-	validateChecks(sp.Checks, "spec.checks", &is)
-	return is.Err()
 }
 
-func validateRuntime(r *Runtime, is *Issues) {
-	const base = "spec.runtime"
-	// forbid reports every field set that the chosen type does not use.
+// validateRuntime checks the runtime fields of a known adapter; base is the
+// path holding them. The adapter name itself is checked by the caller.
+func validateRuntime(r Runtime, base string, is *Issues) {
+	// forbid reports every field set that the chosen adapter does not use.
 	forbid := func(fields map[string]string) {
 		for _, name := range sortedKeys(fields) {
 			if fields[name] != "" {
-				is.addf(base+"."+name, "is not valid for runtime type %s", r.Type)
+				is.addf(base+"."+name, "is not valid for adapter %s", r.Type)
 			}
 		}
 	}
@@ -258,22 +240,17 @@ func validateRuntime(r *Runtime, is *Issues) {
 		// Every command is optional: a missing one makes the action
 		// unsupported instead of pretending to perform it.
 		forbid(merge(systemd, docker, compose))
-		for name, v := range command {
-			if len(v) > maxCmdLen {
+		for _, name := range sortedKeys(command) {
+			if len(command[name]) > maxCmdLen {
 				is.addf(base+"."+name, "exceeds %d bytes", maxCmdLen)
 			}
 		}
 	case RuntimeExternal:
 		forbid(merge(systemd, docker, compose, command))
-	case "":
-		is.addf(base+".type", "is required")
-	default:
-		is.addf(base+".type", "must be one of systemd, docker, compose, command, external")
 	}
 }
 
-func validateSource(s *Source, is *Issues) {
-	const base = "spec.source"
+func validateSource(s *Source, base string, is *Issues) {
 	switch {
 	case s.Repo == "":
 		is.addf(base+".repo", "is required")
@@ -333,29 +310,4 @@ func merge(maps ...map[string]string) map[string]string {
 		}
 	}
 	return out
-}
-
-func (s *Service) normalize() error {
-	var is Issues
-	for i := range s.Spec.Checks {
-		if s.Spec.Checks[i].Props == nil {
-			continue
-		}
-		v, err := Normalize(s.Spec.Checks[i].Props)
-		if err != nil {
-			is.addf(fmt.Sprintf("spec.checks[%d].props", i), "%v", err)
-			continue
-		}
-		s.Spec.Checks[i].Props, _ = v.(map[string]any)
-	}
-	if s.Spec.Host == "" {
-		s.Spec.Host = HostLocal
-	}
-	if s.Spec.Runtime.Type == RuntimeSystemd && s.Spec.Runtime.Scope == "" {
-		s.Spec.Runtime.Scope = ScopeSystem
-	}
-	if src := s.Spec.Source; src != nil && src.Remote == "" {
-		src.Remote = DefaultSourceRemote
-	}
-	return is.Err()
 }

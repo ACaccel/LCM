@@ -15,11 +15,11 @@ import (
 // policy builds a Policy document; spec is the YAML body of spec, indented
 // by two spaces.
 func policy(name, spec string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n" + spec
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n" + spec
 }
 
 func module(name, spec string) string {
-	return "apiVersion: lcm/v1\nkind: Module\nmetadata: { name: " + name + " }\nspec:\n" + spec
+	return "apiVersion: lcm/v2\nkind: Module\nmetadata: { name: " + name + " }\nspec:\n" + spec
 }
 
 func compile(t *testing.T, h *enginetest.Harness, doc string) (*engine.Plan, error) {

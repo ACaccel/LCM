@@ -7,7 +7,7 @@ import (
 )
 
 // Routes lists the registered method and path patterns, such as
-// "GET /api/v1/services/{svc}". It exists so tests can compare the routes
+// "GET /api/v1/resources/{resource}". It exists so tests can compare the routes
 // with the OpenAPI document.
 func (s *Server) Routes() []string {
 	s.routes()
@@ -34,7 +34,6 @@ func (s *Server) routes() http.Handler {
 	}
 	admin, session, ingest := s.requireAdmin, s.requireSession, s.requireAny
 	const v1 = "/api/v1"
-	s.machineRoutes(handle)
 
 	// Public.
 	handle("GET", v1+"/health", s.handleHealth)
@@ -49,21 +48,42 @@ func (s *Server) routes() http.Handler {
 	handle("DELETE", v1+"/tokens/{id}", session("token.revoke", s.handleRevokeToken))
 	handle("GET", v1+"/audit", admin(s.handleListAudit))
 
-	// Catalog.
-	handle("GET", v1+"/hosts", admin(s.handleListHosts))
-	handle("GET", v1+"/services", admin(s.handleListServices))
-	handle("POST", v1+"/services", admin(s.handleCreateService))
-	handle("GET", v1+"/services/{svc}", admin(s.handleGetService))
-	handle("PUT", v1+"/services/{svc}", admin(s.handlePutService))
-	handle("DELETE", v1+"/services/{svc}", admin(s.handleDeleteService))
-	handle("GET", v1+"/services/{svc}/versions", admin(s.handleServiceVersions))
-	handle("GET", v1+"/services/{svc}/versions/{v}", admin(s.handleGetServiceVersion))
-	handle("POST", v1+"/services/{svc}/restore", admin(s.handleRestoreService))
-	handle("POST", v1+"/services/{svc}/actions/{action}", admin(s.handleServiceAction))
+	// Resources of every type.
+	handle("GET", v1+"/resource-types", admin(s.handleResourceTypes))
+	handle("GET", v1+"/resources", admin(s.handleListResources))
+	handle("POST", v1+"/resources", admin(s.handleCreateResource))
+	handle("GET", v1+"/resource-archives", admin(s.handleResourceArchives))
+	handle("GET", v1+"/resources/{resource}", admin(s.handleGetResource))
+	handle("PUT", v1+"/resources/{resource}", admin(s.handlePutResource))
+	handle("GET", v1+"/resources/{resource}/versions", admin(s.handleResourceVersions))
+	handle("GET", v1+"/resources/{resource}/versions/{v}", admin(s.handleGetResourceVersion))
+	handle("POST", v1+"/resources/{resource}/restore", admin(s.handleRestoreResource))
+	handle("POST", v1+"/resources/{resource}/phase", admin(s.handleResourcePhase))
+	handle("POST", v1+"/resources/{resource}/actions/{action}", admin(s.handleResourceAction))
 	handle("GET", v1+"/actions/{id}", admin(s.handleGetAction))
-	handle("GET", v1+"/services/{svc}/deployments", admin(s.handleListDeployments))
-	handle("GET", v1+"/services/{svc}/timeline", admin(s.handleServiceTimeline))
+	handle("GET", v1+"/resources/{resource}/impact", admin(s.handleResourceImpact))
+	handle("POST", v1+"/resource-groups/actions", admin(s.handleGroupAction))
+	handle("GET", v1+"/resource-groups/actions/{id}", admin(s.handleGetGroupAction))
+	handle("GET", v1+"/resources/{resource}/deployments", admin(s.handleListDeployments))
+	handle("GET", v1+"/resources/{resource}/timeline", admin(s.handleResourceTimeline))
 	handle("GET", v1+"/timeline", admin(s.handleTimeline))
+
+	// Native observation, maintenance and durable operations (machines,
+	// routers). Writes are direct administrator requests: the components
+	// refuse them from policies.
+	handle("POST", v1+"/resources/{resource}/observe", admin(s.handleObserveResource))
+	handle("GET", v1+"/resources/{resource}/history", admin(s.handleResourceHistory))
+	handle("GET", v1+"/resources/{resource}/events", admin(s.handleResourceEvents))
+	handle("GET", v1+"/resources/{resource}/capabilities", admin(s.handleResourceCapabilities))
+	handle("GET", v1+"/resources/{resource}/maintenance", admin(s.handleResourceMaintenance))
+	handle("POST", v1+"/resources/{resource}/maintenance", admin(s.handleEnterMaintenance))
+	handle("GET", v1+"/resources/{resource}/maintenance/preview", admin(s.handleMaintenancePreview))
+	handle("POST", v1+"/resources/{resource}/maintenance/exit", admin(s.handleExitMaintenance))
+	handle("GET", v1+"/resources/{resource}/operations", admin(s.handleListOperations))
+	handle("POST", v1+"/resources/{resource}/operations", admin(s.handleSubmitOperation))
+	handle("GET", v1+"/resources/{resource}/operations/{id}", admin(s.handleGetOperation))
+	handle("POST", v1+"/resources/{resource}/operations/{id}/resolve", admin(s.handleResolveOperation))
+	handle("GET", v1+"/connections", admin(s.handleListConnections))
 
 	// Security incident state is admin-only; collectors can only submit.
 	handle("POST", v1+"/hooks/security", ingest(s.handleSecurityHook))
@@ -86,9 +106,9 @@ func (s *Server) routes() http.Handler {
 	handle("GET", v1+"/security/host/operations", admin(s.handleSecurityHostOperations))
 	handle("GET", v1+"/security/host/operations/{id}", admin(s.handleSecurityHostOperation))
 	// Monitoring.
-	handle("GET", v1+"/services/{svc}/checks", admin(s.handleServiceChecks))
-	handle("GET", v1+"/services/{svc}/checks/{check}/series", admin(s.handleCheckSeries))
-	handle("GET", v1+"/services/{svc}/summary", admin(s.handleServiceSummary))
+	handle("GET", v1+"/resources/{resource}/checks", admin(s.handleResourceChecks))
+	handle("GET", v1+"/resources/{resource}/checks/{check}/series", admin(s.handleCheckSeries))
+	handle("GET", v1+"/resources/{resource}/summary", admin(s.handleResourceSummary))
 	handle("GET", v1+"/check-types", admin(s.handleCheckTypes))
 	handle("GET", v1+"/alerts", admin(s.handleListAlerts))
 
@@ -137,8 +157,8 @@ func (s *Server) routes() http.Handler {
 	// Ingest. The webhook routes decide authentication themselves because
 	// a valid HMAC signature can stand in for a token.
 	handle("POST", v1+"/hooks/alerts/{source}", ingest(s.handleAlertHook))
-	handle("POST", v1+"/heartbeats/{svc}/{check}", ingest(s.handleHeartbeat))
-	handle("GET", v1+"/heartbeats/{svc}/{check}", ingest(s.handleHeartbeat))
+	handle("POST", v1+"/heartbeats/{resource}/{check}", ingest(s.handleHeartbeat))
+	handle("GET", v1+"/heartbeats/{resource}/{check}", ingest(s.handleHeartbeat))
 	handle("POST", v1+"/hooks/github", s.handleGitHub)
 	handle("POST", v1+"/hooks/{name}", s.handleWebhook)
 

@@ -19,8 +19,8 @@ type docker struct {
 // values contain a pipe.
 const inspectFormat = "{{.State.Status}}|{{.State.ExitCode}}|{{.State.Pid}}|{{.State.StartedAt}}|{{.Config.Image}}"
 
-func (d *docker) Status(ctx context.Context, svc *model.Service) (Status, error) {
-	name := svc.Spec.Runtime.Container
+func (d *docker) Status(ctx context.Context, rt model.Runtime) (Status, error) {
+	name := rt.Container
 	res, err := run(ctx, d.run, execx.Cmd{
 		Argv:    []string{d.opts.Docker, "inspect", "--type", "container", "--format", inspectFormat, name},
 		Timeout: d.opts.StatusTimeout,
@@ -67,24 +67,24 @@ func parseDockerInspect(name, out string) (Status, error) {
 	return st, nil
 }
 
-func (d *docker) action(ctx context.Context, svc *model.Service, verb string) error {
+func (d *docker) action(ctx context.Context, rt model.Runtime, verb string) error {
 	_, err := run(ctx, d.run, execx.Cmd{
-		Argv:    []string{d.opts.Docker, verb, svc.Spec.Runtime.Container},
+		Argv:    []string{d.opts.Docker, verb, rt.Container},
 		Timeout: d.opts.ActionTimeout,
 	})
 	return err
 }
 
-func (d *docker) Start(ctx context.Context, svc *model.Service) error {
-	return d.action(ctx, svc, "start")
+func (d *docker) Start(ctx context.Context, rt model.Runtime) error {
+	return d.action(ctx, rt, "start")
 }
 
-func (d *docker) Stop(ctx context.Context, svc *model.Service) error {
-	return d.action(ctx, svc, "stop")
+func (d *docker) Stop(ctx context.Context, rt model.Runtime) error {
+	return d.action(ctx, rt, "stop")
 }
 
-func (d *docker) Restart(ctx context.Context, svc *model.Service) error {
-	return d.action(ctx, svc, "restart")
+func (d *docker) Restart(ctx context.Context, rt model.Runtime) error {
+	return d.action(ctx, rt, "restart")
 }
 
 type compose struct {
@@ -97,8 +97,7 @@ func (c *compose) argv(rt model.Runtime, args ...string) []string {
 	return append(base, args...)
 }
 
-func (c *compose) Status(ctx context.Context, svc *model.Service) (Status, error) {
-	rt := svc.Spec.Runtime
+func (c *compose) Status(ctx context.Context, rt model.Runtime) (Status, error) {
 	res, err := run(ctx, c.run, execx.Cmd{
 		Argv:    c.argv(rt, "ps", "-a", "--format", "json"),
 		Timeout: c.opts.StatusTimeout,
@@ -164,19 +163,19 @@ func parseComposePS(project, out string) (Status, error) {
 	return st, nil
 }
 
-func (c *compose) action(ctx context.Context, svc *model.Service, args ...string) error {
-	_, err := run(ctx, c.run, execx.Cmd{Argv: c.argv(svc.Spec.Runtime, args...), Timeout: c.opts.ActionTimeout})
+func (c *compose) action(ctx context.Context, rt model.Runtime, args ...string) error {
+	_, err := run(ctx, c.run, execx.Cmd{Argv: c.argv(rt, args...), Timeout: c.opts.ActionTimeout})
 	return err
 }
 
-func (c *compose) Start(ctx context.Context, svc *model.Service) error {
-	return c.action(ctx, svc, "up", "-d")
+func (c *compose) Start(ctx context.Context, rt model.Runtime) error {
+	return c.action(ctx, rt, "up", "-d")
 }
 
-func (c *compose) Stop(ctx context.Context, svc *model.Service) error {
-	return c.action(ctx, svc, "stop")
+func (c *compose) Stop(ctx context.Context, rt model.Runtime) error {
+	return c.action(ctx, rt, "stop")
 }
 
-func (c *compose) Restart(ctx context.Context, svc *model.Service) error {
-	return c.action(ctx, svc, "restart")
+func (c *compose) Restart(ctx context.Context, rt model.Runtime) error {
+	return c.action(ctx, rt, "restart")
 }

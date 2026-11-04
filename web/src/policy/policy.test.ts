@@ -4,7 +4,7 @@ import { buildModel, parsePolicyText } from "./model";
 
 // Unknown fields, comments, a layout annotation and a future field on a node
 // must all come through every edit unchanged.
-const SRC = `apiVersion: lcm/v1
+const SRC = `apiVersion: lcm/v2
 kind: Policy
 metadata:
   name: demo

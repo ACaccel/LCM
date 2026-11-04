@@ -1,6 +1,7 @@
-// Package model defines the document types for apiVersion lcm/v1 (kinds
-// Policy, Module and Service), their strict decoding from YAML or JSON, and the
-// structural validation that needs no knowledge of node types.
+// Package model defines the document types for apiVersion lcm/v2 (kinds
+// Policy, Module and Resource), their strict decoding from YAML or JSON, the
+// structural validation that needs no knowledge of node types, and the
+// one-way conversion of lcm/v1 documents.
 package model
 
 import (
@@ -14,7 +15,11 @@ import (
 )
 
 // APIVersion is the only supported document version.
-const APIVersion = "lcm/v1"
+const APIVersion = "lcm/v2"
+
+// APIVersionV1 is the retired document version; such documents are only
+// read by the converter (see ConvertV1).
+const APIVersionV1 = "lcm/v1"
 
 // Kind is the document kind.
 type Kind string
@@ -23,6 +28,9 @@ type Kind string
 const (
 	KindPolicy Kind = "Policy"
 	KindModule Kind = "Module"
+	// KindResource is every managed object: services, the local machine
+	// and network devices alike.
+	KindResource Kind = "Resource"
 )
 
 // Node types with structural meaning that the model validates itself.
@@ -69,7 +77,7 @@ const (
 	JoinAny JoinMode = "any"
 )
 
-// Document is a decoded Policy or Module.
+// Document is a decoded Policy, Module or Resource.
 type Document interface {
 	DocKind() Kind
 	DocName() string

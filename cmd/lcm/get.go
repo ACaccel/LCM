@@ -14,8 +14,8 @@ import (
 	"github.com/ACaccel/lcm/internal/client"
 )
 
-// resource describes how `lcm get` lists and shows one kind of resource.
-type resource struct {
+// getKind describes how `lcm get` lists and shows one kind of object.
+type getKind struct {
 	// list is the collection path; show returns the path of one item, or ""
 	// when the API has no endpoint for it (the list is filtered instead).
 	list    string
@@ -24,21 +24,16 @@ type resource struct {
 	header  []string
 	row     func(m map[string]any) []string
 	perPage int
+	// typed lists accept the --type filter.
+	typed bool
 }
 
-var resources = map[string]resource{
-	"machines": {
-		list: "/machines", show: func(n string) string { return client.Path("machines", n) }, key: "name",
-		header: []string{"NAME", "PHASE", "HEALTH", "FRESH", "IDENTITY", "VERSION"},
+var getKinds = map[string]getKind{
+	"resources": {
+		list: "/resources", show: func(n string) string { return client.Path("resources", n) }, key: "name", typed: true,
+		header: []string{"NAME", "TYPE", "ADAPTER", "PHASE", "STATE", "HEALTH", "VERSION"},
 		row: func(m map[string]any) []string {
-			return []string{field(m, "name"), field(m, "phase"), field(m, "status.health"), field(m, "status.fresh"), field(m, "status.identity"), field(m, "version")}
-		},
-	},
-	"services": {
-		list: "/services", show: func(n string) string { return client.Path("services", n) }, key: "name",
-		header: []string{"NAME", "STATE", "HEALTH", "VERSION", "DEPLOYED", "MANAGED BY"},
-		row: func(m map[string]any) []string {
-			return []string{field(m, "name"), field(m, "state"), field(m, "health"), field(m, "version"), short(field(m, "deployedVersion")), managed(m)}
+			return []string{field(m, "name"), field(m, "type"), field(m, "adapter"), field(m, "phase"), field(m, "state"), health(m), field(m, "version")}
 		},
 	},
 	"policies": {
@@ -64,6 +59,13 @@ var resources = map[string]resource{
 		header: []string{"NAME", "OWNER", "ACQUIRED", "EXPIRES"},
 		row: func(m map[string]any) []string {
 			return []string{field(m, "name"), field(m, "owner"), when(m, "acquiredAt"), when(m, "expiresAt")}
+		},
+	},
+	"connections": {
+		list: "/connections", key: "name",
+		header: []string{"NAME", "TYPE", "ALLOW ACTIONS", "ALLOW RESOURCES", "USED BY"},
+		row: func(m map[string]any) []string {
+			return []string{field(m, "name"), field(m, "type"), list(m, "allowActions", "-"), list(m, "allowResources", "any"), list(m, "resources", "-")}
 		},
 	},
 	"sources": {
@@ -136,6 +138,31 @@ func managed(m map[string]any) string {
 	return src
 }
 
+// health renders the health of a resource summary (a string) or detail (an
+// object with a status).
+func health(m map[string]any) string {
+	if _, ok := m["health"].(map[string]any); ok {
+		return field(m, "health.status")
+	}
+	return field(m, "health")
+}
+
+// list renders a string array field comma-separated, or empty when it has
+// no items.
+func list(m map[string]any, key, empty string) string {
+	items, _ := m[key].([]any)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		if s, ok := it.(string); ok {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return empty
+	}
+	return strings.Join(out, ",")
+}
+
 func triggers(m map[string]any) string {
 	list, _ := m["triggers"].([]any)
 	var types []string
@@ -154,16 +181,20 @@ func (a *app) get(ctx context.Context, args []string) error {
 	fs, conn := a.clientFlags("get")
 	format := fs.String("o", "table", "output format: table, json or yaml")
 	limit := fs.Int("limit", 0, "maximum number of items to list (default 100, 50 for runs)")
+	typ := fs.String("type", "", "resource type to list: service, machine or router (resources only)")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) < 1 || len(pos) > 2 {
-		return usagef("get: expected <services|machines|policies|runs|locks|sources> [name]")
+		return usagef("get: expected <resources|policies|runs|locks|sources|connections> [name]")
 	}
-	res, ok := resources[pos[0]]
+	res, ok := getKinds[pos[0]]
 	if !ok {
-		return usagef("get: unknown resource %q; expected services, machines, policies, runs, locks or sources", pos[0])
+		return usagef("get: unknown kind %q; expected resources, policies, runs, locks, sources or connections", pos[0])
+	}
+	if *typ != "" && !res.typed {
+		return usagef("get: --type only applies to resources")
 	}
 	switch *format {
 	case "table", "json", "yaml":
@@ -195,7 +226,7 @@ func (a *app) get(ctx context.Context, args []string) error {
 				max = res.perPage
 			}
 		}
-		all, truncated, err := listAll(ctx, cl, res, max)
+		all, truncated, err := listAll(ctx, cl, res, max, *typ)
 		if err != nil {
 			return apiError(err)
 		}
@@ -218,11 +249,15 @@ func (a *app) get(ctx context.Context, args []string) error {
 	return a.render(res, items, single && res.show != nil, *format)
 }
 
-// listAll follows the cursor until max items are collected.
-func listAll(ctx context.Context, cl *client.Client, res resource, max int) (items []map[string]any, truncated bool, err error) {
+// listAll follows the cursor until max items are collected. typ, when set,
+// filters resources by type.
+func listAll(ctx context.Context, cl *client.Client, res getKind, max int, typ string) (items []map[string]any, truncated bool, err error) {
 	cursor := ""
 	for {
 		q := url.Values{"limit": {strconv.Itoa(min(max-len(items), 500))}}
+		if typ != "" {
+			q.Set("type", typ)
+		}
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
@@ -244,7 +279,7 @@ func listAll(ctx context.Context, cl *client.Client, res resource, max int) (ite
 	}
 }
 
-func (a *app) render(res resource, items []map[string]any, one bool, format string) error {
+func (a *app) render(res getKind, items []map[string]any, one bool, format string) error {
 	switch format {
 	case "json", "yaml":
 		var v any = items

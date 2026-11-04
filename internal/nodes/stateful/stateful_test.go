@@ -14,7 +14,7 @@ import (
 )
 
 func policy(name, nodes string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  concurrency: { mode: parallel, limit: 10 }\n  nodes:\n" + nodes
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  concurrency: { mode: parallel, limit: 10 }\n  nodes:\n" + nodes
 }
 
 type env struct {

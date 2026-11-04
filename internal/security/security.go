@@ -231,14 +231,14 @@ func (m *Manager) ingest(ctx context.Context, e Event, native bool) (Receipt, er
 			return err
 		}
 		var count int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machines WHERE id=? AND phase='managed'`, e.MachineID).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resources WHERE id=? AND type='machine' AND phase='managed'`, e.MachineID).Scan(&count); err != nil {
 			return err
 		}
 		if count != 1 {
 			return model.Issues{{Path: "machineId", Message: "registered managed Machine id is required"}}
 		}
 		if e.Service != "" {
-			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM services WHERE name=?`, e.Service).Scan(&count); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resources WHERE name=? AND type='service' AND phase!='unmanaged'`, e.Service).Scan(&count); err != nil {
 				return err
 			}
 			if count != 1 {

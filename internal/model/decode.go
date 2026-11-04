@@ -14,9 +14,9 @@ import (
 // MaxDocumentSize bounds the accepted document size.
 const MaxDocumentSize = 4 << 20
 
-// Decode parses a Policy, Module or Service from YAML or JSON (JSON is valid YAML).
-// Unknown fields are rejected, values are normalized (see Normalize) and the
-// document is structurally validated. Errors are Issues.
+// Decode parses a Policy, Module or Resource from YAML or JSON (JSON is
+// valid YAML). Unknown fields are rejected, values are normalized (see
+// Normalize) and the document is structurally validated. Errors are Issues.
 func Decode(data []byte) (Document, error) {
 	if len(data) > MaxDocumentSize {
 		return nil, Issues{{Message: fmt.Sprintf("document exceeds %d bytes", MaxDocumentSize)}}
@@ -28,20 +28,16 @@ func Decode(data []byte) (Document, error) {
 	if err := decodeOne(data, &head, false); err != nil {
 		return nil, err
 	}
-	if head.APIVersion != APIVersion {
+	switch head.APIVersion {
+	case APIVersion:
+	case APIVersionV1:
+		return nil, Issues{{Path: "apiVersion", Message: fmt.Sprintf("%s documents are no longer accepted; convert them to %s with \"lcm convert\"", APIVersionV1, APIVersion)}}
+	default:
 		return nil, Issues{{Path: "apiVersion", Message: fmt.Sprintf("must be %q", APIVersion)}}
 	}
 	switch head.Kind {
-	case KindMachine:
-		var m Machine
-		if err := decodeOne(data, &m, true); err != nil {
-			return nil, err
-		}
-		m.normalize()
-		if err := ValidateMachine(&m); err != nil {
-			return nil, err
-		}
-		return &m, nil
+	case KindResource:
+		return decodeResource(data)
 	case KindPolicy:
 		var p Policy
 		if err := decodeOne(data, &p, true); err != nil {
@@ -66,20 +62,8 @@ func Decode(data []byte) (Document, error) {
 			return nil, err
 		}
 		return &m, nil
-	case KindService:
-		var sv Service
-		if err := decodeOne(data, &sv, true); err != nil {
-			return nil, err
-		}
-		if err := sv.normalize(); err != nil {
-			return nil, err
-		}
-		if err := ValidateService(&sv); err != nil {
-			return nil, err
-		}
-		return &sv, nil
 	}
-	return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q, %q, %q or %q", KindPolicy, KindModule, KindService, KindMachine)}}
+	return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q, %q or %q", KindPolicy, KindModule, KindResource)}}
 }
 
 // DecodePolicy decodes data and requires kind Policy.
@@ -106,19 +90,6 @@ func DecodeModule(data []byte) (*Module, error) {
 		return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q", KindModule)}}
 	}
 	return m, nil
-}
-
-// DecodeService decodes data and requires kind Service.
-func DecodeService(data []byte) (*Service, error) {
-	doc, err := Decode(data)
-	if err != nil {
-		return nil, err
-	}
-	s, ok := doc.(*Service)
-	if !ok {
-		return nil, Issues{{Path: "kind", Message: fmt.Sprintf("must be %q", KindService)}}
-	}
-	return s, nil
 }
 
 // Encode returns the canonical JSON form of a document, which Decode reads

@@ -32,47 +32,53 @@ func (e *entry) view(effective bool) CheckStatus {
 		failures = e.failRun
 	}
 	return CheckStatus{
-		Service: e.service, Name: e.check.Name, Type: e.check.Type, Critical: e.check.IsCritical(),
+		Resource: e.resource, Name: e.check.Name, Type: e.check.Type, Critical: e.check.IsCritical(),
 		Interval: e.check.Interval.D(), Status: st, Stale: e.stale, Since: e.since, Message: e.lastMessage,
 		LastResult: e.lastAt, LastLatency: e.lastLatency, ConsecutiveFailures: failures,
 	}
 }
 
-func (s *service) view() ServiceStatus {
-	out := ServiceStatus{
-		Service: s.name, Labels: cloneLabels(s.labels), Health: healthOf(s.checks, true), Since: s.since,
-		Checks: make([]CheckStatus, 0, len(s.checks)),
+func (r *resource) view() ResourceStatus {
+	out := ResourceStatus{
+		Resource: r.name, Type: r.typ, Labels: cloneLabels(r.labels), Health: r.combined(true), Since: r.since,
+		Checks: make([]CheckStatus, 0, len(r.checks)),
 	}
-	for _, e := range s.checks {
+	for _, e := range r.checks {
 		out.Checks = append(out.Checks, e.view(true))
 	}
 	slices.SortFunc(out.Checks, func(a, b CheckStatus) int { return strings.Compare(a.Name, b.Name) })
+	if r.native != nil {
+		n := *r.native
+		n.Reasons = slices.Clone(n.Reasons)
+		out.Native = &n
+	}
 	return out
 }
 
-// Services returns the current status of every service, sorted by name.
-// Statuses restored after a restart read as unknown until a fresh result
-// arrives if they were stale.
-func (m *Monitor) Services() []ServiceStatus {
+// Resources returns the current status of every resource with checks or
+// native health, sorted by name. Check statuses restored after a restart
+// read as unknown until a fresh result arrives if they were stale.
+func (m *Monitor) Resources() []ResourceStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]ServiceStatus, 0, len(m.services))
-	for _, s := range m.services {
-		out = append(out, s.view())
+	out := make([]ResourceStatus, 0, len(m.resources))
+	for _, r := range m.resources {
+		out = append(out, r.view())
 	}
-	slices.SortFunc(out, func(a, b ServiceStatus) int { return strings.Compare(a.Service, b.Service) })
+	slices.SortFunc(out, func(a, b ResourceStatus) int { return strings.Compare(a.Resource, b.Resource) })
 	return out
 }
 
-// Service returns the status of one service and its checks.
-func (m *Monitor) Service(name string) (ServiceStatus, bool) {
+// Resource returns the status of one resource. It is absent when the
+// resource has neither checks nor native health.
+func (m *Monitor) Resource(name string) (ResourceStatus, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s := m.services[name]
-	if s == nil {
-		return ServiceStatus{}, false
+	r := m.resources[name]
+	if r == nil {
+		return ResourceStatus{}, false
 	}
-	return s.view(), true
+	return r.view(), true
 }
 
 // Point is one sample of a series: a single result (Count 1) or a bucket
@@ -102,7 +108,7 @@ type Series struct {
 // Series returns the history of a check over [from, to) as at most
 // maxPoints points. Ranges of up to RawSeriesMaxRange that lie within raw
 // retention use raw results; anything else uses the one-minute rollups.
-func (m *Monitor) Series(ctx context.Context, service, check string, from, to time.Time, maxPoints int) (Series, error) {
+func (m *Monitor) Series(ctx context.Context, resource, check string, from, to time.Time, maxPoints int) (Series, error) {
 	if !to.After(from) {
 		return Series{}, ErrInvalidRange
 	}
@@ -112,7 +118,7 @@ func (m *Monitor) Series(ctx context.Context, service, check string, from, to ti
 	case maxPoints > MaxSeriesPoints:
 		maxPoints = MaxSeriesPoints
 	}
-	id := checkID(service, check)
+	id := checkID(resource, check)
 	now := m.clock.Now()
 	if to.Sub(from) <= RawSeriesMaxRange && !from.Before(now.Add(-m.rawRetention)) {
 		return m.rawSeries(ctx, id, from, to, maxPoints)
@@ -280,7 +286,7 @@ func (b *buckets) points() []Point {
 	return out
 }
 
-// Summary is the uptime and latency of a check or service over a window,
+// Summary is the uptime and latency of a check or resource over a window,
 // computed from one-minute rollups.
 type Summary struct {
 	Window   time.Duration `json:"window"`
@@ -296,17 +302,17 @@ type Summary struct {
 
 // CheckSummary summarizes one check over the window ending now. Typical
 // windows are 24h, 7d and 30d; the window is limited by rollup retention.
-func (m *Monitor) CheckSummary(ctx context.Context, service, check string, window time.Duration) (Summary, error) {
-	id := checkID(service, check)
+func (m *Monitor) CheckSummary(ctx context.Context, resource, check string, window time.Duration) (Summary, error) {
+	id := checkID(resource, check)
 	return m.summary(ctx, window, `check_id = ?`, id)
 }
 
-// ServiceSummary summarizes all checks of a service over the window,
+// ResourceSummary summarizes all checks of a resource over the window,
 // weighting every run equally.
-func (m *Monitor) ServiceSummary(ctx context.Context, service string, window time.Duration) (Summary, error) {
-	// "service/" up to "service0" ('0' follows '/') spans exactly the
-	// check ids of the service and uses the primary key.
-	return m.summary(ctx, window, `check_id >= ? AND check_id < ?`, service+"/", service+"0")
+func (m *Monitor) ResourceSummary(ctx context.Context, resource string, window time.Duration) (Summary, error) {
+	// "resource/" up to "resource0" ('0' follows '/') spans exactly the
+	// check ids of the resource and uses the primary key.
+	return m.summary(ctx, window, `check_id >= ? AND check_id < ?`, resource+"/", resource+"0")
 }
 
 func (m *Monitor) summary(ctx context.Context, window time.Duration, where string, args ...any) (Summary, error) {

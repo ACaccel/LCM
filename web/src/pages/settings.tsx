@@ -2,12 +2,13 @@ import { NavLink, useParams } from "react-router";
 import { PageHead } from "../components/ui";
 import { s } from "../strings";
 import { AccountPanel } from "./settings/account";
+import { ConnectionsPanel } from "./settings/connections";
 import { LocksPanel } from "./settings/locks";
 import { OwnershipPanel } from "./settings/ownership";
 import { SourcesPanel } from "./settings/sources";
 import { TokensPanel } from "./settings/tokens";
 
-const TABS = ["tokens", "sources", "ownership", "locks", "account"] as const;
+const TABS = ["tokens", "sources", "ownership", "locks", "connections", "account"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -27,6 +28,7 @@ export function SettingsPage() {
       {active === "sources" && <SourcesPanel />}
       {active === "ownership" && <OwnershipPanel />}
       {active === "locks" && <LocksPanel />}
+      {active === "connections" && <ConnectionsPanel />}
       {active === "account" && <AccountPanel />}
     </div>
   );

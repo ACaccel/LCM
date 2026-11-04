@@ -6,7 +6,7 @@ export function ValidationReport({ valid, issues, warnings }: { valid: boolean; 
   return (
     <div className="stack" aria-live="polite">
       <div className={`banner ${valid ? "ok" : "error"}`}>
-        {valid ? s.services.valid : s.services.invalid}
+        {valid ? s.common.valid : s.common.invalid}
         {issues.length > 0 && <IssueList issues={issues} />}
       </div>
       {warnings.length > 0 && (

@@ -93,7 +93,7 @@ type RunInfo struct {
 	Trigger any
 }
 
-// Var is an extra top-level expression variable such as service or state.
+// Var is an extra top-level expression variable such as resource or state.
 // Value is called (outside engine locks) each time a node whose props
 // reference the variable is about to run; it must be safe for concurrent
 // use and return a JSON-compatible value.

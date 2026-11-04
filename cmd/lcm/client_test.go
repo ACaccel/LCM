@@ -107,13 +107,15 @@ func writeFile(t *testing.T, dir, name, content string) string {
 	return p
 }
 
+// svcDoc returns a command service. extra is appended to the spec; lines
+// indented by four spaces continue the config.
 func svcDoc(name, extra string) string {
-	return "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: " + name + " }\nspec:\n" +
-		"  runtime: { type: command, start: " + name + "-start, stop: " + name + "-stop, restart: " + name + "-restart, status: " + name + "-status }\n" + extra
+	return "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: " + name + " }\nspec:\n  type: service\n  adapter: command\n  config:\n" +
+		"    start: " + name + "-start\n    stop: " + name + "-stop\n    restart: " + name + "-restart\n    status: " + name + "-status\n" + extra
 }
 
 func polDoc(name, nodes string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" + nodes
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" + nodes
 }
 
 const manualEcho = `    - { id: start, type: trigger.manual, next: { out: [echo] } }
@@ -129,42 +131,42 @@ func TestApplyCommand(t *testing.T) {
 	writeFile(t, dir, "notes.txt", "ignored")
 
 	// A dry run lists what would happen, with diffs, and writes nothing.
-	r := s.cli("", "apply", "-f", dir, "--dry-run").want(t, 0, "create    Service/web  "+filepath.Join(dir, "services/web.yaml"),
-		"create    Policy/echo", "    +kind: Service", "2 documents: 2 create (dry run)")
+	r := s.cli("", "apply", "-f", dir, "--dry-run").want(t, 0, "create    Resource/web  "+filepath.Join(dir, "services/web.yaml"),
+		"create    Policy/echo", "    +kind: Resource", "2 documents: 2 create (dry run)")
 	if strings.Contains(r.stdout, "echo.test.yaml") {
 		t.Fatalf("a test file was applied:\n%s", r.stdout)
 	}
-	s.cli("", "get", "services").want(t, 0)
-	if got := s.cli("", "get", "services"); strings.Contains(got.stdout, "web") {
+	s.cli("", "get", "resources").want(t, 0)
+	if got := s.cli("", "get", "resources"); strings.Contains(got.stdout, "web") {
 		t.Fatalf("dry run created a service:\n%s", got.stdout)
 	}
 
 	s.cli("", "apply", "-f", dir).want(t, 0, "2 documents: 2 create")
-	s.cli("", "get", "services").want(t, 0, "web", "registered")
+	s.cli("", "get", "resources").want(t, 0, "web", "registered")
 	s.cli("", "apply", "-f", dir).want(t, 0, "unchanged", "2 documents: 2 unchanged")
 
 	// An edited file shows its diff and updates.
-	writeFile(t, dir, "services/web.yaml", svcDoc("web", "  dependsOn: [db]\n"))
-	s.cli("", "apply", "-f", filepath.Join(dir, "services")).want(t, 0, "update    Service/web", "    +    - db", "1 documents: 1 update")
+	writeFile(t, dir, "services/web.yaml", svcDoc("web", "  relations: [{ type: dependsOn, target: db }]\n"))
+	s.cli("", "apply", "-f", filepath.Join(dir, "services")).want(t, 0, "update    Resource/web", "target: db", "1 documents: 1 update")
 
 	// Several -f and standard input.
 	extra := writeFile(t, t.TempDir(), "api.yaml", svcDoc("api", ""))
-	s.cli(svcDoc("cache", ""), "apply", "-f", extra, "-f", "-").want(t, 0, "create    Service/api", "create    Service/cache  -")
+	s.cli(svcDoc("cache", ""), "apply", "-f", extra, "-f", "-").want(t, 0, "create    Resource/api", "create    Resource/cache  -")
 }
 
 func TestApplyProblems(t *testing.T) {
 	s := newServer(t)
 	dir := t.TempDir()
 	good := writeFile(t, dir, "good.yaml", svcDoc("good", ""))
-	bad := writeFile(t, dir, "bad.yaml", "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: bad }\nspec:\n  host: mars\n  runtime: { type: command, start: a, stop: b, restart: c, status: d }\n")
-	broken := writeFile(t, dir, "broken.yaml", "kind: Service\nmetadata: [\n")
+	bad := writeFile(t, dir, "bad.yaml", "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: bad }\nspec:\n  type: service\n  adapter: systemd\n")
+	broken := writeFile(t, dir, "broken.yaml", "kind: Resource\nmetadata: [\n")
 
-	r := s.cli("", "apply", "-f", good, "-f", bad).want(t, 3, "create    Service/good", "failed    Service/bad  "+bad, "error: spec.host: only \"local\" is supported")
+	r := s.cli("", "apply", "-f", good, "-f", bad).want(t, 3, "create    Resource/good", "failed    Resource/bad  "+bad, "error: spec.config")
 	if !strings.Contains(r.stderr, "1 of 2 documents were not applied") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
 	// The good document was applied anyway.
-	s.cli("", "get", "services", "good").want(t, 0, "good")
+	s.cli("", "get", "resources", "good").want(t, 0, "good")
 
 	// A file that is not YAML at all is rejected by the server as a whole.
 	r = s.cli("", "apply", "-f", broken).want(t, 1)
@@ -182,15 +184,15 @@ func TestApplyProblems(t *testing.T) {
 func TestExportCommand(t *testing.T) {
 	s := newServer(t)
 	dir := t.TempDir()
-	s.cli("", "apply", "-f", writeFile(t, dir, "all.yaml", svcDoc("web", "")+"---\n"+svcDoc("api", "  dependsOn: [web]\n")+"---\n"+polDoc("echo", manualEcho))).want(t, 0)
+	s.cli("", "apply", "-f", writeFile(t, dir, "all.yaml", svcDoc("web", "")+"---\n"+svcDoc("api", "  relations: [{ type: dependsOn, target: web }]\n")+"---\n"+polDoc("echo", manualEcho))).want(t, 0)
 
-	all := s.cli("", "export").want(t, 0, "kind: Service", "kind: Policy")
-	one := s.cli("", "export", "service/web").want(t, 0, "name: web")
+	all := s.cli("", "export").want(t, 0, "kind: Resource", "kind: Policy")
+	one := s.cli("", "export", "resource/web").want(t, 0, "name: web")
 	if strings.Contains(one.stdout, "name: api") {
-		t.Fatalf("export service/web =\n%s", one.stdout)
+		t.Fatalf("export resource/web =\n%s", one.stdout)
 	}
 	s.cli("", "export", "policies").want(t, 0, "name: echo")
-	s.cli("", "export", "service/ghost").want(t, 1)
+	s.cli("", "export", "resource/ghost").want(t, 1)
 	s.cli("", "export", "host").want(t, 2)
 	s.cli("", "export", "a", "b").want(t, 2)
 
@@ -205,13 +207,13 @@ func TestValidateCommand(t *testing.T) {
 	good := writeFile(t, dir, "good.yaml", svcDoc("good", "")+"---\n"+polDoc("echo", manualEcho))
 	bad := writeFile(t, dir, "bad.yaml", polDoc("loop", "    - { id: start, type: trigger.manual, next: { out: [ghost] } }\n"))
 
-	s.cli("", "validate", "-f", good).want(t, 0, "valid     Service/good", "valid     Policy/echo", "2 documents, 2 valid")
+	s.cli("", "validate", "-f", good).want(t, 0, "valid     Resource/good", "valid     Policy/echo", "2 documents, 2 valid")
 	r := s.cli("", "validate", "-f", good, "-f", bad).want(t, 3, "invalid   Policy/loop", "error:")
 	if !strings.Contains(r.stderr, "1 of 3 documents are invalid") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
 	// Validating never writes.
-	if got := s.cli("", "get", "services"); strings.Contains(got.stdout, "good") {
+	if got := s.cli("", "get", "resources"); strings.Contains(got.stdout, "good") {
 		t.Fatalf("validate created a service:\n%s", got.stdout)
 	}
 	s.cli("", "validate").want(t, 2)
@@ -223,7 +225,7 @@ func TestGetCommand(t *testing.T) {
 	s.cli("", "apply", "-f", writeFile(t, dir, "all.yaml", svcDoc("web", "")+"---\n"+svcDoc("api", "")+"---\n"+polDoc("echo", manualEcho))).want(t, 0)
 	s.cli("", "run", "echo", "--wait", "--event", `{"name":"x"}`).want(t, 0)
 
-	table := s.cli("", "get", "services").want(t, 0, "NAME", "STATE", "MANAGED BY", "api", "web", "registered")
+	table := s.cli("", "get", "resources").want(t, 0, "NAME", "TYPE", "STATE", "HEALTH", "api", "web", "service", "command", "registered")
 	if strings.Contains(table.stdout, "\x1b") {
 		t.Fatal("table output has colour codes")
 	}
@@ -235,22 +237,23 @@ func TestGetCommand(t *testing.T) {
 			t.Fatalf("misaligned table:\n%s", table.stdout)
 		}
 	}
-	s.cli("", "get", "services", "web").want(t, 0, "web")
-	if got := s.cli("", "get", "services", "web"); strings.Contains(got.stdout, "api") {
+	s.cli("", "get", "resources", "web").want(t, 0, "web")
+	if got := s.cli("", "get", "resources", "web"); strings.Contains(got.stdout, "api") {
 		t.Fatalf("named get listed another service:\n%s", got.stdout)
 	}
 	s.cli("", "get", "policies").want(t, 0, "echo", "manual", "succeeded")
 	s.cli("", "get", "runs").want(t, 0, "echo", "succeeded", "ID")
 	s.cli("", "get", "locks").want(t, 0, "NAME")
 	s.cli("", "get", "sources").want(t, 0, "NAME", "REPO")
+	s.cli("", "get", "connections").want(t, 0, "NAME", "ALLOW ACTIONS", "USED BY")
 
 	var list []map[string]any
-	out := s.cli("", "get", "services", "-o", "json").want(t, 0)
+	out := s.cli("", "get", "resources", "-o", "json").want(t, 0)
 	if err := json.Unmarshal([]byte(out.stdout), &list); err != nil || len(list) != 2 || list[0]["name"] != "api" {
 		t.Fatalf("json output: %v\n%s", err, out.stdout)
 	}
 	var one map[string]any
-	out = s.cli("", "get", "services", "web", "-o", "json").want(t, 0)
+	out = s.cli("", "get", "resources", "web", "-o", "json").want(t, 0)
 	if err := json.Unmarshal([]byte(out.stdout), &one); err != nil || one["name"] != "web" || one["document"] == nil {
 		t.Fatalf("json detail: %v\n%s", err, out.stdout)
 	}
@@ -261,16 +264,20 @@ func TestGetCommand(t *testing.T) {
 	}
 
 	// --limit shows a prefix and says so.
-	r := s.cli("", "get", "services", "--limit", "1").want(t, 0, "api")
+	r := s.cli("", "get", "resources", "--limit", "1").want(t, 0, "api")
 	if strings.Contains(r.stdout, "web") || !strings.Contains(r.stderr, "showing the first 1") {
 		t.Fatalf("limit: %+v", r)
 	}
 
-	s.cli("", "get", "services", "ghost").want(t, 1)
+	s.cli("", "get", "resources", "ghost").want(t, 1)
 	s.cli("", "get", "locks", "ghost").want(t, 1)
 	s.cli("", "get", "hosts").want(t, 2)
+	s.cli("", "get", "services").want(t, 2)
+	s.cli("", "get", "policies", "--type", "service").want(t, 2)
+	s.cli("", "get", "resources", "--type", "service").want(t, 0, "api", "web")
+	s.cli("", "get", "resources", "--type", "bogus").want(t, 1)
 	s.cli("", "get").want(t, 2)
-	s.cli("", "get", "services", "-o", "xml").want(t, 2)
+	s.cli("", "get", "resources", "-o", "xml").want(t, 2)
 }
 
 func TestRunCommand(t *testing.T) {
@@ -294,28 +301,28 @@ func TestRunCommand(t *testing.T) {
 	s.cli("", "run", "a", "b").want(t, 2)
 }
 
-func TestActionCommand(t *testing.T) {
+func TestResourceActionCommand(t *testing.T) {
 	s := newServer(t)
-	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("web", "  jobs:\n    reindex: { command: reindex.sh }\n"))).want(t, 0)
+	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("web", "    jobs:\n      reindex: { command: reindex.sh }\n"))).want(t, 0)
 
-	s.cli("", "action", "web", "start", "--dry-run").want(t, 0, "plan: start web (registered -> running)", "1. ")
+	s.cli("", "resource", "action", "web", "start", "--dry-run").want(t, 0, "plan: start web (registered -> running)", "1. ")
 	if n := len(s.runner.Calls()); n != 0 {
 		t.Fatalf("dry run ran %d commands", n)
 	}
-	s.cli("", "action", "web", "start", "--wait").want(t, 0, "started (start web)", "succeeded", "registered -> running")
-	s.cli("", "get", "services", "web").want(t, 0, "running")
-	s.cli("", "action", "web", "run-job", "--job", "reindex", "--wait").want(t, 0, "succeeded")
-	s.cli("", "action", "web", "restart")
+	s.cli("", "resource", "action", "web", "start", "--wait").want(t, 0, "started (start web)", "succeeded", "registered -> running")
+	s.cli("", "get", "resources", "web").want(t, 0, "running")
+	s.cli("", "resource", "action", "web", "run-job", "--job", "reindex", "--wait").want(t, 0, "succeeded")
+	s.cli("", "resource", "action", "web", "restart")
 
-	s.cli("", "action", "web", "explode").want(t, 1)
-	s.cli("", "action", "ghost", "start").want(t, 1)
-	s.cli("", "action", "web", "start").want(t, 1) // already running
-	s.cli("", "action", "web").want(t, 2)
-	s.cli("", "action", "web", "run-job").want(t, 1)
+	s.cli("", "resource", "action", "web", "explode").want(t, 1)
+	s.cli("", "resource", "action", "ghost", "start").want(t, 1)
+	s.cli("", "resource", "action", "web", "start").want(t, 1) // already running
+	s.cli("", "resource", "action", "web").want(t, 2)
+	s.cli("", "resource", "action", "web", "run-job").want(t, 1)
 
 	// A failing command is reported by --wait.
 	s.runner.Reply("web-stop", "boom", 1)
-	r := s.cli("", "action", "web", "stop", "--wait").want(t, 1)
+	r := s.cli("", "resource", "action", "web", "stop", "--wait").want(t, 1)
 	if !strings.Contains(r.stderr, "failed") {
 		t.Fatalf("failed action: %+v", r)
 	}
@@ -330,33 +337,33 @@ func TestClientCredentials(t *testing.T) {
 	}
 	none := map[string]string{"LCM_TOKEN": ""}
 
-	r := run(none, "get", "services").want(t, 2)
+	r := run(none, "get", "resources").want(t, 2)
 	if !strings.Contains(r.stderr, "no API token") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
 
 	file := writeFile(t, dir, "token", "\n"+s.token+"\n")
-	run(none, "get", "services", "--token-file", file).want(t, 0)
-	run(map[string]string{"LCM_TOKEN": "", "LCM_TOKEN_FILE": file}, "get", "services").want(t, 0)
+	run(none, "get", "resources", "--token-file", file).want(t, 0)
+	run(map[string]string{"LCM_TOKEN": "", "LCM_TOKEN_FILE": file}, "get", "resources").want(t, 0)
 	// The flag wins over the environment.
 	bad := writeFile(t, dir, "bad-token", "lcm_wrong\n")
-	run(map[string]string{"LCM_TOKEN_FILE": file}, "get", "services", "--token-file", bad).want(t, 1)
+	run(map[string]string{"LCM_TOKEN_FILE": file}, "get", "resources", "--token-file", bad).want(t, 1)
 
 	// A token file that others can read is refused, and says how to fix it.
 	open := writeFile(t, dir, "open-token", s.token)
 	if err := os.Chmod(open, 0o644); err != nil { //nolint:gosec // the test needs a readable file to prove it is refused
 		t.Fatal(err)
 	}
-	r = run(none, "get", "services", "--token-file", open).want(t, 1)
+	r = run(none, "get", "resources", "--token-file", open).want(t, 1)
 	if !strings.Contains(r.stderr, "chmod 600") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
-	run(none, "get", "services", "--token-file", filepath.Join(dir, "absent")).want(t, 1)
+	run(none, "get", "resources", "--token-file", filepath.Join(dir, "absent")).want(t, 1)
 	empty := writeFile(t, dir, "empty", " \n")
-	run(none, "get", "services", "--token-file", empty).want(t, 1)
+	run(none, "get", "resources", "--token-file", empty).want(t, 1)
 
 	// A wrong token is the server's 401.
-	r = run(map[string]string{"LCM_TOKEN": "lcm_nope"}, "get", "services").want(t, 1)
+	r = run(map[string]string{"LCM_TOKEN": "lcm_nope"}, "get", "resources").want(t, 1)
 	if !strings.Contains(r.stderr, "HTTP 401") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
@@ -366,17 +373,17 @@ func TestClientCredentials(t *testing.T) {
 	}
 
 	// Server URL: flag and environment, and a bad value.
-	run(map[string]string{"LCM_SERVER": "http://127.0.0.1:1"}, "get", "services").want(t, 1)
-	run(map[string]string{"LCM_SERVER": "http://127.0.0.1:1"}, "get", "services", "--server", s.url).want(t, 0)
-	run(map[string]string{"LCM_SERVER": "not a url"}, "get", "services").want(t, 2)
-	run(map[string]string{"LCM_SERVER": "ftp://x"}, "get", "services").want(t, 2)
+	run(map[string]string{"LCM_SERVER": "http://127.0.0.1:1"}, "get", "resources").want(t, 1)
+	run(map[string]string{"LCM_SERVER": "http://127.0.0.1:1"}, "get", "resources", "--server", s.url).want(t, 0)
+	run(map[string]string{"LCM_SERVER": "not a url"}, "get", "resources").want(t, 2)
+	run(map[string]string{"LCM_SERVER": "ftp://x"}, "get", "resources").want(t, 2)
 
 	// A server that redirects must not receive the token elsewhere.
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://127.0.0.1:1/", http.StatusFound)
 	}))
 	defer redirector.Close()
-	r = run(map[string]string{"LCM_SERVER": redirector.URL}, "get", "services").want(t, 1)
+	r = run(map[string]string{"LCM_SERVER": redirector.URL}, "get", "resources").want(t, 1)
 	if !strings.Contains(r.stderr, "redirected") {
 		t.Fatalf("stderr = %q", r.stderr)
 	}
@@ -385,7 +392,7 @@ func TestClientCredentials(t *testing.T) {
 func TestClientCommandsInUsage(t *testing.T) {
 	a, out, errb, _ := newApp(t, "")
 	r := runCLI(t, a, out, errb, "help")
-	for _, want := range []string{"apply -f", "export [kind", "validate -f", "get services", "run <policy>", "action <service>", "LCM_TOKEN", "Exit status"} {
+	for _, want := range []string{"apply -f", "export [kind", "validate -f", "get resources", "run <policy>", "resource <command>", "LCM_TOKEN", "Exit status"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("usage lacks %q", want)
 		}
@@ -393,5 +400,61 @@ func TestClientCommandsInUsage(t *testing.T) {
 	// Help output of a client command goes to stderr and succeeds.
 	if r := runCLI(t, a, out, errb, "apply", "-h"); r.code != 0 || !strings.Contains(r.stderr, "-dry-run") {
 		t.Errorf("apply -h: %+v", r)
+	}
+}
+
+func TestResourcePhaseCommand(t *testing.T) {
+	s := newServer(t)
+	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("web", ""))).want(t, 0)
+	write := func(command string) []string {
+		return []string{"resource", command, "web", "--version", "1", "--reason", "decommission", "--confirm", "web", "--acknowledge"}
+	}
+	s.cli("", write("retire")...).want(t, 0, `"phase": "retired"`)
+	s.cli("", "get", "resources", "web").want(t, 0, "retired")
+	s.cli("", write("resume")...).want(t, 0, `"phase": "managed"`)
+	s.cli("", write("retire")...).want(t, 0)
+	s.cli("", write("unmanage")...).want(t, 0, `"phase": "unmanaged"`)
+	s.cli("", "get", "resources", "web").want(t, 1)
+	// A stale version is refused by the server, not retried.
+	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("api", ""))).want(t, 0)
+	r := s.cli("", "resource", "retire", "api", "--version", "9", "--reason", "x", "--confirm", "api", "--acknowledge").want(t, 1)
+	if !strings.Contains(r.stderr, "version") {
+		t.Fatalf("stale version: %+v", r)
+	}
+}
+
+func TestResourceImpactAndGroupCommands(t *testing.T) {
+	s := newServer(t)
+	dir := t.TempDir()
+	labeled := func(name, extra string) string {
+		return strings.Replace(svcDoc(name, extra), "metadata: { name: "+name+" }", "metadata: { name: "+name+", labels: { tier: web } }", 1)
+	}
+	s.cli("", "apply", "-f", writeFile(t, dir, "db.yaml", labeled("db", ""))).want(t, 0)
+	s.cli("", "apply", "-f", writeFile(t, dir, "web.yaml", labeled("web", "  relations: [{ type: dependsOn, target: db }]\n"))).want(t, 0)
+
+	s.cli("", "resource", "impact", "db").want(t, 0, `"name": "web"`, `"relation": "dependsOn"`)
+	s.cli("", "resource", "group-action", "start").want(t, 2)
+	s.cli("", "resource", "group-action", "--type", "machine", "--label", "tier=web", "start").want(t, 2)
+	s.cli("", "resource", "group-action", "--type", "service", "--label", "tier=web", "start", "--dry-run").
+		want(t, 0, "1. start db (registered -> running)", "2. start web (registered -> running)")
+	if n := len(s.runner.Calls()); n != 0 {
+		t.Fatalf("dry run ran %d commands", n)
+	}
+	s.cli("", "resource", "group-action", "--label", "tier=web", "start", "--wait").want(t, 0, "db: succeeded", "web: succeeded", "succeeded")
+
+	// Stopping db alone needs the impact acknowledged.
+	s.cli("", "resource", "action", "db", "stop", "--dry-run").want(t, 0, "impact: web (dependsOn db)", "requires --acknowledge-impact")
+	r := s.cli("", "resource", "action", "db", "stop").want(t, 1)
+	if !strings.Contains(r.stderr, "acknowledge") {
+		t.Fatalf("unacknowledged stop: %+v", r)
+	}
+	s.cli("", "resource", "action", "db", "stop", "--acknowledge-impact", "--wait").want(t, 0, "succeeded")
+
+	// A failing step stops the group: web stops first, db is not run.
+	s.runner.Reply("web-stop", "boom", 1)
+	s.cli("", "resource", "action", "db", "start", "--wait").want(t, 0)
+	r = s.cli("", "resource", "group-action", "--label", "tier=web", "stop", "--acknowledge-impact", "--wait").want(t, 1, "web: failed", "db: notRun")
+	if !strings.Contains(r.stderr, "failed") {
+		t.Fatalf("group failure: %+v", r)
 	}
 }

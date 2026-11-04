@@ -96,7 +96,7 @@ func deployments(t *testing.T, e *env, name string) []catalog.Deployment {
 
 func lifecycleSummaries(t *testing.T, e *env, name string) []string {
 	t.Helper()
-	page, err := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Service: name, Kinds: []string{catalog.KindLifecycle}})
+	page, err := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Resource: name, Kinds: []string{catalog.KindLifecycle}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestDeploySuccessFirstAndUpdate(t *testing.T) {
 		t.Fatalf("first deployment = %+v", deps[1])
 	}
 
-	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Service: "app", Kinds: []string{catalog.KindDeployment}})
+	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Resource: "app", Kinds: []string{catalog.KindDeployment}})
 	if len(page.Entries) != 2 || !strings.Contains(page.Entries[0].Summary, "deploy succeeded at "+v2[:12]) {
 		t.Fatalf("deployment timeline = %+v", page.Entries)
 	}

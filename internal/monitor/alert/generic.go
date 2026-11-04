@@ -9,6 +9,7 @@ import (
 )
 
 type genericPayload struct {
+	Resource    string            `json:"resource"`
 	Service     string            `json:"service"`
 	Alert       string            `json:"alert"`
 	Status      string            `json:"status"`
@@ -40,9 +41,9 @@ func parseGeneric(body []byte, opts Options) ([]signal.Signal, error) {
 		if status != StatusFiring && status != StatusResolved {
 			return nil, invalidf(SourceGeneric, "item %d: status must be firing or resolved", i)
 		}
-		service := strings.TrimSpace(p.Service)
-		if service == "" {
-			service = opts.serviceOf(p.Labels)
+		resource := explicitResource(p.Resource, p.Service)
+		if resource == "" {
+			resource = opts.resourceOf(p.Labels)
 		}
 		sev := normalizeSeverity(p.Severity, signal.SeverityWarning)
 		if status == StatusResolved {
@@ -50,9 +51,9 @@ func parseGeneric(body []byte, opts Options) ([]signal.Signal, error) {
 		}
 		fp := p.Fingerprint
 		if fp == "" {
-			fp = fingerprint(service, p.Alert, labelFingerprint(p.Labels))
+			fp = fingerprint(resource, p.Alert, labelFingerprint(p.Labels))
 		}
-		out = append(out, build(SourceGeneric, service, p.Alert, status, sev, p.Message, fp, p.Labels, nil))
+		out = append(out, build(SourceGeneric, resource, p.Alert, status, sev, p.Message, fp, p.Labels, nil))
 	}
 	return out, nil
 }

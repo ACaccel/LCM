@@ -1,6 +1,7 @@
 // Package events is the in-process hub behind the server-sent event stream.
 // It gathers what happens in LCM (signals, engine runs and nodes, timeline
-// entries, actions, catalog changes) into one ordered feed that HTTP clients
+// entries, actions, resource and policy changes, stored observations) into
+// one ordered feed that HTTP clients
 // subscribe to with optional filters.
 //
 // Delivery is best effort and never blocks a producer: every subscriber has
@@ -20,8 +21,6 @@ type Type string
 
 // Event types.
 const (
-	// TypeMachine announces committed machine events independently of service signals.
-	TypeMachine Type = "machine"
 	// TypeSignal carries a signal.Signal published on the bus.
 	TypeSignal Type = "signal"
 	// TypeRun carries an engine run event (queued, started, finished, ...).
@@ -32,13 +31,18 @@ const (
 	TypeTimeline Type = "timeline"
 	// TypeAction carries the progress of an API-started service action.
 	TypeAction Type = "action"
-	// TypeCatalog announces a changed service document, or a deployed or
-	// removed policy.
+	// TypeResource announces a changed resource document or phase; the
+	// payload is a resource.Change.
+	TypeResource Type = "resource"
+	// TypeObservation announces a stored observation event of a machine or
+	// router, after it was committed.
+	TypeObservation Type = "observation"
+	// TypeCatalog announces a deployed or removed policy.
 	TypeCatalog Type = "catalog"
 )
 
 // Types lists every event type.
-var Types = []Type{TypeSignal, TypeRun, TypeNode, TypeTimeline, TypeAction, TypeCatalog, TypeMachine}
+var Types = []Type{TypeSignal, TypeRun, TypeNode, TypeTimeline, TypeAction, TypeResource, TypeObservation, TypeCatalog}
 
 // Valid reports whether t is a known event type.
 func (t Type) Valid() bool {
@@ -50,36 +54,39 @@ func (t Type) Valid() bool {
 	return false
 }
 
-// Event is one entry of the feed. Service, Policy and Run route the event
-// to filtered subscribers; Data is the JSON-serializable payload.
+// Event is one entry of the feed. Resource, ResourceID, Policy and Run
+// route the event to filtered subscribers; Data is the JSON-serializable
+// payload.
 type Event struct {
-	Machine string
 	// ID increases with every published event.
-	ID      uint64
-	Type    Type
-	Time    time.Time
-	Service string
-	Policy  string
-	Run     string
-	Data    any
+	ID   uint64
+	Type Type
+	Time time.Time
+	// Resource is the resource name; ResourceID is set by sources that know
+	// the immutable ID (resource changes, observations).
+	Resource   string
+	ResourceID string
+	Policy     string
+	Run        string
+	Data       any
 }
 
 // Filter restricts a subscription. Empty fields match everything; the
 // non-empty ones must all match.
 type Filter struct {
-	Machine string
-	Service string
-	Policy  string
-	Run     string
-	Types   []Type
+	Resource   string
+	ResourceID string
+	Policy     string
+	Run        string
+	Types      []Type
 }
 
 // Match reports whether e passes the filter.
 func (f Filter) Match(e Event) bool {
-	if f.Machine != "" && e.Machine != f.Machine {
+	if f.Resource != "" && e.Resource != f.Resource {
 		return false
 	}
-	if f.Service != "" && e.Service != f.Service {
+	if f.ResourceID != "" && e.ResourceID != f.ResourceID {
 		return false
 	}
 	if f.Policy != "" && e.Policy != f.Policy {

@@ -7,9 +7,11 @@ import type {
   EventEnvelope,
   EventType,
   NodeStatus,
+  ResourceChange,
+  ResourceDetail,
+  ResourceSummary,
   Run,
   RunStatus,
-  ServiceSummary,
   Signal,
   TimelineEntry,
   TimelineList,
@@ -51,15 +53,20 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     timer ??= setTimeout(flush, FLUSH_MS);
   }
 
-  function patchServices(name: string, patch: Partial<Pick<ServiceSummary, "health" | "state" | "stateSince">>) {
-    qc.setQueriesData<ServiceSummary[]>({ queryKey: qk.servicesAll() }, (list) =>
+  function patchResources(name: string, patch: Partial<Pick<ResourceSummary, "health" | "state" | "stateSince">>) {
+    qc.setQueriesData<ResourceSummary[]>({ queryKey: qk.resourcesAll() }, (list) =>
       Array.isArray(list) ? list.map((x) => (x.name === name ? { ...x, ...patch } : x)) : list,
     );
-    qc.setQueryData<Record<string, unknown>>(qk.service(name), (d) => (d ? { ...d, ...patch } : d));
+    // The detail carries health as an object with reasons; only its status is known from the event.
+    qc.setQueryData<ResourceDetail>(qk.resource(name), (d) => {
+      if (!d) return d;
+      const { health, ...rest } = patch;
+      return { ...d, ...rest, ...(health ? { health: { ...d.health, status: health } } : {}) };
+    });
   }
 
   function onSignal(env: EventEnvelope, sig: Signal) {
-    const name = sig.service ?? env.service;
+    const name = sig.resource ?? env.resource;
     if (!name) {
       if (sig.kind === "alert") invalidate(["alerts"]);
       return;
@@ -67,37 +74,67 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     const data = sig.data ?? {};
     switch (sig.kind) {
       case "health.changed":
-        if (typeof data["health"] === "string") patchServices(name, { health: data["health"] as ServiceSummary["health"] });
-        else invalidate(qk.service(name));
-        invalidate(qk.serviceChecks(name));
+        if (typeof data["health"] === "string") patchResources(name, { health: data["health"] as ResourceSummary["health"] });
+        // Reasons are not in the signal.
+        invalidate(qk.resource(name));
+        invalidate(qk.resourceChecks(name));
         break;
       case "lifecycle.changed":
-        if (typeof data["state"] === "string") patchServices(name, { state: data["state"] as ServiceSummary["state"], stateSince: sig.time });
-        else invalidate(qk.service(name));
+        if (typeof data["state"] === "string") patchResources(name, { state: data["state"], stateSince: sig.time });
+        invalidate(qk.resource(name));
         break;
       case "check.changed":
-        invalidate(qk.serviceChecks(name));
-        invalidate(qk.service(name));
+        invalidate(qk.resourceChecks(name));
+        invalidate(qk.resource(name));
         break;
       case "alert":
         invalidate(["alerts"]);
-        invalidate(qk.service(name));
+        invalidate(qk.resource(name));
         break;
+      default:
+        if (sig.kind.startsWith("resource.")) {
+          invalidate(qk.resource(name));
+          invalidate(qk.ownership());
+        }
     }
   }
 
   function onTimeline(entry: TimelineEntry) {
     for (const [key] of qc.getQueriesData<InfiniteData<TimelineList>>({ queryKey: qk.timelineAll() })) {
-      const service = String(key[1] ?? "");
+      const resource = String(key[1] ?? "");
       const kinds = (key[2] ?? []) as string[];
-      if (!matchesFilter(entry, service, kinds)) continue;
+      if (!matchesFilter(entry, resource, kinds)) continue;
       qc.setQueryData<InfiniteData<TimelineList>>(key, (d) => (d ? { ...d, pages: insertLive(d.pages, entry) } : d));
     }
     if (entry.kind === "deployment") {
       invalidate(["deployments-since"]);
-      invalidate(qk.serviceDeployments(entry.service));
-      invalidate(qk.service(entry.service));
+      invalidate(qk.resourceDeployments(entry.resource));
+      invalidate(qk.resource(entry.resource));
     }
+  }
+
+  /** A document or phase change: lists, the detail by name and by id, and ownership. */
+  function onResource(env: EventEnvelope, change: ResourceChange) {
+    const name = change.name || env.resource;
+    const id = change.id || env.resourceId;
+    invalidate(qk.resourcesAll());
+    if (change.change === "phase" || change.change === "unmanaged") invalidate(qk.archivesAll());
+    if (name) invalidate(qk.resourceAll(name));
+    if (id) invalidate(qk.resourceAll(`@${id}`));
+    invalidate(qk.ownership());
+  }
+
+  /** A stored machine or router event: the detail (state, health, operation) and its observation lists. */
+  function onObservation(env: EventEnvelope) {
+    for (const ref of [env.resource, env.resourceId ? `@${env.resourceId}` : undefined]) {
+      if (!ref) continue;
+      invalidate(qk.resource(ref));
+      invalidate(qk.resourceEvents(ref));
+      invalidate(qk.resourceHistory(ref));
+      invalidate(qk.resourceOperations(ref));
+      invalidate(qk.resourceMaintenance(ref));
+    }
+    invalidate(qk.resourcesAll());
   }
 
   function onRun(ev: EngineEvent) {
@@ -153,8 +190,8 @@ export function createEventApplier(qc: QueryClient): EventApplier {
   function onAction(a: Action) {
     qc.setQueryData<Action>(qk.action(a.id), a);
     if (a.status !== "running") {
-      invalidate(qk.service(a.service));
-      invalidate(qk.serviceChecks(a.service));
+      invalidate(qk.resource(a.resource));
+      invalidate(qk.resourceChecks(a.resource));
     }
   }
 
@@ -162,9 +199,6 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     apply(env) {
       const type: EventType = env.type;
       switch (type) {
-		case "machine":
-		  invalidate(["machines"]);
-		  break;
         case "signal":
           onSignal(env, env.data as Signal);
           break;
@@ -180,17 +214,16 @@ export function createEventApplier(qc: QueryClient): EventApplier {
         case "action":
           onAction(env.data as Action);
           break;
-        case "catalog": {
-          const d = env.data as { service?: string; kind?: string; policy?: string };
-          if (d.kind) {
-            onRun(env.data as EngineEvent);
-          } else {
-            invalidate(qk.servicesAll());
-            if (d.service) invalidate(qk.service(d.service));
-            invalidate(qk.ownership());
-          }
+        case "resource":
+          onResource(env, env.data as ResourceChange);
           break;
-        }
+        case "observation":
+          onObservation(env);
+          break;
+        case "catalog":
+          // Only policy deployments travel as catalog events now.
+          if ((env.data as { kind?: string }).kind) onRun(env.data as EngineEvent);
+          break;
       }
     },
     resync() {
@@ -217,7 +250,7 @@ export interface SourceLike {
   close(): void;
 }
 
-const NAMED_EVENTS: EventType[] = ["signal", "run", "node", "timeline", "action", "catalog", "machine"];
+const NAMED_EVENTS: EventType[] = ["signal", "run", "node", "timeline", "action", "resource", "observation", "catalog"];
 
 export interface StreamOptions {
   url?: string;

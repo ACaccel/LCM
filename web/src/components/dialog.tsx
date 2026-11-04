@@ -80,6 +80,7 @@ export function ConfirmDialog({
   confirmLabel = s.common.confirm,
   danger,
   busy,
+  disabled,
   error,
   onConfirm,
   onClose,
@@ -89,6 +90,8 @@ export function ConfirmDialog({
   confirmLabel?: string;
   danger?: boolean;
   busy?: boolean;
+  /** Keeps the confirm button disabled, for example until an acknowledgement is given. */
+  disabled?: boolean;
   error?: unknown;
   onConfirm: () => void;
   onClose: () => void;
@@ -102,7 +105,7 @@ export function ConfirmDialog({
           <button type="button" className="btn" onClick={onClose} data-autofocus>
             {s.common.cancel}
           </button>
-          <button type="button" className={`btn ${danger ? "danger solid" : "primary"}`} disabled={busy} onClick={onConfirm}>
+          <button type="button" className={`btn ${danger ? "danger solid" : "primary"}`} disabled={busy || disabled} onClick={onConfirm}>
             {confirmLabel}
           </button>
         </>

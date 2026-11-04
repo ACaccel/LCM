@@ -3,10 +3,15 @@ package configsync
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/trigger"
 )
 
@@ -166,6 +171,9 @@ func (s *Syncer) syncSource(ctx context.Context, src Source, force bool) Report 
 		rep.Commit = ""
 		return fail(err)
 	}
+	if err := refuseV1(docs); err != nil {
+		return fail(err)
+	}
 
 	actor := "configsync:" + src.Name
 	actx := auth.WithActor(ctx, auth.Actor{Kind: auth.KindSystem, ID: actor, Name: actor})
@@ -178,6 +186,33 @@ func (s *Syncer) syncSource(ctx context.Context, src Source, force bool) Report 
 	s.finishSync(ctx, src.Name, commit, summarizeErrors(rep.Items))
 	s.log.Info("config source synced", "source", src.Name, "commit", shortCommit(commit), "documents", len(rep.Items))
 	return rep
+}
+
+// refuseV1 stops the sync of a source that still holds lcm/v1 documents,
+// before anything is applied or any ownership changes: a v1 Service or
+// Machine names a kind that no longer exists, so applying the rest would
+// flag its migrated Resource orphaned, and a partly converted repository
+// is not a consistent state to apply.
+func refuseV1(docs []Document) error {
+	var paths []string
+	for _, d := range docs {
+		var head struct {
+			APIVersion string `yaml:"apiVersion"`
+		}
+		if yaml.Unmarshal(d.Data, &head) == nil && head.APIVersion == model.APIVersionV1 && !slices.Contains(paths, d.Path) {
+			paths = append(paths, d.Path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	const shown = 5
+	list := strings.Join(paths[:min(len(paths), shown)], ", ")
+	if len(paths) > shown {
+		list += fmt.Sprintf(" (and %d more)", len(paths)-shown)
+	}
+	return fmt.Errorf("%s: %s documents are no longer accepted; convert them to %s with \"lcm convert\" and commit; nothing was applied",
+		list, model.APIVersionV1, model.APIVersion)
 }
 
 // summarizeErrors condenses failed results into the source's lastError.

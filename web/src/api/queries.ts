@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { client, fetchAll, unwrap } from "./client";
-import type { ActionName, Health, RunStatus, ServiceState } from "./types";
+import type { ActionName, Health, ResourceTypeName, RunStatus } from "./types";
 
 /**
  * Query keys. The event reducer (events.ts) patches caches by these keys, so
@@ -8,16 +8,29 @@ import type { ActionName, Health, RunStatus, ServiceState } from "./types";
  */
 export const qk = {
   me: () => ["me"] as const,
-  services: (f: ServiceFilter = {}) => ["services", f] as const,
-  servicesAll: () => ["services"] as const,
-  service: (name: string) => ["service", name] as const,
-  serviceChecks: (name: string) => ["service", name, "checks"] as const,
-  serviceSeries: (name: string, check: string, windowKey: string) => ["service", name, "series", check, windowKey] as const,
-  serviceSummary: (name: string, window: string) => ["service", name, "summary", window] as const,
-  serviceDeployments: (name: string) => ["service", name, "deployments"] as const,
-  serviceVersions: (name: string) => ["service", name, "versions"] as const,
-  serviceVersion: (name: string, v: number) => ["service", name, "version", v] as const,
-  timeline: (f: TimelineFilter = {}) => ["timeline", f.service ?? "", f.kinds ?? []] as const,
+  resourceTypes: () => ["resource-types"] as const,
+  resources: (f: ResourceFilter = {}) => ["resources", f] as const,
+  resourcesAll: () => ["resources"] as const,
+  archives: (type?: ResourceTypeName) => ["resource-archives", type ?? ""] as const,
+  archivesAll: () => ["resource-archives"] as const,
+  /** Prefix of every query about one resource (its name, or `@<id>` for archives). */
+  resourceAll: (ref: string) => ["resource", ref] as const,
+  resource: (ref: string) => ["resource", ref, "detail"] as const,
+  impact: (ref: string, action: string) => ["resource", ref, "impact", action] as const,
+  resourceChecks: (ref: string) => ["resource", ref, "checks"] as const,
+  resourceSeries: (ref: string, check: string, windowKey: string) => ["resource", ref, "series", check, windowKey] as const,
+  resourceSummary: (ref: string, window: string) => ["resource", ref, "summary", window] as const,
+  resourceDeployments: (ref: string) => ["resource", ref, "deployments"] as const,
+  resourceVersions: (ref: string) => ["resource", ref, "versions"] as const,
+  resourceVersion: (ref: string, v: number) => ["resource", ref, "version", v] as const,
+  resourceYaml: (ref: string, version: number) => ["resource", ref, "yaml", version] as const,
+  resourceHistory: (ref: string) => ["resource", ref, "history"] as const,
+  resourceEvents: (ref: string) => ["resource", ref, "events"] as const,
+  resourceOperations: (ref: string) => ["resource", ref, "operations"] as const,
+  resourceOperation: (ref: string, id: string) => ["resource", ref, "operations", id] as const,
+  resourceCapabilities: (ref: string) => ["resource", ref, "capabilities"] as const,
+  resourceMaintenance: (ref: string) => ["resource", ref, "maintenance"] as const,
+  timeline: (f: TimelineFilter = {}) => ["timeline", f.resource ?? "", f.kinds ?? []] as const,
   timelineAll: () => ["timeline"] as const,
   deploymentsSince: (since: string) => ["deployments-since", since] as const,
   policies: () => ["policies"] as const,
@@ -30,23 +43,24 @@ export const qk = {
   runs: (f: RunFilter = {}) => ["runs", f.policy ?? "", f.status ?? []] as const,
   runsAll: () => ["runs"] as const,
   run: (id: string) => ["run", id] as const,
-  alerts: (service?: string) => ["alerts", service ?? ""] as const,
-  hosts: () => ["hosts"] as const,
+  alerts: (resource?: string) => ["alerts", resource ?? ""] as const,
   tokens: () => ["tokens"] as const,
   sources: () => ["sources"] as const,
   ownership: () => ["ownership"] as const,
   locks: () => ["locks"] as const,
+  connections: () => ["connections"] as const,
   action: (id: string) => ["action", id] as const,
 };
 
-export interface ServiceFilter {
+export interface ResourceFilter {
+  type?: ResourceTypeName;
   label?: string[];
-  state?: ServiceState;
+  phase?: "managed" | "retired";
   health?: Health;
 }
 
 export interface TimelineFilter {
-  service?: string;
+  resource?: string;
   kinds?: string[];
 }
 
@@ -63,83 +77,112 @@ export const meQuery = () =>
     staleTime: 5 * 60_000,
   });
 
-export const servicesQuery = (f: ServiceFilter = {}) =>
+
+export const resourceTypesQuery = () =>
   queryOptions({
-    queryKey: qk.services(f),
+    queryKey: qk.resourceTypes(),
+    queryFn: async () => (await unwrap(client.GET("/resource-types"))).items,
+    staleTime: Infinity,
+  });
+
+export const resourcesQuery = (f: ResourceFilter = {}) =>
+  queryOptions({
+    queryKey: qk.resources(f),
     queryFn: () =>
       fetchAll((cursor) =>
         unwrap(
-          client.GET("/services", {
-            params: { query: { limit: 500, cursor, label: f.label?.length ? f.label : undefined, state: f.state, health: f.health } },
+          client.GET("/resources", {
+            params: { query: { limit: 500, cursor, type: f.type, label: f.label?.length ? f.label : undefined, phase: f.phase, health: f.health } },
           }),
         ),
       ),
   });
 
-export const serviceQuery = (name: string) =>
+export const archivesQuery = (type?: ResourceTypeName) =>
   queryOptions({
-    queryKey: qk.service(name),
-    queryFn: () => unwrap(client.GET("/services/{svc}", { params: { path: { svc: name } } })),
+    queryKey: qk.archives(type),
+    queryFn: () => fetchAll((cursor) => unwrap(client.GET("/resource-archives", { params: { query: { limit: 500, cursor, type } } }))),
   });
 
-export const checksQuery = (name: string) =>
+export const resourceQuery = (ref: string) =>
   queryOptions({
-    queryKey: qk.serviceChecks(name),
-    queryFn: () => unwrap(client.GET("/services/{svc}/checks", { params: { path: { svc: name } } })),
+    queryKey: qk.resource(ref),
+    queryFn: () => unwrap(client.GET("/resources/{resource}", { params: { path: { resource: ref } } })),
   });
 
-export const summaryQuery = (name: string, window: "24h" | "7d" | "30d") =>
+/** What acting on a resource reaches; with an action, whether that action needs acknowledgeImpact. */
+export const impactQuery = (ref: string, action = "") =>
   queryOptions({
-    queryKey: qk.serviceSummary(name, window),
-    queryFn: () => unwrap(client.GET("/services/{svc}/summary", { params: { path: { svc: name }, query: { window } } })),
+    queryKey: qk.impact(ref, action),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/impact", { params: { path: { resource: ref }, query: action ? { action } : {} } })),
+  });
+
+export const checksQuery = (ref: string) =>
+  queryOptions({
+    queryKey: qk.resourceChecks(ref),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/checks", { params: { path: { resource: ref } } })),
+  });
+
+export const summaryQuery = (ref: string, window: "24h" | "7d" | "30d") =>
+  queryOptions({
+    queryKey: qk.resourceSummary(ref, window),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/summary", { params: { path: { resource: ref }, query: { window } } })),
     staleTime: 60_000,
   });
 
-export const seriesQuery = (name: string, check: string, windowMs: number, points: number) =>
+export const seriesQuery = (ref: string, check: string, windowMs: number, points: number) =>
   queryOptions({
-    queryKey: qk.serviceSeries(name, check, `${windowMs}:${points}`),
+    queryKey: qk.resourceSeries(ref, check, `${windowMs}:${points}`),
     queryFn: () => {
       const to = new Date();
       const from = new Date(to.getTime() - windowMs);
       return unwrap(
-        client.GET("/services/{svc}/checks/{check}/series", {
-          params: { path: { svc: name, check }, query: { from: from.toISOString(), to: to.toISOString(), points } },
+        client.GET("/resources/{resource}/checks/{check}/series", {
+          params: { path: { resource: ref, check }, query: { from: from.toISOString(), to: to.toISOString(), points } },
         }),
       );
     },
     staleTime: 60_000,
   });
 
-export const deploymentsQuery = (name: string) =>
+export const deploymentsQuery = (ref: string) =>
   queryOptions({
-    queryKey: qk.serviceDeployments(name),
-    queryFn: () => unwrap(client.GET("/services/{svc}/deployments", { params: { path: { svc: name }, query: { limit: 100 } } })),
+    queryKey: qk.resourceDeployments(ref),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/deployments", { params: { path: { resource: ref }, query: { limit: 100 } } })),
   });
 
-export const serviceVersionsQuery = (name: string) =>
+export const resourceVersionsQuery = (ref: string) =>
   queryOptions({
-    queryKey: qk.serviceVersions(name),
-    queryFn: () => unwrap(client.GET("/services/{svc}/versions", { params: { path: { svc: name }, query: { limit: 100 } } })),
+    queryKey: qk.resourceVersions(ref),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/versions", { params: { path: { resource: ref }, query: { limit: 100 } } })),
   });
 
-export const serviceVersionQuery = (name: string, v: number) =>
+export const resourceVersionQuery = (ref: string, v: number) =>
   queryOptions({
-    queryKey: qk.serviceVersion(name, v),
-    queryFn: () => unwrap(client.GET("/services/{svc}/versions/{v}", { params: { path: { svc: name, v } } })),
+    queryKey: qk.resourceVersion(ref, v),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/versions/{v}", { params: { path: { resource: ref, v } } })),
+    staleTime: Infinity,
+  });
+
+/** Canonical YAML of the stored document of an active resource; refetched whenever the version changes. */
+export const resourceYamlQuery = (name: string, version: number) =>
+  queryOptions({
+    queryKey: qk.resourceYaml(name, version),
+    queryFn: () => unwrap(client.GET("/export", { params: { query: { kind: "resource", name } }, parseAs: "text" })) as Promise<string>,
     staleTime: Infinity,
   });
 
 export const TIMELINE_PAGE = 50;
 
-/** Timeline of all services, or of one when `service` is set. Newest first. */
+/** Timeline of all resources, or of one when `resource` is set. Newest first. */
 export const timelineQuery = (f: TimelineFilter = {}) =>
   infiniteQueryOptions({
     queryKey: qk.timeline(f),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => {
       const query = { limit: TIMELINE_PAGE, cursor: pageParam, kinds: f.kinds?.length ? f.kinds : undefined };
-      return f.service
-        ? unwrap(client.GET("/services/{svc}/timeline", { params: { path: { svc: f.service }, query } }))
+      return f.resource
+        ? unwrap(client.GET("/resources/{resource}/timeline", { params: { path: { resource: f.resource }, query } }))
         : unwrap(client.GET("/timeline", { params: { query } }));
     },
     getNextPageParam: (last) => last.nextCursor ?? undefined,
@@ -223,14 +266,11 @@ export const runQuery = (id: string) =>
     queryFn: () => unwrap(client.GET("/runs/{id}", { params: { path: { id } } })),
   });
 
-export const alertsQuery = (service?: string) =>
+export const alertsQuery = (resource?: string) =>
   queryOptions({
-    queryKey: qk.alerts(service),
-    queryFn: () => fetchAll((cursor) => unwrap(client.GET("/alerts", { params: { query: { limit: 500, cursor, service } } }))),
+    queryKey: qk.alerts(resource),
+    queryFn: () => fetchAll((cursor) => unwrap(client.GET("/alerts", { params: { query: { limit: 500, cursor, resource } } }))),
   });
-
-export const hostsQuery = () =>
-  queryOptions({ queryKey: qk.hosts(), queryFn: async () => (await unwrap(client.GET("/hosts"))).items });
 
 export const tokensQuery = () =>
   queryOptions({ queryKey: qk.tokens(), queryFn: async () => (await unwrap(client.GET("/tokens"))).items });
@@ -251,6 +291,12 @@ export const locksQuery = () =>
   queryOptions({
     queryKey: qk.locks(),
     queryFn: () => fetchAll((cursor) => unwrap(client.GET("/locks", { params: { query: { limit: 500, cursor } } }))),
+  });
+
+export const connectionsQuery = () =>
+  queryOptions({
+    queryKey: qk.connections(),
+    queryFn: () => fetchAll((cursor) => unwrap(client.GET("/connections", { params: { query: { limit: 500, cursor } } }))),
   });
 
 export const actionQuery = (id: string) =>

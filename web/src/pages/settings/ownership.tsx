@@ -27,10 +27,10 @@ export function OwnershipPanel() {
   const invalidate = () => {
     setPending(null);
     void qc.invalidateQueries({ queryKey: qk.ownership() });
-    void qc.invalidateQueries({ queryKey: qk.servicesAll() });
+    void qc.invalidateQueries({ queryKey: qk.resourcesAll() });
     void qc.invalidateQueries({ queryKey: qk.policies() });
   };
-  const kindPath = (o: Ownership) => o.kind.toLowerCase() as "service" | "policy" | "module";
+  const kindPath = (o: Ownership) => o.kind.toLowerCase() as "resource" | "policy" | "module";
   const resolve = useMutation({
     mutationFn: ({ item, use }: { item: Ownership; use: "git" | "current" }) =>
       unwrap(client.POST("/config/ownership/{kind}/{name}/resolve", { params: { path: { kind: kindPath(item), name: item.name } }, body: { use } })),
@@ -66,8 +66,8 @@ export function OwnershipPanel() {
                     <tr key={`${o.kind}/${o.name}`}>
                       <td>{o.kind}</td>
                       <td>
-                        {o.kind === "Service" && !o.missing ? (
-                          <Link to={`/services/${encodeURIComponent(o.name)}/config`}>{o.name}</Link>
+                        {o.kind === "Resource" && !o.missing ? (
+                          <Link to={`/resources/${encodeURIComponent(o.name)}/config`}>{o.name}</Link>
                         ) : o.kind === "Policy" && !o.missing ? (
                           <Link to={`/policies/${encodeURIComponent(o.name)}`}>{o.name}</Link>
                         ) : (

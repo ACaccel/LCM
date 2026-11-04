@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/store"
@@ -38,7 +40,7 @@ type fakeAdapter struct {
 	onRestart func()
 }
 
-func (a *fakeAdapter) Status(context.Context, *model.Service) (rt.Status, error) {
+func (a *fakeAdapter) Status(context.Context, model.Runtime) (rt.Status, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.statusErr != nil {
@@ -49,7 +51,7 @@ func (a *fakeAdapter) Status(context.Context, *model.Service) (rt.Status, error)
 
 func (a *fakeAdapter) record(call string) { a.calls = append(a.calls, call) }
 
-func (a *fakeAdapter) Start(context.Context, *model.Service) error {
+func (a *fakeAdapter) Start(context.Context, model.Runtime) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.record("start")
@@ -60,7 +62,7 @@ func (a *fakeAdapter) Start(context.Context, *model.Service) error {
 	return nil
 }
 
-func (a *fakeAdapter) Stop(context.Context, *model.Service) error {
+func (a *fakeAdapter) Stop(context.Context, model.Runtime) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.record("stop")
@@ -71,7 +73,7 @@ func (a *fakeAdapter) Stop(context.Context, *model.Service) error {
 	return nil
 }
 
-func (a *fakeAdapter) Restart(context.Context, *model.Service) error {
+func (a *fakeAdapter) Restart(context.Context, model.Runtime) error {
 	a.mu.Lock()
 	hook := a.onRestart
 	a.record("restart")
@@ -100,14 +102,25 @@ func (a *fakeAdapter) set(f func(*fakeAdapter)) {
 	f(a)
 }
 
-// fakeRuntimes hands out one adapter per service name.
+// fakeRuntimes hands out one adapter per service name. The runtime of
+// each saved document is mapped to its service name by env.put.
 type fakeRuntimes struct {
 	mu       sync.Mutex
 	adapters map[string]*fakeAdapter
+	names    map[model.Runtime]string
 }
 
-func (f *fakeRuntimes) For(svc *model.Service) (rt.Adapter, error) {
-	return f.adapter(svc.Metadata.Name), nil
+func (f *fakeRuntimes) For(r model.Runtime) (rt.Adapter, error) {
+	f.mu.Lock()
+	name := f.names[r]
+	f.mu.Unlock()
+	return f.adapter(name), nil
+}
+
+func (f *fakeRuntimes) learn(r model.Runtime, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.names[r] = name
 }
 
 func (f *fakeRuntimes) adapter(name string) *fakeAdapter {
@@ -189,6 +202,7 @@ type env struct {
 	clk     *clock.Fake
 	bus     *signal.Bus
 	audit   *audit.Log
+	res     *resource.Store
 	cat     *catalog.Catalog
 	runtime *fakeRuntimes
 	locker  *fakeLocker
@@ -205,12 +219,17 @@ func withRunner(r execx.Runner) envOption {
 
 func newEnv(t *testing.T, opts ...envOption) *env {
 	t.Helper()
-	e := &env{t: t, clk: clock.NewFake(epoch), runtime: &fakeRuntimes{adapters: map[string]*fakeAdapter{}}, locker: newFakeLocker()}
+	e := &env{t: t, clk: clock.NewFake(epoch), locker: newFakeLocker(),
+		runtime: &fakeRuntimes{adapters: map[string]*fakeAdapter{}, names: map[model.Runtime]string{}}}
 	e.db = storetest.Open(t)
 	e.bus = signal.NewBus(testLogger(t), e.clk.Now)
 	e.audit = audit.New(e.db, audit.WithClock(e.clk.Now))
 	var err error
-	e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Log: testLogger(t)})
+	e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Log: testLogger(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Resources: e.res, Bus: e.bus, Clock: e.clk, Log: testLogger(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,18 +244,34 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.res.RegisterHooks(model.ResourceService, e.mgr.Hooks())
 	e.ctx = auth.WithActor(context.Background(), alice)
 	return e
 }
 
-// put saves a service document and fails the test on error.
-func (e *env) put(doc string, expected int) catalog.PutResult {
+// put saves a resource document and fails the test on error.
+func (e *env) put(doc string, expected int) resource.PutResult {
 	e.t.Helper()
-	res, err := e.cat.Put(e.ctx, []byte(doc), expected)
+	res, err := e.res.Put(e.ctx, []byte(doc), expected)
 	if err != nil {
 		e.t.Fatalf("put: %v", err)
 	}
+	if r, err := model.DecodeResource([]byte(doc)); err == nil {
+		if cfg, ok := r.Service(); ok {
+			e.runtime.learn(cfg.Runtime(r.Spec.Adapter), r.Metadata.Name)
+		}
+	}
 	return res
+}
+
+// phase changes the phase of a service through the service type.
+func (e *env) phase(ctx context.Context, name, to string) error {
+	e.t.Helper()
+	rec, err := e.res.Get(context.Background(), name)
+	if err != nil {
+		return err
+	}
+	return e.mgr.Type().ChangePhase(ctx, rec, to, rec.Version, "test")
 }
 
 func (e *env) state(name string) catalog.State {
@@ -260,9 +295,30 @@ func (e *env) setState(name string, path ...catalog.State) {
 	}
 }
 
+// svcDoc returns a systemd service resource; extra holds config fields
+// (source, backup, jobs) indented as in a spec, and is moved under config.
 func svcDoc(name string, extra string) string {
-	return "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: " + name + ", labels: { tier: web } }\nspec:\n" +
-		"  runtime: { type: systemd, unit: " + name + ".service }\n" + extra
+	return serviceDoc(name, "systemd", "    unit: "+name+".service\n"+indent(extra), "")
+}
+
+// serviceDoc returns a service resource with the given adapter, config
+// lines (indented by four spaces) and spec lines (indented by two).
+func serviceDoc(name, adapter, config, spec string) string {
+	if strings.TrimSpace(config) == "" {
+		config = "    {}\n"
+	}
+	return "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: " + name + ", labels: { tier: web } }\nspec:\n" +
+		"  type: service\n  adapter: " + adapter + "\n  config:\n" + config + spec
+}
+
+func indent(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			lines[i] = "  " + l
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 type testWriter struct{ t *testing.T }

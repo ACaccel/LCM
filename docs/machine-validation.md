@@ -2,6 +2,8 @@
 
 Implementation checks completed on 2026-11-01, Linux/amd64; the implementation was merged to `main` as `72f7aa4`. The operator confirmed all remaining acceptance complete on 2026-11-03 and requested plan closure. This record distinguishes implementation checks from operator-confirmed deployment and hardware acceptance. Current behavior and constraints are defined in [machines.md](machines.md).
 
+> This record covers the pre-`lcm/v2` implementation (`Machine` documents, `/machines` API paths and `lcm machine` commands). Since 2026-11-05 the machine is a [Resource](resources.md) with the same IDs and behavior; use the current paths and `lcm resource` commands from [machines.md](machines.md).
+
 ## Automated checks
 
 - `make check`: formatter, vet, golangci-lint, full Go race tests, frontend typecheck/lint, 117 Vitest tests across 19 files, generated OpenAPI types. Passed.

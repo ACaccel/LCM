@@ -16,6 +16,8 @@ import (
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/monitor/alert"
+	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/router"
 	"github.com/ACaccel/lcm/internal/security"
 	"github.com/ACaccel/lcm/internal/securityhost"
 	"github.com/ACaccel/lcm/internal/state"
@@ -48,8 +50,14 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		issues model.Issues
 		stErr  *catalog.StateError
 		busy   *lock.BusyError
+		impact *resource.ImpactError
 	)
 	switch {
+	case errors.As(err, &impact):
+		d := toImpactDTO(impact.Impact)
+		d.Action, d.AcknowledgementRequired = impact.Action, true
+		writeError(w, http.StatusConflict, codeImpactUnacknowledged, publicMessage(err),
+			details(map[string]any{"resource": impact.Impact.Resource, "action": impact.Action, "impact": d}))
 	case errors.Is(err, securityhost.ErrConflict):
 		writeError(w, http.StatusConflict, codeConflict, publicMessage(err), details(nil))
 	case errors.Is(err, securityhost.ErrUnavailable):
@@ -67,15 +75,18 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		writeError(w, http.StatusConflict, codeConflict, publicMessage(err), details(nil))
 	case errors.Is(err, security.ErrCapacity):
 		writeError(w, http.StatusServiceUnavailable, codeUnavailable, publicMessage(err), details(nil))
-	case errors.Is(err, machine.ErrNotFound):
+	case errors.Is(err, errUnsupported):
+		writeError(w, http.StatusConflict, codeUnsupported, publicMessage(err), details(nil))
+	case errors.Is(err, machine.ErrNotFound), errors.Is(err, router.ErrNotFound), errors.Is(err, resource.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
-	case errors.Is(err, machine.ErrExists):
+	case errors.Is(err, resource.ErrExists):
 		writeError(w, http.StatusConflict, codeAlreadyExists, publicMessage(err), details(nil))
-	case errors.Is(err, machine.ErrConflict):
+	case errors.Is(err, machine.ErrConflict), errors.Is(err, router.ErrConflict), errors.Is(err, resource.ErrConflict):
 		writeError(w, http.StatusConflict, codeVersionConflict, publicMessage(err), details(nil))
-	case errors.Is(err, machine.ErrForbidden):
+	case errors.Is(err, machine.ErrForbidden), errors.Is(err, router.ErrForbidden):
 		writeError(w, http.StatusForbidden, codeForbidden, publicMessage(err), details(nil))
-	case errors.Is(err, machine.ErrPrecondition), errors.Is(err, machine.ErrUnsupported), errors.Is(err, maintenance.ErrActive):
+	case errors.Is(err, machine.ErrPrecondition), errors.Is(err, machine.ErrUnsupported), errors.Is(err, maintenance.ErrActive),
+		errors.Is(err, router.ErrPrecondition), errors.Is(err, router.ErrUnsupported):
 		writeError(w, http.StatusConflict, codePrecondition, publicMessage(err), details(nil))
 	case errors.As(err, &issues):
 		d := details(map[string]any{"issues": issuesBody(issues)})
@@ -88,14 +99,14 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		errors.Is(err, trigger.ErrNoListener), errors.Is(err, configsync.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
 
-	case errors.Is(err, catalog.ErrExists), errors.Is(err, modules.ErrExists), errors.Is(err, configsync.ErrExists):
+	case errors.Is(err, modules.ErrExists), errors.Is(err, configsync.ErrExists):
 		writeError(w, http.StatusConflict, codeAlreadyExists, publicMessage(err), details(nil))
-	case errors.Is(err, catalog.ErrConflict), errors.Is(err, modules.ErrConflict):
+	case errors.Is(err, modules.ErrConflict):
 		writeError(w, http.StatusConflict, codeVersionConflict, publicMessage(err), details(nil))
 
 	case errors.As(err, &stErr):
 		writeError(w, http.StatusConflict, codeInvalidState, publicMessage(err),
-			details(map[string]any{"service": stErr.Service, "action": stErr.Action, "state": string(stErr.State)}))
+			details(map[string]any{"resource": stErr.Resource, "action": stErr.Action, "state": string(stErr.State)}))
 	case errors.As(err, &busy):
 		writeError(w, http.StatusConflict, codeLockHeld, publicMessage(err), details(lockDetails(busy.Holder)))
 	case errors.Is(err, catalog.ErrLockHeld), errors.Is(err, lock.ErrHeld):
@@ -106,7 +117,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		writeError(w, http.StatusUnprocessableEntity, codeValidation, "validation failed",
 			details(map[string]any{"issues": issuesBody(is)}))
 
-	case errors.Is(err, catalog.ErrPrecondition):
+	case errors.Is(err, catalog.ErrPrecondition), errors.Is(err, resource.ErrPrecondition):
 		writeError(w, http.StatusConflict, codePrecondition, publicMessage(err), details(nil))
 	case errors.Is(err, catalog.ErrStateChanged), errors.Is(err, engine.ErrPolicyPaused),
 		errors.Is(err, engine.ErrRunNotActive), errors.Is(err, engine.ErrNotSuspended),

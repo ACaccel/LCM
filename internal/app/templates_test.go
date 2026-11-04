@@ -27,9 +27,9 @@ import (
 func TestEveryTemplateDeploys(t *testing.T) {
 	h := newHarness(t)
 	for _, tpl := range templates.List() {
-		params := map[string]any{"service": "web"}
+		params := map[string]any{"resource": "web"}
 		if tpl.ID == "auto-deploy" {
-			params = map[string]any{"service": "web", "repo": "https://example.com/web.git", "requireCI": true, "ciRepo": "me/web", "ciWorkflows": []any{"ci.yml"}}
+			params = map[string]any{"resource": "web", "repo": "https://example.com/web.git", "requireCI": true, "ciRepo": "me/web", "ciWorkflows": []any{"ci.yml"}}
 		}
 		doc, err := tpl.Render("web-"+tpl.ID, params)
 		if err != nil {
@@ -184,17 +184,18 @@ func newDeployFixture(t *testing.T, params ...map[string]any) *deployFixture {
 		t.Fatal(err)
 	}
 	f.putService(fmt.Sprintf(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: web }
 spec:
-  runtime: { type: command, start: web-start, stop: web-stop, restart: web-restart, status: web-status }
-  source: { repo: /srv/web, branch: main, build: web-build, install: "true" }
+  type: service
+  adapter: command
+  config: { start: web-start, stop: web-stop, restart: web-restart, status: web-status, source: { repo: /srv/web, branch: main, build: web-build, install: "true" } }
   checks:
     - { name: http, type: http, interval: %s, timeout: 2s, props: { url: %q } }
 `, checkInterval, f.web.srv.URL))
 	tpl, _ := templates.Get("auto-deploy")
-	p := map[string]any{"service": "web", "repo": "https://example.com/web.git", "requireCI": false, "notifySecret": "ops-hook"}
+	p := map[string]any{"resource": "web", "repo": "https://example.com/web.git", "requireCI": false, "notifySecret": "ops-hook"}
 	for _, extra := range params {
 		maps.Copy(p, extra)
 	}
@@ -367,18 +368,19 @@ func TestBackupTemplateConfirmsWithHeartbeat(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.putService(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: db }
 spec:
-  runtime: { type: command, start: db-start, stop: db-stop, status: db-status }
-  backup: { command: backup-db.sh }
+  type: service
+  adapter: command
+  config: { start: db-start, stop: db-stop, status: db-status, backup: { command: backup-db.sh } }
   checks:
     - { name: dump, type: heartbeat, interval: 24h, critical: false }
 `)
 			tpl, _ := templates.Get("scheduled-backup")
 			doc, err := tpl.Render("db-backup", map[string]any{
-				"service": "db", "schedule": "0 15 * * *", "timezone": "UTC", "heartbeatCheck": "dump",
+				"resource": "db", "schedule": "0 15 * * *", "timezone": "UTC", "heartbeatCheck": "dump",
 				"heartbeatTimeout": "10m", "notifySecret": "ops-hook",
 			})
 			if err != nil {

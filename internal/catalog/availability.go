@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
@@ -17,11 +18,15 @@ const (
 	ReasonUnsupported = "unsupported"
 	// ReasonInvalidState: the action may not start in the current state.
 	ReasonInvalidState = "invalidState"
+	// ReasonNotManaged: the service is retired.
+	ReasonNotManaged = "notManaged"
+	// ReasonBusy: another action or phase change is running.
+	ReasonBusy = "busy"
 )
 
 // Actions lists every action of the manager.
 var Actions = []string{
-	ActionStart, ActionStop, ActionRestart, ActionDeploy, ActionRollback, ActionBackup, ActionRunJob, ActionRetire,
+	ActionStart, ActionStop, ActionRestart, ActionDeploy, ActionRollback, ActionBackup, ActionRunJob,
 }
 
 // Availability tells whether an action can start on a service now.
@@ -33,7 +38,7 @@ type Availability struct {
 }
 
 // AvailableActions reports for every action whether it can start on rec,
-// from the document, the runtime's capabilities and the state. Deployment
+// from the phase, the document, the runtime's capabilities and the state. Deployment
 // history is not consulted, so an available rollback may still find no
 // target; Plan gives the definitive answer.
 func AvailableActions(rec *Record) []Availability {
@@ -41,9 +46,11 @@ func AvailableActions(rec *Record) []Availability {
 	for _, a := range Actions {
 		reason := ""
 		switch {
-		case !configured(a, rec.Spec):
+		case rec.Phase != resource.PhaseManaged:
+			reason = ReasonNotManaged
+		case !configured(a, rec.Config):
 			reason = ReasonNotConfigured
-		case checkRuntime(a, rec.Spec) != nil:
+		case checkRuntime(a, rec.Runtime()) != nil:
 			reason = ReasonUnsupported
 		case !CanAct(a, rec.State):
 			reason = ReasonInvalidState
@@ -53,23 +60,24 @@ func AvailableActions(rec *Record) []Availability {
 	return out
 }
 
-func configured(action string, svc *model.Service) bool {
+func configured(action string, cfg *model.ServiceConfig) bool {
 	switch action {
 	case ActionDeploy, ActionRollback:
-		return svc.Spec.Source != nil
+		return cfg.Source != nil
 	case ActionBackup:
-		return svc.Spec.Backup != nil
+		return cfg.Backup != nil
 	case ActionRunJob:
-		return len(svc.Spec.Jobs) > 0
+		return len(cfg.Jobs) > 0
 	}
 	return true
 }
 
 // checkRuntime refuses process actions the runtime cannot perform, so that
-// LCM never records a state change it did not make. Retire skips the stop
-// and deploy skips the restart when unsupported, so both always pass.
-func checkRuntime(action string, svc *model.Service) error {
-	caps := rt.CapabilitiesOf(svc.Spec.Runtime)
+// LCM never records a state change it did not make. Deploy skips the
+// restart when unsupported, so it always passes; so does retiring, which
+// is a phase change that stops only what the runtime can stop.
+func checkRuntime(action string, r model.Runtime) error {
+	caps := rt.CapabilitiesOf(r)
 	ok := true
 	switch action {
 	case ActionStart:
@@ -80,7 +88,7 @@ func checkRuntime(action string, svc *model.Service) error {
 		ok = caps.Restart
 	}
 	if !ok {
-		return fmt.Errorf("%w: %s on a %s runtime", ErrUnsupported, action, svc.Spec.Runtime.Type)
+		return fmt.Errorf("%w: %s on a %s runtime", ErrUnsupported, action, r.Type)
 	}
 	return nil
 }

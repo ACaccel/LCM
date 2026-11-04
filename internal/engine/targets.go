@@ -2,30 +2,30 @@ package engine
 
 import "github.com/ACaccel/lcm/internal/expr"
 
-// ServiceTarget is a node of a plan that acts on a service, found through
-// its type's node.Spec.ServiceProp.
-type ServiceTarget struct {
+// ResourceTarget is a node of a plan that acts on a resource, found
+// through its type's node.Spec.ResourceProp.
+type ResourceTarget struct {
 	// Node is the scoped node id, Type its node type.
 	Node string
 	Type string
-	// Service is the service the node acts on, or "" when that is decided
+	// Resource is the resource the node acts on, or "" when that is decided
 	// only while the policy runs (it depends on the trigger event, another
 	// node's output or a runtime variable).
-	Service string
+	Resource string
 }
 
-// ServiceTargets lists the nodes that act on a service, in document order.
+// ResourceTargets lists the nodes that act on a resource, in document order.
 // A target is resolved when its prop is a literal or an expression over
 // params alone (as the built-in templates write it), including module
 // parameters that are themselves static.
-func (p *Plan) ServiceTargets() []ServiceTarget {
-	var out []ServiceTarget
+func (p *Plan) ResourceTargets() []ResourceTarget {
+	var out []ResourceTarget
 	for _, n := range p.nodes {
-		prop := n.def.ServiceProp()
+		prop := n.def.ResourceProp()
 		if prop == "" {
 			continue
 		}
-		out = append(out, ServiceTarget{Node: n.id, Type: n.typ, Service: p.staticString(n, prop)})
+		out = append(out, ResourceTarget{Node: n.id, Type: n.typ, Resource: p.staticString(n, prop)})
 	}
 	return out
 }

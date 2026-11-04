@@ -25,7 +25,7 @@ export function SecurityOverview({ machineId }: { machineId: string }) {
       <dl className="kv"><dt>{sec.lastRun}</dt><dd>{showTime(value.aide?.lastRunAt)}</dd><dt>{sec.nextRun}</dt><dd>{showTime(value.aide?.nextRunAt)}</dd><dt>{sec.observed}</dt><dd>{showTime(value.collector?.observedAt)}</dd><dt>{sec.lastDelivery}</dt><dd>{showTime(value.collector?.lastDelivery)}</dd><dt>{sec.nginxMode}</dt><dd><Tag>{value.nginx?.mode || sec.unknown}</Tag></dd></dl>
       {value.available && stale(value.collector?.observedAt) && <p className="banner warn">{sec.stale}</p>}{value.collector?.deliveryError && <p className="banner error">{value.collector.deliveryError}</p>}
       </>}
-      <h3>{sec.collectionHealth}</h3><UnknownReport value={value.collector?.health} /><Link to="/machines">{sec.machineLink}</Link><Link to="/services">{sec.serviceLink}</Link>
+      <h3>{sec.collectionHealth}</h3><UnknownReport value={value.collector?.health} /><Link to="/resources?type=machine">{sec.machineLink}</Link><Link to="/resources?type=service">{sec.serviceLink}</Link>
     </>}</Async></section>
   </div>;
 }

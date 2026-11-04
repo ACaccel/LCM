@@ -76,7 +76,7 @@ func newSite(t *testing.T, configure ...func(*config.Config)) *site {
 	}
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(x.ctx, cfg,
-		app.WithClock(x.clk), app.WithRunner(x.runner), app.WithHTTPClient(client), app.WithGitRunner(x.git),
+		app.WithClock(x.clk), app.WithRunner(x.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client), app.WithGitRunner(x.git),
 		app.WithLogger(slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelWarn}))))
 	if err != nil {
 		t.Fatalf("app.New: %v", err)
@@ -218,21 +218,24 @@ func (x *site) anon(method, path string, body any, opts ...opt) reply {
 	return x.call(method, path, body, append([]opt{bearer("")}, opts...)...)
 }
 
-// serviceDoc returns a command-runtime service document.
+// serviceDoc returns a command-adapter service resource document. extra is
+// appended right after the config: lines indented by four spaces add config
+// fields, lines indented by two add spec fields.
 func serviceDoc(name, extra string) string {
-	return "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: " + name + ", labels: { tier: web } }\nspec:\n" +
-		"  runtime: { type: command, start: " + name + "-start, stop: " + name + "-stop, restart: " + name + "-restart, status: " + name + "-status }\n" + extra
+	return "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: " + name + ", labels: { tier: web } }\nspec:\n" +
+		"  type: service\n  adapter: command\n  config:\n" +
+		"    start: " + name + "-start\n    stop: " + name + "-stop\n    restart: " + name + "-restart\n    status: " + name + "-status\n" + extra
 }
 
 const v1 = "/api/v1"
 
 func (x *site) createService(doc string) reply {
 	x.t.Helper()
-	return x.call("POST", v1+"/services", doc, yamlBody()).want(http.StatusCreated)
+	return x.call("POST", v1+"/resources", doc, yamlBody()).want(http.StatusCreated)
 }
 
 func policyDoc(name, nodes string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" + nodes
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  nodes:\n" + nodes
 }
 
 const manualPolicyNodes = `    - { id: start, type: trigger.manual, next: { out: [echo] } }
@@ -290,7 +293,7 @@ func (x *site) actionDone(c *collector, id string) map[string]any {
 // startAction posts an action and returns its id.
 func (x *site) startAction(service, action string, body any) string {
 	x.t.Helper()
-	r := x.call("POST", v1+"/services/"+service+"/actions/"+action, body).want(http.StatusAccepted)
+	r := x.call("POST", v1+"/resources/"+service+"/actions/"+action, body).want(http.StatusAccepted)
 	return r.obj()["actionId"].(string)
 }
 
@@ -304,5 +307,5 @@ func writeSecret(t *testing.T, x *site, name, value string) {
 func startOpts() catalog.ActionOptions { return catalog.ActionOptions{} }
 
 func deployment(service, version string) catalog.Deployment {
-	return catalog.Deployment{Service: service, Action: "deploy", Version: version, Actor: auth.CLI}
+	return catalog.Deployment{Resource: service, Action: "deploy", Version: version, Actor: auth.CLI}
 }

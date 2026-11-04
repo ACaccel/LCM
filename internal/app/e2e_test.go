@@ -28,7 +28,7 @@ const checkInterval = 10 * time.Second
 
 func (h *harness) putService(doc string) {
 	h.t.Helper()
-	if _, err := h.app.Catalog.Put(h.ctx, []byte(doc), 0); err != nil {
+	if _, err := h.app.Resources.Put(h.ctx, []byte(doc), 0); err != nil {
 		h.t.Fatalf("put service: %v", err)
 	}
 }
@@ -49,7 +49,7 @@ func (h *harness) syncTriggers() {
 
 func (h *harness) timeline(service string) []catalog.Entry {
 	h.t.Helper()
-	page, err := h.app.Catalog.Timeline(h.ctx, catalog.TimelineQuery{Service: service, Limit: 200})
+	page, err := h.app.Catalog.Timeline(h.ctx, catalog.TimelineQuery{Resource: service, Limit: 200})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -131,12 +131,13 @@ func TestSelfHealing(t *testing.T) {
 	})
 
 	h.putService(fmt.Sprintf(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: web, labels: { tier: frontend } }
 spec:
-  runtime:
-    type: command
+  type: service
+  adapter: command
+  config:
     start: web-start
     stop: web-stop
     restart: web-restart
@@ -149,13 +150,13 @@ spec:
       props: { url: %q }
 `, checkInterval, web.srv.URL))
 	h.deploy(`
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata: { name: self-heal }
 spec:
   nodes:
     - { id: t, type: trigger.signal, props: { kinds: [health.changed], statuses: [down] }, next: { out: [fix] } }
-    - { id: fix, type: lifecycle.restart, props: { service: "{{ trigger.service }}" } }
+    - { id: fix, type: lifecycle.restart, props: { resource: "{{ trigger.resource }}" } }
 `)
 
 	if _, err := h.app.Manager.Start(h.ctx, "web", catalog.ActionOptions{}); err != nil {
@@ -168,7 +169,7 @@ spec:
 
 	// The first probe runs within the start spread; the service becomes healthy.
 	advanceCheck()
-	if st, ok := h.app.Monitor.Service("web"); !ok || st.Health != monitor.HealthHealthy {
+	if st, ok := h.app.Monitor.Resource("web"); !ok || st.Health != monitor.HealthHealthy {
 		t.Fatalf("health after first probe = %+v", st)
 	}
 
@@ -190,7 +191,7 @@ spec:
 
 	// The restart fixed the endpoint; the next probe sees it.
 	advanceCheck()
-	if st, _ := h.app.Monitor.Service("web"); st.Health != monitor.HealthHealthy {
+	if st, _ := h.app.Monitor.Resource("web"); st.Health != monitor.HealthHealthy {
 		t.Fatalf("health after recovery = %s", st.Health)
 	}
 
@@ -257,24 +258,25 @@ func TestScheduledBackup(t *testing.T) {
 
 	h.runner.Reply("backup-db.sh", "dump written\n", 0)
 	h.putService(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: db }
 spec:
-  runtime: { type: command, start: db-start, stop: db-stop, status: db-status }
-  backup: { command: backup-db.sh }
+  type: service
+  adapter: command
+  config: { start: db-start, stop: db-stop, status: db-status, backup: { command: backup-db.sh } }
 `)
 	h.deploy(fmt.Sprintf(`
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata: { name: nightly-backup }
 spec:
   nodes:
     - { id: t, type: trigger.cron, props: { schedule: "0 3 * * *", timezone: UTC }, next: { out: [backup] } }
-    - { id: backup, type: lifecycle.backup, props: { service: db }, next: { out: [tell] } }
+    - { id: backup, type: lifecycle.backup, props: { resource: db }, next: { out: [tell] } }
     - id: tell
       type: notify
-      props: { target: webhook, url: %q, message: "backup of {{ nodes.backup.service }} finished" }
+      props: { target: webhook, url: %q, message: "backup of {{ nodes.backup.resource }} finished" }
 `, hook.URL))
 
 	base := h.clk.Pending()
@@ -312,7 +314,7 @@ spec:
 func TestRecoveryResumesSuspendedRun(t *testing.T) {
 	h := newHarness(t)
 	h.deploy(`
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata: { name: slow }
 spec:
@@ -363,20 +365,22 @@ func TestServiceLockInterplay(t *testing.T) {
 		return execx.Result{}, nil
 	})
 	h.putService(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: api }
 spec:
-  runtime: { type: command, start: api-start, stop: api-stop, restart: api-restart, status: api-status }
+  type: service
+  adapter: command
+  config: { start: api-start, stop: api-stop, restart: api-restart, status: api-status }
 `)
 	h.deploy(`
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata: { name: bounce }
 spec:
   nodes:
     - { id: t, type: trigger.manual, next: { out: [r] } }
-    - { id: r, type: lifecycle.restart, props: { service: api } }
+    - { id: r, type: lifecycle.restart, props: { resource: api } }
 `)
 	if _, err := h.app.Manager.Start(h.ctx, "api", catalog.ActionOptions{}); err != nil {
 		t.Fatal(err)

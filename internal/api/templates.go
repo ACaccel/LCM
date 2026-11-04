@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/templates"
 )
 
@@ -55,12 +55,15 @@ func (s *Server) handleInstantiateTemplate(w http.ResponseWriter, r *http.Reques
 		s.fail(w, r, err, nil)
 		return
 	}
-	// Only the service parameter names something that must already exist.
-	if svc, _ := req.Params[tpl.ServiceParam].(string); svc != "" {
-		if _, err := s.catalog.Get(r.Context(), svc); errors.Is(err, catalog.ErrNotFound) {
-			s.fail(w, r, model.Issues{{Path: "params." + tpl.ServiceParam, Message: "no service named " + svc}}, nil)
+	// Only the resource parameter names something that must already exist,
+	// and the templates act on services.
+	if name, _ := req.Params[tpl.ResourceParam].(string); name != "" {
+		rec, err := s.resources.Get(r.Context(), name)
+		switch {
+		case errors.Is(err, resource.ErrNotFound), err == nil && rec.Type != model.ResourceService:
+			s.fail(w, r, model.Issues{{Path: "params." + tpl.ResourceParam, Message: "no service named " + name}}, nil)
 			return
-		} else if err != nil {
+		case err != nil:
 			s.internalError(w, r, err)
 			return
 		}

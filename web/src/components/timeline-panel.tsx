@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { servicesQuery, timelineQuery } from "../api/queries";
+import { resourcesQuery, timelineQuery } from "../api/queries";
 import { flattenTimeline } from "../lib/timeline";
 import { s } from "../strings";
 import { TimelineEvents } from "./timeline-list";
@@ -13,12 +13,12 @@ const KINDS = Object.keys(s.timeline.kindNames);
  * the next page when it scrolls into view, and a button does the same for
  * keyboard users and browsers without IntersectionObserver.
  */
-export function TimelinePanel({ service, withServiceFilter }: { service?: string; withServiceFilter?: boolean }) {
+export function TimelinePanel({ resource, withResourceFilter }: { resource?: string; withResourceFilter?: boolean }) {
   const [kinds, setKinds] = useState<string[]>([]);
-  const [svc, setSvc] = useState("");
-  const effective = service ?? svc;
-  const q = useInfiniteQuery(timelineQuery({ service: effective || undefined, kinds }));
-  const services = useQuery({ ...servicesQuery(), enabled: !!withServiceFilter });
+  const [picked, setPicked] = useState("");
+  const effective = resource ?? picked;
+  const q = useInfiniteQuery(timelineQuery({ resource: effective || undefined, kinds }));
+  const resources = useQuery({ ...resourcesQuery(), enabled: !!withResourceFilter });
   const sentinel = useRef<HTMLDivElement>(null);
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = q;
 
@@ -41,14 +41,14 @@ export function TimelinePanel({ service, withServiceFilter }: { service?: string
   return (
     <div>
       <div className="filters">
-        {withServiceFilter && (
+        {withResourceFilter && (
           <div className="field">
-            <label htmlFor="tl-service">{s.timeline.service}</label>
-            <select id="tl-service" value={svc} onChange={(e) => setSvc(e.target.value)}>
-              <option value="">{s.timeline.allServices}</option>
-              {(services.data ?? []).map((x) => (
+            <label htmlFor="tl-resource">{s.timeline.resource}</label>
+            <select id="tl-resource" value={picked} onChange={(e) => setPicked(e.target.value)}>
+              <option value="">{s.timeline.allResources}</option>
+              {(resources.data ?? []).map((x) => (
                 <option key={x.name} value={x.name}>
-                  {x.name}
+                  {x.name} ({s.resourceType[x.type]})
                 </option>
               ))}
             </select>
@@ -71,7 +71,7 @@ export function TimelinePanel({ service, withServiceFilter }: { service?: string
       {q.isPending && <Spinner />}
       <ErrorBox error={q.error} onRetry={() => void q.refetch()} />
       {q.data && entries.length === 0 && <Empty>{s.timeline.empty}</Empty>}
-      {entries.length > 0 && <TimelineEvents entries={entries} showService={!service} />}
+      {entries.length > 0 && <TimelineEvents entries={entries} showResource={!resource} />}
       <div ref={sentinel} />
       {hasNextPage && (
         <p>

@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/ACaccel/lcm/internal/execx"
@@ -13,7 +12,7 @@ import (
 // Start starts a stopped, failed or newly registered service.
 func (m *Manager) Start(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionStart, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
-		if err := s.adapter.Start(ctx, s.svc); err != nil {
+		if err := s.adapter.Start(ctx, s.rt); err != nil {
 			s.settle(ctx, false)
 			return err
 		}
@@ -24,7 +23,7 @@ func (m *Manager) Start(ctx context.Context, name string, opts ActionOptions) (A
 // Stop stops a running or failed service.
 func (m *Manager) Stop(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionStop, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
-		if err := s.adapter.Stop(ctx, s.svc); err != nil {
+		if err := s.adapter.Stop(ctx, s.rt); err != nil {
 			s.settle(ctx, false)
 			return err
 		}
@@ -46,34 +45,19 @@ func (m *Manager) Restart(ctx context.Context, name string, opts ActionOptions) 
 // restartOrStart restarts an active service and starts an inactive one,
 // since not every runtime's restart brings up stopped processes.
 func (s *session) restartOrStart(ctx context.Context) error {
-	if !rt.CapabilitiesOf(s.svc.Spec.Runtime).Start {
-		return s.adapter.Restart(ctx, s.svc)
+	if !rt.CapabilitiesOf(s.rt).Start {
+		return s.adapter.Restart(ctx, s.rt)
 	}
-	if st, err := s.adapter.Status(ctx, s.svc); err == nil && st.State != rt.StateActive && st.State != rt.StateUnknown {
-		return s.adapter.Start(ctx, s.svc)
+	if st, err := s.adapter.Status(ctx, s.rt); err == nil && st.State != rt.StateActive && st.State != rt.StateUnknown {
+		return s.adapter.Start(ctx, s.rt)
 	}
-	return s.adapter.Restart(ctx, s.svc)
-}
-
-// Retire stops the service and marks it retired, the terminal state. The
-// stop is skipped for services that are not running and for runtimes that
-// cannot stop them.
-func (m *Manager) Retire(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
-	return m.exec(ctx, name, ActionRetire, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
-		if (s.cur == StateRunning || s.cur == StateFailed) && rt.CapabilitiesOf(s.svc.Spec.Runtime).Stop {
-			if err := s.adapter.Stop(ctx, s.svc); err != nil && !errors.Is(err, rt.ErrUnsupported) {
-				s.settle(ctx, false)
-				return err
-			}
-		}
-		return s.move(ctx, StateRetired)
-	})
+	return s.adapter.Restart(ctx, s.rt)
 }
 
 // Backup runs the service's backup command. The state does not change.
 func (m *Manager) Backup(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionBackup, opts, func(ctx context.Context, s *session, res *ActionResult) error {
-		b := s.svc.Spec.Backup
+		b := s.cfg.Backup
 		if b == nil {
 			return ErrNoBackup
 		}
@@ -84,7 +68,7 @@ func (m *Manager) Backup(ctx context.Context, name string, opts ActionOptions) (
 // RunJob runs one of the service's configured jobs. The state does not change.
 func (m *Manager) RunJob(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionRunJob, opts, func(ctx context.Context, s *session, res *ActionResult) error {
-		job, ok := s.svc.Spec.Jobs[opts.Job]
+		job, ok := s.cfg.Jobs[opts.Job]
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrUnknownJob, opts.Job)
 		}
@@ -110,7 +94,7 @@ func (s *session) runCommand(ctx context.Context, c model.Command, res *ActionRe
 // workDir is the source checkout when there is one, so that relative paths
 // in commands behave as they do for deploys.
 func (s *session) workDir() string {
-	if src := s.svc.Spec.Source; src != nil {
+	if src := s.cfg.Source; src != nil {
 		return src.Repo
 	}
 	return ""

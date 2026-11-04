@@ -83,14 +83,14 @@ extra_checks() {
 service_doc() {
 	cat >>"$work/monitored.yaml" <<EOF
 ---
-# Monitoring only: runtime external, so LCM never acts on it.
-apiVersion: lcm/v1
-kind: Service
+# Monitoring only: adapter external, so LCM never acts on it.
+apiVersion: lcm/v2
+kind: Resource
 metadata:
   name: $1
 spec:
-  runtime:
-    type: external
+  type: service
+  adapter: external
   checks:$2
 EOF
 	note "$1: $(grep -c '^    - ' <<<"$2") checks"
@@ -120,18 +120,18 @@ fi
 
 log "self-deploy service lcm"
 apply "$deploy_dir/lcm-self.service.yaml"
-deployed=$("$lcm" get services lcm -o json | jq -r '.deployedVersion // ""')
+deployed=$("$lcm" get resources lcm -o json | jq -r '.service.deployedVersion // ""')
 if [[ -n $deployed ]]; then
 	note "already deployed at $deployed"
 else
 	sha=$(git ls-remote -- "$repo_url" refs/heads/main | cut -f1)
 	[[ $sha =~ ^[0-9a-f]{40}$ ]] || die "cannot read the head of main from $repo_url"
 	note "first deployment of main at $sha (builds the console and the binary; takes a few minutes)"
-	"$lcm" action lcm deploy --version "$sha" --wait ||
+	"$lcm" resource action lcm deploy --version "$sha" --wait ||
 		die "the first deployment failed; its log is on the service page of the web console"
 	note "waiting for LCM to restart on the new binary"
 	for _ in $(seq 120); do
-		health=$("$lcm" get services lcm -o json 2>/dev/null | jq -r '.health // ""' || true)
+		health=$("$lcm" get resources lcm -o json 2>/dev/null | jq -r '.health.status // ""' || true)
 		[[ $health == healthy ]] && break
 		sleep 2
 	done
@@ -142,5 +142,5 @@ fi
 log "auto-deploy policy"
 apply "$deploy_dir/lcm-auto-deploy.yaml"
 
-log "services"
-"$lcm" get services
+log "resources"
+"$lcm" get resources

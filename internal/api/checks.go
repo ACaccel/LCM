@@ -8,35 +8,36 @@ import (
 	"github.com/ACaccel/lcm/internal/monitor"
 )
 
-// serviceChecks returns the monitor's view of a service that exists in the
-// catalog. A service without checks has no monitor entry; that is an empty
-// result, not a missing service.
-func (s *Server) serviceChecks(w http.ResponseWriter, r *http.Request) (monitor.ServiceStatus, bool) {
-	name := r.PathValue("svc")
-	if _, err := s.catalog.Get(r.Context(), name); err != nil {
+// resourceChecks returns the monitor's view of an active resource of any
+// type. A resource without checks or native health has no monitor entry;
+// that is an empty result, not a missing resource.
+func (s *Server) resourceChecks(w http.ResponseWriter, r *http.Request) (monitor.ResourceStatus, bool) {
+	name := r.PathValue("resource")
+	rec, err := s.resources.Get(r.Context(), name)
+	if err != nil {
 		s.fail(w, r, err, nil)
-		return monitor.ServiceStatus{}, false
+		return monitor.ResourceStatus{}, false
 	}
-	st, ok := s.monitor.Service(name)
+	st, ok := s.monitor.Resource(rec.Name)
 	if !ok {
-		return monitor.ServiceStatus{Service: name, Health: monitor.HealthUnknown}, true
+		return monitor.ResourceStatus{Resource: rec.Name, Type: rec.Type, Health: monitor.HealthUnknown}, true
 	}
 	return st, true
 }
 
 type checksDTO struct {
-	Service string           `json:"service"`
-	Health  string           `json:"health"`
-	Since   *time.Time       `json:"since"`
-	Checks  []checkStatusDTO `json:"checks"`
+	Resource string           `json:"resource"`
+	Health   string           `json:"health"`
+	Since    *time.Time       `json:"since"`
+	Checks   []checkStatusDTO `json:"checks"`
 }
 
-func (s *Server) handleServiceChecks(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.serviceChecks(w, r)
+func (s *Server) handleResourceChecks(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.resourceChecks(w, r)
 	if !ok {
 		return
 	}
-	out := checksDTO{Service: st.Service, Health: string(st.Health), Since: optTime(st.Since), Checks: []checkStatusDTO{}}
+	out := checksDTO{Resource: st.Resource, Health: string(st.Health), Since: optTime(st.Since), Checks: []checkStatusDTO{}}
 	for _, c := range st.Checks {
 		out.Checks = append(out.Checks, toCheckStatusDTO(c))
 	}
@@ -53,10 +54,10 @@ type pointDTO struct {
 }
 
 type seriesDTO struct {
-	Service string    `json:"service"`
-	Check   string    `json:"check"`
-	From    time.Time `json:"from"`
-	To      time.Time `json:"to"`
+	Resource string    `json:"resource"`
+	Check    string    `json:"check"`
+	From     time.Time `json:"from"`
+	To       time.Time `json:"to"`
 	// Source is raw or rollup.
 	Source string `json:"source"`
 	// StepMs is the bucket width; 0 when every point is one raw result.
@@ -70,7 +71,7 @@ func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond)
 const defaultSeriesRange = time.Hour
 
 func (s *Server) handleCheckSeries(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.serviceChecks(w, r)
+	st, ok := s.resourceChecks(w, r)
 	if !ok {
 		return
 	}
@@ -101,7 +102,7 @@ func (s *Server) handleCheckSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ser, err := s.monitor.Series(r.Context(), st.Service, check, from, to, int(points))
+	ser, err := s.monitor.Series(r.Context(), st.Resource, check, from, to, int(points))
 	if errors.Is(err, monitor.ErrInvalidRange) {
 		writeError(w, http.StatusBadRequest, codeBadRequest, "from must be before to", map[string]any{"param": "from"})
 		return
@@ -111,7 +112,7 @@ func (s *Server) handleCheckSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := seriesDTO{
-		Service: st.Service, Check: check, From: ser.From.UTC(), To: ser.To.UTC(), Source: ser.Source,
+		Resource: st.Resource, Check: check, From: ser.From.UTC(), To: ser.To.UTC(), Source: ser.Source,
 		StepMs: ser.Step.Milliseconds(), Points: make([]pointDTO, 0, len(ser.Points)),
 	}
 	for _, p := range ser.Points {
@@ -139,9 +140,9 @@ func toSummaryDTO(m monitor.Summary) summaryDTO {
 	}
 }
 
-type serviceSummaryRespDTO struct {
-	Service string `json:"service"`
-	Window  string `json:"window"`
+type resourceSummaryRespDTO struct {
+	Resource string `json:"resource"`
+	Window   string `json:"window"`
 	summaryDTO
 	Checks map[string]summaryDTO `json:"checks"`
 }
@@ -153,8 +154,8 @@ var summaryWindows = map[string]time.Duration{
 	"30d": 30 * 24 * time.Hour,
 }
 
-func (s *Server) handleServiceSummary(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.serviceChecks(w, r)
+func (s *Server) handleResourceSummary(w http.ResponseWriter, r *http.Request) {
+	st, ok := s.resourceChecks(w, r)
 	if !ok {
 		return
 	}
@@ -167,14 +168,14 @@ func (s *Server) handleServiceSummary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeBadRequest, "window must be 24h, 7d or 30d", map[string]any{"param": "window"})
 		return
 	}
-	total, err := s.monitor.ServiceSummary(r.Context(), st.Service, window)
+	total, err := s.monitor.ResourceSummary(r.Context(), st.Resource, window)
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return
 	}
-	out := serviceSummaryRespDTO{Service: st.Service, Window: label, summaryDTO: toSummaryDTO(total), Checks: map[string]summaryDTO{}}
+	out := resourceSummaryRespDTO{Resource: st.Resource, Window: label, summaryDTO: toSummaryDTO(total), Checks: map[string]summaryDTO{}}
 	for _, c := range st.Checks {
-		sum, err := s.monitor.CheckSummary(r.Context(), st.Service, c.Name, window)
+		sum, err := s.monitor.CheckSummary(r.Context(), st.Resource, c.Name, window)
 		if err != nil {
 			s.fail(w, r, err, nil)
 			return
@@ -197,8 +198,8 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 		alerts []monitor.Alert
 		err    error
 	)
-	if svc := r.URL.Query().Get("service"); svc != "" {
-		alerts, err = s.monitor.FiringAlerts(r.Context(), svc)
+	if name := r.URL.Query().Get("resource"); name != "" {
+		alerts, err = s.monitor.FiringAlerts(r.Context(), name)
 	} else {
 		alerts, err = s.monitor.AllFiringAlerts(r.Context())
 	}

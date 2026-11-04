@@ -12,9 +12,7 @@ import (
 func BenchmarkJournalBurst(b *testing.B) {
 	e := newEnv(b)
 	e.m.onEvent = nil
-	if _, err := e.m.Put(e.ctx, []byte(testDoc), 0); err != nil {
-		b.Fatal(err)
-	}
+	e.put(b, testDoc, 0)
 	var before, after syscall.Rusage
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &before); err != nil {
 		b.Fatal(err)
@@ -53,7 +51,7 @@ func BenchmarkJournalBurst(b *testing.B) {
 	}
 	b.ReportMetric(float64(size), "db-with-wal-B")
 	var count int
-	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM machine_events`).Scan(&count); err != nil {
+	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM resource_events`).Scan(&count); err != nil {
 		b.Fatal(err)
 	}
 	if count > 200000 {
@@ -63,7 +61,7 @@ func BenchmarkJournalBurst(b *testing.B) {
 	if err := e.m.Prune(e.ctx); err != nil {
 		b.Fatal(err)
 	}
-	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM machine_events`).Scan(&count); err != nil {
+	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM resource_events`).Scan(&count); err != nil {
 		b.Fatal(err)
 	}
 	if count != 0 {

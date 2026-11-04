@@ -234,16 +234,17 @@ func (e *realEnv) createDeployFixtures() {
 	}
 	install := fmt.Sprintf("rm -rf %[1]s/* && cp -r site/. %[1]s/", filepath.Join(e.dir, "deploy"))
 	doc := fmt.Sprintf(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: e2e-web }
 spec:
-  runtime: { type: systemd, unit: %s.service, scope: user }
-  source: { repo: %s, branch: main, build: "sh ./build.sh", install: %q }
+  type: service
+  adapter: systemd
+  config: { unit: %s.service, scope: user, source: { repo: %s, branch: main, build: "sh ./build.sh", install: %q } }
   checks:
     - { name: http, type: http, interval: 2s, timeout: 1s, props: { url: "http://127.0.0.1:%d/health" } }
 `, e.unit, e.work, install, e.port)
-	if _, err := e.app.Catalog.Put(e.ctx, []byte(doc), 0); err != nil {
+	if _, err := e.app.Resources.Put(e.ctx, []byte(doc), 0); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -323,7 +324,7 @@ func (e *realEnv) autoDeploy(t *testing.T) {
 	e.expectHealthyOn("0")
 	tpl, _ := templates.Get("auto-deploy")
 	doc, err := tpl.Render("e2e-auto-deploy", map[string]any{
-		"service": "e2e-web", "repo": e.origin, "requireCI": false, "healthTimeout": "30s", "notifySecret": "e2e-hook",
+		"resource": "e2e-web", "repo": e.origin, "requireCI": false, "healthTimeout": "30s", "notifySecret": "e2e-hook",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -345,8 +346,11 @@ func (e *realEnv) autoDeploy(t *testing.T) {
 	if got := e.served(); got != "A" {
 		t.Fatalf("after A the server shows %q", got)
 	}
+	// One message per deployment: created when the run starts and edited
+	// as each stage finishes.
 	msgs := e.discord.all()
-	if len(msgs) != 2 || !strings.HasPrefix(msgs[0], "POST ") || !strings.HasPrefix(msgs[1], "PATCH ") || !strings.Contains(msgs[1], "Deployed") {
+	if posts, last := countPosts(msgs), msgs[len(msgs)-1]; posts != 1 || !strings.HasPrefix(msgs[0], "POST ") ||
+		!strings.HasPrefix(last, "PATCH ") || !strings.Contains(last, "is healthy") {
 		t.Fatalf("notifications for A = %q", msgs)
 	}
 
@@ -368,10 +372,10 @@ func (e *realEnv) autoDeploy(t *testing.T) {
 		t.Errorf("health wait for C = %s on port %q, want the timeout port", n.Status, n.Port)
 	}
 	e.expectHealthyOn("A")
-	if msgs := e.discord.all(); len(msgs) != 6 {
-		t.Fatalf("notifications = %q, want a POST and one edit per stage for each of three runs", msgs)
+	if msgs := e.discord.all(); countPosts(msgs) != 3 || !strings.Contains(msgs[len(msgs)-1], "Rolled back") {
+		t.Fatalf("notifications = %q, want one message per run, edited as its stages finish", msgs)
 	}
-	if st, ok := e.app.Monitor.Service("e2e-web"); !ok || st.Health != "healthy" {
+	if st, ok := e.app.Monitor.Resource("e2e-web"); !ok || st.Health != "healthy" {
 		t.Errorf("health at the end = %+v", st)
 	}
 	rec, err := e.app.Catalog.Get(e.ctx, "e2e-web")
@@ -398,7 +402,7 @@ func (e *realEnv) expectHealthyOn(version string) {
 	e.t.Helper()
 	e.eventually("version "+version+" to be served", 15*time.Second, func() bool { return e.served() == version })
 	e.eventually("the service to report healthy", 20*time.Second, func() bool {
-		st, ok := e.app.Monitor.Service("e2e-web")
+		st, ok := e.app.Monitor.Resource("e2e-web")
 		return ok && st.Health == "healthy"
 	})
 }
@@ -411,16 +415,17 @@ func (e *realEnv) scheduledBackup(t *testing.T) {
 	out := filepath.Join(e.dir, "backup.out")
 	beat := fmt.Sprintf("curl -fsS -X POST -H 'Authorization: Bearer %s' http://%s/api/v1/heartbeats/e2e-db/dump", tok, e.app.Addr())
 	doc := fmt.Sprintf(`
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata: { name: e2e-db }
 spec:
-  runtime: { type: command, start: "true", stop: "true", status: "true" }
-  backup: { command: "echo dump > %s && %s" }
+  type: service
+  adapter: command
+  config: { start: "true", stop: "true", status: "true", backup: { command: "echo dump > %s && %s" } }
   checks:
     - { name: dump, type: heartbeat, interval: 1h, critical: false }
 `, out, beat)
-	if _, err := e.app.Catalog.Put(e.ctx, []byte(doc), 0); err != nil {
+	if _, err := e.app.Resources.Put(e.ctx, []byte(doc), 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.app.Manager.Start(e.ctx, "e2e-db", catalog.ActionOptions{}); err != nil {
@@ -432,7 +437,7 @@ spec:
 
 	tpl, _ := templates.Get("scheduled-backup")
 	body, err := tpl.Render("e2e-backup", map[string]any{
-		"service": "e2e-db", "schedule": "* * * * *", "timezone": "UTC", "heartbeatCheck": "dump", "notifySecret": "e2e-hook",
+		"resource": "e2e-db", "schedule": "* * * * *", "timezone": "UTC", "heartbeatCheck": "dump", "notifySecret": "e2e-hook",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -468,4 +473,15 @@ spec:
 	if err := e.app.Engine.Undeploy(e.ctx, "e2e-backup"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// countPosts counts the created messages; every other entry edits one.
+func countPosts(msgs []string) int {
+	n := 0
+	for _, m := range msgs {
+		if strings.HasPrefix(m, "POST ") {
+			n++
+		}
+	}
+	return n
 }

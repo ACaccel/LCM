@@ -2,6 +2,7 @@ package api
 
 import (
 	_ "embed"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -83,8 +84,9 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		} else {
 			out.Warnings = issuesBody(warnings)
 		}
-	case *model.Service:
-		out.Issues = issuesBody(s.serviceIssues(r, d))
+	case *model.Resource:
+		out.Issues = issuesBody(s.monitor.ValidateChecks(d.Spec.Checks, "spec.checks"))
+		out.Warnings = issuesBody(s.unresolvedRelations(r, d))
 	}
 	finish()
 }
@@ -140,4 +142,20 @@ func (s *Server) handleForceReleaseLock(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// unresolvedRelations warns about relation targets that do not exist yet.
+// Saving is allowed (the target may be created later), so they are not
+// errors.
+func (s *Server) unresolvedRelations(r *http.Request, doc *model.Resource) model.Issues {
+	var out model.Issues
+	for i, rel := range doc.Spec.Relations {
+		if _, err := s.resources.Get(r.Context(), rel.Target); err != nil {
+			out = append(out, model.Issue{
+				Path:    fmt.Sprintf("spec.relations[%d].target", i),
+				Message: fmt.Sprintf("no resource named %q yet; the relation stays unresolved until it exists", rel.Target),
+			})
+		}
+	}
+	return out
 }

@@ -36,10 +36,10 @@ type Spec[P any] struct {
 	Run func(ctx context.Context, rc *RunContext, props P) (Result, error)
 	// DryRun replaces Run for write nodes in dry mode; optional.
 	DryRun func(ctx context.Context, rc *RunContext, props P) (Result, error)
-	// ServiceProp names the string prop holding the service the node acts
-	// on, so that a policy's targets can be listed without running it;
-	// optional.
-	ServiceProp string
+	// ResourceProp names the string prop holding the resource the node
+	// acts on, so that a policy's targets can be listed without running
+	// it; optional.
+	ResourceProp string
 }
 
 // Definition is a registered node type with its props type erased.
@@ -58,7 +58,7 @@ type Definition struct {
 	run      func(context.Context, *RunContext, any) (Result, error)
 	dryRun   func(context.Context, *RunContext, any) (Result, error)
 
-	serviceProp string
+	resourceProp string
 }
 
 var (
@@ -125,12 +125,12 @@ func newDefinition[P any](s Spec[P]) (*Definition, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.ServiceProp != "" && !slices.ContainsFunc(props, func(p Prop) bool { return p.Name == s.ServiceProp && p.Type == "string" }) {
-		return nil, fmt.Errorf("serviceProp %q is not a string prop", s.ServiceProp)
+	if s.ResourceProp != "" && !slices.ContainsFunc(props, func(p Prop) bool { return p.Name == s.ResourceProp && p.Type == "string" }) {
+		return nil, fmt.Errorf("resourceProp %q is not a string prop", s.ResourceProp)
 	}
 	d := &Definition{
 		typ: s.Type, category: s.Category, description: s.Description, effect: effect,
-		ports: slices.Clone(ports), props: props, additional: additional, serviceProp: s.ServiceProp,
+		ports: slices.Clone(ports), props: props, additional: additional, resourceProp: s.ResourceProp,
 		decode: func(m map[string]any) (any, error) { return decodeInto[P](m) },
 	}
 	if s.PortsOf != nil {
@@ -196,8 +196,8 @@ func (d *Definition) Effect() Effect { return d.effect }
 // IsTrigger reports whether the type starts runs.
 func (d *Definition) IsTrigger() bool { return d.category == CategoryTrigger }
 
-// ServiceProp returns the prop naming the service the node acts on, or "".
-func (d *Definition) ServiceProp() string { return d.serviceProp }
+// ResourceProp returns the prop naming the resource the node acts on, or "".
+func (d *Definition) ResourceProp() string { return d.resourceProp }
 
 // HasDryRun reports whether the type provides a DryRun function.
 func (d *Definition) HasDryRun() bool { return d.dryRun != nil }

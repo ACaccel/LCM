@@ -10,7 +10,7 @@ import (
 )
 
 const validPolicy = `
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata: { name: auto-restart, labels: { team: ops } }
 spec:
@@ -84,7 +84,7 @@ func TestEncodeRoundTrip(t *testing.T) {
 }
 
 const validModule = `
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Module
 metadata: { name: restart-mod }
 spec:
@@ -120,7 +120,7 @@ func TestDecodeModule(t *testing.T) {
 }
 
 func TestDecodeErrors(t *testing.T) {
-	head := "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: p }\n"
+	head := "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: p }\n"
 	node := "spec:\n  nodes:\n    - { id: a, type: trigger.manual }\n"
 	tests := []struct {
 		name, doc, path, msg string
@@ -128,16 +128,16 @@ func TestDecodeErrors(t *testing.T) {
 		{"empty", "", "", "empty document"},
 		{"syntax", "a: [", "", "did not find"},
 		{"multi", head + node + "---\n" + head + node, "", "single document"},
-		{"api version", "apiVersion: v2\nkind: Policy\n", "apiVersion", "lcm/v1"},
-		{"kind", "apiVersion: lcm/v1\nkind: Thing\n", "kind", "must be"},
+		{"api version", "apiVersion: v2\nkind: Policy\n", "apiVersion", "lcm/v2"},
+		{"kind", "apiVersion: lcm/v2\nkind: Thing\n", "kind", "must be"},
 		{"unknown field", head + node + "  bogus: 1\n", "", "field bogus not found"},
 		{"unknown node field", head + "spec:\n  nodes:\n    - { id: a, type: t, color: red }\n", "", "field color not found"},
 		{"bad duration", head + "spec:\n  timeout: soon\n  nodes:\n    - { id: a, type: t }\n", "", "invalid duration"},
 		{"duration type", head + "spec:\n  timeout: [1]\n  nodes:\n    - { id: a, type: t }\n", "", "duration must be"},
 		{"non-string key", head + "spec:\n  nodes:\n    - { id: a, type: t, props: { x: { true: 2 } } }\n", "spec.nodes[0].props", "string keys"},
-		{"param unknown field", "apiVersion: lcm/v1\nkind: Module\nmetadata: { name: m }\nspec:\n  params: [{ name: a, req: true }]\n  nodes: []\n", "", "field req not found"},
-		{"param not mapping", "apiVersion: lcm/v1\nkind: Module\nmetadata: { name: m }\nspec:\n  params: [a]\n  nodes: []\n", "", "must be a mapping"},
-		{"module params default", "apiVersion: lcm/v1\nkind: Module\nmetadata: { name: m }\nspec:\n  params: [{ name: a, default: { true: 2 } }]\n  nodes: []\n", "spec.params[0].default", "string keys"},
+		{"param unknown field", "apiVersion: lcm/v2\nkind: Module\nmetadata: { name: m }\nspec:\n  params: [{ name: a, req: true }]\n  nodes: []\n", "", "field req not found"},
+		{"param not mapping", "apiVersion: lcm/v2\nkind: Module\nmetadata: { name: m }\nspec:\n  params: [a]\n  nodes: []\n", "", "must be a mapping"},
+		{"module params default", "apiVersion: lcm/v2\nkind: Module\nmetadata: { name: m }\nspec:\n  params: [{ name: a, default: { true: 2 } }]\n  nodes: []\n", "spec.params[0].default", "string keys"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -167,7 +167,7 @@ func TestValidatePolicy(t *testing.T) {
 		path string
 		msg  string
 	}{
-		{"api", func(p *model.Policy) { p.APIVersion = "x" }, "apiVersion", "lcm/v1"},
+		{"api", func(p *model.Policy) { p.APIVersion = "x" }, "apiVersion", "lcm/v2"},
 		{"kind", func(p *model.Policy) { p.Kind = model.KindModule }, "kind", "Policy"},
 		{"name missing", func(p *model.Policy) { p.Metadata.Name = "" }, "metadata.name", "required"},
 		{"name invalid", func(p *model.Policy) { p.Metadata.Name = "Bad_Name" }, "metadata.name", "lowercase"},
@@ -291,7 +291,7 @@ func assertIssue(t *testing.T, err error, path, msg string) {
 
 func TestAnnotationsRoundTrip(t *testing.T) {
 	const src = `
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata:
   name: p

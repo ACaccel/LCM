@@ -62,7 +62,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	err := s.monitor.Heartbeat(r.Context(), r.PathValue("svc"), r.PathValue("check"), body)
+	err := s.monitor.Heartbeat(r.Context(), r.PathValue("resource"), r.PathValue("check"), body)
 	if errors.Is(err, monitor.ErrNotHeartbeat) {
 		writeError(w, http.StatusConflict, codeConflict, publicMessage(err), nil)
 		return

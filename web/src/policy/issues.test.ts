@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { autoLayout, issuesAt, issuesExactlyAt, mapIssues, nextPosition, tokenizePath } from "./issues";
 import { parsePolicyText } from "./model";
 
-const text = `apiVersion: lcm/v1
+const text = `apiVersion: lcm/v2
 kind: Policy
 metadata: { name: p }
 spec:

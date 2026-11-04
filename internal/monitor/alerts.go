@@ -19,7 +19,7 @@ const maxAlertMessage = 1024
 type Alert struct {
 	Source      string            `json:"source"`
 	Fingerprint string            `json:"fingerprint"`
-	Service     string            `json:"service,omitempty"`
+	Resource    string            `json:"resource,omitempty"`
 	Name        string            `json:"name"`
 	Severity    string            `json:"severity"`
 	Labels      map[string]string `json:"labels,omitempty"`
@@ -36,7 +36,7 @@ type Alert struct {
 // for an alert that is already firing refreshes it silently, so Alertmanager
 // re-sends do not retrigger policies. It returns the published signals.
 func (m *Monitor) IngestAlert(ctx context.Context, source string, body []byte) ([]signal.Signal, error) {
-	parsed, err := alert.Parse(source, body, alert.Options{ServiceLabels: m.alertLabels})
+	parsed, err := alert.Parse(source, body, alert.Options{ResourceLabels: m.alertLabels})
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +45,12 @@ func (m *Monitor) IngestAlert(ctx context.Context, source string, body []byte) (
 	}
 	m.mu.Lock()
 	closed := m.closed
+	// The type is known when the resource has checks or native health.
+	for i := range parsed {
+		if r := m.resources[parsed[i].Resource]; r != nil {
+			parsed[i].ResourceType = r.typ
+		}
+	}
 	m.mu.Unlock()
 	if closed {
 		return nil, ErrClosed
@@ -100,18 +106,18 @@ func recordAlert(ctx context.Context, tx *sql.Tx, sig signal.Signal, now time.Ti
 		}
 		if firing {
 			_, err = tx.ExecContext(ctx,
-				`UPDATE monitor_alerts SET service = ?, name = ?, severity = ?, labels = ?, message = ?, updated_at = ?
+				`UPDATE monitor_alerts SET resource = ?, name = ?, severity = ?, labels = ?, message = ?, updated_at = ?
                  WHERE source = ? AND fingerprint = ?`,
-				sig.Service, name, sig.Severity, string(labels), msg, now.UnixMilli(), sig.Source, fp)
+				sig.Resource, name, sig.Severity, string(labels), msg, now.UnixMilli(), sig.Source, fp)
 			return false, err
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO monitor_alerts (source, fingerprint, service, name, severity, labels, message, started_at, updated_at, resolved_at)
+			`INSERT INTO monitor_alerts (source, fingerprint, resource, name, severity, labels, message, started_at, updated_at, resolved_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-             ON CONFLICT (source, fingerprint) DO UPDATE SET service = excluded.service, name = excluded.name,
+             ON CONFLICT (source, fingerprint) DO UPDATE SET resource = excluded.resource, name = excluded.name,
                  severity = excluded.severity, labels = excluded.labels, message = excluded.message,
                  started_at = excluded.started_at, updated_at = excluded.updated_at, resolved_at = NULL`,
-			sig.Source, fp, sig.Service, name, sig.Severity, string(labels), msg, now.UnixMilli(), now.UnixMilli())
+			sig.Source, fp, sig.Resource, name, sig.Severity, string(labels), msg, now.UnixMilli(), now.UnixMilli())
 		return true, err
 	default:
 		if !firing {
@@ -126,10 +132,10 @@ func recordAlert(ctx context.Context, tx *sql.Tx, sig signal.Signal, now time.Ti
 	}
 }
 
-// FiringAlerts returns the alerts currently firing for service, oldest
-// first. The empty service selects alerts that could not be mapped to one.
-func (m *Monitor) FiringAlerts(ctx context.Context, service string) ([]Alert, error) {
-	return m.queryAlerts(ctx, `service = ? AND resolved_at IS NULL`, service)
+// FiringAlerts returns the alerts currently firing for resource, oldest
+// first. The empty resource selects alerts that could not be mapped to one.
+func (m *Monitor) FiringAlerts(ctx context.Context, resource string) ([]Alert, error) {
+	return m.queryAlerts(ctx, `resource = ? AND resolved_at IS NULL`, resource)
 }
 
 // AllFiringAlerts returns every alert currently firing, oldest first.
@@ -139,7 +145,7 @@ func (m *Monitor) AllFiringAlerts(ctx context.Context) ([]Alert, error) {
 
 func (m *Monitor) queryAlerts(ctx context.Context, where string, args ...any) ([]Alert, error) {
 	rows, err := m.db.Reader().QueryContext(ctx,
-		`SELECT source, fingerprint, service, name, severity, labels, message, started_at, updated_at
+		`SELECT source, fingerprint, resource, name, severity, labels, message, started_at, updated_at
          FROM monitor_alerts WHERE `+where+` ORDER BY started_at, source, fingerprint`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("monitor: alerts: %w", err)
@@ -149,7 +155,7 @@ func (m *Monitor) queryAlerts(ctx context.Context, where string, args ...any) ([
 		var a Alert
 		var labels string
 		var started, updated int64
-		if err := rows.Scan(&a.Source, &a.Fingerprint, &a.Service, &a.Name, &a.Severity, &labels, &a.Message, &started, &updated); err != nil {
+		if err := rows.Scan(&a.Source, &a.Fingerprint, &a.Resource, &a.Name, &a.Severity, &labels, &a.Message, &started, &updated); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("monitor: alerts: %w", err)
 		}

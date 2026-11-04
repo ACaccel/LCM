@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
 )
 
@@ -20,7 +22,7 @@ type TransitionInfo struct {
 	Ref string
 }
 
-// Transition moves a service from one state to another. from must equal the
+// Transition moves a service resource from one state to another. from must equal the
 // current state, which makes the change a compare-and-set: callers that
 // hold the service lock cannot overwrite a state they did not see. A
 // transition to the same state does nothing. The change, its timeline entry
@@ -39,11 +41,13 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 	var labels map[string]string
 	var entry Entry
 	err := c.db.Write(ctx, func(tx *sql.Tx) error {
-		var cur, rawLabels string
+		var id, cur, rawLabels string
 		err := tx.QueryRowContext(ctx,
-			`SELECT s.state, COALESCE(json_extract(v.document, '$.metadata.labels'), '{}')
-			 FROM services s JOIN service_versions v ON v.name = s.name AND v.version = s.version
-			 WHERE s.name = ?`, name).Scan(&cur, &rawLabels)
+			`SELECT r.id, s.state, COALESCE(json_extract(v.document, '$.metadata.labels'), '{}')
+			 FROM resources r
+			 JOIN service_states s ON s.resource_id = r.id
+			 JOIN resource_versions v ON v.resource_id = r.id AND v.version = r.version
+			 WHERE r.name = ? AND r.type = ? AND r.phase != ?`, name, model.ResourceService, resource.PhaseUnmanaged).Scan(&id, &cur, &rawLabels)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("%w: service %s", ErrNotFound, name)
@@ -56,7 +60,7 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 			return fmt.Errorf("decode labels: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE services SET state = ?, state_since = ? WHERE name = ?`, string(to), now.UnixMilli(), name); err != nil {
+			`UPDATE service_states SET state = ?, state_since = ? WHERE resource_id = ?`, string(to), now.UnixMilli(), id); err != nil {
 			return err
 		}
 		summary := fmt.Sprintf("%s -> %s", from, to)
@@ -64,7 +68,7 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 			summary += " (" + info.Action + ")"
 		}
 		entry = Entry{
-			Service: name, Time: now, Kind: KindLifecycle, Summary: summary, Ref: info.Ref,
+			Resource: name, Time: now, Kind: KindLifecycle, Summary: summary, Ref: info.Ref,
 			Data: map[string]any{"state": string(to), "previous": string(from), "action": info.Action, "reason": info.Reason},
 		}
 		return insertTimeline(ctx, tx, entry)
@@ -73,16 +77,13 @@ func (c *Catalog) Transition(ctx context.Context, name string, from, to State, i
 		return err
 	}
 	c.timelineAdded(entry)
-	if from == StateRetired || to == StateRetired {
-		c.changed()
-	}
 	if c.bus != nil {
 		sev := signal.SeverityInfo
 		if to == StateFailed {
 			sev = signal.SeverityWarning
 		}
 		c.bus.Publish(signal.Signal{
-			Kind: signal.KindLifecycle, Time: now, Service: name, Source: "catalog", Severity: sev, Labels: labels,
+			Kind: signal.KindLifecycle, Time: now, Resource: name, ResourceType: model.ResourceService, Source: "catalog", Severity: sev, Labels: labels,
 			Data: map[string]any{"state": string(to), "previous": string(from), "action": info.Action},
 		})
 	}

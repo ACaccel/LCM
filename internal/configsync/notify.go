@@ -15,8 +15,11 @@ const (
 	KindInvalid  = "config.invalid"
 )
 
-// Signal data keys follow the alert signals of the monitor, so policies
-// that react to alerts can react to these as well.
+// SignalPrefix starts the kind of every signal the sync publishes about a
+// resource, such as "resource.config.conflict".
+const SignalPrefix = "resource."
+
+// Signal data keys follow the alert signals of the monitor.
 const (
 	dataAlert       = "alert"
 	dataStatus      = "status"
@@ -35,7 +38,7 @@ func (s *Syncer) notifyConflict(ctx context.Context, ref Ref, source, path, comm
 			shortCommit(commit), source, ref, path)
 	}
 	s.timeline(ctx, ref, KindConflict, msg, map[string]any{"source": source, "commit": commit, "path": path})
-	s.alert(ref, source, KindConflict, "firing", signal.SeverityWarning, msg, map[string]any{"commit": commit, "path": path})
+	s.alert(ctx, ref, source, KindConflict, "firing", signal.SeverityWarning, msg, map[string]any{"commit": commit, "path": path})
 	s.log.Warn("config sync conflict", "source", source, "resource", ref.String(), "commit", commit)
 }
 
@@ -49,36 +52,36 @@ func (s *Syncer) notifyInvalid(ctx context.Context, res Result, o applyOpts) {
 	msg := fmt.Sprintf("commit %s of source %s has an invalid document %s (%s): %s; the previous configuration stays",
 		shortCommit(o.commit), o.source, ref, res.Path, res.Issues.Error())
 	s.timeline(ctx, ref, KindInvalid, msg, map[string]any{"source": o.source, "commit": o.commit, "path": res.Path})
-	s.alert(ref, o.source, KindInvalid, "firing", signal.SeverityWarning, msg, map[string]any{"commit": o.commit, "path": res.Path})
+	s.alert(ctx, ref, o.source, KindInvalid, "firing", signal.SeverityWarning, msg, map[string]any{"commit": o.commit, "path": res.Path})
 	s.log.Warn("config sync document invalid", "source", o.source, "resource", ref.String(), "commit", o.commit)
 }
 
 // notifyResolved closes a conflict notification.
 func (s *Syncer) notifyResolved(ctx context.Context, ref Ref, source, why string) {
 	msg := fmt.Sprintf("config conflict on %s (source %s) is over: %s", ref, source, why)
-	s.alert(ref, source, KindConflict, "resolved", signal.SeverityInfo, msg, nil)
+	s.alert(ctx, ref, source, KindConflict, "resolved", signal.SeverityInfo, msg, nil)
 	s.timeline(ctx, ref, KindConflict, msg, map[string]any{"source": source, "resolved": true})
 }
 
-// timeline adds an entry to the service's timeline; only services have one.
-// It is written directly rather than through the signal follower so that it
-// is reliable and carries its own text.
+// timeline adds an entry to the resource's timeline; policies and modules
+// have none. It is written directly rather than through the signal
+// follower so that it is reliable and carries its own text; the follower
+// skips the resource.* signals for that reason.
 func (s *Syncer) timeline(ctx context.Context, ref Ref, kind, summary string, data map[string]any) {
-	if ref.Kind != model.KindService {
+	if ref.Kind != model.KindResource {
 		return
 	}
-	err := s.cat.AppendTimeline(ctx, catalog.Entry{Service: ref.Name, Kind: kind, Summary: summary, Data: data})
+	err := s.cat.AppendTimeline(ctx, catalog.Entry{Resource: ref.Name, Kind: kind, Summary: summary, Data: data})
 	if err != nil {
-		s.log.Warn("config sync timeline entry failed", "service", ref.Name, "error", err)
+		s.log.Warn("config sync timeline entry failed", "resource", ref.Name, "error", err)
 	}
 }
 
-// alert publishes a Service alert or a machine.config.* signal with source
-// "configsync". The signal
-// carries the service only as a label: with Signal.Service set, the
-// catalog's signal follower would add a second, less specific timeline
-// entry for the one written by timeline.
-func (s *Syncer) alert(ref Ref, source, name, status, severity, message string, extra map[string]any) {
+// alert publishes a resource.config.* signal with source "configsync" for
+// a resource, and an alert signal for a policy or module. Resource signals
+// have their own kinds so that alert triggers written for monitored alerts
+// do not start on config sync notifications.
+func (s *Syncer) alert(ctx context.Context, ref Ref, source, name, status, severity, message string, extra map[string]any) {
 	if s.bus == nil {
 		return
 	}
@@ -91,16 +94,13 @@ func (s *Syncer) alert(ref Ref, source, name, status, severity, message string, 
 		data[k] = v
 	}
 	labels := map[string]string{"kind": string(ref.Kind), "name": ref.Name, "source": source}
-	if ref.Kind == model.KindService {
-		labels["service"] = ref.Name
+	sig := signal.Signal{Kind: signal.KindAlert, Source: SourceName, Severity: severity, Labels: labels, Data: data}
+	if ref.Kind == model.KindResource {
+		sig.Kind, sig.Resource = signal.Kind(SignalPrefix+name), ref.Name
+		// A document that never became a resource has no type yet.
+		if rec, err := s.res.Get(ctx, ref.Name); err == nil {
+			sig.ResourceType = rec.Type
+		}
 	}
-	kind := signal.KindAlert
-	if ref.Kind == model.KindMachine {
-		// Machine conflicts must not enter legacy Service alert triggers.
-		kind = signal.Kind("machine." + name)
-		labels["machine"] = ref.Name
-	}
-	s.bus.Publish(signal.Signal{
-		Kind: kind, Source: SourceName, Severity: severity, Labels: labels, Data: data,
-	})
+	s.bus.Publish(sig)
 }

@@ -18,8 +18,7 @@ type command struct {
 	opts Options
 }
 
-func (c *command) Status(ctx context.Context, svc *model.Service) (Status, error) {
-	rt := svc.Spec.Runtime
+func (c *command) Status(ctx context.Context, rt model.Runtime) (Status, error) {
 	if rt.Status == "" {
 		return Status{State: StateUnknown, Detail: map[string]string{"reason": "no status command"}}, nil
 	}
@@ -46,26 +45,25 @@ func (c *command) exec(ctx context.Context, name, script string) error {
 	return nil
 }
 
-func (c *command) Start(ctx context.Context, svc *model.Service) error {
-	return c.exec(ctx, "start", svc.Spec.Runtime.Start)
+func (c *command) Start(ctx context.Context, rt model.Runtime) error {
+	return c.exec(ctx, "start", rt.Start)
 }
 
-func (c *command) Stop(ctx context.Context, svc *model.Service) error {
-	return c.exec(ctx, "stop", svc.Spec.Runtime.Stop)
+func (c *command) Stop(ctx context.Context, rt model.Runtime) error {
+	return c.exec(ctx, "stop", rt.Stop)
 }
 
 // Restart uses the restart command when configured and stop followed by
 // start otherwise.
-func (c *command) Restart(ctx context.Context, svc *model.Service) error {
-	r := svc.Spec.Runtime
-	if r.Restart != "" {
-		return c.exec(ctx, "restart", r.Restart)
+func (c *command) Restart(ctx context.Context, rt model.Runtime) error {
+	if rt.Restart != "" {
+		return c.exec(ctx, "restart", rt.Restart)
 	}
-	if r.Start == "" || r.Stop == "" {
+	if rt.Start == "" || rt.Stop == "" {
 		return c.exec(ctx, "restart", "")
 	}
-	if err := c.Stop(ctx, svc); err != nil {
+	if err := c.Stop(ctx, rt); err != nil {
 		return err
 	}
-	return c.Start(ctx, svc)
+	return c.Start(ctx, rt)
 }

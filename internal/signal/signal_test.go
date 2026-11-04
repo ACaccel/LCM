@@ -19,13 +19,13 @@ func TestPublishFanOutAndDefaults(t *testing.T) {
 	defer a.Close()
 	defer c.Close()
 
-	sent := b.Publish(Signal{Kind: KindHealth, Service: "web", Source: "monitor"})
+	sent := b.Publish(Signal{Kind: KindHealth, Resource: "web", Source: "monitor"})
 	if sent.ID == "" || sent.Time.IsZero() {
 		t.Fatalf("ID and Time must be filled: %+v", sent)
 	}
 	for _, s := range []*Subscription{a, c} {
 		got := <-s.C
-		if got.ID != sent.ID || got.Service != "web" {
+		if got.ID != sent.ID || got.Resource != "web" {
 			t.Fatalf("subscriber %s got %+v", s.name, got)
 		}
 	}

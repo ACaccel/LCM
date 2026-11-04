@@ -14,6 +14,7 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
@@ -44,6 +45,9 @@ var (
 	ErrNoBackup         = precondition("catalog: service has no backup command")
 	ErrUnknownJob       = precondition("catalog: service has no such job")
 	ErrUnsupported      = precondition("catalog: the service's runtime cannot perform this action")
+	// ErrNotManaged refuses actions on a retired service: it must be
+	// resumed first.
+	ErrNotManaged = precondition("catalog: the service is retired; resume it before acting on it")
 )
 
 // Locker serializes actions on a service across holders. Acquire must not
@@ -54,12 +58,12 @@ type Locker interface {
 	Acquire(ctx context.Context, name, owner string, ttl time.Duration) (release func(context.Context) error, err error)
 }
 
-// LockName is the lock name guarding a service.
-func LockName(service string) string { return "service:" + service }
+// LockName is the lock name guarding a resource.
+func LockName(name string) string { return "resource:" + name }
 
-// Runtimes resolves the adapter of a service; *runtime.Registry implements it.
+// Runtimes resolves the adapter of a runtime; *runtime.Registry implements it.
 type Runtimes interface {
-	For(svc *model.Service) (rt.Adapter, error)
+	For(r model.Runtime) (rt.Adapter, error)
 }
 
 // ManagerConfig configures a Manager.
@@ -76,7 +80,7 @@ type ManagerConfig struct {
 	Git string
 }
 
-// Manager performs lifecycle actions on services.
+// Manager performs lifecycle actions and phase changes on service resources.
 type Manager struct {
 	cat      *Catalog
 	runtimes Runtimes
@@ -130,10 +134,10 @@ type ActionOptions struct {
 // ActionResult describes a finished action. Fields are camelCase JSON so
 // the node output and the stored completion share one shape.
 type ActionResult struct {
-	Service string `json:"service"`
-	Action  string `json:"action"`
-	From    State  `json:"from"`
-	To      State  `json:"to"`
+	Resource string `json:"resource"`
+	Action   string `json:"action"`
+	From     State  `json:"from"`
+	To       State  `json:"to"`
 	// Version is the deployed commit (deploy and rollback).
 	Version         string `json:"version,omitempty"`
 	PreviousVersion string `json:"previousVersion,omitempty"`
@@ -155,7 +159,8 @@ type session struct {
 	opts    ActionOptions
 	actor   auth.Actor
 	rec     *Record
-	svc     *model.Service
+	cfg     *model.ServiceConfig
+	rt      model.Runtime
 	adapter rt.Adapter
 	release func(context.Context) error
 	cur     State
@@ -184,9 +189,9 @@ func (m *Manager) isBusy(name string) bool {
 	return busy
 }
 
-// open takes the busy mark and the lock, reloads the service and checks
-// that the action is allowed in its current state.
-func (m *Manager) open(ctx context.Context, name, action string, opts ActionOptions, actor auth.Actor) (*session, error) {
+// lock takes the busy mark and the lock of a service. The caller closes
+// the session.
+func (m *Manager) lock(ctx context.Context, name, action string, opts ActionOptions, actor auth.Actor) (*session, error) {
 	if !m.markBusy(name) {
 		return nil, fmt.Errorf("%w: another action is running on %s", ErrLockHeld, name)
 	}
@@ -201,29 +206,52 @@ func (m *Manager) open(ctx context.Context, name, action string, opts ActionOpti
 		return nil, fmt.Errorf("lock service %s: %w", name, err)
 	}
 	s.release = release
+	return s, nil
+}
 
-	// The state is read only after the lock is held: it may have changed
-	// while waiting for the lock holder.
-	rec, err := m.cat.Get(ctx, name)
+// load reads the service after the lock is held (it may have changed
+// while waiting for the lock holder) and resolves its adapter.
+func (s *session) load(ctx context.Context) error {
+	rec, err := s.m.cat.Get(ctx, s.name)
 	if err != nil {
+		return err
+	}
+	r := rec.Runtime()
+	adapter, err := s.m.runtimes.For(r)
+	if err != nil {
+		return err
+	}
+	s.rec, s.cfg, s.rt, s.adapter, s.cur = rec, rec.Config, r, adapter, rec.State
+	return nil
+}
+
+// open takes the busy mark and the lock, reloads the service and checks
+// that the action is allowed in its current phase and state.
+func (m *Manager) open(ctx context.Context, name, action string, opts ActionOptions, actor auth.Actor) (*session, error) {
+	s, err := m.lock(ctx, name, action, opts, actor)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.load(ctx); err != nil {
 		s.close()
 		return nil, err
+	}
+	if err := checkAction(action, s.rec); err != nil {
+		s.close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// checkAction refuses an action the phase, state or runtime does not allow.
+func checkAction(action string, rec *Record) error {
+	if rec.Phase != resource.PhaseManaged {
+		return ErrNotManaged
 	}
 	if !CanAct(action, rec.State) {
-		s.close()
-		return nil, &StateError{Service: name, Action: action, State: rec.State}
+		return &StateError{Resource: rec.Name, Action: action, State: rec.State}
 	}
-	if err := checkRuntime(action, rec.Spec); err != nil {
-		s.close()
-		return nil, err
-	}
-	adapter, err := m.runtimes.For(rec.Spec)
-	if err != nil {
-		s.close()
-		return nil, err
-	}
-	s.rec, s.svc, s.adapter, s.cur = rec, rec.Spec, adapter, rec.State
-	return s, nil
+	return checkRuntime(action, rec.Runtime())
 }
 
 // detached returns a context for bookkeeping that must finish even when the
@@ -259,7 +287,7 @@ func (s *session) settle(ctx context.Context, alwaysFailed bool) {
 	defer cancel()
 	to := StateFailed
 	if !alwaysFailed {
-		if st, err := s.adapter.Status(ctx, s.svc); err == nil && st.State == rt.StateActive {
+		if st, err := s.adapter.Status(ctx, s.rt); err == nil && st.State == rt.StateActive {
 			to = StateRunning
 		}
 	}
@@ -292,6 +320,10 @@ func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOpti
 		if err := json.Unmarshal(raw, &res); err != nil {
 			return ActionResult{}, fmt.Errorf("catalog: decode stored result: %w", err)
 		}
+		if res.Resource == "" {
+			// Completions stored before resources named the field service.
+			res.Resource = name
+		}
 		res.Replayed = true
 		return res, nil
 	}
@@ -300,11 +332,11 @@ func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOpti
 	s, err := m.open(ctx, name, action, opts, actor)
 	if err != nil {
 		m.recordAudit(ctx, action, name, audit.OutcomeError, nil)
-		return ActionResult{Service: name, Action: action}, err
+		return ActionResult{Resource: name, Action: action}, err
 	}
 	defer s.close()
 
-	res := ActionResult{Service: name, Action: action, From: s.cur, To: s.cur}
+	res := ActionResult{Resource: name, Action: action, From: s.cur, To: s.cur}
 	err = body(ctx, s, &res)
 	res.To = s.cur
 	res.DurationMs = m.cat.now().Sub(start).Milliseconds()
@@ -407,7 +439,7 @@ func (m *Manager) timelineAction(ctx context.Context, s *session, res *ActionRes
 			ref = fmt.Sprint(res.DeploymentID)
 		}
 	}
-	if err := m.cat.AppendTimeline(ctx, Entry{Service: s.name, Kind: kind, Summary: summary, Data: data, Ref: ref}); err != nil {
+	if err := m.cat.AppendTimeline(ctx, Entry{Resource: s.name, Kind: kind, Summary: summary, Data: data, Ref: ref}); err != nil {
 		m.log.Error("append timeline entry failed", "service", s.name, "action", s.action, "error", err)
 	}
 }

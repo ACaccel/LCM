@@ -269,6 +269,17 @@ svg.spark {
   gap: 14px;
 }
 
+.chips {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.chips .btn[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--accent-surface);
+  color: var(--accent-surface-foreground);
+}
+
 .filters {
   display: flex;
   gap: 10px;

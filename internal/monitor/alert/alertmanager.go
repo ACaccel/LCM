@@ -59,7 +59,7 @@ func parseAlertmanager(body []byte, opts Options) ([]signal.Signal, error) {
 		if status == StatusResolved {
 			sev = signal.SeverityInfo
 		}
-		out = append(out, build(SourceAlertmanager, opts.serviceOf(labels), name, status, sev, msg, fp, labels, map[string]any{
+		out = append(out, build(SourceAlertmanager, opts.resourceOf(labels), name, status, sev, msg, fp, labels, map[string]any{
 			"startsAt":     a.StartsAt,
 			"endsAt":       a.EndsAt,
 			"generatorURL": a.GeneratorURL,

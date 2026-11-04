@@ -32,8 +32,8 @@ func triggersOf(plan *engine.Plan) []triggerDTO {
 type targetDTO struct {
 	Node string `json:"node"`
 	Type string `json:"type"`
-	// Service is null when the policy decides it while running.
-	Service *string `json:"service"`
+	// Resource is null when the policy decides it while running.
+	Resource *string `json:"resource"`
 }
 
 func targetsOf(plan *engine.Plan) []targetDTO {
@@ -41,11 +41,11 @@ func targetsOf(plan *engine.Plan) []targetDTO {
 	if plan == nil {
 		return out
 	}
-	for _, t := range plan.ServiceTargets() {
+	for _, t := range plan.ResourceTargets() {
 		d := targetDTO{Node: t.Node, Type: t.Type}
-		if t.Service != "" {
-			svc := t.Service
-			d.Service = &svc
+		if t.Resource != "" {
+			name := t.Resource
+			d.Resource = &name
 		}
 		out = append(out, d)
 	}
@@ -71,7 +71,7 @@ type policySummaryDTO struct {
 	DeployedAt      *time.Time   `json:"deployedAt"`
 	UpdatedAt       time.Time    `json:"updatedAt"`
 	Triggers        []triggerDTO `json:"triggers"`
-	// Targets are the deployed version's nodes that act on a service.
+	// Targets are the deployed version's nodes that act on a resource.
 	Targets []targetDTO `json:"targets"`
 	LastRun *lastRunDTO `json:"lastRun"`
 	// ManagedBy is null when only the web UI and API manage the policy.

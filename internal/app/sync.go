@@ -8,34 +8,35 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
-// monitorSyncInterval is the safety net behind the catalog change hook: a
+// monitorSyncInterval is the safety net behind the resource change hook: a
 // missed kick (or a change made by another process, such as a restore from
 // backup) is picked up within this time.
 const monitorSyncInterval = time.Minute
 
-// monitorSyncer keeps the monitor's check set equal to the catalog.
+// monitorSyncer keeps the monitor's check set equal to the checks of the
+// managed resources.
 type monitorSyncer struct {
-	cat *catalog.Catalog
+	res *resource.Store
 	mon *monitor.Monitor
 	log *slog.Logger
 
-	// mu serializes syncs so that an older catalog snapshot never replaces
-	// a newer one.
+	// mu serializes syncs so that an older snapshot never replaces a newer
+	// one.
 	mu   sync.Mutex
 	kick chan struct{}
 }
 
-func newMonitorSyncer(cat *catalog.Catalog, mon *monitor.Monitor, log *slog.Logger) *monitorSyncer {
-	return &monitorSyncer{cat: cat, mon: mon, log: log, kick: make(chan struct{}, 1)}
+func newMonitorSyncer(res *resource.Store, mon *monitor.Monitor, log *slog.Logger) *monitorSyncer {
+	return &monitorSyncer{res: res, mon: mon, log: log, kick: make(chan struct{}, 1)}
 }
 
-// Kick requests a sync without blocking. It is the catalog change hook,
-// which runs inside catalog writes and so must be cheap.
+// Kick requests a sync without blocking. It is called from the resource
+// change hook, which runs on the writer's goroutine and so must be cheap.
 func (s *monitorSyncer) Kick() {
 	select {
 	case s.kick <- struct{}{}:
@@ -43,41 +44,69 @@ func (s *monitorSyncer) Kick() {
 	}
 }
 
-// monitorDefs lists the checks of every service that is not retired.
-func monitorDefs(recs []catalog.Record) []monitor.Def {
+// monitorDefs lists the checks of every managed resource of any type.
+// Retired resources are not observed, and List never returns unmanaged
+// ones.
+func monitorDefs(recs []resource.Record) []monitor.Def {
 	var defs []monitor.Def
 	for _, rec := range recs {
-		if rec.State == catalog.StateRetired || rec.Spec == nil {
+		if rec.Phase != resource.PhaseManaged || rec.Document == nil {
 			continue
 		}
-		for _, c := range rec.Spec.Spec.Checks {
-			defs = append(defs, monitor.Def{Service: rec.Name, Labels: rec.Spec.Metadata.Labels, Check: c})
+		for _, c := range rec.Document.Spec.Checks {
+			defs = append(defs, monitor.Def{Resource: rec.Name, ResourceType: rec.Type, Labels: rec.Document.Metadata.Labels, Check: c})
 		}
 	}
 	return defs
 }
 
-// Sync reads the catalog and applies its checks to the monitor. Invalid
-// check definitions are logged and do not fail the sync, because the rest
-// of the checks were applied.
+// Sync reads the managed resources and applies their checks to the monitor.
+// Invalid check definitions are logged and do not fail the sync, because
+// the rest of the checks were applied.
 func (s *monitorSyncer) Sync(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	recs, err := s.cat.List(ctx)
+	// The generation is read before the snapshot, so that the monitor can
+	// ignore a resource forgotten while this sync was reading.
+	gen := s.mon.Generation()
+	recs, err := s.res.List(ctx, resource.Filter{})
 	if err != nil {
 		return err
 	}
-	err = s.mon.Sync(ctx, monitorDefs(recs))
+	err = s.mon.SyncAt(ctx, gen, monitorDefs(recs))
 	var issues model.Issues
 	if errors.As(err, &issues) {
 		for _, is := range issues {
-			// Paths start with "service/check".
-			service, _, _ := strings.Cut(is.Path, "/")
-			s.log.Warn("invalid check definition", "service", service, "path", is.Path, "error", is.Message)
+			// Paths start with "resource/check".
+			name, _, _ := strings.Cut(is.Path, "/")
+			s.log.Warn("invalid check definition", "resource", name, "path", is.Path, "error", is.Message)
 		}
 		return nil
 	}
 	return err
+}
+
+// Changed makes the monitor forget a resource that left observation, before
+// the sync the change kicks: a sync that removed the checks of a retired
+// machine or router first would recompute its health from its native input
+// alone and announce a change. It runs on the resource writer's goroutine
+// after the commit.
+func (s *monitorSyncer) Changed(ctx context.Context, c resource.Change) {
+	switch c.Change {
+	case resource.ChangeUnmanaged:
+	case resource.ChangePhase:
+		rec, err := s.res.Get(ctx, "@"+c.ID)
+		if err != nil {
+			s.log.Warn("resource phase not read", "resource", c.Name, "error", err)
+			return
+		}
+		if rec.Phase == resource.PhaseManaged {
+			return
+		}
+	default:
+		return
+	}
+	s.mon.Forget(c.Name)
 }
 
 // syncQuietly runs Sync and logs failures; a closed monitor or a cancelled

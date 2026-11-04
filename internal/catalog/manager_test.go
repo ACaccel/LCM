@@ -11,6 +11,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
@@ -101,10 +102,13 @@ func TestFailedActionLeavesFailedUnlessStillRunning(t *testing.T) {
 	}
 }
 
-func TestRefusesForbiddenStates(t *testing.T) {
+func TestRefusesRetiredServices(t *testing.T) {
 	e := newEnv(t)
 	e.put(svcDoc("app", "  backup: { command: x }\n"), 0)
-	e.setState("app", catalog.StateRetired)
+	e.setState("app", catalog.StateStopped)
+	if err := e.phase(e.ctx, "app", resource.PhaseRetired); err != nil {
+		t.Fatal(err)
+	}
 	ad := e.runtime.adapter("app")
 	for name, act := range map[string]func() (catalog.ActionResult, error){
 		"start":    func() (catalog.ActionResult, error) { return e.mgr.Start(e.ctx, "app", catalog.ActionOptions{}) },
@@ -113,12 +117,22 @@ func TestRefusesForbiddenStates(t *testing.T) {
 		"deploy":   func() (catalog.ActionResult, error) { return e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}) },
 		"rollback": func() (catalog.ActionResult, error) { return e.mgr.Rollback(e.ctx, "app", catalog.ActionOptions{}) },
 		"backup":   func() (catalog.ActionResult, error) { return e.mgr.Backup(e.ctx, "app", catalog.ActionOptions{}) },
-		"retire":   func() (catalog.ActionResult, error) { return e.mgr.Retire(e.ctx, "app", catalog.ActionOptions{}) },
 	} {
 		_, err := act()
-		var se *catalog.StateError
-		if !errors.As(err, &se) || se.State != catalog.StateRetired || !errors.Is(err, catalog.ErrPrecondition) && !errors.Is(err, catalog.ErrInvalidTransition) {
+		if !errors.Is(err, catalog.ErrNotManaged) || !errors.Is(err, catalog.ErrPrecondition) {
 			t.Errorf("%s on retired: %v", name, err)
+		}
+		if _, err := e.mgr.Plan(e.ctx, "app", name, catalog.ActionOptions{}); !errors.Is(err, catalog.ErrNotManaged) {
+			t.Errorf("plan %s on retired: %v", name, err)
+		}
+	}
+	rec, err := e.cat.Get(context.Background(), "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range catalog.AvailableActions(rec) {
+		if a.Allowed || a.Reason != catalog.ReasonNotManaged {
+			t.Errorf("availability on retired = %+v", a)
 		}
 	}
 	if len(ad.Calls()) != 0 || len(e.runner.cmds) != 0 {
@@ -300,7 +314,7 @@ func TestBackupAndJobs(t *testing.T) {
 		t.Fatalf("no backup: %v", err)
 	}
 
-	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Service: "db", Kinds: []string{catalog.KindBackup, catalog.KindJob}})
+	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Resource: "db", Kinds: []string{catalog.KindBackup, catalog.KindJob}})
 	if len(page.Entries) != 3 {
 		t.Fatalf("timeline = %+v", page.Entries)
 	}
@@ -333,45 +347,6 @@ func TestIdempotencyKeysSeparateJobs(t *testing.T) {
 	}
 }
 
-func TestRetire(t *testing.T) {
-	e := newEnv(t)
-	e.put(svcDoc("app", ""), 0)
-	e.setState("app", catalog.StateRunning)
-	ad := e.runtime.adapter("app")
-
-	res, err := e.mgr.Retire(e.ctx, "app", catalog.ActionOptions{})
-	if err != nil || res.To != catalog.StateRetired {
-		t.Fatalf("retire = %+v %v", res, err)
-	}
-	if !reflect.DeepEqual(ad.Calls(), []string{"stop"}) {
-		t.Fatalf("running service must be stopped: %v", ad.Calls())
-	}
-
-	// Retiring a stopped service does not stop it again.
-	e.put(svcDoc("old", ""), 0)
-	e.setState("old", catalog.StateStopped)
-	if _, err := e.mgr.Retire(e.ctx, "old", catalog.ActionOptions{}); err != nil || len(e.runtime.adapter("old").Calls()) != 0 {
-		t.Fatalf("retire stopped: %v %v", err, e.runtime.adapter("old").Calls())
-	}
-
-	// A failing stop keeps the service from being retired.
-	e.put(svcDoc("stuck", ""), 0)
-	e.setState("stuck", catalog.StateRunning)
-	sa := e.runtime.adapter("stuck")
-	sa.set(func(a *fakeAdapter) { a.stopErr = errors.New("busy"); a.state = rt.StateActive })
-	if _, err := e.mgr.Retire(e.ctx, "stuck", catalog.ActionOptions{}); err == nil || e.state("stuck") != catalog.StateRunning {
-		t.Fatalf("failed retire: %v state %s", err, e.state("stuck"))
-	}
-
-	// External services cannot be stopped by LCM; retiring still works.
-	e.put(svcDoc("ext", ""), 0)
-	e.setState("ext", catalog.StateRunning)
-	e.runtime.adapter("ext").set(func(a *fakeAdapter) { a.stopErr = rt.ErrUnsupported })
-	if _, err := e.mgr.Retire(e.ctx, "ext", catalog.ActionOptions{}); err != nil || e.state("ext") != catalog.StateRetired {
-		t.Fatalf("retire external: %v state %s", err, e.state("ext"))
-	}
-}
-
 func TestActionsAreAuditedAndOnTimeline(t *testing.T) {
 	e := newEnv(t)
 	e.put(svcDoc("app", ""), 0)
@@ -387,7 +362,7 @@ func TestActionsAreAuditedAndOnTimeline(t *testing.T) {
 	for i := len(entries) - 1; i >= 0; i-- {
 		got = append(got, entries[i].Action+"/"+string(entries[i].Outcome))
 	}
-	want := "service.create/ok service.start/ok service.stop/error service.deploy/error"
+	want := "resource.save/ok service.start/ok service.stop/error service.deploy/error"
 	if strings.Join(got, " ") != want {
 		t.Fatalf("audit = %v", got)
 	}
@@ -403,7 +378,7 @@ func TestActionsAreAuditedAndOnTimeline(t *testing.T) {
 		}
 	}
 
-	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Service: "app", Kinds: []string{catalog.KindAction}})
+	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Resource: "app", Kinds: []string{catalog.KindAction}})
 	if len(page.Entries) != 2 || page.Entries[0].Data["outcome"] != "failed" || page.Entries[1].Summary != "start succeeded" || page.Entries[1].Ref != "run7" {
 		t.Fatalf("action entries = %+v", page.Entries)
 	}
@@ -424,7 +399,7 @@ func TestPlan(t *testing.T) {
 		t.Fatalf("deploy plan = %+v %v", p, err)
 	}
 	joined := strings.Join(p.Steps, "\n")
-	for _, want := range []string{"lock service:app", "set state updating", "git fetch --prune origin", "head of origin/main", "build: make", "restart systemd unit app.service"} {
+	for _, want := range []string{"lock resource:app", "set state updating", "git fetch --prune origin", "head of origin/main", "build: make", "restart systemd unit app.service"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("deploy plan lacks %q:\n%s", want, joined)
 		}

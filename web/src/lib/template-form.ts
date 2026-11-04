@@ -14,11 +14,11 @@ export function defaultText(p: TemplateParam): string | boolean {
   return String(d);
 }
 
-/** Initial form values: defaults, with the target service preset. */
-export function initialValues(t: Template, service?: string): FormValues {
+/** Initial form values: defaults, with the target resource preset. */
+export function initialValues(t: Template, resource?: string): FormValues {
   const out: FormValues = {};
   for (const p of t.params) out[p.name] = defaultText(p);
-  if (service) out[t.serviceParam] = service;
+  if (resource) out[t.resourceParam] = resource;
   return out;
 }
 
@@ -32,10 +32,10 @@ export interface BuiltParams {
  * Turns form values into the request's params: only values that differ from
  * the default are sent, so the server's defaults stay the single source.
  */
-export function buildParams(t: Template, values: FormValues, service?: string): BuiltParams {
+export function buildParams(t: Template, values: FormValues, resource?: string): BuiltParams {
   const params: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
-  const initial = initialValues(t, service);
+  const initial = initialValues(t, resource);
   for (const p of t.params) {
     const v = values[p.name];
     if (p.type === "boolean") {
@@ -48,7 +48,7 @@ export function buildParams(t: Template, values: FormValues, service?: string): 
       errors[p.name] = s.templates.required;
       continue;
     }
-    if (p.name !== t.serviceParam && v === initial[p.name]) continue;
+    if (p.name !== t.resourceParam && v === initial[p.name]) continue;
     switch (p.type) {
       case "strings":
         params[p.name] = text
@@ -75,7 +75,7 @@ export function isRequired(p: TemplateParam, values: FormValues): boolean {
   return p.required || (p.requiredIf ? values[p.requiredIf] === true : false);
 }
 
-/** A policy name suggestion for the template and service. */
-export function suggestName(templateId: string, service?: string): string {
-  return service ? `${service}-${templateId}`.slice(0, 63) : templateId;
+/** A policy name suggestion for the template and resource. */
+export function suggestName(templateId: string, resource?: string): string {
+  return resource ? `${resource}-${templateId}`.slice(0, 63) : templateId;
 }

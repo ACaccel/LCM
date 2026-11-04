@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 // Observe samples once; background and administrator requests cannot overlap.
@@ -20,7 +21,7 @@ func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	if r.Phase != "managed" {
+	if r.Phase != resource.PhaseManaged {
 		return Record{}, precondition("machine is retired")
 	}
 	if m.observer == nil {
@@ -28,7 +29,7 @@ func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 	}
 	// A slow probe must never re-date pre-maintenance evidence as a new sample.
 	startedAt := m.clk.Now().UTC()
-	snap, probeErr := m.observer.Observe(ctx, r.Document.Spec.Monitoring)
+	snap, probeErr := m.observer.Observe(ctx, *r.Config)
 	snap.ObservedAt = startedAt
 	if snap.Coverage == nil {
 		snap.Coverage = map[string]Coverage{}
@@ -38,13 +39,13 @@ func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 	}
 	var cursor string
 	var cursorAt int64
-	err = m.db.Reader().QueryRowContext(ctx, `SELECT cursor,updated_at FROM machine_cursors WHERE machine_id=? AND source='journal'`, r.ID).Scan(&cursor, &cursorAt)
+	err = m.db.Reader().QueryRowContext(ctx, `SELECT cursor,updated_at FROM machine_cursors WHERE resource_id=? AND source='journal'`, r.ID).Scan(&cursor, &cursorAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Record{}, err
 	}
 	batch := JournalBatch{Coverage: Coverage{State: "disabled", Reason: "not configured"}}
-	if r.Document.Spec.Monitoring.Journal {
-		batch, err = m.observer.ReadJournal(ctx, r.Document.Spec.Monitoring, cursor, time.UnixMilli(cursorAt))
+	if r.Config.Journal {
+		batch, err = m.observer.ReadJournal(ctx, *r.Config, cursor, time.UnixMilli(cursorAt))
 		if err != nil {
 			batch = JournalBatch{Coverage: Coverage{State: "unknown", Reason: "journal unavailable"}}
 		}
@@ -57,24 +58,25 @@ func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 		return Record{}, err
 	}
 	m.publish(events)
-	return m.Get(ctx, name)
+	latest, err := m.Get(ctx, "@"+r.ID)
+	if err != nil {
+		return Record{}, err
+	}
+	m.feedNative(latest)
+	return latest, nil
 }
 
 func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, batch JournalBatch) ([]Event, error) {
 	snap.CPUPercent = nil
 	var published []Event
 	err := m.db.Write(ctx, func(tx *sql.Tx) error {
-		var raw, identity, phase string
-		var version int
-		if err := tx.QueryRowContext(ctx, `SELECT status,identity_hash,phase,version FROM machines WHERE id=?`, r.ID).Scan(&raw, &identity, &phase, &version); err != nil {
+		cur, err := current(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
-		if version != r.Version || phase != "managed" {
+		version, identity, old := cur.version, cur.identity, cur.status
+		if version != r.Version || cur.phase != resource.PhaseManaged {
 			return ErrConflict
-		}
-		var old storedStatus
-		if err := json.Unmarshal([]byte(raw), &old); err != nil {
-			return err
 		}
 		if old.Baseline == nil || old.DocumentVersion != version {
 			old.Baseline = map[string]transition{}
@@ -88,7 +90,18 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		} else if identity != snap.DeviceHash {
 			next.Identity = "changed"
 		}
-		continuous := old.Snapshot != nil && old.Snapshot.BootID == snap.BootID && snap.ObservedAt.After(old.Snapshot.ObservedAt) && snap.ObservedAt.Sub(old.Snapshot.ObservedAt) <= r.Document.Spec.Monitoring.StaleAfter.D()
+		staleAfter := r.Config.StaleAfter.D()
+		continuous := old.Snapshot != nil && old.Snapshot.BootID == snap.BootID && snap.ObservedAt.After(old.Snapshot.ObservedAt) && snap.ObservedAt.Sub(old.Snapshot.ObservedAt) <= staleAfter
+		// The machine stays online across consecutive successful samples
+		// that never went stale; a reboot in between is still online.
+		if snap.Coverage["probe"].State != "unknown" {
+			next.OnlineSince = snap.ObservedAt
+			wasOnline := old.Snapshot != nil && old.Snapshot.Coverage["probe"].State != "unknown" && !old.OnlineSince.IsZero() &&
+				old.DocumentVersion == version && snap.ObservedAt.After(old.Snapshot.ObservedAt) && snap.ObservedAt.Sub(old.Snapshot.ObservedAt) <= staleAfter
+			if wasOnline {
+				next.OnlineSince = old.OnlineSince
+			}
+		}
 		if continuous && old.Snapshot.CPUTotal > 0 && old.Snapshot.CPUCount > 0 && snap.CPUCount > 0 && cpuAvailable(old.Snapshot.Coverage) && cpuAvailable(snap.Coverage) && snap.CPUTotal > old.Snapshot.CPUTotal && snap.CPUIdle >= old.Snapshot.CPUIdle {
 			delta, idle := snap.CPUTotal-old.Snapshot.CPUTotal, snap.CPUIdle-old.Snapshot.CPUIdle
 			if idle <= delta {
@@ -106,7 +119,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		if old.Snapshot != nil && old.Snapshot.BootID != "" && snap.BootID != "" && old.Snapshot.BootID != snap.BootID {
 			events = append(events, Event{Kind: "machine.boot.changed", Severity: "info", Reason: "boot identity changed"})
 		}
-		changes := evaluateHealth(&next, r.Document.Spec.Monitoring)
+		changes := evaluateHealth(&next, *r.Config)
 		events = append(events, changes...)
 		if old.Health != "" && old.Health != next.Health {
 			events = append(events, Event{Kind: "machine.health.changed", Severity: severity(next.Health), Reason: next.Health})
@@ -118,7 +131,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		if err != nil {
 			return err
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO machine_snapshots(machine_id,observed_at,body) VALUES(?,?,?)`, r.ID, snap.ObservedAt.UnixMilli(), body)
+		res, err := tx.ExecContext(ctx, `INSERT INTO resource_snapshots(resource_id,observed_at,body) VALUES(?,?,?)`, r.ID, snap.ObservedAt.UnixMilli(), body)
 		if err != nil {
 			return err
 		}
@@ -131,12 +144,12 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 			cpuSum = *snap.CPUPercent
 			cpuCount = 1
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO machine_rollups(machine_id,bucket_at,boot_id,samples,cpu_sum,cpu_count,body) VALUES(?,?,?,1,?,?,?) ON CONFLICT(machine_id,bucket_at,boot_id) DO UPDATE SET samples=samples+1,cpu_sum=cpu_sum+excluded.cpu_sum,cpu_count=cpu_count+excluded.cpu_count,body=excluded.body`, r.ID, snap.ObservedAt.Truncate(time.Minute).UnixMilli(), snap.BootID, cpuSum, cpuCount, body); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO resource_points(resource_id,bucket_at,boot_id,samples,cpu_sum,cpu_count,body) VALUES(?,?,?,1,?,?,?) ON CONFLICT(resource_id,bucket_at,boot_id) DO UPDATE SET samples=samples+1,cpu_sum=cpu_sum+excluded.cpu_sum,cpu_count=cpu_count+excluded.cpu_count,body=excluded.body`, r.ID, snap.ObservedAt.Truncate(time.Minute).UnixMilli(), snap.BootID, cpuSum, cpuCount, body); err != nil {
 			return err
 		}
 		for i := range events {
 			e := &events[i]
-			e.MachineID = r.ID
+			e.ResourceID = r.ID
 			e.Source = "poll"
 			e.Key = fmt.Sprintf("%d:%d", snap.ID, i)
 			e.OccurredAt = snap.ObservedAt
@@ -149,7 +162,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		}
 		for i := range batch.Events {
 			e := batch.Events[i]
-			e.MachineID = r.ID
+			e.ResourceID = r.ID
 			e.Source = "journal"
 			e.IngestedAt = snap.ObservedAt
 			if e.Key == "" || e.OccurredAt.IsZero() {
@@ -165,8 +178,8 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		if batch.ResetCursor {
 			batch.Cursor = ""
 		}
-		if batch.Cursor != "" || batch.ResetCursor || (r.Document.Spec.Monitoring.Journal && (batch.Coverage.State == "available" || batch.Coverage.State == "partial")) {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO machine_cursors(machine_id,source,cursor,updated_at) VALUES(?,'journal',?,?) ON CONFLICT(machine_id,source) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at`, r.ID, batch.Cursor, snap.ObservedAt.UnixMilli()); err != nil {
+		if batch.Cursor != "" || batch.ResetCursor || (r.Config.Journal && (batch.Coverage.State == "available" || batch.Coverage.State == "partial")) {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO machine_cursors(resource_id,source,cursor,updated_at) VALUES(?,'journal',?,?) ON CONFLICT(resource_id,source) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at`, r.ID, batch.Cursor, snap.ObservedAt.UnixMilli()); err != nil {
 				return err
 			}
 		}
@@ -174,12 +187,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		if err = trimEvents(ctx, tx); err != nil {
 			return err
 		}
-		status, err := encode(next)
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE machines SET status=?,identity_hash=? WHERE id=?`, status, identity, r.ID)
-		return err
+		return saveStatus(ctx, tx, r.ID, next, identity, snap.ObservedAt)
 	})
 	if err != nil {
 		return nil, err
@@ -199,7 +207,7 @@ func cpuAvailable(sources map[string]Coverage) bool {
 	return !ok || c.State == "available"
 }
 
-func evaluateHealth(s *storedStatus, c model.MachineMonitoring) []Event {
+func evaluateHealth(s *storedStatus, c model.MachineConfig) []Event {
 	t := c.Thresholds
 	s.Health = "healthy"
 	s.Reasons = []string{}
@@ -296,7 +304,7 @@ func (m *Manager) Events(ctx context.Context, name string, after int64, limit in
 		return nil, err
 	}
 	limit = max(1, min(limit, 200))
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT id,body FROM machine_events WHERE machine_id=? AND id>? ORDER BY id LIMIT ?`, r.ID, after, limit)
+	rows, err := m.db.Reader().QueryContext(ctx, `SELECT id,body FROM resource_events WHERE resource_id=? AND id>? ORDER BY id LIMIT ?`, r.ID, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -329,9 +337,9 @@ func (m *Manager) HistoryResolution(ctx context.Context, name string, after int6
 		return nil, err
 	}
 	limit = max(1, min(limit, 200))
-	query := `SELECT id,body,0,0 FROM machine_snapshots WHERE machine_id=? AND id>? ORDER BY id LIMIT ?`
+	query := `SELECT id,body,0,0 FROM resource_snapshots WHERE resource_id=? AND id>? ORDER BY id LIMIT ?`
 	if minute {
-		query = `SELECT id,body,cpu_sum,cpu_count FROM machine_rollups WHERE machine_id=? AND id>? ORDER BY id LIMIT ?`
+		query = `SELECT id,body,cpu_sum,cpu_count FROM resource_points WHERE resource_id=? AND id>? ORDER BY id LIMIT ?`
 	}
 	rows, err := m.db.Reader().QueryContext(ctx, query, r.ID, after, limit)
 	if err != nil {
@@ -361,17 +369,31 @@ func (m *Manager) HistoryResolution(ctx context.Context, name string, after int6
 	return out, rows.Err()
 }
 
-// Run polls only registered managed machines; errors leave the last data visibly stale.
+// Run polls only registered managed machines; errors leave the last data
+// visibly stale. The monitor learns the stored health before the first
+// poll and, after every poll, the health of the latest status, so that a
+// failing probe turns native health unknown once the data is stale.
 func (m *Manager) Run(ctx context.Context) {
+	if rows, err := m.List(ctx); err == nil {
+		for _, r := range rows {
+			m.feedNative(r)
+		}
+	}
 	for ctx.Err() == nil {
 		wait := 30 * time.Second
+		m.flushStaged(ctx)
 		rows, err := m.List(ctx)
 		if err == nil {
 			for _, r := range rows {
-				if r.Phase == "managed" {
-					wait = r.Document.Spec.Monitoring.Interval.D()
-					if _, err := m.Observe(ctx, r.Name); err != nil && ctx.Err() == nil {
-						m.log.Warn("machine observation failed", "machine", r.Name, "error", err)
+				if r.Phase != resource.PhaseManaged {
+					m.feedNative(r)
+					continue
+				}
+				wait = r.Config.Interval.D()
+				if _, err := m.Observe(ctx, r.Name); err != nil && ctx.Err() == nil {
+					m.log.Warn("machine observation failed", "machine", r.Name, "error", err)
+					if latest, err := m.Get(ctx, "@"+r.ID); err == nil {
+						m.feedNative(latest)
 					}
 				}
 			}
@@ -394,12 +416,12 @@ func (m *Manager) Prune(ctx context.Context) error {
 		query string
 		args  []any
 	}{
-		{`DELETE FROM machine_snapshots WHERE id IN (SELECT id FROM machine_snapshots WHERE observed_at<? AND id NOT IN (SELECT MAX(id) FROM machine_snapshots GROUP BY machine_id) LIMIT 5000)`, []any{now.Add(-m.rawRetention).UnixMilli()}},
-		{`DELETE FROM machine_rollups WHERE id IN (SELECT id FROM machine_rollups WHERE bucket_at<? LIMIT 5000)`, []any{now.Add(-m.rollupRetention).UnixMilli()}},
-		{`DELETE FROM machine_events WHERE id IN (SELECT id FROM machine_events WHERE ingested_at<? LIMIT 5000)`, []any{now.Add(-m.eventRetention).UnixMilli()}},
-		{`DELETE FROM machine_snapshots WHERE id IN (SELECT id FROM machine_snapshots WHERE id < (SELECT id FROM machine_snapshots ORDER BY id DESC LIMIT 1 OFFSET 199999) AND id NOT IN (SELECT MAX(id) FROM machine_snapshots GROUP BY machine_id) LIMIT 5000)`, nil},
-		{`DELETE FROM machine_rollups WHERE id IN (SELECT id FROM machine_rollups WHERE id < (SELECT id FROM machine_rollups ORDER BY id DESC LIMIT 1 OFFSET 199999) LIMIT 5000)`, nil},
-		{`DELETE FROM machine_events WHERE id IN (SELECT id FROM machine_events WHERE id <= (SELECT MAX(id)-200000 FROM machine_events) LIMIT 5000)`, nil},
+		{`DELETE FROM resource_snapshots WHERE id IN (SELECT id FROM resource_snapshots WHERE observed_at<? AND id NOT IN (SELECT MAX(id) FROM resource_snapshots GROUP BY resource_id) LIMIT 5000)`, []any{now.Add(-m.rawRetention).UnixMilli()}},
+		{`DELETE FROM resource_points WHERE id IN (SELECT id FROM resource_points WHERE bucket_at<? LIMIT 5000)`, []any{now.Add(-m.rollupRetention).UnixMilli()}},
+		{`DELETE FROM resource_events WHERE id IN (SELECT id FROM resource_events WHERE ingested_at<? LIMIT 5000)`, []any{now.Add(-m.eventRetention).UnixMilli()}},
+		{`DELETE FROM resource_snapshots WHERE id IN (SELECT id FROM resource_snapshots WHERE id < (SELECT id FROM resource_snapshots ORDER BY id DESC LIMIT 1 OFFSET 199999) AND id NOT IN (SELECT MAX(id) FROM resource_snapshots GROUP BY resource_id) LIMIT 5000)`, nil},
+		{`DELETE FROM resource_points WHERE id IN (SELECT id FROM resource_points WHERE id < (SELECT id FROM resource_points ORDER BY id DESC LIMIT 1 OFFSET 199999) LIMIT 5000)`, nil},
+		{`DELETE FROM resource_events WHERE id IN (SELECT id FROM resource_events WHERE id <= (SELECT MAX(id)-200000 FROM resource_events) LIMIT 5000)`, nil},
 	}
 	for _, job := range jobs {
 		for {

@@ -1,0 +1,67 @@
+package resource
+
+import (
+	"context"
+	"time"
+)
+
+// Type is the runtime side of one resource type: its status and actions.
+// The service, machine and router implementations live with the components
+// that control them and are connected in internal/app.
+type Type interface {
+	// Name is the resource type, such as model.ResourceService.
+	Name() string
+	// Status reports the type-specific state of a resource.
+	Status(ctx context.Context, rec Record) (Status, error)
+	// Actions reports what can be done with a resource now.
+	Actions(ctx context.Context, rec Record) []Action
+	// ChangePhase moves a resource to another phase. It may act first
+	// (retiring a running service stops it) and then calls Store.SetPhase.
+	ChangePhase(ctx context.Context, rec Record, to string, expected int, reason string) error
+}
+
+// Status is the type-specific state of a resource. Machines and routers
+// report StateOnline, StateOffline or StateUnknown; services report their
+// lifecycle state.
+type Status struct {
+	State      string
+	StateSince time.Time
+	// Detail is type-specific data encoded as JSON for clients.
+	Detail any
+}
+
+// Observed states of machines and routers. Offline needs fresh evidence of
+// unreachability: a missing observation is unknown, not offline.
+const (
+	StateOnline  = "online"
+	StateOffline = "offline"
+	StateUnknown = "unknown"
+)
+
+// Action describes one thing a client can do with a resource.
+type Action struct {
+	Name      string
+	Available bool
+	// Reason explains why the action is not available.
+	Reason string
+	Risk   string
+	// Policy reports whether policies may run the action.
+	Policy bool
+	Kind   string
+}
+
+// Action risks, from harmless to irreversible.
+const (
+	RiskRead        = "read"
+	RiskReversible  = "reversible"
+	RiskDisruptive  = "disruptive"
+	RiskDestructive = "destructive"
+)
+
+// Action kinds: a synchronous lifecycle action, a durable operation with an
+// observed outcome, or a phase change.
+const (
+	KindAction    = "action"
+	KindOperation = "operation"
+	KindPhase     = "phase"
+)

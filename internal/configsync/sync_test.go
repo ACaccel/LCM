@@ -12,6 +12,7 @@ import (
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
 )
 
@@ -54,7 +55,7 @@ func TestSyncAppliesAndOwns(t *testing.T) {
 	if rep.Commit != c1 || !rep.Changed || len(rep.Items) != 2 {
 		t.Fatalf("report = %+v", rep)
 	}
-	wantAction(t, rep.Items, "Service/web", configsync.ActionCreate)
+	wantAction(t, rep.Items, "Resource/web", configsync.ActionCreate)
 	wantAction(t, rep.Items, "Policy/echo", configsync.ActionCreate)
 
 	own, err := e.sync.Ownership(e.ctx, "")
@@ -66,7 +67,7 @@ func TestSyncAppliesAndOwns(t *testing.T) {
 			t.Fatalf("ownership = %+v", o)
 		}
 	}
-	if o := e.owner("service", "web"); o == nil || o.Path != webPath {
+	if o := e.owner("resource", "web"); o == nil || o.Path != webPath {
 		t.Fatalf("web ownership = %+v", o)
 	}
 	src, _ := e.sync.GetSource(e.ctx, "infra")
@@ -75,8 +76,8 @@ func TestSyncAppliesAndOwns(t *testing.T) {
 	}
 
 	// Documents are applied under the source's own actor.
-	vs, err := e.cat.Versions(e.ctx, "web")
-	if err != nil || vs[0].CreatedBy.ID != "configsync:infra" {
+	vs, err := e.res.Versions(e.ctx, "web")
+	if err != nil || vs[0].Actor.ID != "configsync:infra" {
 		t.Fatalf("versions = %+v, %v", vs, err)
 	}
 
@@ -94,18 +95,18 @@ func TestSyncAppliesAndOwns(t *testing.T) {
 	// A new commit updates what changed and records the commit; a
 	// multi-document file is split.
 	c2 := r.commit("more", map[string]string{
-		webPath:         serviceYAML("web", "  dependsOn: [db]\n"),
+		webPath:         serviceYAML("web", "  relations: [{ type: dependsOn, target: db }]\n"),
 		"deploy/m.yaml": moduleYAML("greet", "1") + "---\n" + serviceYAML("db", ""),
 	})
 	rep = e.syncNow("infra")
 	if rep.Commit != c2 || !rep.Changed {
 		t.Fatalf("report = %+v", rep)
 	}
-	wantAction(t, rep.Items, "Service/web", configsync.ActionUpdate)
+	wantAction(t, rep.Items, "Resource/web", configsync.ActionUpdate)
 	wantAction(t, rep.Items, "Policy/echo", configsync.ActionUnchanged)
 	wantAction(t, rep.Items, "Module/greet", configsync.ActionCreate)
-	wantAction(t, rep.Items, "Service/db", configsync.ActionCreate)
-	if o := e.owner("service", "web"); o.Commit != c2 || o.AppliedVersion != 2 || o.Drifted {
+	wantAction(t, rep.Items, "Resource/db", configsync.ActionCreate)
+	if o := e.owner("resource", "web"); o.Commit != c2 || o.AppliedVersion != 2 || o.Drifted {
 		t.Fatalf("web after update = %+v", o)
 	}
 	if o := e.owner("policy", "echo"); o.Commit != c2 && o.Commit != c1 {
@@ -124,7 +125,7 @@ func TestSyncWholeRepositoryPath(t *testing.T) {
 	r.commit("one file", map[string]string{"lcm.yaml": serviceYAML("solo", "")})
 	e.addSource("root", r, "")
 	rep := e.syncNow("root")
-	wantAction(t, rep.Items, "Service/solo", configsync.ActionCreate)
+	wantAction(t, rep.Items, "Resource/solo", configsync.ActionCreate)
 	if src, _ := e.sync.GetSource(e.ctx, "root"); src.Path != "." {
 		t.Fatalf("path = %q", src.Path)
 	}
@@ -136,36 +137,36 @@ func TestManualApplyOfOwnedResource(t *testing.T) {
 	e.addSource("infra", r, "deploy")
 	e.syncNow("infra")
 
-	edited := serviceYAML("web", "  dependsOn: [cache]\n")
+	edited := serviceYAML("web", "  relations: [{ type: dependsOn, target: cache }]\n")
 	res := e.apply(configsync.Options{}, edited)
-	got := wantAction(t, res, "Service/web", configsync.ActionSkipped)
+	got := wantAction(t, res, "Resource/web", configsync.ActionSkipped)
 	if !strings.Contains(got.Reason, `source "infra"`) || !strings.Contains(got.Reason, "force") {
 		t.Fatalf("reason = %q", got.Reason)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "web"); rec.Version != 1 {
+	if rec, _ := e.res.Get(e.ctx, "web"); rec.Version != 1 {
 		t.Fatalf("a refused apply wrote version %d", rec.Version)
 	}
 
 	// Applying what the resource already is asks for nothing, so it is not refused.
-	wantAction(t, e.apply(configsync.Options{}, serviceYAML("web", "")), "Service/web", configsync.ActionUnchanged)
+	wantAction(t, e.apply(configsync.Options{}, serviceYAML("web", "")), "Resource/web", configsync.ActionUnchanged)
 
 	// Dry-run says the same without --force and previews with it.
-	wantAction(t, e.apply(configsync.Options{DryRun: true}, edited), "Service/web", configsync.ActionSkipped)
-	prev := wantAction(t, e.apply(configsync.Options{DryRun: true, Force: true}, edited), "Service/web", configsync.ActionUpdate)
-	if !strings.Contains(prev.Diff, "+    - cache") {
+	wantAction(t, e.apply(configsync.Options{DryRun: true}, edited), "Resource/web", configsync.ActionSkipped)
+	prev := wantAction(t, e.apply(configsync.Options{DryRun: true, Force: true}, edited), "Resource/web", configsync.ActionUpdate)
+	if !strings.Contains(prev.Diff, "+      target: cache") {
 		t.Fatalf("preview diff = %q", prev.Diff)
 	}
 
 	// Force writes it, keeps the ownership and so leaves the service drifted.
-	wantAction(t, e.apply(configsync.Options{Force: true}, edited), "Service/web", configsync.ActionUpdate)
-	o := e.owner("service", "web")
+	wantAction(t, e.apply(configsync.Options{Force: true}, edited), "Resource/web", configsync.ActionUpdate)
+	o := e.owner("resource", "web")
 	if o == nil || o.Source != "infra" || !o.Drifted {
 		t.Fatalf("after force = %+v", o)
 	}
 
 	// An unowned resource needs no force.
-	wantAction(t, e.apply(configsync.Options{}, serviceYAML("free", "")), "Service/free", configsync.ActionCreate)
-	if e.owner("service", "free") != nil {
+	wantAction(t, e.apply(configsync.Options{}, serviceYAML("free", "")), "Resource/free", configsync.ActionCreate)
+	if e.owner("resource", "free") != nil {
 		t.Fatal("a manual apply created an owner")
 	}
 }
@@ -179,9 +180,9 @@ func TestDriftConflictAndResolveCurrent(t *testing.T) {
 	e.syncNow("infra")
 
 	// An edit through the API takes effect and marks the service drifted.
-	local := serviceYAML("web", "  dependsOn: [local]\n")
+	local := serviceYAML("web", "  relations: [{ type: dependsOn, target: local }]\n")
 	e.editService("web", local)
-	o := e.owner("service", "web")
+	o := e.owner("resource", "web")
 	if !o.Drifted || o.Conflict {
 		t.Fatalf("after edit = %+v", o)
 	}
@@ -192,36 +193,36 @@ func TestDriftConflictAndResolveCurrent(t *testing.T) {
 	// Another service file changes: the drifted one is untouched and calm.
 	r.commit("unrelated", map[string]string{echoPath: policyYAML("echo", echoNodes+"    - { id: later, type: data.set, props: { values: { a: 1 } } }\n")})
 	rep := e.syncNow("infra")
-	got := wantAction(t, rep.Items, "Service/web", configsync.ActionSkipped)
+	got := wantAction(t, rep.Items, "Resource/web", configsync.ActionSkipped)
 	if got.Conflict || !got.Drifted || !strings.Contains(got.Reason, "repository has not changed") {
 		t.Fatalf("unrelated commit: %+v", got)
 	}
 	wantAction(t, rep.Items, "Policy/echo", configsync.ActionUpdate)
-	if o := e.owner("service", "web"); o.Conflict {
+	if o := e.owner("resource", "web"); o.Conflict {
 		t.Fatal("conflict raised although the repository document did not change")
 	}
 
 	// The repository changes the drifted service: skipped, flagged, notified.
-	c3 := r.commit("repo edit", map[string]string{webPath: serviceYAML("web", "  dependsOn: [repo]\n")})
+	c3 := r.commit("repo edit", map[string]string{webPath: serviceYAML("web", "  relations: [{ type: dependsOn, target: repo }]\n")})
 	rep = e.syncNow("infra")
-	got = wantAction(t, rep.Items, "Service/web", configsync.ActionSkipped)
-	if !got.Conflict || !strings.Contains(got.Diff, "-    - local") || !strings.Contains(got.Diff, "+    - repo") {
+	got = wantAction(t, rep.Items, "Resource/web", configsync.ActionSkipped)
+	if !got.Conflict || !strings.Contains(got.Diff, "-      target: local") || !strings.Contains(got.Diff, "+      target: repo") {
 		t.Fatalf("conflict result = %+v", got)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "web"); rec.Spec.Spec.DependsOn[0] != "local" {
-		t.Fatalf("the local edit was overwritten: %v", rec.Spec.Spec.DependsOn)
+	if rec, _ := e.res.Get(e.ctx, "web"); rec.Document.Spec.Relations[0].Target != "local" {
+		t.Fatalf("the local edit was overwritten: %v", rec.Document.Spec.Relations)
 	}
-	o = e.owner("service", "web")
+	o = e.owner("resource", "web")
 	if !o.Conflict || o.ConflictCommit != c3 || !o.Drifted {
 		t.Fatalf("after conflict = %+v", o)
 	}
 	sigs := alerts(sub)
-	if len(sigs) != 1 || sigs[0].Kind != signal.KindAlert || sigs[0].Source != configsync.SourceName ||
+	if len(sigs) != 1 || sigs[0].Kind != "resource.config.conflict" || sigs[0].Source != configsync.SourceName ||
 		sigs[0].Severity != signal.SeverityWarning || sigs[0].Data["status"] != "firing" ||
-		sigs[0].Labels["service"] != "web" || sigs[0].Data["commit"] != c3 {
+		sigs[0].Resource != "web" || sigs[0].ResourceType != "service" || sigs[0].Data["commit"] != c3 {
 		t.Fatalf("signals = %+v", sigs)
 	}
-	tl, err := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Service: "web", Kinds: []string{configsync.KindConflict}})
+	tl, err := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Resource: "web", Kinds: []string{configsync.KindConflict}})
 	if err != nil || len(tl.Entries) != 1 || !strings.Contains(tl.Entries[0].Summary, "edited locally") {
 		t.Fatalf("timeline = %+v, %v", tl, err)
 	}
@@ -234,7 +235,7 @@ func TestDriftConflictAndResolveCurrent(t *testing.T) {
 
 	// Keep the current content: the conflict closes (and says so), the
 	// service stays drifted and acknowledged.
-	resolved, err := e.sync.Resolve(e.ctx, model.KindService, "web", false)
+	resolved, err := e.sync.Resolve(e.ctx, model.KindResource, "web", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,27 +246,27 @@ func TestDriftConflictAndResolveCurrent(t *testing.T) {
 		t.Fatalf("resolve signals = %+v", sigs)
 	}
 	// The same commit no longer conflicts.
-	got = wantAction(t, e.syncNow("infra").Items, "Service/web", configsync.ActionSkipped)
+	got = wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionSkipped)
 	if got.Conflict {
 		t.Fatalf("acknowledged commit conflicts again: %+v", got)
 	}
 
 	// A later change of the document conflicts again.
-	r.commit("repo edit 2", map[string]string{webPath: serviceYAML("web", "  dependsOn: [repo2]\n")})
-	if got := wantAction(t, e.syncNow("infra").Items, "Service/web", configsync.ActionSkipped); !got.Conflict {
+	r.commit("repo edit 2", map[string]string{webPath: serviceYAML("web", "  relations: [{ type: dependsOn, target: repo2 }]\n")})
+	if got := wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionSkipped); !got.Conflict {
 		t.Fatalf("a newer change did not conflict: %+v", got)
 	}
-	if o := e.owner("service", "web"); o.Acknowledged {
+	if o := e.owner("resource", "web"); o.Acknowledged {
 		t.Fatal("acknowledgement survived a new conflict")
 	}
 
 	// The repository catches up with the current content: drift clears by itself.
 	r.commit("catch up", map[string]string{webPath: local})
-	got = wantAction(t, e.syncNow("infra").Items, "Service/web", configsync.ActionUnchanged)
+	got = wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionUnchanged)
 	if got.Drifted || !strings.Contains(got.Reason, "match the repository") {
 		t.Fatalf("catch-up result = %+v", got)
 	}
-	o = e.owner("service", "web")
+	o = e.owner("resource", "web")
 	if o.Drifted || o.Conflict || o.Acknowledged {
 		t.Fatalf("after catch-up = %+v", o)
 	}
@@ -280,49 +281,44 @@ func TestResolveUseGit(t *testing.T) {
 	e.addSource("infra", r, "deploy")
 	e.syncNow("infra")
 
-	e.editService("web", serviceYAML("web", "  dependsOn: [local]\n"))
-	repoDoc := serviceYAML("web", "  dependsOn: [repo]\n")
+	e.editService("web", serviceYAML("web", "  relations: [{ type: dependsOn, target: local }]\n"))
+	repoDoc := serviceYAML("web", "  relations: [{ type: dependsOn, target: repo }]\n")
 	c2 := r.commit("repo edit", map[string]string{webPath: repoDoc})
-	wantAction(t, e.syncNow("infra").Items, "Service/web", configsync.ActionSkipped)
+	wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionSkipped)
 
-	o, err := e.sync.Resolve(e.ctx, model.KindService, "web", true)
+	o, err := e.sync.Resolve(e.ctx, model.KindResource, "web", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if o.Drifted || o.Conflict || o.Commit != c2 {
 		t.Fatalf("after use-git = %+v", o)
 	}
-	rec, _ := e.cat.Get(e.ctx, "web")
-	if rec.Spec.Spec.DependsOn[0] != "repo" || rec.Version != 3 {
-		t.Fatalf("service after use-git = v%d %v", rec.Version, rec.Spec.Spec.DependsOn)
+	rec, _ := e.res.Get(e.ctx, "web")
+	if rec.Document.Spec.Relations[0].Target != "repo" || rec.Version != 3 {
+		t.Fatalf("service after use-git = v%d %v", rec.Version, rec.Document.Spec.Relations)
 	}
 	// Using git on a drifted resource without a newer commit reverts it.
-	e.editService("web", serviceYAML("web", "  dependsOn: [again]\n"))
-	if o := e.owner("service", "web"); !o.Drifted {
+	e.editService("web", serviceYAML("web", "  relations: [{ type: dependsOn, target: again }]\n"))
+	if o := e.owner("resource", "web"); !o.Drifted {
 		t.Fatal("not drifted after a second edit")
 	}
-	if o, err := e.sync.Resolve(e.ctx, model.KindService, "web", true); err != nil || o.Drifted {
+	if o, err := e.sync.Resolve(e.ctx, model.KindResource, "web", true); err != nil || o.Drifted {
 		t.Fatalf("revert = %+v, %v", o, err)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "web"); rec.Spec.Spec.DependsOn[0] != "repo" {
-		t.Fatalf("revert left %v", rec.Spec.Spec.DependsOn)
+	if rec, _ := e.res.Get(e.ctx, "web"); rec.Document.Spec.Relations[0].Target != "repo" {
+		t.Fatalf("revert left %v", rec.Document.Spec.Relations)
 	}
 
-	// A resource deleted locally comes back.
-	if err := e.cat.Delete(e.ctx, "web"); err != nil {
+	// An owned resource cannot be unmanaged behind the sync's back.
+	cur, _ := e.res.Get(e.ctx, "web")
+	if err := e.res.SetPhase(e.ctx, "web", resource.PhaseRetired, cur.Version, ""); err != nil {
 		t.Fatal(err)
 	}
-	if o := e.owner("service", "web"); !o.Drifted || !o.Missing {
-		t.Fatalf("deleted service = %+v", o)
-	}
-	if _, err := e.sync.Resolve(e.ctx, model.KindService, "web", true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.cat.Get(e.ctx, "web"); err != nil {
-		t.Fatalf("service not restored: %v", err)
+	if err := e.res.SetPhase(e.ctx, "web", resource.PhaseUnmanaged, cur.Version, ""); !errors.Is(err, resource.ErrPrecondition) {
+		t.Fatalf("unmanaging an owned resource: %v", err)
 	}
 
-	if _, err := e.sync.Resolve(e.ctx, model.KindService, "nobody", true); err == nil {
+	if _, err := e.sync.Resolve(e.ctx, model.KindResource, "nobody", true); err == nil {
 		t.Fatal("resolving an unowned resource succeeded")
 	}
 }
@@ -393,25 +389,25 @@ func TestTwoSourcesClaimTheSameResource(t *testing.T) {
 	e := newEnv(t)
 	r1, _ := baseRepo(t)
 	r2 := newRepo(t)
-	r2.commit("dup", map[string]string{"web.yaml": serviceYAML("web", "  dependsOn: [other]\n"), "extra.yaml": serviceYAML("extra", "")})
+	r2.commit("dup", map[string]string{"web.yaml": serviceYAML("web", "  relations: [{ type: dependsOn, target: other }]\n"), "extra.yaml": serviceYAML("extra", "")})
 	e.addSource("first", r1, "deploy")
 	e.addSource("second", r2, ".")
 	e.syncNow("first")
 
 	rep := e.syncNow("second")
-	got := wantAction(t, rep.Items, "Service/web", configsync.ActionFailed)
+	got := wantAction(t, rep.Items, "Resource/web", configsync.ActionFailed)
 	if !strings.Contains(got.Reason, `source "first"`) {
 		t.Fatalf("reason = %q", got.Reason)
 	}
-	wantAction(t, rep.Items, "Service/extra", configsync.ActionCreate)
-	if o := e.owner("service", "web"); o.Source != "first" {
+	wantAction(t, rep.Items, "Resource/extra", configsync.ActionCreate)
+	if o := e.owner("resource", "web"); o.Source != "first" {
 		t.Fatalf("owner = %+v", o)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "web"); len(rec.Spec.Spec.DependsOn) != 0 {
+	if rec, _ := e.res.Get(e.ctx, "web"); len(rec.Document.Spec.Relations) != 0 {
 		t.Fatal("the refused source changed the service")
 	}
 	src, _ := e.sync.GetSource(e.ctx, "second")
-	if !strings.Contains(src.LastError, "Service/web") {
+	if !strings.Contains(src.LastError, "Resource/web") {
 		t.Fatalf("lastError = %q", src.LastError)
 	}
 }
@@ -426,17 +422,17 @@ func TestSourceAdoptsIdenticalResource(t *testing.T) {
 	r, _ := baseRepo(t)
 	e.addSource("infra", r, "deploy")
 	rep := e.syncNow("infra")
-	for _, ref := range []string{"Service/web", "Policy/echo"} {
+	for _, ref := range []string{"Resource/web", "Policy/echo"} {
 		got := wantAction(t, rep.Items, ref, configsync.ActionUnchanged)
 		if !strings.Contains(got.Reason, "adopted") || got.Version != 1 || got.Conflict {
 			t.Fatalf("%s: %+v", ref, got)
 		}
 	}
-	o := e.owner("service", "web")
+	o := e.owner("resource", "web")
 	if o == nil || o.Source != "infra" || o.Drifted || o.Conflict || o.AppliedVersion != 1 {
 		t.Fatalf("owner = %+v", o)
 	}
-	if vs, _ := e.cat.Versions(e.ctx, "web"); len(vs) != 1 {
+	if vs, _ := e.res.Versions(e.ctx, "web"); len(vs) != 1 {
 		t.Fatalf("adoption wrote a version: %+v", vs)
 	}
 	if n := len(alerts(sub)); n != 0 {
@@ -448,8 +444,8 @@ func TestSourceDoesNotOverwriteDifferentResource(t *testing.T) {
 	e := newEnv(t)
 	sub := e.bus.Subscribe("test", 16)
 	defer sub.Close()
-	guiWeb := serviceYAML("web", "  dependsOn: [gui]\n")
-	guiAPI := serviceYAML("api", "  dependsOn: [gui]\n")
+	guiWeb := serviceYAML("web", "  relations: [{ type: dependsOn, target: gui }]\n")
+	guiAPI := serviceYAML("api", "  relations: [{ type: dependsOn, target: gui }]\n")
 	e.apply(configsync.Options{}, guiWeb, guiAPI)
 	r := newRepo(t)
 	c1 := r.commit("repo", map[string]string{
@@ -460,17 +456,17 @@ func TestSourceDoesNotOverwriteDifferentResource(t *testing.T) {
 	e.addSource("infra", r, "deploy")
 
 	rep := e.syncNow("infra")
-	web := wantAction(t, rep.Items, "Service/web", configsync.ActionSkipped)
-	if !web.Conflict || !strings.Contains(web.Diff, "-    - gui") || !strings.Contains(web.Reason, "no source manages it") {
+	web := wantAction(t, rep.Items, "Resource/web", configsync.ActionSkipped)
+	if !web.Conflict || !strings.Contains(web.Diff, "-      target: gui") || !strings.Contains(web.Reason, "no source manages it") {
 		t.Fatalf("adoption conflict = %+v", web)
 	}
-	wantAction(t, rep.Items, "Service/new", configsync.ActionCreate)
+	wantAction(t, rep.Items, "Resource/new", configsync.ActionCreate)
 	for _, n := range []string{"web", "api"} {
-		if rec, _ := e.cat.Get(e.ctx, n); rec.Version != 1 || rec.Spec.Spec.DependsOn[0] != "gui" {
-			t.Fatalf("%s was written: v%d %v", n, rec.Version, rec.Spec.Spec.DependsOn)
+		if rec, _ := e.res.Get(e.ctx, n); rec.Version != 1 || rec.Document.Spec.Relations[0].Target != "gui" {
+			t.Fatalf("%s was written: v%d %v", n, rec.Version, rec.Document.Spec.Relations)
 		}
 	}
-	o := e.owner("service", "web")
+	o := e.owner("resource", "web")
 	if o == nil || !o.Conflict || !o.Drifted || o.ConflictCommit != c1 || o.Source != "infra" {
 		t.Fatalf("ownership = %+v", o)
 	}
@@ -478,13 +474,13 @@ func TestSourceDoesNotOverwriteDifferentResource(t *testing.T) {
 	if len(sigs) != 2 || sigs[0].Source != configsync.SourceName || sigs[0].Severity != signal.SeverityWarning || sigs[0].Data["status"] != "firing" {
 		t.Fatalf("signals = %+v", sigs)
 	}
-	tl, _ := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Service: "web", Kinds: []string{configsync.KindConflict}})
+	tl, _ := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Resource: "web", Kinds: []string{configsync.KindConflict}})
 	if len(tl.Entries) != 1 || !strings.Contains(tl.Entries[0].Summary, "not managed by a source") {
 		t.Fatalf("timeline = %+v", tl)
 	}
 
 	// The same commit again neither writes nor notifies a second time.
-	got := wantAction(t, e.syncNow("infra").Items, "Service/web", configsync.ActionSkipped)
+	got := wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionSkipped)
 	if got.Conflict {
 		t.Fatalf("resync: %+v", got)
 	}
@@ -493,36 +489,36 @@ func TestSourceDoesNotOverwriteDifferentResource(t *testing.T) {
 	}
 
 	// Use git: the file is applied and the source owns the service.
-	resolved, err := e.sync.Resolve(e.ctx, model.KindService, "web", true)
+	resolved, err := e.sync.Resolve(e.ctx, model.KindResource, "web", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resolved.Drifted || resolved.Conflict || resolved.Commit != c1 {
 		t.Fatalf("after use-git = %+v", resolved)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "web"); rec.Version != 2 || len(rec.Spec.Spec.DependsOn) != 0 {
-		t.Fatalf("web after use-git: v%d %v", rec.Version, rec.Spec.Spec.DependsOn)
+	if rec, _ := e.res.Get(e.ctx, "web"); rec.Version != 2 || len(rec.Document.Spec.Relations) != 0 {
+		t.Fatalf("web after use-git: v%d %v", rec.Version, rec.Document.Spec.Relations)
 	}
 
 	// Use current: the service is kept, owned, drifted and acknowledged.
-	kept, err := e.sync.Resolve(e.ctx, model.KindService, "api", false)
+	kept, err := e.sync.Resolve(e.ctx, model.KindResource, "api", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if kept.Conflict || !kept.Drifted || !kept.Acknowledged || kept.Source != "infra" {
 		t.Fatalf("after keep-current = %+v", kept)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "api"); rec.Version != 1 || rec.Spec.Spec.DependsOn[0] != "gui" {
+	if rec, _ := e.res.Get(e.ctx, "api"); rec.Version != 1 || rec.Document.Spec.Relations[0].Target != "gui" {
 		t.Fatalf("api changed: v%d", rec.Version)
 	}
-	if got := wantAction(t, e.syncNow("infra").Items, "Service/api", configsync.ActionSkipped); got.Conflict {
+	if got := wantAction(t, e.syncNow("infra").Items, "Resource/api", configsync.ActionSkipped); got.Conflict {
 		t.Fatalf("acknowledged adoption conflicts again: %+v", got)
 	}
 
 	// It clears once the repository matches the resource.
 	r.commit("catch up", map[string]string{"deploy/api.yaml": guiAPI})
-	wantAction(t, e.syncNow("infra").Items, "Service/api", configsync.ActionUnchanged)
-	if o := e.owner("service", "api"); o.Drifted || o.Acknowledged || o.Conflict {
+	wantAction(t, e.syncNow("infra").Items, "Resource/api", configsync.ActionUnchanged)
+	if o := e.owner("resource", "api"); o.Drifted || o.Acknowledged || o.Conflict {
 		t.Fatalf("after catch-up = %+v", o)
 	}
 }
@@ -536,19 +532,19 @@ func TestInvalidDocumentKeepsOldConfiguration(t *testing.T) {
 	e.syncNow("infra")
 
 	c2 := r.commit("break it", map[string]string{
-		webPath:  serviceYAML("web", "  host: mars\n"),
+		webPath:  serviceYAML("web", "  relations: [{ type: dependsOn, target: web }]\n"),
 		echoPath: policyYAML("echo", "    - { id: start, type: trigger.manual, next: { out: [ghost] } }\n"),
 	})
 	rep := e.syncNow("infra")
-	web := wantAction(t, rep.Items, "Service/web", configsync.ActionFailed)
+	web := wantAction(t, rep.Items, "Resource/web", configsync.ActionFailed)
 	wantAction(t, rep.Items, "Policy/echo", configsync.ActionFailed)
-	if len(web.Issues) == 0 || web.Issues[0].Path != "spec.host" {
+	if len(web.Issues) == 0 || web.Issues[0].Path != "spec.relations[0].target" {
 		t.Fatalf("issues = %v", web.Issues)
 	}
-	if rec, _ := e.cat.Get(e.ctx, "web"); rec.Version != 1 {
+	if rec, _ := e.res.Get(e.ctx, "web"); rec.Version != 1 {
 		t.Fatalf("an invalid document changed the service to v%d", rec.Version)
 	}
-	if o := e.owner("service", "web"); o.Commit == c2 || o.Drifted {
+	if o := e.owner("resource", "web"); o.Commit == c2 || o.Drifted {
 		t.Fatalf("ownership moved to the broken commit: %+v", o)
 	}
 	src, _ := e.sync.GetSource(e.ctx, "infra")
@@ -564,7 +560,7 @@ func TestInvalidDocumentKeepsOldConfiguration(t *testing.T) {
 	if invalid != 2 {
 		t.Fatalf("%d invalid-document alerts", invalid)
 	}
-	if tl, _ := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Service: "web", Kinds: []string{configsync.KindInvalid}}); len(tl.Entries) != 1 {
+	if tl, _ := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Resource: "web", Kinds: []string{configsync.KindInvalid}}); len(tl.Entries) != 1 {
 		t.Fatalf("timeline = %+v", tl)
 	}
 
@@ -585,7 +581,7 @@ func TestSyncNoRepeatedInvalidAlerts(t *testing.T) {
 	sub := e.bus.Subscribe("test", 16)
 	defer sub.Close()
 	r := newRepo(t)
-	r.commit("bad", map[string]string{"a.yaml": "kind: Service\n"})
+	r.commit("bad", map[string]string{"a.yaml": "kind: Resource\n"})
 	e.addSource("s", r, ".")
 	e.syncNow("s")
 	e.syncNow("s")
@@ -686,10 +682,10 @@ func TestSourceCRUD(t *testing.T) {
 	if err := e.sync.DeleteSource(e.ctx, "infra"); err != nil {
 		t.Fatal(err)
 	}
-	if e.owner("service", "web") != nil {
+	if e.owner("resource", "web") != nil {
 		t.Fatal("ownership survived the source")
 	}
-	if _, err := e.cat.Get(e.ctx, "web"); err != nil {
+	if _, err := e.res.Get(e.ctx, "web"); err != nil {
 		t.Fatalf("deleting the source removed the service: %v", err)
 	}
 	if err := e.sync.DeleteSource(e.ctx, "infra"); err == nil {
@@ -751,11 +747,11 @@ func TestRunSyncsOnItsInterval(t *testing.T) {
 	if src, _ := e.sync.GetSource(e.ctx, "off"); !src.LastSyncAt.IsZero() {
 		t.Fatal("a disabled source was synced")
 	}
-	if _, err := e.cat.Get(e.ctx, "web"); err != nil {
+	if _, err := e.res.Get(e.ctx, "web"); err != nil {
 		t.Fatal(err)
 	}
 
-	c2 := r.commit("next", map[string]string{webPath: serviceYAML("web", "  dependsOn: [db]\n")})
+	c2 := r.commit("next", map[string]string{webPath: serviceYAML("web", "  relations: [{ type: dependsOn, target: db }]\n")})
 	e.clk.Advance(30 * time.Second)
 	if src, _ := e.sync.GetSource(e.ctx, "infra"); src.LastCommit != c1 {
 		t.Fatal("synced before the interval ended")
@@ -769,7 +765,7 @@ func TestRunSyncsOnItsInterval(t *testing.T) {
 	// A push notification marks the matching source due, whatever its
 	// interval; the loop syncs it as soon as it runs.
 	stop()
-	c3 := r.commit("pushed", map[string]string{webPath: serviceYAML("web", "  dependsOn: [db, cache]\n")})
+	c3 := r.commit("pushed", map[string]string{webPath: serviceYAML("web", "  relations: [{ type: dependsOn, target: db }, { type: dependsOn, target: cache }]\n")})
 	if n, err := e.sync.NotifyPush(e.ctx, "https://example.com/other.git", "main"); err != nil || n != 0 {
 		t.Fatalf("unrelated push matched %d, %v", n, err)
 	}
@@ -827,5 +823,32 @@ func TestRequestSyncRunsInTheBackground(t *testing.T) {
 	e.sync.Close()
 	if started, err := e.sync.RequestSync(e.ctx, "infra"); err != nil || started {
 		t.Fatalf("after Close: started=%v err=%v", started, err)
+	}
+}
+
+// A source still holding lcm/v1 documents after the upgrade is not synced
+// at all: applying the rest would flag the migrated resources orphaned,
+// because the source no longer holds a Resource of their names.
+func TestSyncRefusesV1Documents(t *testing.T) {
+	e := newEnv(t)
+	r, c1 := baseRepo(t)
+	e.addSource("infra", r, "deploy")
+	e.syncNow("infra")
+
+	v1 := "apiVersion: lcm/v1\nkind: Service\nmetadata: { name: web }\nspec:\n  runtime: { type: external }\n"
+	r.commit("old format", map[string]string{webPath: v1, echoPath: policyYAML("echo", echoNodes+"    - { id: y, type: data.set, props: { values: { a: 1 } } }\n")})
+	rep, err := e.sync.SyncNow(e.ctx, "infra")
+	if err != nil || !strings.Contains(rep.Error, "lcm convert") || !strings.Contains(rep.Error, webPath) || len(rep.Items) != 0 || len(rep.Orphaned) != 0 {
+		t.Fatalf("report = %+v", rep)
+	}
+	if o := e.owner("resource", "web"); o == nil || o.Orphaned || o.Commit != c1 {
+		t.Fatalf("web ownership = %+v", o)
+	}
+	if o := e.owner("policy", "echo"); o == nil || o.Commit != c1 {
+		t.Fatalf("the rest of the source was applied: %+v", o)
+	}
+	src, _ := e.sync.GetSource(e.ctx, "infra")
+	if !strings.Contains(src.LastError, "lcm convert") || src.LastCommit != c1 {
+		t.Fatalf("source = %+v", src)
 	}
 }

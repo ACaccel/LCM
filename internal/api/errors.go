@@ -28,6 +28,9 @@ const (
 	codeInvalidState    = "invalid_state"
 	codePrecondition    = "precondition_failed"
 	codeConflict        = "conflict"
+	// codeUnsupported: the route exists, but the resource's type does not
+	// offer it (observing a service, deploying a machine).
+	codeUnsupported = "unsupported"
 )
 
 // maxBodyBytes caps JSON request bodies.

@@ -8,7 +8,8 @@ import (
 	"encoding/json"
 )
 
-// Workload is the registered impact inventory, not proof of shutdown readiness.
+// Workload is the registered impact inventory, not proof of shutdown
+// readiness. Every managed service runs on the local machine.
 type Workload struct {
 	Name      string `json:"name"`
 	Version   int    `json:"version"`
@@ -17,7 +18,7 @@ type Workload struct {
 }
 
 type MaintenancePreview struct {
-	MachineID         string     `json:"machineId"`
+	ResourceID        string     `json:"resourceId"`
 	Version           int        `json:"version"`
 	Hash              string     `json:"hash"`
 	PartialCoverage   bool       `json:"partialCoverage"`
@@ -31,8 +32,8 @@ type previewReader interface {
 }
 
 func preview(ctx context.Context, q previewReader, r Record) (MaintenancePreview, error) {
-	p := MaintenancePreview{MachineID: r.ID, Version: r.Version, PartialCoverage: true, ControllerOffline: true, ManualPowerOn: true, Workloads: []Workload{}}
-	rows, err := q.QueryContext(ctx, `SELECT s.name,s.version,s.state FROM services s JOIN hosts h ON h.name=s.host WHERE h.kind='local' ORDER BY s.name`)
+	p := MaintenancePreview{ResourceID: r.ID, Version: r.Version, PartialCoverage: true, ControllerOffline: true, ManualPowerOn: true, Workloads: []Workload{}}
+	rows, err := q.QueryContext(ctx, `SELECT r.name,r.version,s.state FROM resources r JOIN service_states s ON s.resource_id=r.id WHERE r.type='service' AND r.phase='managed' ORDER BY r.name`)
 	if err != nil {
 		return p, err
 	}

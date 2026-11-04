@@ -36,7 +36,7 @@ const (
 	TypeDuration ParamType = "duration"
 	// TypeSecret is the name of a secret, never its value.
 	TypeSecret ParamType = "secret"
-	// TypeService is the name of a service in the catalog.
+	// TypeService is the name of a resource of type service.
 	TypeService ParamType = "service"
 	// TypeStrings is a list of strings.
 	TypeStrings ParamType = "strings"
@@ -63,9 +63,10 @@ type Template struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
-	// ServiceParam names the parameter that selects the target service.
-	ServiceParam string  `json:"serviceParam"`
-	Params       []Param `json:"params"`
+	// ResourceParam names the parameter that selects the target resource,
+	// a service.
+	ResourceParam string  `json:"resourceParam"`
+	Params        []Param `json:"params"`
 
 	doc *yaml.Node
 }
@@ -78,12 +79,12 @@ func (t Template) Document() string {
 
 // descriptor is the part of a template that is not in its document.
 type descriptor struct {
-	id, title, description, serviceParam string
-	params                               []Param
+	id, title, description, resourceParam string
+	params                                []Param
 }
 
 var (
-	service = Param{Name: "service", Type: TypeService, Required: true,
+	service = Param{Name: "resource", Type: TypeService, Required: true,
 		Description: "Service the policy acts on. It needs at least one critical health check, which decides whether it is healthy."}
 	notify = Param{Name: "notifySecret", Type: TypeSecret,
 		Description: "Name of a secret that holds a Discord webhook URL. Leave empty to send no notifications."}
@@ -103,7 +104,7 @@ func healthTimeout() Param {
 
 var descriptors = []descriptor{
 	{
-		id: "auto-deploy", title: "Auto deploy", serviceParam: "service",
+		id: "auto-deploy", title: "Auto deploy", resourceParam: "resource",
 		description: "Deploys every new commit of a branch once CI has passed and the deploy window is open, " +
 			"waits for the service to become healthy and rolls back otherwise. One Discord or konata message is updated through the stages.",
 		params: append([]Param{
@@ -121,11 +122,11 @@ var descriptors = []descriptor{
 		}, deployNotify...),
 	},
 	{
-		id: "scheduled-backup", title: "Scheduled backup", serviceParam: "service",
+		id: "scheduled-backup", title: "Scheduled backup", resourceParam: "resource",
 		description: "Runs the service's backup on a cron schedule, retries it with backoff, runs once after downtime, " +
 			"optionally confirms that a heartbeat check reported in, and notifies on failure.",
 		params: []Param{
-			{Name: "service", Type: TypeService, Required: true, Description: "Service whose backup command runs."},
+			{Name: "resource", Type: TypeService, Required: true, Description: "Service whose backup command runs."},
 			{Name: "schedule", Type: TypeString, Description: "Five-field cron expression."},
 			{Name: "timezone", Type: TypeString, Description: "IANA time zone of the schedule."},
 			{Name: "heartbeatCheck", Type: TypeString, Description: "Name of a heartbeat check of the service that the backup job reports to. Empty skips the confirmation."},
@@ -134,13 +135,13 @@ var descriptors = []descriptor{
 		},
 	},
 	{
-		id: "post-deploy-verify", title: "Post-deploy verification", serviceParam: "service",
+		id: "post-deploy-verify", title: "Post-deploy verification", resourceParam: "resource",
 		description: "After any deployment of the service waits for it to become healthy and rolls back when it does not. " +
 			"Not for services that also use auto-deploy, which does this itself.",
 		params: []Param{service, healthTimeout(), notify},
 	},
 	{
-		id: "restart-on-down", title: "Restart when down", serviceParam: "service",
+		id: "restart-on-down", title: "Restart when down", resourceParam: "resource",
 		description: "Restarts the service when its health turns down and reports whether it recovered. " +
 			"This simple version has no rate limit: a service that keeps failing is restarted every time.",
 		params: []Param{service, healthTimeout(), notify},
@@ -188,7 +189,7 @@ func load(d descriptor) (Template, error) {
 	if err != nil {
 		return Template{}, err
 	}
-	t := Template{ID: d.id, Title: d.title, Description: d.description, ServiceParam: d.serviceParam, doc: &doc}
+	t := Template{ID: d.id, Title: d.title, Description: d.description, ResourceParam: d.resourceParam, doc: &doc}
 	seen := map[string]bool{}
 	for _, p := range d.params {
 		def, ok := params[p.Name]
@@ -210,8 +211,8 @@ func load(d descriptor) (Template, error) {
 			return Template{}, fmt.Errorf("spec.params.%s has no descriptor", name)
 		}
 	}
-	if !seen[d.serviceParam] {
-		return Template{}, fmt.Errorf("service parameter %s is not described", d.serviceParam)
+	if !seen[d.resourceParam] {
+		return Template{}, fmt.Errorf("resource parameter %s is not described", d.resourceParam)
 	}
 	return t, nil
 }
@@ -229,8 +230,8 @@ func (t Template) Render(name string, values map[string]any) ([]byte, error) {
 	meta := mapping(root, "metadata")
 	setScalar(meta, "name", name)
 	labels := ensureMapping(meta, "labels")
-	if svc, _ := merged[t.ServiceParam].(string); svc != "" {
-		setScalar(labels, "service", svc)
+	if res, _ := merged[t.ResourceParam].(string); res != "" {
+		setScalar(labels, "resource", res)
 	}
 	setScalar(ensureMapping(meta, "annotations"), Annotation, t.ID)
 

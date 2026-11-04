@@ -28,10 +28,10 @@ func TestModuleMaintenanceGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := gate.Exclusive(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO machines(id,name,version,created_at,updated_at) VALUES('m','local',1,0,0)`); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('m','local','machine','local','managed',1,0,0)`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,machine_id,state,entered_at,body) VALUES('local','m','active',0,'{}')`)
+		_, err := tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,resource_id,state,entered_at,body) VALUES('local','m','active',0,'{}')`)
 		return err
 	}); err != nil {
 		t.Fatal(err)

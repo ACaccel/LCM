@@ -170,15 +170,15 @@ func TestSummaries(t *testing.T) {
 		t.Errorf("latency = avg %v min %v max %v", sum.AvgLatency, sum.MinLatency, sum.MaxLatency)
 	}
 
-	svc, err := h.m.ServiceSummary(h.ctx, "api", 24*time.Hour)
+	svc, err := h.m.ResourceSummary(h.ctx, "api", 24*time.Hour)
 	if err != nil || svc.Count != 18 || svc.Failures != 3 {
 		t.Fatalf("service summary = %+v, %v", svc, err)
 	}
-	gw, err := h.m.ServiceSummary(h.ctx, "api-gw", 24*time.Hour)
+	gw, err := h.m.ResourceSummary(h.ctx, "api-gw", 24*time.Hour)
 	if err != nil || gw.Count != 1 || gw.Failures != 1 || gw.Uptime != 0 {
 		t.Fatalf("api-gw summary = %+v, %v", gw, err)
 	}
-	none, err := h.m.ServiceSummary(h.ctx, "nothing", 24*time.Hour)
+	none, err := h.m.ResourceSummary(h.ctx, "nothing", 24*time.Hour)
 	if err != nil || none.Count != 0 || none.Uptime != 0 {
 		t.Fatalf("empty summary = %+v, %v", none, err)
 	}
@@ -288,7 +288,7 @@ func TestManyChecksStayCheap(t *testing.T) {
 	if got := h.count("monitor_results"); got != 300 {
 		t.Fatalf("results = %d, want 300", got)
 	}
-	s, _ := h.m.Service("bulk")
+	s, _ := h.m.Resource("bulk")
 	if len(s.Checks) != 50 || s.Health != HealthHealthy {
 		t.Fatalf("service = %d checks, %s", len(s.Checks), s.Health)
 	}

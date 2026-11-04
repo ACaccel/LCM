@@ -89,7 +89,7 @@ func atoi(t *testing.T, s string) int {
 
 func TestCanonicalYAMLRoundTrip(t *testing.T) {
 	docs := []string{
-		`apiVersion: lcm/v1
+		`apiVersion: lcm/v2
 kind: Policy
 metadata: { name: tricky, labels: { "true": "yes", n: "08" } }
 spec:
@@ -98,7 +98,7 @@ spec:
     - { id: start, type: trigger.manual, next: { out: [echo] } }
     - { id: echo, type: data.set, props: { values: { got: "{{ trigger.name }}", q: "it's \"quoted\"", u: "caf\u00e9 \u2603" } } }
 `,
-		"apiVersion: lcm/v1\nkind: Service\nmetadata: { name: web }\nspec:\n  runtime: { type: command, start: s, stop: t, restart: r, status: q }\n  jobs:\n    j: { command: \"echo 'a'\\nexit 1\", timeout: 90s }\n",
+		"apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: web }\nspec:\n  type: service\n  adapter: command\n  config:\n    start: s\n    stop: t\n    restart: r\n    status: q\n    jobs:\n      j: { command: \"echo 'a'\\nexit 1\", timeout: 90s }\n",
 	}
 	for _, text := range docs {
 		doc, err := model.Decode([]byte(text))
@@ -124,7 +124,7 @@ spec:
 		if strings.Contains(string(y), ": {") || strings.Contains(string(y), `"kind"`) {
 			t.Fatalf("output is not block style:\n%s", y)
 		}
-		if !strings.HasPrefix(string(y), "apiVersion: lcm/v1\nkind: ") {
+		if !strings.HasPrefix(string(y), "apiVersion: lcm/v2\nkind: ") {
 			t.Fatalf("unexpected field order:\n%s", y)
 		}
 	}

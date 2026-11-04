@@ -13,10 +13,10 @@ import (
 func queryService(t *testing.T, f *fixture) {
 	t.Helper()
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(f.ctx, `INSERT INTO service_versions(name,version,document,created_at,created_by_kind,created_by_id,created_by_name) VALUES('website',1,'{}',0,'system','test','test')`); err != nil {
+		if _, err := tx.ExecContext(f.ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('service-website','website','service','external','managed',1,0,0)`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(f.ctx, `INSERT INTO services(name,host,version,state,state_since,created_at,updated_at) VALUES('website','local',1,'running',0,0,0)`)
+		_, err := tx.ExecContext(f.ctx, `INSERT INTO service_states(resource_id,state,state_since) VALUES('service-website','running',0)`)
 		return err
 	}); err != nil {
 		t.Fatal(err)

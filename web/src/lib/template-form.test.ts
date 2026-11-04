@@ -6,9 +6,9 @@ const tpl: Template = {
   id: "auto-deploy",
   title: "Auto deploy",
   description: "",
-  serviceParam: "service",
+  resourceParam: "resource",
   params: [
-    { name: "service", type: "service", description: "", required: true },
+    { name: "resource", type: "service", description: "", required: true },
     { name: "repo", type: "string", description: "", required: true },
     { name: "branch", type: "string", description: "", required: false, default: "main" },
     { name: "requireCI", type: "boolean", description: "", required: false, default: true },
@@ -19,18 +19,18 @@ const tpl: Template = {
 };
 
 describe("template form", () => {
-  it("presets the service and shows defaults", () => {
+  it("presets the resource and shows defaults", () => {
     const v = initialValues(tpl, "web");
-    expect(v).toMatchObject({ service: "web", repo: "", branch: "main", requireCI: true, ciWorkflows: "" });
+    expect(v).toMatchObject({ resource: "web", repo: "", branch: "main", requireCI: true, ciWorkflows: "" });
     expect(v["windows"]).toBe('[{"start":"00:00","end":"24:00"}]');
   });
 
-  it("sends only changed values, the service and booleans", () => {
+  it("sends only changed values, the resource and booleans", () => {
     const v = { ...initialValues(tpl, "web"), repo: "git@h:me/web.git", ciRepo: "me/web", ciWorkflows: "ci.yml, secret-scan.yml" };
     const { params, errors } = buildParams(tpl, v, "web");
     expect(errors).toEqual({});
     expect(params).toEqual({
-      service: "web",
+      resource: "web",
       repo: "git@h:me/web.git",
       requireCI: true,
       ciRepo: "me/web",

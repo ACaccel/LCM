@@ -13,7 +13,7 @@ import (
 func securitySite(t *testing.T) *site {
 	x := newSite(t, func(c *config.Config) { c.SecurityEnabled = true; c.SecurityMachineID = "machine-a" })
 	if err := x.app.DB.Write(x.ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(x.ctx, `INSERT INTO machines(id,name,version,created_at,updated_at) VALUES('machine-a','workstation',1,0,0)`)
+		_, err := tx.ExecContext(x.ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('machine-a','workstation','machine','local','managed',1,0,0)`)
 		return err
 	}); err != nil {
 		t.Fatal(err)

@@ -1,20 +1,22 @@
 # LCM
 
-LCM manages self-hosted software services and the Linux workstation running the controller. It checks services and performs deployments, rollbacks, restarts, backups and jobs from the console, CLI or policies. Local Machine management adds OS observations, bounded event history, maintenance and durable manual power requests. LCM ships as one Go binary with SQLite; current execution targets are local, and Kubernetes is outside its scope.
+LCM manages self-hosted software services, the Linux workstation running the controller and network routers as one kind of object, the `lcm/v2` [Resource](docs/resources.md). It checks resources and performs deployments, rollbacks, restarts, backups and jobs from the console, CLI or policies. The local machine adds OS observations, bounded event history, maintenance and durable manual power requests; routers add observation and controlled reboots. Relations between resources drive impact previews, acknowledgement of disruptive actions and ordered group actions. LCM ships as one Go binary with SQLite; Kubernetes is outside its scope.
 
-**Status.** The local-service baseline and local Machine implementation are complete. Automated checks pass, and the operator confirmed all deployment and hardware acceptance complete on 2026-11-03; see the [validation record](docs/machine-validation.md). Power is disabled by default and requires a separately installed restricted helper. Registration does not install tools, grant privileges or operate power. SSH, cloud VMs and generalized Resource management remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
+**Status.** Services and the local machine are complete and accepted (operator-confirmed on 2026-11-03; see the [validation record](docs/machine-validation.md), which predates the resource model). The unified Resource model and Xiaomi routers were delivered on 2026-11-05 with automated checks; router acceptance on real hardware is pending the operator's confirmation ([pending acceptance](docs/review.md)). Upgrading replaces `lcm/v1` documents, API paths and CLI commands without aliases; see the [upgrade notes](docs/operations.md#upgrade-to-lcmv2-resources). Power is disabled by default and requires a separately installed restricted helper. SSH machines, cloud VMs and other resource types remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
 | [docs/roadmap.md](docs/roadmap.md) | Planned capabilities, priorities, dependencies, and completion criteria |
-| [docs/services.md](docs/services.md) | Service documents: runtimes and the actions they allow, deployments, health checks, lifecycle states, reconciliation, timeline |
-| [docs/machines.md](docs/machines.md) | Local Machine registration, native monitoring, event coverage, maintenance, power evidence and archives |
+| [docs/resources.md](docs/resources.md) | The shared Resource model: document, types, phases, state and health, actions, relations, impact, group actions, connections, routers |
+| [docs/services.md](docs/services.md) | Service resources: runtime adapters and the actions they allow, deployments, health checks, lifecycle states, reconciliation, timeline |
+| [docs/machines.md](docs/machines.md) | The local machine resource: native monitoring, event coverage, maintenance, power evidence and archives |
 | [docs/security.md](docs/security.md) | Security console, incidents, traffic, notifications and restricted host controls |
 | [docs/policies.md](docs/policies.md) | Policies, built-in templates, policy-as-code (git config sources, ownership, drift) |
 | [docs/architecture.md](docs/architecture.md) | Components, data flow, engine semantics, security model (authentication, tokens, privileges, secrets) |
-| [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), backup, upgrade, remote access |
+| [docs/review.md](docs/review.md) | Pending operator acceptance: steps, pass criteria and results |
+| [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), router connections, backup, upgrade (including `lcm/v2`), remote access |
 | [`internal/api/openapi.yaml`](internal/api/openapi.yaml) | The API v1 reference, also served at `GET /api/v1/openapi.yaml` |
 
 ## Quick start
@@ -27,9 +29,9 @@ bin/lcm admin set-password       # create the admin account (min 8 characters)
 bin/lcm serve                    # http://127.0.0.1:7800, data in ./data
 ```
 
-Log in to the console, add a service under *服務 > 建立服務* (see [services](docs/services.md)), then attach a policy from a template on its *Policy* tab. For the CLI and scripts, create a token under *設定 > API token* (or `bin/lcm token create --name cli > token && chmod 600 token`).
+Log in to the console, add a service under *資源 > 建立資源* (see [services](docs/services.md)), then attach a policy from a template on its *Policy* tab. For the CLI and scripts, create a token under *設定 > API token* (or `bin/lcm token create --name cli > token && chmod 600 token`).
 
-The console (Traditional Chinese, light and dark themes) shows services, local machines, monitoring/history, maintenance and operation evidence, policies, live runs, hosts and settings. It uses the REST API and one server-sent-event stream. Registering a [local Machine](docs/machines.md#registration-and-configuration) preserves the existing Service and Host contracts.
+The console (Traditional Chinese, light and dark themes) shows resources of every type with a type filter, a detail page per type (monitoring/history, maintenance, operation evidence, relations and impact), the timeline, policies, live runs, security and settings. It uses the REST API and one server-sent-event stream.
 
 ## CLI
 
@@ -41,13 +43,15 @@ The console (Traditional Chinese, light and dark themes) shows services, local m
 | `lcm token list` / `lcm token revoke <id>` | List or revoke API tokens |
 | `lcm version` | Print version information |
 | `lcm storage-schema` | Report the binary's supported storage schema without starting a controller; used for upgrade compatibility checks |
-| `lcm apply -f <file\|dir> [-f ...] [--dry-run] [--force]` | Apply Service, Machine, Policy and Module documents; prints a result and a diff per document |
-| `lcm export [kind[/name]]` | Print documents as YAML (`service`, `machine`, `policy`, `module`, or everything) |
+| `lcm convert -f <file\|dir> [-f ...]` | Print `lcm/v1` documents converted to `lcm/v2`, offline; [rules](docs/policies.md#policy-as-code) |
+| `lcm apply -f <file\|dir> [-f ...] [--dry-run] [--force]` | Apply Resource, Policy and Module documents; prints a result and a diff per document |
+| `lcm export [kind[/name]]` | Print documents as YAML (`resource`, `policy`, `module`, or everything) |
 | `lcm validate -f <file\|dir>` | Check documents on the server without applying them |
-| `lcm get services\|machines\|policies\|runs\|locks\|sources [name] [-o table\|json\|yaml] [--limit n]` | List or show resources |
-| `lcm machine <command> <name> [flags]` | Observe/history/events, capabilities, maintenance, durable operations and management phase; [confirmation and recovery rules](docs/machines.md#maintenance-and-power-requests) |
+| `lcm get resources\|policies\|runs\|locks\|sources\|connections [name] [--type t] [-o table\|json\|yaml] [--limit n]` | List or show objects; `--type service\|machine\|router` filters resources; `@<id>` selects an archived resource |
+| `lcm resource action <service> <action> [--version v] [--job j] [--dry-run] [--wait] [--acknowledge-impact]` | Run a service lifecycle action; `--dry-run` prints the plan and impact |
+| `lcm resource <command> <name> [flags]` | `observe`, `history`, `events`, `capabilities`, `maintenance`, `reboot`, `shutdown`, `operations`, `operation`, `resolve`, `retire`, `resume`, `unmanage`, `impact`; [confirmation and recovery rules](docs/machines.md#maintenance-and-power-requests) |
+| `lcm resource group-action --label k=v [...] <action> [--dry-run] [--wait] [--acknowledge-impact]` | Run one service action on matching services in dependency order; [rules](docs/resources.md#group-actions) |
 | `lcm run <policy> [--trigger id] [--event json] [--dry-run] [--wait]` | Start a policy run |
-| `lcm action <service> <action> [--version v] [--job j] [--dry-run] [--wait]` | Run a lifecycle action; `--dry-run` prints the plan |
 
 Admin and token commands open the database directly, so local filesystem access is administrator access. They are recorded in the audit log as actor `system` / `cli`.
 
@@ -80,12 +84,13 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_SYSTEMCTL_PRIVILEGE` | `--systemctl-privilege` | `sudo -n` | Prefix for system-scope `systemctl` start, stop and restart; `none` (or an empty flag value) runs it directly |
 | `LCM_RUNTIME_STATUS_TIMEOUT` | `--runtime-status-timeout` | `15s` | Timeout of runtime status queries |
 | `LCM_RUNTIME_ACTION_TIMEOUT` | `--runtime-action-timeout` | `5m` | Timeout of runtime start, stop and restart |
-| `LCM_LOCK_TTL` | `--lock-ttl` | `1h` | Expiry of a service lock whose holder crashed; must exceed the longest lifecycle action (max `168h`) |
+| `LCM_LOCK_TTL` | `--lock-ttl` | `1h` | Expiry of a resource lock whose holder crashed; must exceed the longest lifecycle action (max `168h`) |
 | `LCM_MONITOR_CONCURRENCY` | `--monitor-concurrency` | `8` | Health probes running at the same time |
-| `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw Service check results and Machine snapshots are kept |
-| `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long Service rollups and Machine minute points are kept; must not be shorter than raw retention |
-| `LCM_ALERT_SERVICE_LABELS` | `--alert-service-labels` | `lcm_service,service` | Comma-separated alert labels that name the affected service |
-| `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long Service timeline entries and Machine events are kept; unresolved evidence has retention exceptions |
+| `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw check results and machine/router snapshots are kept |
+| `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long check rollups and machine/router minute points are kept; must not be shorter than raw retention |
+| `LCM_ALERT_RESOURCE_LABELS` | `--alert-resource-labels` | `lcm_resource,resource,lcm_service,service` | Comma-separated alert labels that name the affected resource; the first present wins |
+| `LCM_CONNECTIONS_FILE` | `--connections-file` | empty | Host [connections file](docs/resources.md#connections) for network-reached resources such as routers; read once at startup, an invalid file or unresolvable password secret stops startup; empty means no connections |
+| `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long timeline entries and machine/router events are kept; unresolved evidence has retention exceptions |
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |
 | `LCM_RUN_RETENTION_AGE` | `--run-retention-age` | `720h` | Finished runs younger than this are kept; older ones beyond the newest N are deleted |
 | `LCM_DEPLOYMENT_RETENTION_KEEP` | `--deployment-retention-keep` | `100` | Deployment records kept per service; the idempotency records of finished actions follow the run retention age |
@@ -99,13 +104,13 @@ Environment variables configure the server; each can be overridden by the `serve
 The API is described by the hand-written OpenAPI 3.1 document [`internal/api/openapi.yaml`](internal/api/openapi.yaml); a test fails when it and the registered routes disagree, and the integration tests check every response against it.
 
 - JSON uses camelCase; errors are `{"error":{"code","message","details"}}`, and a 422 lists `details.issues` as `{path, message}`.
-- Service, Machine, Policy and Module documents accept YAML or JSON; updates need `If-Match: <version>` and a stale one answers 409.
+- Resource, Policy and Module documents (`lcm/v2`) accept YAML or JSON; updates need `If-Match: <version>` and a stale one answers 409. `GET /api/v1/resource-types` describes types, adapters and actions.
 - Lists take `limit` and an opaque `cursor` and answer `{items, nextCursor}`.
-- Lifecycle actions run in the background (202 and an id for `GET /api/v1/actions/{id}`); `?dryRun=true` returns the plan instead.
-- Machine operations use their own durable `/api/v1/machines/{machine}/operations` records; acceptance does not prove reboot or power-off. See the [Machine completion contract](docs/machines.md#maintenance-and-power-requests).
-- `GET /api/v1/events` streams signals, run and node progress, timeline entries, action progress and catalog changes as server-sent events, filtered by `service`, `policy`, `run` and `types`.
-- Machine events have a separate category and immutable Machine ID filter. SSE is best effort; clients recover current state and history from the API after disconnect or overflow.
-- Alerts (`/hooks/alerts/{source}`), heartbeats (`/heartbeats/{svc}/{check}`) and webhooks (`/hooks/{name}`, `/hooks/github`) feed LCM from outside.
+- Resources live under `/api/v1/resources` (`@<id>` reads any incarnation), archives under `/resource-archives`, host connections under `/connections` (read only).
+- Service actions run in the background (`POST /api/v1/resources/{resource}/actions/{action}`, 202 and an id for `GET /api/v1/actions/{id}`); `?dryRun=true` returns the plan and impact instead. Disruptive actions on resources others depend on need `acknowledgeImpact` (409 `impact_unacknowledged` otherwise); group actions use `/resource-groups/actions`.
+- Machine and router operations are durable `/api/v1/resources/{resource}/operations` records; acceptance does not prove completion. See the [machine](docs/machines.md#maintenance-and-power-requests) and [router](docs/resources.md#reboot) completion rules.
+- `GET /api/v1/events` streams signals, run and node progress, timeline entries, action progress, resource changes and machine/router observations as server-sent events, filtered by `resource`, `resourceId`, `policy`, `run` and `types`. SSE is best effort; clients recover current state and history from the API after disconnect or overflow.
+- Alerts (`/hooks/alerts/{source}`), heartbeats (`/heartbeats/{resource}/{check}`) and webhooks (`/hooks/{name}`, `/hooks/github`) feed LCM from outside.
 
 Browsers authenticate with a session cookie, scripts with `Authorization: Bearer <token>`; token scopes and what each may call are in the [security model](docs/architecture.md#security-model).
 

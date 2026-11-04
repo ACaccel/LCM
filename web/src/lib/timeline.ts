@@ -7,12 +7,12 @@ import type { TimelineEntry, TimelineList } from "../api/types";
  * the same entry is later loaded from a page.
  */
 export function entryKey(e: TimelineEntry): string {
-  return [e.service, e.time, e.kind, e.ref, e.summary].join("\u0000");
+  return [e.resource, e.time, e.kind, e.ref, e.summary].join("\u0000");
 }
 
-/** Whether a live entry belongs in a timeline query with this service and kind filter. */
-export function matchesFilter(e: TimelineEntry, service: string, kinds: readonly string[]): boolean {
-  if (service && e.service !== service) return false;
+/** Whether a live entry belongs in a timeline query with this resource and kind filter. */
+export function matchesFilter(e: TimelineEntry, resource: string, kinds: readonly string[]): boolean {
+  if (resource && e.resource !== resource) return false;
   return kinds.length === 0 || kinds.includes(e.kind);
 }
 

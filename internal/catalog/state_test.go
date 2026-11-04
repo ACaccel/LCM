@@ -16,7 +16,6 @@ var allowed = map[[2]catalog.State]bool{
 	{catalog.StateRegistered, catalog.StateRunning}:   true,
 	{catalog.StateRegistered, catalog.StateStopped}:   true,
 	{catalog.StateRegistered, catalog.StateFailed}:    true,
-	{catalog.StateRegistered, catalog.StateRetired}:   true,
 	{catalog.StateDeploying, catalog.StateRunning}:    true,
 	{catalog.StateDeploying, catalog.StateFailed}:     true,
 	{catalog.StateUpdating, catalog.StateRunning}:     true,
@@ -27,22 +26,19 @@ var allowed = map[[2]catalog.State]bool{
 	{catalog.StateRunning, catalog.StateRollingBack}:  true,
 	{catalog.StateRunning, catalog.StateStopped}:      true,
 	{catalog.StateRunning, catalog.StateFailed}:       true,
-	{catalog.StateRunning, catalog.StateRetired}:      true,
 	{catalog.StateStopped, catalog.StateDeploying}:    true,
 	{catalog.StateStopped, catalog.StateRunning}:      true,
 	{catalog.StateStopped, catalog.StateRollingBack}:  true,
 	{catalog.StateStopped, catalog.StateFailed}:       true,
-	{catalog.StateStopped, catalog.StateRetired}:      true,
 	{catalog.StateFailed, catalog.StateDeploying}:     true,
 	{catalog.StateFailed, catalog.StateRollingBack}:   true,
 	{catalog.StateFailed, catalog.StateRunning}:       true,
 	{catalog.StateFailed, catalog.StateStopped}:       true,
-	{catalog.StateFailed, catalog.StateRetired}:       true,
 }
 
 func TestStateMachineEveryPair(t *testing.T) {
-	if len(catalog.States) != 8 {
-		t.Fatalf("expected 8 states, have %d", len(catalog.States))
+	if len(catalog.States) != 7 {
+		t.Fatalf("expected 7 states, have %d", len(catalog.States))
 	}
 	for _, from := range catalog.States {
 		for _, to := range catalog.States {
@@ -54,14 +50,6 @@ func TestStateMachineEveryPair(t *testing.T) {
 	}
 	if catalog.CanTransition("bogus", catalog.StateRunning) || catalog.CanTransition(catalog.StateRunning, "bogus") {
 		t.Error("unknown states must never transition")
-	}
-}
-
-func TestRetiredIsTerminal(t *testing.T) {
-	for _, to := range catalog.States {
-		if catalog.CanTransition(catalog.StateRetired, to) {
-			t.Errorf("retired -> %s allowed", to)
-		}
 	}
 }
 
@@ -87,7 +75,6 @@ func TestCanAct(t *testing.T) {
 		{catalog.ActionRollback, []c{catalog.StateRunning, catalog.StateStopped, catalog.StateFailed}},
 		{catalog.ActionBackup, []c{catalog.StateRegistered, catalog.StateRunning, catalog.StateStopped, catalog.StateFailed}},
 		{catalog.ActionRunJob, []c{catalog.StateRegistered, catalog.StateRunning, catalog.StateStopped, catalog.StateFailed}},
-		{catalog.ActionRetire, []c{catalog.StateRegistered, catalog.StateRunning, catalog.StateStopped, catalog.StateFailed}},
 	}
 	for _, tt := range tests {
 		okSet := map[c]bool{}
@@ -104,14 +91,14 @@ func TestCanAct(t *testing.T) {
 		t.Error("unknown action allowed")
 	}
 	// Every action that moves the service must have a legal first step.
-	for _, a := range []string{catalog.ActionStart, catalog.ActionStop, catalog.ActionRestart, catalog.ActionRetire} {
+	for _, a := range []string{catalog.ActionStart, catalog.ActionStop, catalog.ActionRestart} {
 		for _, s := range catalog.States {
 			if !catalog.CanAct(a, s) {
 				continue
 			}
 			target := map[string]catalog.State{
 				catalog.ActionStart: catalog.StateRunning, catalog.ActionStop: catalog.StateStopped,
-				catalog.ActionRestart: catalog.StateRunning, catalog.ActionRetire: catalog.StateRetired,
+				catalog.ActionRestart: catalog.StateRunning,
 			}[a]
 			if s != target && !catalog.CanTransition(s, target) {
 				t.Errorf("action %s allowed in %s but %s -> %s is not a transition", a, s, s, target)
@@ -155,7 +142,7 @@ func TestTransitionStoresAndPublishes(t *testing.T) {
 
 	select {
 	case sig := <-sub.C:
-		if sig.Kind != signal.KindLifecycle || sig.Service != "app" || sig.Data["state"] != "running" ||
+		if sig.Kind != signal.KindLifecycle || sig.Resource != "app" || sig.ResourceType != "service" || sig.Data["state"] != "running" ||
 			sig.Data["previous"] != "registered" || sig.Data["action"] != "start" || sig.Labels["tier"] != "web" {
 			t.Fatalf("signal = %+v", sig)
 		}
@@ -163,7 +150,7 @@ func TestTransitionStoresAndPublishes(t *testing.T) {
 		t.Fatal("no lifecycle signal published")
 	}
 
-	page, err := e.cat.Timeline(ctx, catalog.TimelineQuery{Service: "app", Kinds: []string{catalog.KindLifecycle}})
+	page, err := e.cat.Timeline(ctx, catalog.TimelineQuery{Resource: "app", Kinds: []string{catalog.KindLifecycle}})
 	if err != nil || len(page.Entries) != 1 || page.Entries[0].Ref != "run1" || page.Entries[0].Summary != "registered -> running (start)" {
 		t.Fatalf("timeline = %+v %v", page, err)
 	}
@@ -199,7 +186,7 @@ func TestTransitionErrors(t *testing.T) {
 		t.Fatalf("unexpected signal %+v", sig)
 	default:
 	}
-	if err := (&catalog.StateError{Service: "a", Action: "x", State: catalog.StateRunning}); !errors.Is(err, catalog.ErrInvalidTransition) {
+	if err := (&catalog.StateError{Resource: "a", Action: "x", State: catalog.StateRunning}); !errors.Is(err, catalog.ErrInvalidTransition) {
 		t.Fatal("StateError must match ErrInvalidTransition")
 	}
 }

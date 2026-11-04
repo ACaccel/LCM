@@ -52,7 +52,7 @@ function detailFor(e: TimelineEntry): string {
 }
 
 /** Timeline rows in the style of the approved mockup. */
-export function TimelineEvents({ entries, showService }: { entries: readonly TimelineEntry[]; showService?: boolean }) {
+export function TimelineEvents({ entries, showResource }: { entries: readonly TimelineEntry[]; showResource?: boolean }) {
   return (
     <div className="events" role="list">
       {entries.map((e, i) => {
@@ -66,9 +66,9 @@ export function TimelineEvents({ entries, showService }: { entries: readonly Tim
             <div className={`dot d-${dot}`} aria-hidden="true" />
             <div>
               <span className="kind">{s.timeline.kindNames[e.kind] ?? e.kind}</span>
-              {showService && e.service && (
+              {showResource && e.resource && (
                 <>
-                  <Link to={`/services/${encodeURIComponent(e.service)}`}>{e.service}</Link>{" "}
+                  <Link to={`/resources/${encodeURIComponent(e.resource)}`}>{e.resource}</Link>{" "}
                 </>
               )}
               {e.summary}

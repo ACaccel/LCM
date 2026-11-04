@@ -29,7 +29,7 @@ func setup(t *testing.T, opts ...func(*Config)) *fixture {
 	clk := clock.NewFake(time.Date(2026, 11, 1, 1, 0, 0, 0, time.UTC))
 	ctx := auth.WithActor(context.Background(), auth.CLI)
 	if err := db.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO machines(id,name,version,created_at,updated_at) VALUES('machine-a','workstation',1,?,?)`, clk.Now().UnixMilli(), clk.Now().UnixMilli())
+		_, err := tx.ExecContext(ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('machine-a','workstation','machine','local','managed',1,?,?)`, clk.Now().UnixMilli(), clk.Now().UnixMilli())
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestActiveCapacityRejectsWithoutSilentlyDropping(t *testing.T) {
 
 type observations struct {
 	record   machine.Record
-	services []monitor.ServiceStatus
+	services []monitor.ResourceStatus
 	selector string
 }
 
@@ -240,7 +240,7 @@ func (o *observations) Get(_ context.Context, selector string) (machine.Record, 
 	o.selector = selector
 	return o.record, nil
 }
-func (o *observations) Services() []monitor.ServiceStatus { return o.services }
+func (o *observations) Resources() []monitor.ResourceStatus { return o.services }
 func TestNativeReconciliationStalenessAndCheckpointRestart(t *testing.T) {
 	f := setup(t)
 	o := &observations{record: machine.Record{ID: "machine-a", Status: machine.Status{Fresh: true, Health: "degraded", Reasons: []string{"memory"}, Snapshot: &machine.Snapshot{ID: 1, ObservedAt: f.clk.Now()}}}}
@@ -338,15 +338,15 @@ func TestTypedTrafficIsQueryableAndNeverChangesIncidentLifecycle(t *testing.T) {
 func TestServiceFailureAndGapRetainSeparateIdentities(t *testing.T) {
 	f := setup(t)
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(f.ctx, `INSERT INTO service_versions(name,version,document,created_at,created_by_kind,created_by_id,created_by_name) VALUES('website',1,'{}',0,'system','test','test')`); err != nil {
+		if _, err := tx.ExecContext(f.ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('service-website','website','service','external','managed',1,0,0)`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(f.ctx, `INSERT INTO services(name,host,version,state,state_since,created_at,updated_at) VALUES('website','local',1,'running',0,0,0)`)
+		_, err := tx.ExecContext(f.ctx, `INSERT INTO service_states(resource_id,state,state_since) VALUES('service-website','running',0)`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	o := &observations{record: machine.Record{ID: "machine-a", Status: machine.Status{Fresh: true, Health: "healthy", Snapshot: &machine.Snapshot{ID: 1, ObservedAt: f.clk.Now()}}}, services: []monitor.ServiceStatus{{Service: "website", Health: monitor.HealthDown, Checks: []monitor.CheckStatus{{LastResult: f.clk.Now(), Interval: time.Minute, Status: monitor.StatusDown}}}}}
+	o := &observations{record: machine.Record{ID: "machine-a", Status: machine.Status{Fresh: true, Health: "healthy", Snapshot: &machine.Snapshot{ID: 1, ObservedAt: f.clk.Now()}}}, services: []monitor.ResourceStatus{{Resource: "website", Type: "service", Health: monitor.HealthDown, Checks: []monitor.CheckStatus{{LastResult: f.clk.Now(), Interval: time.Minute, Status: monitor.StatusDown}}}}}
 	if err := f.m.Poll(f.ctx, o, o); err != nil {
 		t.Fatal(err)
 	}
@@ -440,10 +440,10 @@ func TestRemovedServiceRetiresOnlyExistingMachineEpisodes(t *testing.T) {
 		c.Send = func(context.Context, Incident) error { sends++; return nil }
 	})
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(f.ctx, `INSERT INTO service_versions(name,version,document,created_at,created_by_kind,created_by_id,created_by_name) VALUES('website',1,'{}',0,'system','test','test')`); err != nil {
+		if _, err := tx.ExecContext(f.ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('service-website','website','service','external','managed',1,0,0)`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(f.ctx, `INSERT INTO services(name,host,version,state,state_since,created_at,updated_at) VALUES('website','local',1,'running',0,0,0)`)
+		_, err := tx.ExecContext(f.ctx, `INSERT INTO service_states(resource_id,state,state_since) VALUES('service-website','running',0)`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -452,7 +452,7 @@ func TestRemovedServiceRetiresOnlyExistingMachineEpisodes(t *testing.T) {
 	e.Service = "website"
 	old := f.ingest(t, e).IncidentID
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(f.ctx, `DELETE FROM services WHERE name='website'`)
+		_, err := tx.ExecContext(f.ctx, `UPDATE resources SET phase='unmanaged' WHERE name='website'`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -530,10 +530,10 @@ func TestLateDeliveryCompletionCannotUndoScopeRetirement(t *testing.T) {
 		c.Send = func(context.Context, Incident) error { close(started); <-release; return nil }
 	})
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(f.ctx, `INSERT INTO service_versions(name,version,document,created_at,created_by_kind,created_by_id,created_by_name) VALUES('website',1,'{}',0,'system','test','test')`); err != nil {
+		if _, err := tx.ExecContext(f.ctx, `INSERT INTO resources(id,name,type,adapter,phase,version,created_at,updated_at) VALUES('service-website','website','service','external','managed',1,0,0)`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(f.ctx, `INSERT INTO services(name,host,version,state,state_since,created_at,updated_at) VALUES('website','local',1,'running',0,0,0)`)
+		_, err := tx.ExecContext(f.ctx, `INSERT INTO service_states(resource_id,state,state_since) VALUES('service-website','running',0)`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -545,7 +545,7 @@ func TestLateDeliveryCompletionCannotUndoScopeRetirement(t *testing.T) {
 	go func() { done <- f.m.Deliver(f.ctx) }()
 	<-started
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(f.ctx, `DELETE FROM services WHERE name='website'`)
+		_, err := tx.ExecContext(f.ctx, `UPDATE resources SET phase='unmanaged' WHERE name='website'`)
 		return err
 	}); err != nil {
 		close(release)

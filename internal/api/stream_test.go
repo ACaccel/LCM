@@ -96,27 +96,27 @@ func TestEventStreamCarriesSignalsRunsAndChanges(t *testing.T) {
 	x.putPolicy("echo", manualPolicyNodes)
 	all := x.openStream("")
 	runOnly := x.openStream("?types=run&policy=echo")
-	webOnly := x.openStream("?service=web")
+	webOnly := x.openStream("?resource=web")
 
-	// Catalog changes, timeline entries and signals for a service.
+	// Resource changes, timeline entries and signals for a resource.
 	x.createService(serviceDoc("web", ""))
-	e := all.until("timeline event", func(e streamEvent) bool { return e.Name == "timeline" && e.Data["service"] == "web" })
-	if tl := e.Data["data"].(map[string]any); tl["kind"] != "config.changed" || tl["summary"] == "" {
-		t.Fatalf("timeline event = %v", e)
-	}
-	e = all.until("catalog event", func(e streamEvent) bool { return e.Name == "catalog" && e.Data["service"] == "web" })
-	if c := e.Data["data"].(map[string]any); c["change"] != "created" || c["service"] != "web" {
-		t.Fatalf("catalog event = %v", e)
+	e := all.until("resource event", func(e streamEvent) bool { return e.Name == "resource" && e.Data["resource"] == "web" })
+	if c := e.Data["data"].(map[string]any); c["change"] != "created" || c["name"] != "web" || c["type"] != "service" || e.Data["resourceId"] != c["id"] {
+		t.Fatalf("resource event = %v", e)
 	}
 
-	x.app.Bus.Publish(signal.Signal{Kind: signal.KindHealth, Service: "web", Source: "monitor", Data: map[string]any{"health": "down"}})
+	x.app.Bus.Publish(signal.Signal{Kind: signal.KindHealth, Resource: "web", ResourceType: "service", Source: "monitor", Data: map[string]any{"health": "down"}})
 	e = webOnly.until("signal for web", func(e streamEvent) bool { return e.Name == "signal" })
-	if sig := e.Data["data"].(map[string]any); sig["kind"] != "health.changed" || e.Data["service"] != "web" {
+	if sig := e.Data["data"].(map[string]any); sig["kind"] != "health.changed" || sig["resourceType"] != "service" || e.Data["resource"] != "web" {
 		t.Fatalf("signal event = %v", e)
 	}
 
 	// An action reports its progress.
 	id := x.startAction("web", "start", nil)
+	e = all.until("timeline event", func(e streamEvent) bool { return e.Name == "timeline" && e.Data["resource"] == "web" })
+	if tl := e.Data["data"].(map[string]any); tl["resource"] != "web" || tl["summary"] == "" {
+		t.Fatalf("timeline event = %v", e)
+	}
 	all.until("action finished", func(e streamEvent) bool {
 		return e.Name == "action" && e.Data["data"].(map[string]any)["id"] == id && e.Data["data"].(map[string]any)["status"] == "succeeded"
 	})
@@ -132,13 +132,13 @@ func TestEventStreamCarriesSignalsRunsAndChanges(t *testing.T) {
 	}
 	all.until("node event", func(e streamEvent) bool { return e.Name == "node" && e.Data["run"] == runID })
 
-	// The service-filtered stream never saw run events (they carry no
-	// service), and the run-only stream never saw anything but runs.
-	x.app.Bus.Publish(signal.Signal{Kind: signal.KindHealth, Service: "web", Source: "marker"})
+	// The resource-filtered stream never saw run events (they carry no
+	// resource), and the run-only stream never saw anything but runs.
+	x.app.Bus.Publish(signal.Signal{Kind: signal.KindHealth, Resource: "web", Source: "marker"})
 	sawMarker := false
 	webOnly.until("marker", func(e streamEvent) bool {
 		if e.Name == "run" || e.Name == "node" {
-			t.Fatalf("service filter let %s through", e.Name)
+			t.Fatalf("resource filter let %s through", e.Name)
 		}
 		sawMarker = e.Name == "signal" && e.Data["data"].(map[string]any)["source"] == "marker"
 		return sawMarker

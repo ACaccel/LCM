@@ -72,7 +72,7 @@ func (m *Manager) StartNotificationTest(ctx context.Context, u TestRequest) (Not
 		if count > 0 {
 			return ErrTestRate
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machines WHERE id=? AND phase='managed'`, m.cfg.MachineID).Scan(&count); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resources WHERE id=? AND type='machine' AND phase='managed'`, m.cfg.MachineID).Scan(&count); err != nil {
 			return err
 		}
 		if count != 1 {

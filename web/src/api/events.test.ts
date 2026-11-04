@@ -4,15 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEventApplier, EventStream } from "./events";
 import type { SourceLike } from "./events";
 import { qk } from "./queries";
-import type { Action, EventEnvelope, Run, ServiceSummary, TimelineEntry, TimelineList } from "./types";
+import type { Action, EventEnvelope, ResourceDetail, ResourceSummary, Run, TimelineEntry, TimelineList } from "./types";
 
 function env(type: EventEnvelope["type"], data: unknown, extra: Partial<EventEnvelope> = {}): EventEnvelope {
   return { id: 1, type, time: "2026-10-28T10:00:00Z", data, ...extra } as EventEnvelope;
 }
 
-const svc = (name: string, over: Partial<ServiceSummary> = {}): ServiceSummary => ({
+const svc = (name: string, over: Partial<ResourceSummary> = {}): ResourceSummary => ({
+  id: `id-${name}`,
   name,
-  host: "local",
+  type: "service",
+  adapter: "systemd",
+  phase: "managed",
   labels: {},
   state: "running",
   stateSince: "2026-10-28T09:00:00Z",
@@ -26,7 +29,7 @@ const svc = (name: string, over: Partial<ServiceSummary> = {}): ServiceSummary =
 
 const entry = (over: Partial<TimelineEntry> = {}): TimelineEntry => ({
   id: 0,
-  service: "web",
+  resource: "web",
   time: "2026-10-28T10:00:00Z",
   kind: "deployment",
   summary: "deployed",
@@ -47,23 +50,23 @@ afterEach(() => {
 });
 
 describe("health and lifecycle signals", () => {
-  it("patches the services list and detail without a request", () => {
-    qc.setQueryData(qk.services({}), [svc("web"), svc("api")]);
-    qc.setQueryData(qk.service("web"), { ...svc("web"), checks: [] });
+  it("patches the resource list and detail without a request", () => {
+    qc.setQueryData(qk.resources({}), [svc("web"), svc("api")]);
+    qc.setQueryData(qk.resource("web"), { name: "web", health: { status: "healthy", since: null, reasons: ["kept"] } } as unknown as ResourceDetail);
     const a = createEventApplier(qc);
 
-    a.apply(env("signal", { id: "s1", kind: "health.changed", time: "2026-10-28T10:00:00Z", service: "web", source: "monitor", data: { health: "down" } }));
+    a.apply(env("signal", { id: "s1", kind: "health.changed", time: "2026-10-28T10:00:00Z", resource: "web", resourceType: "service", source: "monitor", data: { health: "down" } }));
 
-    const list = qc.getQueryData<ServiceSummary[]>(qk.services({}));
+    const list = qc.getQueryData<ResourceSummary[]>(qk.resources({}));
     expect(list?.map((x) => x.health)).toEqual(["down", "healthy"]);
-    expect(qc.getQueryData<ServiceSummary>(qk.service("web"))?.health).toBe("down");
+    expect(qc.getQueryData<ResourceDetail>(qk.resource("web"))?.health).toEqual({ status: "down", since: null, reasons: ["kept"] });
   });
 
   it("updates the state and its start time on lifecycle changes", () => {
-    qc.setQueryData(qk.services({}), [svc("web")]);
+    qc.setQueryData(qk.resources({}), [svc("web")]);
     const a = createEventApplier(qc);
-    a.apply(env("signal", { id: "s2", kind: "lifecycle.changed", time: "2026-10-28T10:05:00Z", service: "web", source: "catalog", data: { state: "updating", previous: "running" } }));
-    const [web] = qc.getQueryData<ServiceSummary[]>(qk.services({})) ?? [];
+    a.apply(env("signal", { id: "s2", kind: "lifecycle.changed", time: "2026-10-28T10:05:00Z", resource: "web", source: "catalog", data: { state: "updating", previous: "running" } }));
+    const [web] = qc.getQueryData<ResourceSummary[]>(qk.resources({})) ?? [];
     expect(web?.state).toBe("updating");
     expect(web?.stateSince).toBe("2026-10-28T10:05:00Z");
   });
@@ -77,8 +80,8 @@ describe("timeline events", () => {
 
   it("prepends to every matching timeline and skips non-matching filters", () => {
     qc.setQueryData(qk.timeline({}), page([]));
-    qc.setQueryData(qk.timeline({ service: "web" }), page([]));
-    qc.setQueryData(qk.timeline({ service: "api" }), page([]));
+    qc.setQueryData(qk.timeline({ resource: "web" }), page([]));
+    qc.setQueryData(qk.timeline({ resource: "api" }), page([]));
     qc.setQueryData(qk.timeline({ kinds: ["alert"] }), page([]));
     const a = createEventApplier(qc);
 
@@ -86,8 +89,8 @@ describe("timeline events", () => {
 
     const count = (key: readonly unknown[]) => qc.getQueryData<InfiniteData<TimelineList>>(key)?.pages[0]?.items.length;
     expect(count(qk.timeline({}))).toBe(1);
-    expect(count(qk.timeline({ service: "web" }))).toBe(1);
-    expect(count(qk.timeline({ service: "api" }))).toBe(0);
+    expect(count(qk.timeline({ resource: "web" }))).toBe(1);
+    expect(count(qk.timeline({ resource: "api" }))).toBe(0);
     expect(count(qk.timeline({ kinds: ["alert"] }))).toBe(0);
   });
 
@@ -157,9 +160,34 @@ describe("run and node events", () => {
   });
 });
 
+describe("resource and observation events", () => {
+  it("refreshes lists, the detail by name and by id, archives and ownership after a phase change", async () => {
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const a = createEventApplier(qc);
+    a.apply(env("resource", { id: "r-1", name: "web", type: "service", change: "unmanaged" }, { resource: "web", resourceId: "r-1" }));
+    await vi.advanceTimersByTimeAsync(300);
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    for (const k of [qk.resourcesAll(), qk.archivesAll(), qk.resourceAll("web"), qk.resourceAll("@r-1"), qk.ownership()]) expect(keys).toContain(JSON.stringify(k));
+  });
+
+  it("refreshes the observed resource and its observation lists, coalesced", async () => {
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const a = createEventApplier(qc);
+    const ev = { id: 1, resourceId: "m-1", source: "health", kind: "machine.health.changed", severity: "warning", occurredAt: "x", ingestedAt: "x", historical: false };
+    a.apply(env("observation", ev, { resource: "box", resourceId: "m-1" }));
+    a.apply(env("observation", { ...ev, id: 2 }, { resource: "box", resourceId: "m-1" }));
+    await vi.advanceTimersByTimeAsync(300);
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    expect(keys.filter((k) => k === JSON.stringify(qk.resource("box")))).toHaveLength(1);
+    expect(keys).toContain(JSON.stringify(qk.resourceEvents("box")));
+    expect(keys).toContain(JSON.stringify(qk.resourceOperations("box")));
+    expect(keys).not.toContain(JSON.stringify(qk.resourceVersions("box")));
+  });
+});
+
 describe("action events", () => {
   it("replaces the cached action", () => {
-    const running: Action = { id: "a1", service: "web", action: "deploy", status: "running", actor: { kind: "user", id: "1", name: "admin" }, startedAt: "x", finishedAt: null, result: null, error: "" };
+    const running: Action = { id: "a1", resource: "web", action: "deploy", status: "running", actor: { kind: "user", id: "1", name: "admin" }, startedAt: "x", finishedAt: null, result: null, error: "" };
     qc.setQueryData(qk.action("a1"), running);
     createEventApplier(qc).apply(env("action", { ...running, status: "succeeded", finishedAt: "y" }));
     expect(qc.getQueryData<Action>(qk.action("a1"))?.status).toBe("succeeded");
@@ -237,15 +265,15 @@ describe("EventStream", () => {
   });
 
   it("survives an unreadable frame and applies the next one", () => {
-    qc.setQueryData(qk.services({}), [svc("web")]);
+    qc.setQueryData(qk.resources({}), [svc("web")]);
     const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const s = stream();
     s.start();
     const src = FakeSource.all[0];
     src?.emit("signal", undefined);
-    src?.emit("signal", env("signal", { id: "s", kind: "health.changed", time: "t", service: "web", source: "m", data: { health: "degraded" } }));
+    src?.emit("signal", env("signal", { id: "s", kind: "health.changed", time: "t", resource: "web", source: "m", data: { health: "degraded" } }));
     expect(err).toHaveBeenCalledTimes(1);
-    expect(qc.getQueryData<ServiceSummary[]>(qk.services({}))?.[0]?.health).toBe("degraded");
+    expect(qc.getQueryData<ResourceSummary[]>(qk.resources({}))?.[0]?.health).toBe("degraded");
     err.mockRestore();
     s.stop();
   });

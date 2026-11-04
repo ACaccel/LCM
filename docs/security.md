@@ -18,7 +18,7 @@ LCM_SECURITY_KONATA_URL=http://127.0.0.1:4100/notifications/security-alerts
 LCM_SECURITY_TOKEN_SECRET=konata-notify-key
 ```
 
-Register the local Machine through the existing API or CLI first. Use its `id`,
+Register the local machine resource (`type: machine`) first. Use its `id`,
 not its mutable display name. Configure the Konata route for the intended private
 Discord channel before enabling delivery. The token variable contains an LCM
 secret **name**; the relay bearer value stays in the existing secret directory.
@@ -58,7 +58,7 @@ message. Updates are coalesced and normally limited to once per fifteen minutes;
 recovery and increasing severity bypass that cooldown. Pending updates retain the
 latest revision even when ingestion races a delivery attempt.
 
-When a Service registration is removed, reconciliation retires its existing
+When a Service resource is unmanaged, reconciliation retires its existing
 episodes for the configured Machine, cancels pending delivery and releases active
 condition capacity. History explicitly says `retired`, which does not assert
 that the service recovered. External ingestion still cannot reference an unknown

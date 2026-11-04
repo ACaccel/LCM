@@ -12,7 +12,7 @@ const pt = (time: string, count: number, failures: number, avg = 100): SeriesPoi
 });
 
 const series = (points: SeriesPoint[]): Series => ({
-  service: "s",
+  resource: "s",
   check: "c",
   from: "2026-10-28T00:00:00Z",
   to: "2026-10-29T00:00:00Z",

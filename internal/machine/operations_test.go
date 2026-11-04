@@ -38,9 +38,7 @@ func readyPower(t *testing.T) (*testEnv, *fakePower) {
 	p := &fakePower{}
 	e.m.power = p
 	e.cfg.Power = p
-	if _, err := e.m.Put(e.ctx, []byte(testDoc), 0); err != nil {
-		t.Fatal(err)
-	}
+	e.put(t, testDoc, 0)
 	e.poll(t)
 	e.poll(t)
 	return e, p
@@ -169,9 +167,7 @@ func TestAmbiguousHandoffDoesNotResubmit(t *testing.T) {
 func TestNewConfigurationAndBrokenCPUBaseline(t *testing.T) {
 	e, _ := readyPower(t)
 	changed := strings.Replace(testDoc, "consecutive: 2", "consecutive: 3", 1)
-	if _, err := e.m.Put(e.ctx, []byte(changed), 1); err != nil {
-		t.Fatal(err)
-	}
+	e.put(t, changed, 1)
 	r, _ := e.m.Get(e.ctx, "workstation")
 	if r.Status.Fresh || r.Status.Health != "unknown" {
 		t.Fatalf("stale configuration health: %+v", r.Status)

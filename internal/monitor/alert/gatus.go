@@ -13,6 +13,7 @@ type gatusPayload struct {
 	URL         string            `json:"url"`
 	Description string            `json:"description"`
 	Status      string            `json:"status"`
+	Resource    string            `json:"resource"`
 	Service     string            `json:"service"`
 	Severity    string            `json:"severity"`
 	Message     string            `json:"message"`
@@ -43,9 +44,9 @@ func parseGatus(body []byte, opts Options) ([]signal.Signal, error) {
 	for k, v := range p.Labels {
 		labels[k] = v
 	}
-	service := strings.TrimSpace(p.Service)
-	if service == "" {
-		service = opts.serviceOf(labels)
+	resource := explicitResource(p.Resource, p.Service)
+	if resource == "" {
+		resource = opts.resourceOf(labels)
 	}
 	sev := normalizeSeverity(p.Severity, signal.SeverityWarning)
 	if status == StatusResolved {
@@ -55,6 +56,6 @@ func parseGatus(body []byte, opts Options) ([]signal.Signal, error) {
 	if msg == "" {
 		msg = p.Description
 	}
-	return []signal.Signal{build(SourceGatus, service, p.Endpoint, status, sev, msg,
+	return []signal.Signal{build(SourceGatus, resource, p.Endpoint, status, sev, msg,
 		fingerprint(p.Group, p.Endpoint), labels, map[string]any{"url": p.URL})}, nil
 }

@@ -66,7 +66,7 @@ func TestStatusChangesAfterThreshold(t *testing.T) {
 		t.Fatalf("signals = %+v", sigs)
 	}
 	c := cs[0]
-	if c.Service != "api" || c.Severity != signal.SeverityCritical || c.Data["status"] != "down" ||
+	if c.Resource != "api" || c.ResourceType != "service" || c.Severity != signal.SeverityCritical || c.Data["status"] != "down" ||
 		c.Data["previous"] != "up" || c.Data["message"] != "boom" || c.Data["check"] != "web" {
 		t.Errorf("check signal = %+v", c)
 	}
@@ -203,14 +203,14 @@ func TestSyncAddUpdateRemoveKeepsState(t *testing.T) {
 
 	// Remove the service entirely.
 	h.sync()
-	if _, ok := h.m.Service("api"); ok {
+	if _, ok := h.m.Resource("api"); ok {
 		t.Error("service without checks still listed")
 	}
-	_ = h.db.Reader().QueryRow(`SELECT COUNT(*) FROM monitor_services`).Scan(&n)
+	_ = h.db.Reader().QueryRow(`SELECT COUNT(*) FROM monitor_resources`).Scan(&n)
 	if n != 0 {
 		t.Error("stored service was kept")
 	}
-	if len(h.m.Services()) != 0 {
+	if len(h.m.Resources()) != 0 {
 		t.Error("Services not empty")
 	}
 }
@@ -223,7 +223,7 @@ func TestSyncInvalidDefinitions(t *testing.T) {
 
 	bad := fakeDef("api", "web", func(c *model.Check) { c.Props = map[string]any{"nope": 1} })
 	good := fakeDef("api", "db")
-	err := h.m.Sync(h.ctx, []Def{bad, good, fakeDef("Bad Name", "x"), {Service: "api", Check: model.Check{Name: "t", Type: "teapot"}}, good})
+	err := h.m.Sync(h.ctx, []Def{bad, good, fakeDef("Bad Name", "x"), {Resource: "api", Check: model.Check{Name: "t", Type: "teapot"}}, good})
 	var is model.Issues
 	if !errors.As(err, &is) {
 		t.Fatalf("error = %v, want model.Issues", err)
@@ -239,7 +239,7 @@ func TestSyncInvalidDefinitions(t *testing.T) {
 	}
 	// The valid definition was applied and the invalid update kept the
 	// running check untouched.
-	s, ok := h.m.Service("api")
+	s, ok := h.m.Resource("api")
 	if !ok || len(s.Checks) != 2 {
 		t.Fatalf("service = %+v", s)
 	}
@@ -527,7 +527,7 @@ func TestConfigValidation(t *testing.T) {
 }
 
 func heartbeatDef(service, name string, props map[string]any) Def {
-	return Def{Service: service, Check: model.Check{Name: name, Type: "heartbeat", Interval: model.Duration(testInterval), Props: props}}
+	return Def{Resource: service, ResourceType: "service", Check: model.Check{Name: name, Type: "heartbeat", Interval: model.Duration(testInterval), Props: props}}
 }
 
 func checkSignals(sigs []signal.Signal, check string) []signal.Signal {

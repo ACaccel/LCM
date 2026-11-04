@@ -1,9 +1,9 @@
 # LCM deploying itself. Applied by deploy/seed.sh; docs/operations.md
 # explains the flow and the trust boundary.
 #
-# Runtime command: lcm.service is LCM itself, so LCM must not stop or restart
+# Adapter command: lcm.service is LCM itself, so LCM must not stop or restart
 # it (the restart would kill the process recording the deployment). The
-# runtime therefore only reports status: start, stop and restart are not
+# config therefore only reports status: start, stop and restart are not
 # offered, and a deployment skips its restart step. The install step's
 # self-install schedules the restart 3s later in a separate systemd unit,
 # verifies the new version and restores the previous binary when it does not
@@ -14,28 +14,29 @@
 # so a deployment that self-install rolled back is seen as unhealthy and the
 # auto-deploy policy rolls the checkout back too. It also fails for the few
 # seconds between a build and the restart.
-apiVersion: lcm/v1
-kind: Service
+apiVersion: lcm/v2
+kind: Resource
 metadata:
   name: lcm
 spec:
-  runtime:
-    type: command
+  type: service
+  adapter: command
+  config:
     status: systemctl is-active --quiet lcm.service
-  source:
-    repo: /var/lib/lcm/work/lcm
-    branch: main
-    # make build compiles the console (npm) and bin/lcm with the toolchains
-    # bootstrap copied; caches stay under the data directory.
-    build: >-
-      PATH=/opt/lcm/toolchain/go/bin:/opt/lcm/toolchain/node/bin:$PATH
-      GOTOOLCHAIN=local GOFLAGS=-modcacherw
-      GOCACHE=/var/lib/lcm/cache/go-build GOMODCACHE=/var/lib/lcm/cache/go-mod
-      npm_config_cache=/var/lib/lcm/cache/npm npm_config_audit=false
-      npm_config_fund=false npm_config_update_notifier=false
-      make build
-    install: sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm
-    timeout: 20m
+    source:
+      repo: /var/lib/lcm/work/lcm
+      branch: main
+      # make build compiles the console (npm) and bin/lcm with the toolchains
+      # bootstrap copied; caches stay under the data directory.
+      build: >-
+        PATH=/opt/lcm/toolchain/go/bin:/opt/lcm/toolchain/node/bin:$PATH
+        GOTOOLCHAIN=local GOFLAGS=-modcacherw
+        GOCACHE=/var/lib/lcm/cache/go-build GOMODCACHE=/var/lib/lcm/cache/go-mod
+        npm_config_cache=/var/lib/lcm/cache/npm npm_config_audit=false
+        npm_config_fund=false npm_config_update_notifier=false
+        make build
+      install: sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm
+      timeout: 20m
   checks:
     - name: api
       type: http

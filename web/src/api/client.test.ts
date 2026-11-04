@@ -47,7 +47,7 @@ describe("error handling", () => {
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("Failed to fetch");
     });
-    const net = (await unwrap(client.GET("/hosts")).catch((e: unknown) => e)) as ApiError;
+    const net = (await unwrap(client.GET("/resource-types")).catch((e: unknown) => e)) as ApiError;
     expect([net.status, net.code, net.message]).toEqual([0, "network", "Failed to fetch"]);
     expect(errorFrom(502, "bad gateway").message).toBe("bad gateway");
     expect(errorFrom(500, undefined).message).toBe("HTTP 500");

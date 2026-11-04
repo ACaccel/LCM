@@ -96,7 +96,7 @@ func (s *stub) requests() []request {
 }
 
 func policy(name, nodes string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  concurrency: { mode: parallel, limit: 10 }\n  nodes:\n" + nodes
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  concurrency: { mode: parallel, limit: 10 }\n  nodes:\n" + nodes
 }
 
 type env struct {
@@ -376,7 +376,7 @@ func TestNotifyOptionalSkipsAnEmptyDestination(t *testing.T) {
 	x := setup(t)
 	// The destination is a template parameter: empty means "do not notify",
 	// a name means send. Without optional an empty destination is an error.
-	x.h.Deploy(x.e, `apiVersion: lcm/v1
+	x.h.Deploy(x.e, `apiVersion: lcm/v2
 kind: Policy
 metadata: { name: o }
 spec:
@@ -394,7 +394,7 @@ spec:
 		t.Fatalf("output = %v", n.Output)
 	}
 
-	x.h.Deploy(x.e, `apiVersion: lcm/v1
+	x.h.Deploy(x.e, `apiVersion: lcm/v2
 kind: Policy
 metadata: { name: m }
 spec:

@@ -14,7 +14,7 @@ const (
 	MaxCheckThreshold     = 100
 )
 
-// Check is a health check attached to a service. Type-specific settings live
+// Check is a health check attached to a resource. Type-specific settings live
 // in Props and are decoded and validated by the monitor's check registry, the
 // same way node props are handled by the node registry.
 type Check struct {
@@ -25,7 +25,7 @@ type Check struct {
 	// Timeout of one run; defaults to DefaultCheckTimeout and must be
 	// shorter than Interval.
 	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	// Critical checks make the service down when failing; non-critical
+	// Critical checks make the resource down when failing; non-critical
 	// ones make it degraded. Nil means critical.
 	Critical *bool `yaml:"critical,omitempty" json:"critical,omitempty"`
 	// Threshold is the number of consecutive failures (and successes)
@@ -34,7 +34,7 @@ type Check struct {
 	Props     map[string]any `yaml:"props,omitempty" json:"props,omitempty"`
 }
 
-// IsCritical reports whether a failing check makes its service down.
+// IsCritical reports whether a failing check makes its resource down.
 func (c Check) IsCritical() bool { return c.Critical == nil || *c.Critical }
 
 // WithDefaults returns a copy with unset fields filled in.
@@ -51,7 +51,7 @@ func (c Check) WithDefaults() Check {
 	return c
 }
 
-// ValidateChecks checks the structure of a service's checks; path is the
+// ValidateChecks checks the structure of a resource's checks; path is the
 // location of the list, such as "spec.checks". Type-specific props are not
 // inspected.
 func ValidateChecks(checks []Check, path string) error {

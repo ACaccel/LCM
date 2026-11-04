@@ -86,7 +86,7 @@ func parseUptimeKuma(body []byte, opts Options) ([]signal.Signal, error) {
 	if msg == "" {
 		msg = p.Msg
 	}
-	return []signal.Signal{build(SourceUptimeKuma, opts.serviceOf(labels), name, status, sev, msg,
+	return []signal.Signal{build(SourceUptimeKuma, opts.resourceOf(labels), name, status, sev, msg,
 		fmt.Sprintf("monitor-%s", strings.TrimSpace(id)), labels, map[string]any{
 			"time": p.Heartbeat.Time,
 			"url":  m.URL,

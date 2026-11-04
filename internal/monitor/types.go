@@ -16,10 +16,10 @@ const (
 	StatusDown    Status = "down"
 )
 
-// Health is the aggregated state of a service.
+// Health is the combined state of a resource.
 type Health string
 
-// Service health values.
+// Health values, from best to worst: healthy, unknown, degraded, down.
 const (
 	HealthUnknown  Health = "unknown"
 	HealthHealthy  Health = "healthy"
@@ -27,22 +27,25 @@ const (
 	HealthDown     Health = "down"
 )
 
-// Def is a check together with the service it belongs to. Sync takes the
+// Def is a check together with the resource it belongs to. Sync takes the
 // complete list of definitions.
 type Def struct {
-	Service string
-	Labels  map[string]string
-	Check   model.Check
+	Resource string
+	// ResourceType is the type of Resource, such as "service"; signals
+	// carry it.
+	ResourceType string
+	Labels       map[string]string
+	Check        model.Check
 }
 
-// ID returns the check's identity, "service/check".
-func (d Def) ID() string { return checkID(d.Service, d.Check.Name) }
+// ID returns the check's identity, "resource/check".
+func (d Def) ID() string { return checkID(d.Resource, d.Check.Name) }
 
-func checkID(service, check string) string { return service + "/" + check }
+func checkID(resource, check string) string { return resource + "/" + check }
 
 // CheckStatus is the current state of one check.
 type CheckStatus struct {
-	Service  string        `json:"service"`
+	Resource string        `json:"resource"`
 	Name     string        `json:"name"`
 	Type     string        `json:"type"`
 	Critical bool          `json:"critical"`
@@ -60,11 +63,24 @@ type CheckStatus struct {
 	ConsecutiveFailures int           `json:"consecutiveFailures"`
 }
 
-// ServiceStatus is the current state of one service and its checks.
-type ServiceStatus struct {
-	Service string            `json:"service"`
-	Labels  map[string]string `json:"labels,omitempty"`
-	Health  Health            `json:"health"`
-	Since   time.Time         `json:"since"`
-	Checks  []CheckStatus     `json:"checks"`
+// ResourceStatus is the current state of one resource: its combined health,
+// its checks and the native health its type reported.
+type ResourceStatus struct {
+	Resource string            `json:"resource"`
+	Type     string            `json:"type,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	// Health is the worst of the checks' health and the native health.
+	Health Health        `json:"health"`
+	Since  time.Time     `json:"since"`
+	Checks []CheckStatus `json:"checks"`
+	// Native is the health the resource type evaluated itself (machine or
+	// router thresholds and reachability); nil when it reports none.
+	Native *NativeStatus `json:"native,omitempty"`
+}
+
+// NativeStatus is the type-evaluated health of a resource, see SetNative.
+type NativeStatus struct {
+	Health  Health    `json:"health"`
+	Reasons []string  `json:"reasons,omitempty"`
+	Since   time.Time `json:"since"`
 }

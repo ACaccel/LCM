@@ -22,7 +22,7 @@ func TestChecksHeartbeatAndSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checks := x.call("GET", v1+"/services/web/checks", nil).want(http.StatusOK).obj()
+	checks := x.call("GET", v1+"/resources/web/checks", nil).want(http.StatusOK).obj()
 	list := checks["checks"].([]any)
 	if checks["health"] != "unknown" || len(list) != 2 {
 		t.Fatalf("checks = %v", checks)
@@ -45,45 +45,45 @@ func TestChecksHeartbeatAndSeries(t *testing.T) {
 	if err := x.app.Monitor.Flush(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	checks = x.call("GET", v1+"/services/web/checks", nil).want(http.StatusOK).obj()
+	checks = x.call("GET", v1+"/resources/web/checks", nil).want(http.StatusOK).obj()
 	beat := checks["checks"].([]any)[0].(map[string]any)
 	if beat["status"] != "up" || beat["message"] != "heartbeat received" || beat["lastResult"] == nil {
 		t.Fatalf("beat after heartbeat = %v", beat)
 	}
-	detail := x.call("GET", v1+"/services/web", nil).obj()
+	detail := x.call("GET", v1+"/resources/web", nil).obj()
 	if len(detail["checks"].([]any)) != 2 {
 		t.Fatalf("service detail checks = %v", detail["checks"])
 	}
 
 	from, to := epoch.Add(-time.Hour).Format(time.RFC3339), epoch.Add(time.Hour).Format(time.RFC3339)
-	ser := x.call("GET", v1+"/services/web/checks/beat/series?from="+from+"&to="+to+"&points=10", nil).want(http.StatusOK).obj()
+	ser := x.call("GET", v1+"/resources/web/checks/beat/series?from="+from+"&to="+to+"&points=10", nil).want(http.StatusOK).obj()
 	pts := ser["points"].([]any)
 	if ser["source"] != "raw" || ser["check"] != "beat" || len(pts) != 2 || pts[0].(map[string]any)["failures"] != float64(0) {
 		t.Fatalf("series = %v", ser)
 	}
 	// Without from and to the last hour up to the (fake) now is served.
-	x.call("GET", v1+"/services/web/checks/beat/series", nil).want(http.StatusOK)
-	x.call("GET", v1+"/services/web/checks/beat/series?from="+to+"&to="+from, nil).wantError(http.StatusBadRequest, "bad_request")
-	x.call("GET", v1+"/services/web/checks/beat/series?from=yesterday", nil).wantError(http.StatusBadRequest, "bad_request")
-	x.call("GET", v1+"/services/web/checks/beat/series?points=0", nil).wantError(http.StatusBadRequest, "bad_request")
-	x.call("GET", v1+"/services/web/checks/ghost/series", nil).wantError(http.StatusNotFound, "not_found")
-	x.call("GET", v1+"/services/ghost/checks", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("GET", v1+"/resources/web/checks/beat/series", nil).want(http.StatusOK)
+	x.call("GET", v1+"/resources/web/checks/beat/series?from="+to+"&to="+from, nil).wantError(http.StatusBadRequest, "bad_request")
+	x.call("GET", v1+"/resources/web/checks/beat/series?from=yesterday", nil).wantError(http.StatusBadRequest, "bad_request")
+	x.call("GET", v1+"/resources/web/checks/beat/series?points=0", nil).wantError(http.StatusBadRequest, "bad_request")
+	x.call("GET", v1+"/resources/web/checks/ghost/series", nil).wantError(http.StatusNotFound, "not_found")
+	x.call("GET", v1+"/resources/ghost/checks", nil).wantError(http.StatusNotFound, "not_found")
 
 	for _, w := range []string{"", "24h", "7d", "30d"} {
-		path := v1 + "/services/web/summary"
+		path := v1 + "/resources/web/summary"
 		if w != "" {
 			path += "?window=" + w
 		}
 		sum := x.call("GET", path, nil).want(http.StatusOK).obj()
-		if sum["service"] != "web" || sum["checks"].(map[string]any)["beat"] == nil {
+		if sum["resource"] != "web" || sum["checks"].(map[string]any)["beat"] == nil {
 			t.Fatalf("summary %q = %v", w, sum)
 		}
 	}
-	x.call("GET", v1+"/services/web/summary?window=5y", nil).wantError(http.StatusBadRequest, "bad_request")
+	x.call("GET", v1+"/resources/web/summary?window=5y", nil).wantError(http.StatusBadRequest, "bad_request")
 
 	// A service without checks has empty results rather than an error.
 	x.createService(serviceDoc("plain", ""))
-	empty := x.call("GET", v1+"/services/plain/checks", nil).want(http.StatusOK).obj()
+	empty := x.call("GET", v1+"/resources/plain/checks", nil).want(http.StatusOK).obj()
 	if len(empty["checks"].([]any)) != 0 || empty["health"] != "unknown" {
 		t.Fatalf("plain checks = %v", empty)
 	}
@@ -110,24 +110,24 @@ func TestAlertIngestAndList(t *testing.T) {
 	if r.obj()["signals"] != float64(1) {
 		t.Fatalf("ingest = %s", r)
 	}
-	sigs.until("alert signal", func(e events.Event) bool { return e.Service == "web" })
+	sigs.until("alert signal", func(e events.Event) bool { return e.Resource == "web" })
 	// A repeat of a firing alert refreshes it silently.
 	r = x.call("POST", v1+"/hooks/alerts/generic", payload, bearer(x.ingest)).want(http.StatusAccepted)
 	if r.obj()["signals"] != float64(0) {
 		t.Fatalf("repeat = %s", r)
 	}
 
-	alerts := x.call("GET", v1+"/alerts?service=web", nil).want(http.StatusOK).items()
-	if len(alerts) != 1 || alerts[0]["name"] != "HighLatency" || alerts[0]["severity"] != "warning" || alerts[0]["service"] != "web" {
+	alerts := x.call("GET", v1+"/alerts?resource=web", nil).want(http.StatusOK).items()
+	if len(alerts) != 1 || alerts[0]["name"] != "HighLatency" || alerts[0]["severity"] != "warning" || alerts[0]["resource"] != "web" {
 		t.Fatalf("alerts = %v", alerts)
 	}
 	if n := len(x.call("GET", v1+"/alerts", nil).items()); n != 1 {
 		t.Fatalf("all alerts = %d", n)
 	}
-	if n := len(x.call("GET", v1+"/alerts?service=db", nil).items()); n != 0 {
+	if n := len(x.call("GET", v1+"/alerts?resource=db", nil).items()); n != 0 {
 		t.Fatalf("db alerts = %d", n)
 	}
-	if got := x.call("GET", v1+"/services/web", nil).obj()["alerts"].([]any); len(got) != 1 {
+	if got := x.call("GET", v1+"/resources/web", nil).obj()["alerts"].([]any); len(got) != 1 {
 		t.Fatalf("service alerts = %v", got)
 	}
 

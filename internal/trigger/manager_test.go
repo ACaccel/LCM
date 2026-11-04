@@ -33,7 +33,7 @@ type env struct {
 }
 
 func policy(name, nodes string) string {
-	return "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  concurrency: { mode: parallel, limit: 50 }\n  nodes:\n" + nodes
+	return "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: " + name + " }\nspec:\n  concurrency: { mode: parallel, limit: 50 }\n  nodes:\n" + nodes
 }
 
 // echo is the node every test policy runs after its trigger.
@@ -146,17 +146,18 @@ func event(t *testing.T, v engine.RunView) map[string]any {
 func TestSignalTriggerFiltersAndStartsRuns(t *testing.T) {
 	x := newEnv(t, nil, "")
 	x.h.Deploy(x.e, policy("restart", trig("trigger.signal",
-		`{ kinds: [health.changed], services: [api], severities: [critical], statuses: [down], labels: { env: prod } }`)))
+		`{ kinds: [health.changed], resources: [api], types: [service], severities: [critical], statuses: [down], labels: { env: prod } }`)))
 	x.sync(t)
 	seen := map[string]bool{}
 
 	pub := func(s signal.Signal) { x.bus.Publish(s) }
-	base := signal.Signal{Kind: signal.KindHealth, Service: "api", Severity: "critical",
+	base := signal.Signal{Kind: signal.KindHealth, Resource: "api", ResourceType: "service", Severity: "critical",
 		Labels: map[string]string{"env": "prod", "team": "x"}, Data: map[string]any{"health": "down", "previous": "healthy"}}
 	// Each variation breaks exactly one filter.
 	for _, mod := range []func(*signal.Signal){
 		func(s *signal.Signal) { s.Kind = signal.KindCheck },
-		func(s *signal.Signal) { s.Service = "web" },
+		func(s *signal.Signal) { s.Resource = "web" },
+		func(s *signal.Signal) { s.ResourceType = "machine" },
 		func(s *signal.Signal) { s.Severity = "warning" },
 		func(s *signal.Signal) { s.Labels = map[string]string{"env": "dev"} },
 		func(s *signal.Signal) { s.Data = map[string]any{"health": "healthy"} },
@@ -169,7 +170,7 @@ func TestSignalTriggerFiltersAndStartsRuns(t *testing.T) {
 
 	got := x.runs(t, "restart", seen, 1)
 	ev := event(t, got[0])
-	if ev["service"] != "api" || ev["kind"] != "health.changed" || ev["data"].(map[string]any)["health"] != "down" {
+	if ev["resource"] != "api" || ev["resourceType"] != "service" || ev["kind"] != "health.changed" || ev["data"].(map[string]any)["health"] != "down" {
 		t.Fatalf("event = %v", ev)
 	}
 	x.noRuns(t, "restart", seen)
@@ -198,18 +199,18 @@ func TestSignalTriggerStopsOnUndeploy(t *testing.T) {
 
 func TestNewVersionReplacesWatcher(t *testing.T) {
 	x := newEnv(t, nil, "")
-	x.h.Deploy(x.e, policy("p", trig("trigger.signal", `{ services: [a] }`)))
+	x.h.Deploy(x.e, policy("p", trig("trigger.signal", `{ resources: [a] }`)))
 	x.sync(t)
-	x.h.Deploy(x.e, policy("p", trig("trigger.signal", `{ services: [b] }`)))
+	x.h.Deploy(x.e, policy("p", trig("trigger.signal", `{ resources: [b] }`)))
 	x.sync(t)
 	if x.m.Watching() != 1 {
 		t.Fatalf("watching = %d", x.m.Watching())
 	}
 	seen := map[string]bool{}
-	x.bus.Publish(signal.Signal{Kind: signal.KindAlert, Service: "a"})
-	x.bus.Publish(signal.Signal{Kind: signal.KindAlert, Service: "b"})
+	x.bus.Publish(signal.Signal{Kind: signal.KindAlert, Resource: "a"})
+	x.bus.Publish(signal.Signal{Kind: signal.KindAlert, Resource: "b"})
 	got := x.runs(t, "p", seen, 1)
-	if event(t, got[0])["service"] != "b" {
+	if event(t, got[0])["resource"] != "b" {
 		t.Fatalf("old version still triggers: %v", got[0].Event)
 	}
 	x.noRuns(t, "p", seen)

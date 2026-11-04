@@ -1,4 +1,4 @@
-// Command lcm is the service lifecycle control plane: HTTP server and
+// Command lcm is the resource lifecycle control plane: HTTP server and
 // administration CLI in one binary.
 package main
 
@@ -28,15 +28,16 @@ Commands:
   token revoke <id>           Revoke an API token
   version                     Print version information
   storage-schema              Print the supported storage version
+  convert -f <file|dir>       Print lcm/v1 documents converted to lcm/v2 (offline)
 
 Commands that talk to a running server (see the README):
-  apply -f <file|dir> [--dry-run] [--force]   Apply Service, Machine, Policy and Module documents
-  export [kind[/name]]                        Print resources as YAML
+  apply -f <file|dir> [--dry-run] [--force]   Apply Resource, Policy and Module documents
+  export [kind[/name]]                        Print documents as YAML (kind: resource, policy, module)
   validate -f <file|dir>                      Check documents on the server
-  get services|machines|policies|runs|locks|sources [name] [-o table|json|yaml]
-  machine <command> <name> [flags]           Observe, maintain or operate a machine
+  get resources|policies|runs|locks|sources|connections [name] [--type t] [-o table|json|yaml]
+  resource <command> <name> [flags]           Act on a resource: action, observe, maintenance,
+                                              reboot, retire, impact, group-action, ... (see -h)
   run <policy> [--trigger id] [--event json] [--dry-run] [--wait]
-  action <service> <action> [--version v] [--job j] [--dry-run] [--wait]
 
 Run "lcm <command> -h" for the flags of a command.
 Configuration is read from LCM_* environment variables; flags override them.
@@ -115,6 +116,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return err
 	case "serve":
 		return a.serve(ctx, rest)
+	case "convert":
+		return a.convert(ctx, rest)
 	case "admin":
 		return a.admin(ctx, rest)
 	case "token":
@@ -129,10 +132,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.get(ctx, rest)
 	case "run":
 		return a.runPolicy(ctx, rest)
-	case "action":
-		return a.action(ctx, rest)
-	case "machine":
-		return a.machine(ctx, rest)
+	case "resource":
+		return a.resource(ctx, rest)
 	case "machine-helper":
 		return a.machineHelper(ctx, rest)
 	case "version", "--version":

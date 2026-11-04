@@ -177,10 +177,10 @@ func TestRegisterPanics(t *testing.T) {
 			node.Register(r, node.Spec[chanField]{Type: "a.b", Category: "x", Run: runOf[chanField]()})
 		},
 		"service prop missing": func(r *node.Registry) {
-			node.Register(r, node.Spec[struct{}]{Type: "a.b", Category: "x", Run: run, ServiceProp: "service"})
+			node.Register(r, node.Spec[struct{}]{Type: "a.b", Category: "x", Run: run, ResourceProp: "resource"})
 		},
 		"service prop not a string": func(r *node.Registry) {
-			node.Register(r, node.Spec[intProp]{Type: "a.b", Category: "x", Run: runOf[intProp](), ServiceProp: "n"})
+			node.Register(r, node.Spec[intProp]{Type: "a.b", Category: "x", Run: runOf[intProp](), ResourceProp: "n"})
 		},
 		"duplicate": func(r *node.Registry) {
 			node.Register(r, node.Spec[struct{}]{Type: "a.b", Category: "x", Run: run})

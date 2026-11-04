@@ -29,16 +29,17 @@ const (
 	MaxTimelineLimit     = 1000
 )
 
-// Entry is one line of a service's timeline.
+// Entry is one line of a resource's timeline. Timelines are keyed by
+// resource name, so the history follows the name across incarnations.
 type Entry struct {
-	ID      int64
-	Service string
-	Time    time.Time
-	Kind    string
-	Summary string
-	Data    map[string]any
+	ID       int64          `json:"id"`
+	Resource string         `json:"resource"`
+	Time     time.Time      `json:"time"`
+	Kind     string         `json:"kind"`
+	Summary  string         `json:"summary"`
+	Data     map[string]any `json:"data,omitempty"`
 	// Ref links the entry to its cause: a signal id, run id or deployment id.
-	Ref string
+	Ref string `json:"ref,omitempty"`
 }
 
 func insertTimeline(ctx context.Context, tx *sql.Tx, e Entry) error {
@@ -51,8 +52,8 @@ func insertTimeline(ctx context.Context, tx *sql.Tx, e Entry) error {
 		return fmt.Errorf("catalog: encode timeline data: %w", err)
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO timeline (service, time, kind, summary, data, ref) VALUES (?, ?, ?, ?, ?, ?)`,
-		e.Service, e.Time.UnixMilli(), e.Kind, e.Summary, string(blob), e.Ref)
+		`INSERT INTO timeline (resource, time, kind, summary, data, ref) VALUES (?, ?, ?, ?, ?, ?)`,
+		e.Resource, e.Time.UnixMilli(), e.Kind, e.Summary, string(blob), e.Ref)
 	if err != nil {
 		return fmt.Errorf("catalog: insert timeline: %w", err)
 	}
@@ -61,8 +62,8 @@ func insertTimeline(ctx context.Context, tx *sql.Tx, e Entry) error {
 
 // AppendTimeline adds an entry; a zero Time means now.
 func (c *Catalog) AppendTimeline(ctx context.Context, e Entry) error {
-	if e.Service == "" || e.Kind == "" {
-		return fmt.Errorf("catalog: timeline entry needs a service and a kind")
+	if e.Resource == "" || e.Kind == "" {
+		return fmt.Errorf("catalog: timeline entry needs a resource and a kind")
 	}
 	if e.Time.IsZero() {
 		e.Time = c.now()
@@ -77,7 +78,7 @@ func (c *Catalog) AppendTimeline(ctx context.Context, e Entry) error {
 
 // TimelineQuery selects timeline entries. All filters are optional.
 type TimelineQuery struct {
-	Service string
+	Resource string
 	// From is inclusive and To exclusive.
 	From, To time.Time
 	Kinds    []string
@@ -106,9 +107,9 @@ func (c *Catalog) Timeline(ctx context.Context, q TimelineQuery) (TimelinePage, 
 	}
 	var where []string
 	var args []any
-	if q.Service != "" {
-		where = append(where, "service = ?")
-		args = append(args, q.Service)
+	if q.Resource != "" {
+		where = append(where, "resource = ?")
+		args = append(args, q.Resource)
 	}
 	if !q.From.IsZero() {
 		where = append(where, "time >= ?")
@@ -128,7 +129,7 @@ func (c *Catalog) Timeline(ctx context.Context, q TimelineQuery) (TimelinePage, 
 		where = append(where, "id < ?")
 		args = append(args, q.Before)
 	}
-	query := `SELECT id, service, time, kind, summary, data, ref FROM timeline`
+	query := `SELECT id, resource, time, kind, summary, data, ref FROM timeline`
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, " AND ")
 	}
@@ -148,7 +149,7 @@ func (c *Catalog) Timeline(ctx context.Context, q TimelineQuery) (TimelinePage, 
 			ms   int64
 			data string
 		)
-		if err := rows.Scan(&e.ID, &e.Service, &ms, &e.Kind, &e.Summary, &data, &e.Ref); err != nil {
+		if err := rows.Scan(&e.ID, &e.Resource, &ms, &e.Kind, &e.Summary, &data, &e.Ref); err != nil {
 			return TimelinePage{}, fmt.Errorf("catalog: scan timeline: %w", err)
 		}
 		e.Time = time.UnixMilli(ms).UTC()
@@ -189,7 +190,7 @@ func (c *Catalog) PruneTimeline(ctx context.Context, retention time.Duration) (i
 	return n, nil
 }
 
-// Follower copies signals that carry a service name onto the timeline.
+// Follower copies signals that carry a resource name onto the timeline.
 type Follower struct {
 	sub  *signal.Subscription
 	done chan struct{}
@@ -197,8 +198,10 @@ type Follower struct {
 }
 
 // FollowSignals subscribes to bus and appends a timeline entry for every
-// signal with a service. Lifecycle signals are skipped because state
-// changes write their own entry in the transaction that makes them.
+// signal with a resource. Lifecycle signals are skipped because state
+// changes write their own entry in the transaction that makes them, and
+// so are resource.* signals (such as config sync conflicts), whose
+// producer writes the timeline entry itself.
 // Delivery is lossy by design (see package signal); the timeline is a log
 // for people, not a source of truth.
 func (c *Catalog) FollowSignals(ctx context.Context, bus *signal.Bus) *Follower {
@@ -206,13 +209,13 @@ func (c *Catalog) FollowSignals(ctx context.Context, bus *signal.Bus) *Follower 
 	go func() {
 		defer close(f.done)
 		for sig := range f.sub.C {
-			if sig.Service == "" || sig.Kind == signal.KindLifecycle {
+			if sig.Resource == "" || sig.Kind == signal.KindLifecycle || strings.HasPrefix(string(sig.Kind), "resource.") {
 				continue
 			}
 			e := entryFromSignal(sig)
 			// Keep writing after ctx ends so that Close drains the buffer.
 			if err := c.AppendTimeline(context.WithoutCancel(ctx), e); err != nil {
-				c.log.Warn("append timeline entry from signal failed", "service", sig.Service, "kind", sig.Kind, "error", err)
+				c.log.Warn("append timeline entry from signal failed", "resource", sig.Resource, "kind", sig.Kind, "error", err)
 			}
 		}
 	}()
@@ -234,11 +237,14 @@ func entryFromSignal(sig signal.Signal) Entry {
 	if len(sig.Labels) > 0 {
 		data["labels"] = sig.Labels
 	}
+	if sig.ResourceType != "" {
+		data["resourceType"] = sig.ResourceType
+	}
 	if len(sig.Data) > 0 {
 		data["data"] = sig.Data
 	}
 	return Entry{
-		Service: sig.Service, Time: sig.Time, Kind: string(sig.Kind),
+		Resource: sig.Resource, Time: sig.Time, Kind: string(sig.Kind),
 		Summary: summarize(sig), Data: data, Ref: sig.ID,
 	}
 }

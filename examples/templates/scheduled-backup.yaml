@@ -3,18 +3,18 @@
 # trigger.cron -> lifecycle.backup (retried with backoff) -> optional wait
 # for a heartbeat check to report in after the backup started; a failed
 # backup or a missing heartbeat is notified. Make the backup command post
-# to /api/v1/heartbeats/<service>/<check> with an ingest token when it is
+# to /api/v1/heartbeats/<resource>/<check> with an ingest token when it is
 # done.
 #
 # The trigger takes its values when the template is instantiated; every
 # other node reads params.*.
-apiVersion: lcm/v1
+apiVersion: lcm/v2
 kind: Policy
 metadata:
   name: scheduled-backup
 spec:
   params:
-    service: my-service
+    resource: my-service
     schedule: "0 3 * * *"
     timezone: Asia/Taipei
     heartbeatCheck: ""
@@ -31,7 +31,7 @@ spec:
 
     - id: backup
       type: lifecycle.backup
-      props: { service: "{{ params.service }}" }
+      props: { resource: "{{ params.resource }}" }
       retry: { max: 3, backoff: 1m, maxBackoff: 10m }
       next: { out: [confirm_gate], error: [backup_failed] }
 
@@ -46,7 +46,7 @@ spec:
         timeout: "{{ params.heartbeatTimeout }}"
         condition: 'inputs.svc.checks[inputs.check]?.status == "up" && inputs.svc.checks[inputs.check].lastResultMs > inputs.since'
         inputs:
-          svc: "{{ service[params.service] }}"
+          svc: "{{ resource[params.resource] }}"
           check: "{{ params.heartbeatCheck }}"
           since: "{{ nodes.backup.startedMs }}"
       next: { timeout: [heartbeat_missing] }
@@ -57,7 +57,7 @@ spec:
         target: discord
         optional: true
         urlSecret: "{{ params.notifySecret }}"
-        title: "{{ params.service }} backup"
+        title: "{{ params.resource }} backup"
         message: "The backup failed: {{ nodes.backup.message }}"
     - id: heartbeat_missing
       type: notify
@@ -65,5 +65,5 @@ spec:
         target: discord
         optional: true
         urlSecret: "{{ params.notifySecret }}"
-        title: "{{ params.service }} backup"
+        title: "{{ params.resource }} backup"
         message: "The backup ran but the {{ params.heartbeatCheck }} heartbeat did not arrive in time."

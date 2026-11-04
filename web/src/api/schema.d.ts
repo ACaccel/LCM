@@ -3,266 +3,6 @@
  */
 
 export interface paths {
-    "/machines": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** list Machines */
-        get: operations["listMachines"];
-        put?: never;
-        /** create Machine */
-        post: operations["createMachine"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** get Machine */
-        get: operations["getMachine"];
-        /** put Machine */
-        put: operations["putMachine"];
-        post?: never;
-        /** unmanage Machine */
-        delete: operations["unmanageMachine"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/phase": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** set Machine Phase */
-        post: operations["setMachinePhase"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/versions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** list Machine Versions */
-        get: operations["listMachineVersions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/versions/{v}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** get Machine Version */
-        get: operations["getMachineVersion"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** restore Machine */
-        post: operations["restoreMachine"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/observe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** observe Machine */
-        post: operations["observeMachine"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** list Machine History */
-        get: operations["listMachineHistory"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** list Machine Events */
-        get: operations["listMachineEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/capabilities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** get Machine Capabilities */
-        get: operations["getMachineCapabilities"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/maintenance": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** get Machine Maintenance */
-        get: operations["getMachineMaintenance"];
-        put?: never;
-        /** enter Machine Maintenance */
-        post: operations["enterMachineMaintenance"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/maintenance/exit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** exit Machine Maintenance */
-        post: operations["exitMachineMaintenance"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/operations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** list Machine Operations */
-        get: operations["listMachineOperations"];
-        put?: never;
-        /** submit Machine Operation */
-        post: operations["submitMachineOperation"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/operations/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** get Machine Operation */
-        get: operations["getMachineOperation"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/operations/{id}/resolve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** resolve Machine Operation */
-        post: operations["resolveMachineOperation"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/health": {
         parameters: {
             query?: never;
@@ -418,147 +158,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/hosts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Hosts services run on */
-        get: operations["listHosts"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List services */
-        get: operations["listServices"];
-        put?: never;
-        /** Create a service */
-        post: operations["createService"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-            };
-            cookie?: never;
-        };
-        /** A service with its state, health, checks and alerts */
-        get: operations["getService"];
-        /**
-         * Replace a service document
-         * @description The name in the document must match the URL. `If-Match` is required.
-         */
-        put: operations["updateService"];
-        post?: never;
-        /**
-         * Delete a service
-         * @description Only services that are registered, stopped, failed or retired can be deleted. History is kept.
-         */
-        delete: operations["deleteService"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/versions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-            };
-            cookie?: never;
-        };
-        /** Stored versions of a service document */
-        get: operations["listServiceVersions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/versions/{v}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-                v: components["parameters"]["Version"];
-            };
-            cookie?: never;
-        };
-        /** One stored version of a service document */
-        get: operations["getServiceVersion"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore an old version as a new one */
-        post: operations["restoreService"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/actions/{action}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run a lifecycle action
-         * @description Starts the action in the background and answers 202 with an action id.
-         *     Preconditions that can be checked up front (unknown service, wrong state,
-         *     missing configuration, busy service) fail synchronously. With
-         *     `dryRun=true` nothing is started and the plan is returned.
-         */
-        post: operations["runServiceAction"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/actions/{id}": {
         parameters: {
             query?: never;
@@ -571,111 +170,6 @@ export interface paths {
          * @description Only the most recent 500 actions are remembered, and not across restarts.
          */
         get: operations["getAction"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/deployments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Deployment history of a service */
-        get: operations["listDeployments"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Timeline of one service */
-        get: operations["listServiceTimeline"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Timeline of all services */
-        get: operations["listTimeline"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/checks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Current status of a service's health checks */
-        get: operations["listChecks"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/checks/{check}/series": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Result history of one check
-         * @description Ranges up to six hours inside raw retention use raw results; anything else uses one-minute rollups.
-         */
-        get: operations["getCheckSeries"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/services/{svc}/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Uptime and latency over a window */
-        get: operations["getServiceSummary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -710,6 +204,597 @@ export interface paths {
         };
         /** Firing external alerts */
         get: operations["listAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resource-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Registered resource types
+         * @description Types, their adapters and the actions they offer. Clients build forms and menus from it instead of repeating server rules.
+         */
+        get: operations["listResourceTypes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List managed and retired resources */
+        get: operations["listResources"];
+        put?: never;
+        /** Create a resource */
+        post: operations["createResource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resource-archives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List unmanaged (archived) resources
+         * @description Read them with `GET /resources/@{id}`; archives are read only.
+         */
+        get: operations["listResourceArchives"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        /** A resource with its phase, state, health, checks, actions and open operation */
+        get: operations["getResource"];
+        /**
+         * Replace a resource document
+         * @description The name in the document must match the URL; type and adapter cannot change. `If-Match` is required.
+         */
+        put: operations["updateResource"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        /** Stored versions of a resource document */
+        get: operations["listResourceVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/versions/{v}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+                v: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        /** One stored version of a resource document */
+        get: operations["getResourceVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore an old version as a new one */
+        post: operations["restoreResource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/phase": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retire, resume or unmanage a resource
+         * @description `retired` stops observation and control and keeps the records (a running
+         *     service is stopped first when its runtime can); `managed` resumes;
+         *     `unmanaged` archives the resource and releases its name. Unmanaging requires a
+         *     retired resource that no config source owns and, for a service, no running
+         *     action and a registered, stopped or failed state. Retiring a service other managed
+         *     resources depend on or are controlled through needs `acknowledgeImpact`
+         *     (409 `impact_unacknowledged` otherwise; see `GET /resources/{resource}/impact`).
+         */
+        post: operations["setResourcePhase"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/actions/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a service lifecycle action
+         * @description Starts the action in the background and answers 202 with an action id.
+         *     Preconditions that can be checked up front (unknown resource, a type other
+         *     than service (409 `unsupported`), wrong state, missing configuration, busy
+         *     resource) fail synchronously. A disruptive action (stop, restart, deploy,
+         *     rollback, run-job) on a service other managed resources depend on or are
+         *     controlled through needs `acknowledgeImpact: true` in the body; without it the
+         *     answer is 409 `impact_unacknowledged` with the impact in `error.details.impact`.
+         *     With `dryRun=true` nothing is started and the plan, including the impact, is
+         *     returned.
+         */
+        post: operations["runResourceAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resources an action on this one reaches
+         * @description Managed resources that depend on this one directly or transitively (`dependsOn`,
+         *     `runsOn`) and the managed resources controlled through it or through one of its
+         *     dependents (`controlPath`). Retired resources are neither observed nor controlled
+         *     and do not count. With `action`, `acknowledgementRequired` tells whether that
+         *     action needs `acknowledgeImpact`: disruptive and destructive actions and
+         *     operations, and retiring a service, when the impact is not empty.
+         */
+        get: operations["getResourceImpact"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resource-groups/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run one service action on a group of services
+         * @description Selects the managed services matching every label of the selector and runs the
+         *     action on them one after another: the services a service depends on first,
+         *     except for `stop`, which stops dependents first. Only service lifecycle actions
+         *     run in groups; machine and router operations are refused. Nothing starts unless
+         *     every step can run as planned and, when a step's impact needs it,
+         *     `acknowledgeImpact` is set. The group stops at the first failed step; the steps
+         *     after it are reported as `notRun`. With `dryRun` the ordered plan is returned.
+         *     Every step is also a tracked action under `/actions/{id}`.
+         */
+        post: operations["runResourceGroupAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resource-groups/actions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * State of a group action
+         * @description Group actions are kept in memory; the most recent 100 are available until restart.
+         */
+        get: operations["getResourceGroupAction"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/deployments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Deployment history of a service */
+        get: operations["listDeployments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Timeline of one resource */
+        get: operations["listResourceTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Timeline of all resources */
+        get: operations["listTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current health and checks of a resource */
+        get: operations["listChecks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/checks/{check}/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Result history of one check
+         * @description Ranges up to six hours inside raw retention use raw results; anything else uses one-minute rollups.
+         */
+        get: operations["getCheckSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Uptime and latency over a window */
+        get: operations["getResourceSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/observe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Observe a machine or router now
+         * @description Other types answer 409 `unsupported`.
+         */
+        post: operations["observeResource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stored observations of a machine or router */
+        get: operations["listResourceHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stored events of a machine or router */
+        get: operations["listResourceEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Prerequisites of the durable operations of a machine or router */
+        get: operations["getResourceCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/maintenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        /** Maintenance state of the local machine */
+        get: operations["getResourceMaintenance"];
+        put?: never;
+        /**
+         * Enter maintenance on the local machine
+         * @description Direct administrator requests only; policies are refused.
+         */
+        post: operations["enterResourceMaintenance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/maintenance/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workloads affected by maintenance of the local machine */
+        get: operations["previewResourceMaintenance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/maintenance/exit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exit maintenance on the local machine
+         * @description Direct administrator requests only; policies are refused.
+         */
+        post: operations["exitResourceMaintenance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        /** Durable operations of a machine or router */
+        get: operations["listResourceOperations"];
+        put?: never;
+        /**
+         * Submit a durable operation such as a reboot
+         * @description The intent is stored before anything is sent; the outcome is observed and an
+         *     unknown one needs `resolve`. Direct administrator requests only; policies are
+         *     refused. A disruptive or destructive operation (reboot, graceful-shutdown) on a
+         *     resource other managed resources depend on or are controlled through needs
+         *     `acknowledgeImpact` (409 `impact_unacknowledged` otherwise); send it again when
+         *     retrying with the same idempotency key.
+         */
+        post: operations["submitResourceOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One durable operation */
+        get: operations["getResourceOperation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/operations/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Settle an operation whose outcome is unknown
+         * @description Direct administrator requests only; policies are refused.
+         */
+        post: operations["resolveResourceOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Host-configured connections
+         * @description Connections come from the host's connections file (`LCM_CONNECTIONS_FILE`) and
+         *     cannot be changed through the API. Addresses, usernames and passwords are never
+         *     returned.
+         */
+        get: operations["listConnections"];
         put?: never;
         post?: never;
         delete?: never;
@@ -923,10 +1008,11 @@ export interface paths {
         put?: never;
         /**
          * Validate any single document without side effects
-         * @description Decodes and checks a Policy, Module or Service. Problems are a normal result
+         * @description Decodes and checks a Policy, Module or Resource. Problems are a normal result
          *     and answer 200 with `valid: false`; only a request that cannot be read is an
-         *     error. Policies are compiled against the module store, and services are
-         *     checked against the hosts and the check types.
+         *     error. Policies are compiled against the module store; resources are checked
+         *     against the check types, and relation targets that do not exist yet are
+         *     warnings.
          */
         post: operations["validateDocument"];
         delete?: never;
@@ -1050,7 +1136,7 @@ export interface paths {
          * Create a policy from a template
          * @description Fills the template with `params` (defaults for the rest), compiles the
          *     result and deploys it as a new policy. With `dryRun` nothing is stored and
-         *     the concrete document is returned for review. The named service must exist.
+         *     the concrete document is returned for review. The named resource must exist and be a service.
          */
         post: operations["instantiateTemplate"];
         delete?: never;
@@ -1069,9 +1155,9 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Apply Service, Policy and Module documents
+         * Apply Resource, Policy and Module documents
          * @description Applies a multi-document YAML stream (documents separated by `---`): modules
-         *     first, then services, then policies, whatever the order in the body. It is not
+         *     first, then resources, then policies, whatever the order in the body. It is not
          *     transactional; every document gets its own result and a failing one does not
          *     stop the others, so the response is 200 even when documents failed. Only a
          *     body without any usable document is a 422.
@@ -1097,7 +1183,7 @@ export interface paths {
         /**
          * Export resources as YAML
          * @description Canonical YAML of existing resources as one multi-document stream, in apply
-         *     order (modules, services, policies) and by name within a kind. Only document
+         *     order (modules, resources, policies) and by name within a kind. Only document
          *     fields are written. Applying the output back changes nothing, so it is the way
          *     to move resources that were created in the web UI under git.
          */
@@ -1122,7 +1208,7 @@ export interface paths {
         put?: never;
         /**
          * Register a config source
-         * @description A source is a repository location LCM pulls Service, Policy and Module documents
+         * @description A source is a repository location LCM pulls Resource, Policy and Module documents
          *     from. LCM keeps its own clone under its data directory and never touches the
          *     repository's working copy. The first sync starts at once when the server runs.
          *     The repository URL must not embed a password; use an SSH key or a git
@@ -1491,33 +1577,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/heartbeats/{svc}/{check}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-                check: string;
-            };
-            cookie?: never;
-        };
-        /**
-         * Report a heartbeat without a body
-         * @description For senders that can only issue GET, such as `curl` in a cron line.
-         */
-        get: operations["getHeartbeat"];
-        put?: never;
-        /**
-         * Report a heartbeat
-         * @description The body, if any, is kept as a short message. Allowed for `admin` and `ingest` tokens.
-         */
-        post: operations["postHeartbeat"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/hooks/github": {
         parameters: {
             query?: never;
@@ -1586,51 +1645,20 @@ export interface paths {
          *
          *     Event types and their `data` payloads:
          *
-         *     - `machine`: a committed normalized Machine event; reload durable APIs after reconnect.
-         *     - `signal`: a signal from the bus (check, health, lifecycle, alert).
+         *     - `signal`: a signal from the bus (check, health, lifecycle, alert, resource.config.*).
          *     - `run`: a run event (`run.queued`, `run.started`, `run.suspended`,
          *       `run.resumed`, `run.finished`).
          *     - `node`: a node event (`node.started`, `node.finished`, `node.retrying`,
          *       `node.suspended`, `node.dead`).
          *     - `timeline`: a stored timeline entry.
          *     - `action`: progress of an action started through the API.
-         *     - `catalog`: a service document was created, updated, restored or deleted,
-         *       or a policy was deployed or undeployed.
+         *     - `resource`: a resource document was created, updated or restored, or its
+         *       phase changed (`ResourceChange`).
+         *     - `observation`: a committed machine or router event (`ResourceEvent`);
+         *       reload durable APIs after reconnect.
+         *     - `catalog`: a policy was deployed or undeployed.
          */
         get: operations["streamEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machine-archives": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List archived machine registrations */
-        get: operations["listMachineArchives"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/machines/{machine}/maintenance/preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["previewMachineMaintenance"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1877,6 +1905,34 @@ export interface paths {
         get: operations["getSecuritySettingsHistory"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/heartbeats/{resource}/{check}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+                check: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Report a heartbeat without a body
+         * @description For senders that can only issue GET, such as `curl` in a cron line.
+         */
+        get: operations["getHeartbeat"];
+        put?: never;
+        /**
+         * Report a heartbeat
+         * @description The body, if any, is kept as a short message. Allowed for `admin` and `ingest` tokens.
+         */
+        post: operations["postHeartbeat"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2177,7 +2233,7 @@ export interface components {
             lastError: string;
         };
         MachineMaintenancePreview: {
-            machineId: string;
+            resourceId: string;
             version: number;
             hash: string;
             partialCoverage: boolean;
@@ -2193,42 +2249,6 @@ export interface components {
         MachineCoverage: {
             state: string;
             reason?: string;
-        };
-        MachineThresholds: {
-            cpuPercent: number;
-            memoryPercent: number;
-            diskPercent: number;
-            consecutive: number;
-            hysteresis: number;
-        };
-        MachineMonitoring: {
-            interval: string;
-            staleAfter: string;
-            filesystems: string[];
-            interfaces?: string[];
-            units?: string[];
-            journal: boolean;
-            thresholds: components["schemas"]["MachineThresholds"];
-        };
-        MachineDocument: {
-            /** @constant */
-            apiVersion: "lcm/v1";
-            /** @constant */
-            kind: "Machine";
-            metadata: {
-                name: string;
-                labels?: {
-                    [key: string]: string;
-                };
-                annotations?: {
-                    [key: string]: string;
-                };
-            };
-            spec: {
-                /** @constant */
-                host: "local";
-                monitoring: components["schemas"]["MachineMonitoring"];
-            };
         };
         MachineFilesystem: {
             path: string;
@@ -2276,51 +2296,8 @@ export interface components {
             journal: components["schemas"]["MachineCoverage"];
             fresh: boolean;
         };
-        MachineRecord: {
-            id: string;
-            name: string;
-            host: string;
-            version: number;
-            /** @enum {string} */
-            phase: "managed" | "retired" | "unmanaged";
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-            document: components["schemas"]["MachineDocument"];
-            status: components["schemas"]["MachineStatus"];
-        };
-        MachineVersion: {
-            version: number;
-            /** Format: date-time */
-            createdAt: string;
-            createdBy: components["schemas"]["Actor"];
-            restoredFrom: number;
-            document: components["schemas"]["MachineDocument"];
-        };
-        MachineEvent: {
-            operationId?: string;
-            id: number;
-            machineId: string;
-            source: string;
-            kind: string;
-            severity: string;
-            /** Format: date-time */
-            occurredAt: string;
-            /** Format: date-time */
-            ingestedAt: string;
-            bootId?: string;
-            unit?: string;
-            historical: boolean;
-            reason?: string;
-        };
-        MachineCapability: {
-            action: string;
-            available: boolean;
-            reason: string;
-        };
         MachineMaintenance: {
-            machineId: string;
+            resourceId: string;
             state: string;
             /** Format: date-time */
             enteredAt: string;
@@ -2347,63 +2324,6 @@ export interface components {
             /** Format: date-time */
             acceptedAt: string;
             bootId: string;
-        };
-        MachineOperation: {
-            id: string;
-            machineId: string;
-            action: string;
-            state: string;
-            unresolved: boolean;
-            version: number;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-            actor: components["schemas"]["Actor"];
-            request: components["schemas"]["MachinePowerRequest"];
-            receipt: components["schemas"]["MachineReceipt"] | null;
-            reason: string;
-            resolution?: string;
-            resolvedBy?: components["schemas"]["Actor"];
-            /** Format: date-time */
-            resolvedAt?: string;
-            evidence?: components["schemas"]["MachineStatus"];
-        };
-        MachineThresholdsInput: {
-            cpuPercent?: number;
-            memoryPercent?: number;
-            diskPercent?: number;
-            consecutive?: number;
-            hysteresis?: number;
-        };
-        MachineMonitoringInput: {
-            interval?: string;
-            staleAfter?: string;
-            filesystems?: string[];
-            interfaces?: string[];
-            units?: string[];
-            journal?: boolean;
-            thresholds?: components["schemas"]["MachineThresholdsInput"];
-        };
-        MachineDocumentInput: {
-            /** @constant */
-            apiVersion: "lcm/v1";
-            /** @constant */
-            kind: "Machine";
-            metadata: {
-                name: string;
-                labels?: {
-                    [key: string]: string;
-                };
-                annotations?: {
-                    [key: string]: string;
-                };
-            };
-            spec: {
-                /** @constant */
-                host?: "local";
-                monitoring?: components["schemas"]["MachineMonitoringInput"];
-            };
         };
         ErrorEnvelope: {
             error: {
@@ -2487,12 +2407,6 @@ export interface components {
             /** @enum {string} */
             outcome: "ok" | "denied" | "error";
         };
-        Host: {
-            name: string;
-            /** @enum {string} */
-            kind: "local" | "ssh";
-            address: string;
-        };
         /**
          * @description Go duration such as `30s` or `5m`.
          * @example 30s
@@ -2536,44 +2450,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** @description A `lcm/v1` Service. */
-        ServiceDocument: {
-            /** @enum {string} */
-            apiVersion: "lcm/v1";
-            /** @enum {string} */
-            kind: "Service";
-            metadata: components["schemas"]["Metadata"];
-            spec: {
-                host?: string;
-                runtime: {
-                    /** @enum {string} */
-                    type: "systemd" | "docker" | "compose" | "command";
-                    unit?: string;
-                    scope?: string;
-                    container?: string;
-                    project?: string;
-                    file?: string;
-                    start?: string;
-                    stop?: string;
-                    restart?: string;
-                    status?: string;
-                };
-                source?: {
-                    repo: string;
-                    remote?: string;
-                    branch: string;
-                    build?: string;
-                    install?: string;
-                    timeout?: components["schemas"]["Duration"];
-                };
-                backup?: components["schemas"]["Command"];
-                jobs?: {
-                    [key: string]: components["schemas"]["Command"];
-                };
-                dependsOn?: string[];
-                checks?: components["schemas"]["Check"][];
-            };
-        };
         PolicyNode: {
             id: string;
             /** @description See `GET /node-types`. */
@@ -2594,10 +2470,10 @@ export interface components {
             /** @enum {string} */
             joinMode?: "all" | "any";
         };
-        /** @description A `lcm/v1` Policy. */
+        /** @description A `lcm/v2` Policy. */
         PolicyDocument: {
             /** @enum {string} */
-            apiVersion: "lcm/v1";
+            apiVersion: "lcm/v2";
             /** @enum {string} */
             kind: "Policy";
             metadata: components["schemas"]["Metadata"];
@@ -2615,10 +2491,10 @@ export interface components {
                 nodes: components["schemas"]["PolicyNode"][];
             };
         };
-        /** @description A `lcm/v1` Module. */
+        /** @description A `lcm/v2` Module. */
         ModuleDocument: {
             /** @enum {string} */
-            apiVersion: "lcm/v1";
+            apiVersion: "lcm/v2";
             /** @enum {string} */
             kind: "Module";
             metadata: components["schemas"]["Metadata"];
@@ -2633,92 +2509,124 @@ export interface components {
             description?: string;
         };
         /** @enum {string} */
-        ServiceState: "registered" | "deploying" | "running" | "updating" | "rolling_back" | "stopped" | "failed" | "retired";
+        ServiceState: "registered" | "deploying" | "running" | "updating" | "rolling_back" | "stopped" | "failed";
         /** @enum {string} */
         Health: "unknown" | "healthy" | "degraded" | "down";
-        ServiceSummary: {
-            name: string;
-            host: string;
-            labels: components["schemas"]["Labels"];
-            state: components["schemas"]["ServiceState"];
-            /** Format: date-time */
-            stateSince: string;
-            health: components["schemas"]["Health"];
-            /** @description Version of the configuration document. */
-            version: number;
-            /** Format: date-time */
-            updatedAt: string;
-            /** @description Commit of the last successful deployment; empty if none. */
-            deployedVersion: string;
-            managedBy: components["schemas"]["ManagedBy"];
-        };
-        ServiceList: {
-            items: components["schemas"]["ServiceSummary"][];
-            nextCursor: string | null;
-        };
-        ServiceDoc: components["schemas"]["DocMeta"] & {
-            document: components["schemas"]["ServiceDocument"];
-        };
-        ServiceVersion: components["schemas"]["ServiceDoc"] & {
-            /** @description The version this one was restored from. */
-            restoredFrom: number | null;
-        };
-        ServiceDetail: components["schemas"]["ServiceDoc"] & {
-            name: string;
-            host: string;
-            state: components["schemas"]["ServiceState"];
-            /** Format: date-time */
-            stateSince: string;
-            /** Format: date-time */
-            createdAt: string;
-            health: components["schemas"]["Health"];
-            /** Format: date-time */
-            healthSince: string | null;
-            checks: components["schemas"]["CheckStatus"][];
-            alerts: components["schemas"]["Alert"][];
-            deployedVersion: string;
-            lastDeployment: components["schemas"]["Deployment"] | null;
-            managedBy: components["schemas"]["ManagedBy"];
-            /** @description Whether each action can start now. Rollback may still find no target; the dry-run is definitive. */
-            actions: components["schemas"]["ActionAvailability"][];
-        };
-        ActionAvailability: {
-            action: components["schemas"]["ActionName"];
-            allowed: boolean;
-            /**
-             * @description Why the action is unavailable: notConfigured (no source, backup or jobs), unsupported (the runtime cannot do it), invalidState (not allowed in the current state); null when allowed.
-             * @enum {string|null}
-             */
-            reason: "notConfigured" | "unsupported" | "invalidState" | null;
-        };
-        ServiceVersionInfo: {
-            version: number;
-            /** Format: date-time */
-            createdAt: string;
-            createdBy: components["schemas"]["Actor"];
-            restoredFrom: number | null;
-        };
-        ServiceVersionList: {
-            items: components["schemas"]["ServiceVersionInfo"][];
-            nextCursor: string | null;
-        };
         /** @enum {string} */
-        ActionName: "deploy" | "rollback" | "start" | "stop" | "restart" | "backup" | "run-job" | "retire";
+        ActionName: "deploy" | "rollback" | "start" | "stop" | "restart" | "backup" | "run-job";
         ActionRequest: {
             /** @description Commit to deploy (7 to 64 hex digits); deploy only. The head of the configured branch when omitted. */
             version?: string;
             /** @description Name of the job; run-job only, and required there. */
             job?: string;
+            /** @description Accept the impact of a disruptive action; see the dry run's `impact`. */
+            acknowledgeImpact?: boolean;
         };
-        ActionPlan: {
-            service: string;
+        ActionSteps: {
+            resource: string;
             action: components["schemas"]["ActionName"];
             from: components["schemas"]["ServiceState"];
             to: components["schemas"]["ServiceState"];
             steps: string[];
         };
+        ActionPlan: components["schemas"]["ActionSteps"] & {
+            impact: components["schemas"]["ResourceImpact"];
+        };
+        ImpactEntry: {
+            name: string;
+            type: components["schemas"]["ResourceTypeName"];
+            /**
+             * @description The relation of this resource to `via`.
+             * @enum {string}
+             */
+            relation: "dependsOn" | "runsOn" | "controlPath";
+            /** @description The resource the relation targets. */
+            via: string;
+            /** @description 1 when the relation targets the acted-on resource. */
+            depth: number;
+        };
+        ResourceImpact: {
+            resource: string;
+            /** @description Managed resources that depend on the resource, nearest first. */
+            dependents: components["schemas"]["ImpactEntry"][];
+            /** @description Managed resources LCM reaches through the resource or one of its dependents. */
+            controlDependents: components["schemas"]["ImpactEntry"][];
+            /** @description Relation targets of the resource that do not exist. */
+            unresolved: string[];
+            /** @description The action the guard was evaluated for. */
+            action?: string;
+            /** @description The action needs `acknowledgeImpact`; always false without an action. */
+            acknowledgementRequired: boolean;
+        };
+        ResourceGroupActionRequest: {
+            selector: {
+                /**
+                 * @description Only services run group actions.
+                 * @enum {string}
+                 */
+                type?: "service";
+                labels: {
+                    [key: string]: string;
+                };
+            };
+            action: components["schemas"]["ActionName"];
+            params?: {
+                /** @description Commit to deploy; deploy only. */
+                version?: string;
+                /** @description Job to run; run-job only */
+                job?: string;
+            };
+            /** @default false */
+            dryRun: boolean;
+            /** @default false */
+            acknowledgeImpact: boolean;
+        };
+        ResourceGroupSelector: {
+            /** @enum {string} */
+            type: "service";
+            labels: {
+                [key: string]: string;
+            };
+        };
+        ResourceGroupPlan: {
+            action: components["schemas"]["ActionName"];
+            selector: components["schemas"]["ResourceGroupSelector"];
+            /** @description In execution order. */
+            steps: {
+                resource: string;
+                plan: components["schemas"]["ActionSteps"] | null;
+                /** @description Why the step could not run now; empty when it can. */
+                error: string;
+                impact: components["schemas"]["ResourceImpact"];
+            }[];
+            /** @description Some step needs `acknowledgeImpact`. */
+            acknowledgementRequired: boolean;
+        };
+        ResourceGroupAction: {
+            id: string;
+            action: components["schemas"]["ActionName"];
+            /** @enum {string} */
+            status: "running" | "succeeded" | "failed";
+            actor: components["schemas"]["Actor"];
+            selector: components["schemas"]["ResourceGroupSelector"];
+            version?: string;
+            job?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            steps: {
+                resource: string;
+                /** @enum {string} */
+                status: "pending" | "running" | "succeeded" | "failed" | "notRun";
+                /** @description The step's tracked action; empty until it starts. */
+                actionId: string;
+                result: components["schemas"]["ActionResult"] | null;
+                error: string;
+            }[];
+        };
         ActionResult: {
-            service: string;
+            resource: string;
             action: components["schemas"]["ActionName"];
             from: components["schemas"]["ServiceState"];
             to: components["schemas"]["ServiceState"];
@@ -2735,7 +2643,7 @@ export interface components {
         };
         Action: {
             id: string;
-            service: string;
+            resource: string;
             action: components["schemas"]["ActionName"];
             /** @enum {string} */
             status: "running" | "succeeded" | "failed";
@@ -2752,7 +2660,7 @@ export interface components {
         Deployment: {
             /** Format: int64 */
             id: number;
-            service: string;
+            resource: string;
             /** @enum {string} */
             action: "deploy" | "rollback";
             version: string;
@@ -2778,7 +2686,7 @@ export interface components {
              * @description Row id; 0 in `timeline` events for entries whose id is not known.
              */
             id: number;
-            service: string;
+            resource: string;
             /** Format: date-time */
             time: string;
             /** @description For example `config.changed`, `lifecycle.changed`, `deployment`, `action`, `backup`, `job`, `check.changed`, `health.changed`, `alert`. */
@@ -2814,7 +2722,7 @@ export interface components {
             consecutiveFailures: number;
         };
         Checks: {
-            service: string;
+            resource: string;
             health: components["schemas"]["Health"];
             /** Format: date-time */
             since: string | null;
@@ -2832,7 +2740,7 @@ export interface components {
             maxLatencyMs: number;
         };
         Series: {
-            service: string;
+            resource: string;
             check: string;
             /** Format: date-time */
             from: string;
@@ -2858,8 +2766,8 @@ export interface components {
             minLatencyMs: number;
             maxLatencyMs: number;
         };
-        ServiceSummaryStats: components["schemas"]["SummaryStats"] & {
-            service: string;
+        ResourceSummaryStats: components["schemas"]["SummaryStats"] & {
+            resource: string;
             /** @enum {string} */
             window: "24h" | "7d" | "30d";
             checks: {
@@ -2873,7 +2781,7 @@ export interface components {
         Alert: {
             source: string;
             fingerprint: string;
-            service?: string;
+            resource?: string;
             name: string;
             /** @enum {string} */
             severity: "info" | "warning" | "critical";
@@ -2916,7 +2824,7 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             triggers: components["schemas"]["Trigger"][];
-            /** @description Nodes of the deployed version that act on a service; empty when not deployed. */
+            /** @description Nodes of the deployed version that act on a resource; empty when not deployed. */
             targets: components["schemas"]["PolicyTarget"][];
             lastRun: components["schemas"]["LastRun"] | null;
             managedBy: components["schemas"]["ManagedBy"];
@@ -2925,8 +2833,8 @@ export interface components {
             /** @description Scoped node id such as deploy or mod/restart. */
             node: string;
             type: string;
-            /** @description The service the node acts on; null when the policy decides it while running (for example from the trigger event). */
-            service: string | null;
+            /** @description The resource the node acts on; null when the policy decides it while running (for example from the trigger event). */
+            resource: string | null;
         };
         PolicyList: {
             items: components["schemas"]["PolicySummary"][];
@@ -3060,7 +2968,7 @@ export interface components {
         };
         Ownership: {
             /** @enum {string} */
-            kind: "Service" | "Policy" | "Module";
+            kind: "Resource" | "Policy" | "Module";
             name: string;
             source: string;
             path: string;
@@ -3093,15 +3001,15 @@ export interface components {
             id: string;
             title: string;
             description: string;
-            /** @description Name of the parameter that selects the target service. */
-            serviceParam: string;
+            /** @description Name of the parameter that selects the target resource, a service. */
+            resourceParam: string;
             params: components["schemas"]["TemplateParam"][];
         };
         TemplateParam: {
             name: string;
             /**
-             * @description `secret` is the name of a secret, `service` the name of a catalog
-             *     service, `duration` Go syntax such as `5m`, `strings` a list of
+             * @description `secret` is the name of a secret, `service` the name of a service
+             *     resource, `duration` Go syntax such as `5m`, `strings` a list of
              *     strings and `json` any JSON value.
              * @enum {string}
              */
@@ -3265,7 +3173,7 @@ export interface components {
             sources?: number;
         };
         /** @enum {string} */
-        EventType: "signal" | "run" | "node" | "timeline" | "action" | "catalog" | "machine";
+        EventType: "signal" | "run" | "node" | "timeline" | "action" | "resource" | "observation" | "catalog";
         /** @description Payload of `run` and `node` events, and of policy deployments in `catalog` events. */
         EngineEvent: {
             /** @enum {string} */
@@ -3289,11 +3197,12 @@ export interface components {
         /** @description Payload of `signal` events. */
         Signal: {
             id: string;
-            /** @enum {string} */
-            kind: "check.changed" | "health.changed" | "lifecycle.changed" | "alert";
+            /** @description check.changed, health.changed, lifecycle.changed, alert, or resource.config.conflict / resource.config.invalid from config sync. */
+            kind: string;
             /** Format: date-time */
             time: string;
-            service?: string;
+            resource?: string;
+            resourceType?: components["schemas"]["ResourceTypeName"];
             source: string;
             severity?: string;
             labels?: components["schemas"]["Labels"];
@@ -3301,16 +3210,8 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** @description Payload of `catalog` events about services. */
-        CatalogChange: {
-            service: string;
-            /** @enum {string} */
-            change: "created" | "updated" | "restored" | "deleted";
-        };
         /** @description The `data` of every server-sent event. */
         EventEnvelope: {
-            /** @description Immutable Machine ID. */
-            machine?: string;
             /**
              * Format: int64
              * @description Increases with every event.
@@ -3319,11 +3220,322 @@ export interface components {
             type: components["schemas"]["EventType"];
             /** Format: date-time */
             time: string;
-            service?: string;
+            /** @description Name of the resource the event is about. */
+            resource?: string;
+            /** @description Immutable resource ID, for resource changes and observations. */
+            resourceId?: string;
             policy?: string;
             run?: string;
             /** @description Depends on `type`. */
-            data: components["schemas"]["Signal"] | components["schemas"]["EngineEvent"] | components["schemas"]["TimelineEntry"] | components["schemas"]["Action"] | components["schemas"]["CatalogChange"] | components["schemas"]["MachineEvent"];
+            data: components["schemas"]["Signal"] | components["schemas"]["EngineEvent"] | components["schemas"]["TimelineEntry"] | components["schemas"]["Action"] | components["schemas"]["ResourceChange"] | components["schemas"]["ResourceEvent"];
+        };
+        /** @enum {string} */
+        ResourceTypeName: "service" | "machine" | "router";
+        /**
+         * @description `managed` is observed and controlled; `retired` keeps records without observation or control and can be resumed; `unmanaged` is archived and has released its name.
+         * @enum {string}
+         */
+        ResourcePhase: "managed" | "retired" | "unmanaged";
+        ResourceAction: {
+            /** @description Action, operation or phase change, such as `restart`, `reboot` or `retire`. */
+            name: string;
+            available: boolean;
+            /** @description Why the action is unavailable now; empty when available. Services use notConfigured, unsupported, invalidState, notManaged or busy. */
+            reason: string;
+            /** @enum {string} */
+            risk: "read" | "reversible" | "disruptive" | "destructive";
+            /** @description Whether policies may run it. */
+            policy: boolean;
+            /**
+             * @description `action` runs through `POST /resources/{resource}/actions/{action}` (services) or its own route (observe, maintenance); `operation` through `POST /resources/{resource}/operations`; `phase` through `POST /resources/{resource}/phase`.
+             * @enum {string}
+             */
+            kind: "action" | "operation" | "phase";
+        };
+        ResourceType: {
+            type: components["schemas"]["ResourceTypeName"];
+            adapters: string[];
+            /** @description The adapter reaches the resource through a connection named in `spec.connection` and defined in host configuration. */
+            needsConnection: boolean;
+            description: string;
+            /** @description Everything the type offers; `available` and `reason` are only meaningful on a resource. */
+            actions: components["schemas"]["ResourceAction"][];
+        };
+        Relation: {
+            /** @enum {string} */
+            type: "dependsOn" | "runsOn" | "controlPath";
+            /** @description Name of another resource. */
+            target: string;
+        };
+        /** @description A `lcm/v2` Resource. */
+        ResourceDocument: {
+            /** @enum {string} */
+            apiVersion: "lcm/v2";
+            /** @enum {string} */
+            kind: "Resource";
+            metadata: components["schemas"]["Metadata"];
+            spec: {
+                type: components["schemas"]["ResourceTypeName"];
+                /** @description service: systemd, docker, compose, command or external; machine: local; router: xiaomi. See `GET /resource-types`. */
+                adapter: string;
+                /** @description Name of a host-configured connection; only for adapters that need one. */
+                connection?: string;
+                /**
+                 * @description Typed by `type` and `adapter` and validated strictly by the server (unknown
+                 *     fields are refused). service: the runtime fields valid for the adapter
+                 *     (`unit`, `scope`, `container`, `project`, `file`, `start`, `stop`,
+                 *     `restart`, `status`) plus `source`, `backup` and `jobs`. machine:
+                 *     `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
+                 *     `thresholds`. router: `interval`, `staleAfter`, `thresholds`
+                 *     (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).
+                 */
+                config?: {
+                    [key: string]: unknown;
+                };
+                checks?: components["schemas"]["Check"][];
+                relations?: components["schemas"]["Relation"][];
+            };
+        };
+        ResourceSummary: {
+            /** @description Immutable ID; `@<id>` addresses any incarnation */
+            id: string;
+            name: string;
+            type: components["schemas"]["ResourceTypeName"];
+            adapter: string;
+            phase: components["schemas"]["ResourcePhase"];
+            labels: components["schemas"]["Labels"];
+            /** @description service: registered, deploying, running, updating, rolling_back, stopped or failed; machine and router: online, offline or unknown. Empty when not known. */
+            state: string;
+            /** Format: date-time */
+            stateSince: string | null;
+            health: components["schemas"]["Health"];
+            /** @description Version of the configuration document. */
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Commit of a service's last successful deployment; empty if none and for other types. */
+            deployedVersion: string;
+            managedBy: components["schemas"]["ManagedBy"];
+        };
+        ResourceList: {
+            items: components["schemas"]["ResourceSummary"][];
+            nextCursor: string | null;
+        };
+        ResourceHealth: {
+            status: components["schemas"]["Health"];
+            /** Format: date-time */
+            since: string | null;
+            /** @description The type's own findings (thresholds, reachability) followed by failing checks. */
+            reasons: string[];
+        };
+        ResourceDetail: {
+            id: string;
+            name: string;
+            type: components["schemas"]["ResourceTypeName"];
+            adapter: string;
+            /** @description Empty when the adapter needs none. */
+            connection: string;
+            phase: components["schemas"]["ResourcePhase"];
+            labels: components["schemas"]["Labels"];
+            document: components["schemas"]["ResourceDocument"];
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            updatedBy: components["schemas"]["Actor"];
+            /** @description See `ResourceSummary.state`. */
+            state: string;
+            /** Format: date-time */
+            stateSince: string | null;
+            health: components["schemas"]["ResourceHealth"];
+            checks: components["schemas"]["CheckStatus"][];
+            alerts: components["schemas"]["Alert"][];
+            /** @description What can be done now. A service rollback may still find no target; the dry-run is definitive. */
+            actions: components["schemas"]["ResourceAction"][];
+            /** @description The durable operation whose outcome is still open, if any. */
+            operation: components["schemas"]["ResourceOperation"] | null;
+            managedBy: components["schemas"]["ManagedBy"];
+            /** @description Relation targets of the document that name no resource yet, sorted; such a relation counts once the target exists. Empty for archives. */
+            unresolvedRelations: string[];
+            /** @description Services only. */
+            service?: {
+                deployedVersion: string;
+                lastDeployment: components["schemas"]["Deployment"] | null;
+            };
+            /** @description Machines only. */
+            machine?: {
+                status: components["schemas"]["MachineStatus"] | null;
+            };
+            /** @description Routers only. */
+            router?: {
+                status: components["schemas"]["RouterStatus"] | null;
+            };
+        };
+        ResourcePhaseRequest: {
+            phase: components["schemas"]["ResourcePhase"];
+            /** @description The current document version; `If-Match` may carry it instead. */
+            version?: number;
+            reason?: string;
+            /** @description Accept the impact of retiring a service (it is stopped first). */
+            acknowledgeImpact?: boolean;
+        };
+        ResourceVersion: components["schemas"]["DocMeta"] & {
+            document: components["schemas"]["ResourceDocument"];
+            /** @description The version this one was restored from. */
+            restoredFrom: number | null;
+        };
+        ResourceVersionInfo: {
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["Actor"];
+            restoredFrom: number | null;
+        };
+        ResourceVersionList: {
+            items: components["schemas"]["ResourceVersionInfo"][];
+            nextCursor: string | null;
+        };
+        /** @description One stored observation; the measurements are under the field named after `type`. */
+        ResourceSnapshot: {
+            /** Format: int64 */
+            id: number;
+            resourceId: string;
+            type: components["schemas"]["ResourceTypeName"];
+            /** Format: date-time */
+            observedAt: string;
+            machine?: components["schemas"]["MachineSnapshot"];
+            router?: components["schemas"]["RouterSnapshot"];
+        };
+        ResourceEvent: {
+            /** Format: int64 */
+            id: number;
+            resourceId: string;
+            /** @description `control`, `journal` or `health`. */
+            source: string;
+            kind: string;
+            severity: string;
+            /** Format: date-time */
+            occurredAt: string;
+            /** Format: date-time */
+            ingestedAt: string;
+            bootId?: string;
+            unit?: string;
+            historical: boolean;
+            reason?: string;
+            operationId?: string;
+        };
+        ResourceCapability: {
+            action: string;
+            available: boolean;
+            reason: string;
+        };
+        /** @description A durable operation. `request`, `receipt` and `evidence` are type-specific. */
+        ResourceOperation: {
+            id: string;
+            resourceId: string;
+            action: string;
+            /** @description For example pending, submitted, succeeded, failed or indeterminate. */
+            state: string;
+            /** @description The outcome is not known yet or needs `resolve`. */
+            unresolved: boolean;
+            /** @description Document version the operation was submitted against. */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            actor: components["schemas"]["Actor"];
+            request: {
+                [key: string]: unknown;
+            };
+            receipt: {
+                [key: string]: unknown;
+            } | null;
+            reason: string;
+            resolution?: string;
+            resolvedBy?: components["schemas"]["Actor"];
+            /** Format: date-time */
+            resolvedAt?: string;
+            evidence?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description WAN link and traffic; addresses, DNS servers and MAC addresses are never read. */
+        RouterWAN: {
+            link: boolean | null;
+            status: number | null;
+            uptimeSeconds: number | null;
+            /** @description Connection type the router reports, such as `dhcp` or `pppoe`. */
+            type?: string;
+            upBytesPerSec: number | null;
+            downBytesPerSec: number | null;
+            /** Format: int64 */
+            uploadedBytes: number | null;
+            /** Format: int64 */
+            downloadedBytes: number | null;
+        };
+        /** @description One observation attempt; measurements the router did not report are null. */
+        RouterSnapshot: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            observedAt: string;
+            /**
+             * @description `unreachable`: no HTTP answer; `unavailable`: an answer without usable status; `not-configured`: no usable connection or password secret on this host.
+             * @enum {string}
+             */
+            outcome: "ok" | "unreachable" | "auth-failed" | "unavailable" | "not-configured";
+            /** @description Fixed description of a failed attempt. */
+            reason?: string;
+            cpuPercent: number | null;
+            cpuCores: number | null;
+            memoryPercent: number | null;
+            uptimeSeconds: number | null;
+            temperatureC: number | null;
+            /** @description Online clients. */
+            clients: number | null;
+            wan: components["schemas"]["RouterWAN"];
+            /** @description Availability of each status source (`status`, `wan`). */
+            sources: {
+                [key: string]: components["schemas"]["MachineCoverage"];
+            };
+            model: string;
+            firmware: string;
+        };
+        RouterStatus: {
+            /** @description The latest observation attempt. */
+            snapshot: components["schemas"]["RouterSnapshot"] | null;
+            health: components["schemas"]["Health"];
+            reasons: string[];
+            /** @description The latest attempt is younger than `staleAfter`. */
+            fresh: boolean;
+            /** @enum {string} */
+            reachability: "reachable" | "unreachable" | "unknown";
+            /**
+             * Format: date-time
+             * @description Last boot estimated from the reported uptime.
+             */
+            bootAt: string | null;
+        };
+        Connection: {
+            name: string;
+            /** @enum {string} */
+            type: "xiaomi";
+            /** @description Write actions resources may perform through the connection; others are refused. */
+            allowActions: string[];
+            /** @description Resource names that may use the connection; empty allows all. */
+            allowResources: string[];
+            /** @description Managed and retired resources whose document names the connection. */
+            resources: string[];
+        };
+        /** @description Payload of `resource` events. */
+        ResourceChange: {
+            id: string;
+            name: string;
+            type: components["schemas"]["ResourceTypeName"];
+            /** @enum {string} */
+            change: "created" | "updated" | "restored" | "phase" | "unmanaged";
         };
     };
     responses: {
@@ -3384,7 +3596,8 @@ export interface components {
         /**
          * @description Conflict. `error.code` tells which: `version_conflict` (details carry
          *     `currentVersion`), `already_exists`, `lock_held`, `invalid_state`,
-         *     `precondition_failed` or `conflict`.
+         *     `precondition_failed`, `impact_unacknowledged` (details carry `resource`,
+         *     `action` and `impact`, a `ResourceImpact`) or `conflict`.
          */
         Conflict: {
             headers: {
@@ -3440,11 +3653,12 @@ export interface components {
         Cursor: string;
         /** @description The version the change is based on, or `*` to create. */
         IfMatch: string;
-        Service: string;
+        /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+        Resource: string;
         Policy: string;
         Module: string;
         SourceName: string;
-        OwnedKind: "service" | "policy" | "module" | "machine";
+        OwnedKind: "resource" | "policy" | "module";
         OwnedName: string;
         Version: number;
         RunID: string;
@@ -3456,10 +3670,10 @@ export interface components {
         TimelineTo: string;
     };
     requestBodies: {
-        ServiceDocument: {
+        ResourceDocument: {
             content: {
                 "application/yaml": string;
-                "application/json": components["schemas"]["ServiceDocument"];
+                "application/json": components["schemas"]["ResourceDocument"];
             };
         };
         PolicyDocument: {
@@ -3483,1073 +3697,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    listMachines: {
-        parameters: {
-            query?: {
-                /** @description Page size. */
-                limit?: components["parameters"]["Limit"];
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineRecord"][];
-                        nextCursor: string | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    createMachine: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MachineDocumentInput"];
-                "application/yaml": components["schemas"]["MachineDocumentInput"];
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineRecord"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    getMachine: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineRecord"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    putMachine: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MachineDocumentInput"];
-                "application/yaml": components["schemas"]["MachineDocumentInput"];
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineRecord"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    unmanageMachine: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    setMachinePhase: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @enum {string} */
-                    phase: "managed" | "retired";
-                };
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineRecord"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listMachineVersions: {
-        parameters: {
-            query?: {
-                /** @description Page size. */
-                limit?: components["parameters"]["Limit"];
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineVersion"][];
-                        nextCursor: string | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    getMachineVersion: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-                v: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineVersion"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    restoreMachine: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    version: number;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineRecord"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    observeMachine: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineRecord"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listMachineHistory: {
-        parameters: {
-            query?: {
-                /** @description Page size. */
-                limit?: components["parameters"]["Limit"];
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-                resolution?: "raw" | "minute";
-            };
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineSnapshot"][];
-                        nextCursor: string | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listMachineEvents: {
-        parameters: {
-            query?: {
-                /** @description Page size. */
-                limit?: components["parameters"]["Limit"];
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineEvent"][];
-                        nextCursor: string | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    getMachineCapabilities: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineCapability"][];
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    getMachineMaintenance: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        maintenance: components["schemas"]["MachineMaintenance"] | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    enterMachineMaintenance: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    reason: string;
-                    acknowledged: boolean;
-                    previewHash: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        maintenance: components["schemas"]["MachineMaintenance"];
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    exitMachineMaintenance: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    reason: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    listMachineOperations: {
-        parameters: {
-            query?: {
-                /** @description Page size. */
-                limit?: components["parameters"]["Limit"];
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineOperation"][];
-                        nextCursor: string | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    submitMachineOperation: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @enum {string} */
-                    action: "reboot" | "graceful-shutdown";
-                    idempotencyKey: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineOperation"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    getMachineOperation: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineOperation"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    resolveMachineOperation: {
-        parameters: {
-            query?: never;
-            header: {
-                "If-Match": string;
-            };
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    reason: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineOperation"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
     getHealth: {
         parameters: {
             query?: never;
@@ -4775,7 +3922,32 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
-    listHosts: {
+    getAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The action. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Action"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listCheckTypes: {
         parameters: {
             query?: never;
             header?: never;
@@ -4784,14 +3956,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Hosts. */
+            /** @description Check types. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        items: components["schemas"]["Host"][];
+                        items: components["schemas"]["CheckType"][];
                     };
                 };
             };
@@ -4799,16 +3971,73 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
-    listServices: {
+    listAlerts: {
         parameters: {
             query?: {
                 /** @description Page size. */
                 limit?: components["parameters"]["Limit"];
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
-                /** @description Keep services with this label, as `key=value`. May be repeated; all must match. */
+                /** @description Only alerts of this resource. */
+                resource?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alerts, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listResourceTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resource types in display order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ResourceType"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listResources: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                type?: "service" | "machine" | "router";
+                /** @description Keep resources with this label, as `key=value`. May be repeated; all must match. */
                 label?: string[];
-                state?: components["schemas"]["ServiceState"];
+                phase?: "managed" | "retired";
+                /** @description Type-specific state, such as `running` or `online`. */
+                state?: string;
                 health?: components["schemas"]["Health"];
             };
             header?: never;
@@ -4817,13 +4046,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Services ordered by name. */
+            /** @description Resources ordered by name. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceList"];
+                    "application/json": components["schemas"]["ResourceList"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -4831,14 +4060,14 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
-    createService: {
+    createResource: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["ServiceDocument"];
+        requestBody: components["requestBodies"]["ResourceDocument"];
         responses: {
             /** @description Created. */
             201: {
@@ -4848,7 +4077,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceDoc"];
+                    "application/json": components["schemas"]["ResourceDetail"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -4859,25 +4088,55 @@ export interface operations {
             422: components["responses"]["Unprocessable"];
         };
     };
-    getService: {
+    listResourceArchives: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                type?: "service" | "machine" | "router";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archives ordered by name, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getResource: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The service. */
+            /** @description The resource. */
             200: {
                 headers: {
                     ETag: components["headers"]["ETag"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceDetail"];
+                    "application/json": components["schemas"]["ResourceDetail"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -4885,19 +4144,19 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    updateService: {
+    updateResource: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description The version the change is based on, or `*` to create. */
-                "If-Match"?: components["parameters"]["IfMatch"];
+            header: {
+                "If-Match": string;
             };
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["ServiceDocument"];
+        requestBody: components["requestBodies"]["ResourceDocument"];
         responses: {
             /** @description Saved. An unchanged document keeps its version. */
             200: {
@@ -4906,7 +4165,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceDoc"];
+                    "application/json": components["schemas"]["ResourceDetail"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -4918,31 +4177,7 @@ export interface operations {
             422: components["responses"]["Unprocessable"];
         };
     };
-    deleteService: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Deleted. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-        };
-    };
-    listServiceVersions: {
+    listResourceVersions: {
         parameters: {
             query?: {
                 /** @description Page size. */
@@ -4952,7 +4187,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
@@ -4964,7 +4200,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceVersionList"];
+                    "application/json": components["schemas"]["ResourceVersionList"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -4973,12 +4209,13 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    getServiceVersion: {
+    getResourceVersion: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
                 v: components["parameters"]["Version"];
             };
             cookie?: never;
@@ -4991,7 +4228,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceVersion"];
+                    "application/json": components["schemas"]["ResourceVersion"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -4999,7 +4236,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    restoreService: {
+    restoreResource: {
         parameters: {
             query?: never;
             header?: {
@@ -5007,7 +4244,8 @@ export interface operations {
                 "If-Match"?: string;
             };
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
@@ -5019,14 +4257,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The new current version. */
+            /** @description The resource at its new current version. */
             200: {
                 headers: {
                     ETag: components["headers"]["ETag"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceDoc"];
+                    "application/json": components["schemas"]["ResourceDetail"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -5037,14 +4275,52 @@ export interface operations {
             422: components["responses"]["Unprocessable"];
         };
     };
-    runServiceAction: {
+    setResourcePhase: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The current version, when the body does not carry it. */
+                "If-Match"?: string;
+            };
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourcePhaseRequest"];
+            };
+        };
+        responses: {
+            /** @description The resource in its new phase. */
+            200: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    runResourceAction: {
         parameters: {
             query?: {
                 dryRun?: boolean;
             };
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
                 action: components["schemas"]["ActionName"];
             };
             cookie?: never;
@@ -5086,7 +4362,77 @@ export interface operations {
             422: components["responses"]["Unprocessable"];
         };
     };
-    getAction: {
+    getResourceImpact: {
+        parameters: {
+            query?: {
+                /** @description An action, operation or phase change of the resource's type (see `GET /resource-types`). */
+                action?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The impact. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceImpact"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    runResourceGroupAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceGroupActionRequest"];
+            };
+        };
+        responses: {
+            /** @description The plan (only with `dryRun`). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceGroupPlan"];
+                };
+            };
+            /** @description Started. */
+            202: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceGroupAction"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    getResourceGroupAction: {
         parameters: {
             query?: never;
             header?: never;
@@ -5097,13 +4443,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The action. */
+            /** @description The group action. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Action"];
+                    "application/json": components["schemas"]["ResourceGroupAction"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -5121,13 +4467,14 @@ export interface operations {
             };
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Deployments, newest first. */
+            /** @description Deployments of the resource's name, newest first; empty for other types. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5139,9 +4486,10 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
-    listServiceTimeline: {
+    listResourceTimeline: {
         parameters: {
             query?: {
                 /** @description Page size. */
@@ -5157,7 +4505,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
@@ -5175,6 +4524,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listTimeline: {
@@ -5184,6 +4534,8 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
+                /** @description Only entries of this resource. */
+                resource?: string;
                 /** @description Entry kinds to keep, repeated or comma separated. */
                 kinds?: components["parameters"]["TimelineKinds"];
                 /** @description Entries at or after this time. */
@@ -5216,13 +4568,14 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Checks; empty for a service without checks. */
+            /** @description Checks; empty for a resource without checks. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5248,7 +4601,8 @@ export interface operations {
             };
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
                 check: string;
             };
             cookie?: never;
@@ -5270,26 +4624,27 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    getServiceSummary: {
+    getResourceSummary: {
         parameters: {
             query?: {
                 window?: "24h" | "7d" | "30d";
             };
             header?: never;
             path: {
-                svc: components["parameters"]["Service"];
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Totals for the service and per check. */
+            /** @description Totals for the resource and per check. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceSummaryStats"];
+                    "application/json": components["schemas"]["ResourceSummaryStats"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -5298,39 +4653,423 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    listCheckTypes: {
+    observeResource: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Check types. */
+            /** @description The resource after the observation. */
             200: {
                 headers: {
+                    ETag: components["headers"]["ETag"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        items: components["schemas"]["CheckType"][];
-                    };
+                    "application/json": components["schemas"]["ResourceDetail"];
                 };
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
         };
     };
-    listAlerts: {
+    listResourceHistory: {
         parameters: {
             query?: {
                 /** @description Page size. */
                 limit?: components["parameters"]["Limit"];
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
-                /** @description Only alerts of this service. */
-                service?: string;
+                resolution?: "raw" | "minute";
+            };
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Snapshots, oldest first; at most 199 per page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ResourceSnapshot"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listResourceEvents: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Events, oldest first; at most 199 per page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ResourceEvent"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getResourceCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One entry per operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ResourceCapability"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getResourceMaintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active maintenance, or null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        maintenance: components["schemas"]["MachineMaintenance"] | null;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    enterResourceMaintenance: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                    acknowledged: boolean;
+                    previewHash: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The active maintenance. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        maintenance: components["schemas"]["MachineMaintenance"];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    previewResourceMaintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current known local workloads and partial coverage; review before entering maintenance. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineMaintenancePreview"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    exitResourceMaintenance: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Exited. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listResourceOperations: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Operations, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ResourceOperation"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    submitResourceOperation: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description For example `reboot` or `graceful-shutdown`; see `GET /resource-types`. */
+                    action: string;
+                    idempotencyKey: string;
+                    /** @description Accept the impact reported by `GET /resources/{resource}/impact?action=`. */
+                    acknowledgeImpact?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The stored operation. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    getResourceOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOperation"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    resolveResourceOperation: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The resolved operation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceOperation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+        };
+    };
+    listConnections: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
             };
             header?: never;
             path?: never;
@@ -5338,13 +5077,16 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Alerts, oldest first. */
+            /** @description Connections in file order. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AlertList"];
+                    "application/json": {
+                        items: components["schemas"]["Connection"][];
+                        nextCursor: string | null;
+                    };
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -5960,7 +5702,7 @@ export interface operations {
     exportDocuments: {
         parameters: {
             query?: {
-                /** @description service, policy or module (plural and any case are accepted). Omit for everything. */
+                /** @description resource, policy or module (plural and any case are accepted). Omit for everything. */
                 kind?: string;
                 /** @description One resource of `kind`. */
                 name?: string;
@@ -6615,47 +6357,6 @@ export interface operations {
             413: components["responses"]["TooLarge"];
         };
     };
-    getHeartbeat: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-                check: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            202: components["responses"]["HeartbeatAccepted"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-        };
-    };
-    postHeartbeat: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                svc: components["parameters"]["Service"];
-                check: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "*/*": string;
-            };
-        };
-        responses: {
-            202: components["responses"]["HeartbeatAccepted"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-        };
-    };
     githubPush: {
         parameters: {
             query?: never;
@@ -6720,10 +6421,10 @@ export interface operations {
     streamEvents: {
         parameters: {
             query?: {
-                /** @description Only committed events for this immutable Machine ID. */
-                machine?: string;
-                /** @description Only events about this service. */
-                service?: string;
+                /** @description Only events about the resource with this name. */
+                resource?: string;
+                /** @description Only events that carry this immutable resource ID (resource changes, observations). */
+                resourceId?: string;
                 /** @description Only events about this policy. */
                 policy?: string;
                 /** @description Only events of this run. */
@@ -6749,85 +6450,6 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-        };
-    };
-    listMachineArchives: {
-        parameters: {
-            query?: {
-                /** @description Page size. */
-                limit?: components["parameters"]["Limit"];
-                /** @description The `nextCursor` of the previous page. */
-                cursor?: components["parameters"]["Cursor"];
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful response. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["MachineRecord"][];
-                        nextCursor: string | null;
-                    };
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            413: components["responses"]["TooLarge"];
-            422: components["responses"]["Unprocessable"];
-            /** @description Request rejected or unavailable. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Request rejected or unavailable. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    previewMachineMaintenance: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Active name, or @ followed by immutable ID for archived read-only history. */
-                machine: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current known local workloads and partial coverage; review before entering maintenance. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MachineMaintenancePreview"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
         };
     };
     getSecurityIncident: {
@@ -7266,6 +6888,49 @@ export interface operations {
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["Internal"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    getHeartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+                check: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["HeartbeatAccepted"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    postHeartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+                check: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "*/*": string;
+            };
+        };
+        responses: {
+            202: components["responses"]["HeartbeatAccepted"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            413: components["responses"]["TooLarge"];
         };
     };
 }

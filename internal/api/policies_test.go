@@ -262,7 +262,7 @@ func TestCancelResumeAndDropped(t *testing.T) {
 	}
 
 	// In drop mode a second start while one is active is stored as dropped.
-	dropDoc := "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: dropper }\nspec:\n  concurrency: { mode: drop }\n  nodes:\n" + waitingPolicy
+	dropDoc := "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: dropper }\nspec:\n  concurrency: { mode: drop }\n  nodes:\n" + waitingPolicy
 	x.call("PUT", v1+"/policies/dropper", dropDoc, yamlBody()).want(http.StatusCreated)
 	first := x.call("POST", v1+"/policies/dropper/runs", nil).want(http.StatusAccepted).obj()["runId"].(string)
 	d := x.call("POST", v1+"/policies/dropper/runs", nil).wantError(http.StatusConflict, "conflict")

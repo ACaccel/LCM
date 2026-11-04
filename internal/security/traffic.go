@@ -118,14 +118,14 @@ func (m *Manager) IngestTraffic(ctx context.Context, v Traffic) (TrafficReceipt,
 			return err
 		}
 		var n int
-		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machines WHERE id=? AND phase='managed'`, v.MachineID).Scan(&n); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resources WHERE id=? AND type='machine' AND phase='managed'`, v.MachineID).Scan(&n); err != nil {
 			return err
 		}
 		if n != 1 {
 			return model.Issues{{Path: "machineId", Message: "registered managed Machine id is required"}}
 		}
 		if v.Service != "" {
-			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM services WHERE name=?`, v.Service).Scan(&n); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resources WHERE name=? AND type='service' AND phase!='unmanaged'`, v.Service).Scan(&n); err != nil {
 				return err
 			}
 			if n != 1 {

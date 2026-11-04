@@ -50,7 +50,7 @@ func TestSecurityHTTPKonataRestartIntegration(t *testing.T) {
 		c.SecurityTokenSecret = "konata-notify-key"
 	}
 	h := newHarness(t, func(o *testOpts) { o.configure = configure })
-	_, err := h.app.Machines.Put(h.ctx, []byte(`{"apiVersion":"lcm/v1","kind":"Machine","metadata":{"name":"workstation"},"spec":{}}`), 0)
+	_, err := h.app.Resources.Put(h.ctx, []byte(`{"apiVersion":"lcm/v2","kind":"Resource","metadata":{"name":"workstation"},"spec":{"type":"machine","adapter":"local"}}`), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestSecurityHTTPKonataRestartIntegration(t *testing.T) {
 // The actual Machine manager resolves unprefixed strings as names, not IDs.
 func TestSecurityPollUsesRegisteredMachineIdentity(t *testing.T) {
 	h := newHarness(t)
-	_, err := h.app.Machines.Put(h.ctx, []byte(`{"apiVersion":"lcm/v1","kind":"Machine","metadata":{"name":"workstation"},"spec":{}}`), 0)
+	_, err := h.app.Resources.Put(h.ctx, []byte(`{"apiVersion":"lcm/v2","kind":"Resource","metadata":{"name":"workstation"},"spec":{"type":"machine","adapter":"local"}}`), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

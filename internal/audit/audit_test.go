@@ -83,3 +83,25 @@ func TestListPagination(t *testing.T) {
 		t.Errorf("oversized limit: len = %d", len(all))
 	}
 }
+
+func TestContextDetails(t *testing.T) {
+	l := audit.New(storetest.Open(t))
+	ctx := auth.WithActor(context.Background(), auth.CLI)
+	ctx = audit.WithDetail(ctx, "acknowledgedImpact", map[string]any{"dependents": []string{"web"}})
+	ctx = audit.WithDetail(ctx, "note", "context")
+	if err := l.Record(ctx, "service.stop", "db", audit.OutcomeOK, map[string]any{"note": "explicit"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := l.List(ctx, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := got[0].Details
+	if d["note"] != "explicit" {
+		t.Errorf("explicit detail lost to the context: %v", d)
+	}
+	imp, ok := d["acknowledgedImpact"].(map[string]any)
+	if !ok || len(imp["dependents"].([]any)) != 1 {
+		t.Errorf("context detail missing: %v", d)
+	}
+}

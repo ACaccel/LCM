@@ -11,6 +11,7 @@ import (
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/monitor"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 // lockAdapter lets the catalog manager take service locks from the durable
@@ -74,28 +75,43 @@ func (r monitorRunner) Run(ctx context.Context, c monitor.Command) (monitor.Comm
 	}
 }
 
-// serviceVar returns the engine variable "service": a map from service name
-// to its lifecycle state, health and check results, read when a node whose
-// props mention service is about to run. Policies use it to wait for a
-// service to become healthy: inputs: { svc: "{{ service[params.service] }}" }.
+// resourceVar returns the engine variable "resource": a map from resource
+// name to its type, adapter, phase, type-specific state, health and check
+// results, read when a node whose props mention resource is about to run.
+// Policies use it to wait for a resource to become healthy:
+// inputs: { r: "{{ resource[params.service] }}" }.
 //
-// Check times are Unix milliseconds. A service that is not in the catalog is
-// absent from the map.
-func serviceVar(cat *catalog.Catalog, mon *monitor.Monitor) engine.Var {
+// Managed and retired resources are present. The state comes from the
+// resource's type (a service's lifecycle state, online/offline/unknown for
+// machines and routers); a type that cannot tell leaves it empty. Check
+// times are Unix milliseconds.
+func resourceVar(res *resource.Store, types []resource.Type, mon *monitor.Monitor) engine.Var {
+	byName := make(map[string]resource.Type, len(types))
+	for _, t := range types {
+		byName[t.Name()] = t
+	}
 	return engine.Var{
-		Name: "service",
+		Name: "resource",
 		Value: func(ctx context.Context, _ engine.RunInfo) (any, error) {
-			recs, err := cat.List(ctx)
+			recs, err := res.List(ctx, resource.Filter{IncludeRetired: true})
 			if err != nil {
 				return nil, err
 			}
 			out := make(map[string]any, len(recs))
 			for _, r := range recs {
-				entry := map[string]any{
-					"name": r.Name, "state": string(r.State), "health": string(monitor.HealthUnknown),
-					"checks": map[string]any{},
+				state := ""
+				if t := byName[r.Type]; t != nil {
+					st, err := t.Status(ctx, r)
+					if err != nil {
+						return nil, err
+					}
+					state = st.State
 				}
-				if st, ok := mon.Service(r.Name); ok {
+				entry := map[string]any{
+					"name": r.Name, "type": r.Type, "adapter": r.Adapter, "phase": r.Phase, "state": state,
+					"health": string(monitor.HealthUnknown), "checks": map[string]any{},
+				}
+				if st, ok := mon.Resource(r.Name); ok {
 					checks := make(map[string]any, len(st.Checks))
 					for _, c := range st.Checks {
 						checks[c.Name] = map[string]any{

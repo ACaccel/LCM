@@ -24,10 +24,10 @@ const (
 	maxDeploymentError = 2 << 10
 )
 
-// Deployment is one deploy or rollback of a service.
+// Deployment is one deploy or rollback of a service resource.
 type Deployment struct {
-	ID      int64
-	Service string
+	ID       int64
+	Resource string
 	// Action is "deploy" or "rollback".
 	Action string
 	// Version is the commit sha that was deployed.
@@ -51,9 +51,9 @@ func (c *Catalog) BeginDeployment(ctx context.Context, d Deployment) (int64, err
 	var id int64
 	err := c.db.Write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO deployments (service, action, version, previous_version, started_at, outcome, actor_kind, actor_id, actor_name, run_id)
+			`INSERT INTO deployments (resource, action, version, previous_version, started_at, outcome, actor_kind, actor_id, actor_name, run_id)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			d.Service, d.Action, d.Version, d.PreviousVersion, d.StartedAt.UnixMilli(), OutcomeRunning,
+			d.Resource, d.Action, d.Version, d.PreviousVersion, d.StartedAt.UnixMilli(), OutcomeRunning,
 			string(d.Actor.Kind), d.Actor.ID, d.Actor.Name, d.RunID)
 		if err != nil {
 			return err
@@ -102,8 +102,8 @@ func (c *Catalog) FinishDeployment(ctx context.Context, id int64, outcome, errMs
 
 // Deployments lists a service's deployments newest first. before, when
 // positive, returns only ids below it.
-func (c *Catalog) Deployments(ctx context.Context, service string, limit int, before int64) ([]Deployment, error) {
-	return c.deployments(ctx, `WHERE service = ?`+beforeClause(before), limit, append([]any{service}, beforeArgs(before)...)...)
+func (c *Catalog) Deployments(ctx context.Context, name string, limit int, before int64) ([]Deployment, error) {
+	return c.deployments(ctx, `WHERE resource = ?`+beforeClause(before), limit, append([]any{name}, beforeArgs(before)...)...)
 }
 
 // RunningDeployments lists deployments that have no outcome yet, across all
@@ -131,7 +131,7 @@ func (c *Catalog) deployments(ctx context.Context, where string, limit int, args
 		limit = 100
 	}
 	rows, err := c.db.Reader().QueryContext(ctx,
-		`SELECT id, service, action, version, previous_version, started_at, finished_at, outcome,
+		`SELECT id, resource, action, version, previous_version, started_at, finished_at, outcome,
 		        actor_kind, actor_id, actor_name, run_id, error, log
 		 FROM deployments `+where+` ORDER BY id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
@@ -146,7 +146,7 @@ func (c *Catalog) deployments(ctx context.Context, where string, limit int, args
 			finished sql.NullInt64
 			kind     string
 		)
-		if err := rows.Scan(&d.ID, &d.Service, &d.Action, &d.Version, &d.PreviousVersion, &started, &finished, &d.Outcome,
+		if err := rows.Scan(&d.ID, &d.Resource, &d.Action, &d.Version, &d.PreviousVersion, &started, &finished, &d.Outcome,
 			&kind, &d.Actor.ID, &d.Actor.Name, &d.RunID, &d.Error, &d.LogExcerpt); err != nil {
 			return nil, fmt.Errorf("catalog: scan deployment: %w", err)
 		}
@@ -206,13 +206,13 @@ func lastSuccessful(deps []Deployment) string {
 
 // CompletedAction returns the stored result of the last completed action
 // when its idempotency key equals key.
-func (c *Catalog) CompletedAction(ctx context.Context, service, action, key string) ([]byte, bool, error) {
+func (c *Catalog) CompletedAction(ctx context.Context, name, action, key string) ([]byte, bool, error) {
 	if key == "" {
 		return nil, false, nil
 	}
 	var stored, result string
 	err := c.db.Reader().QueryRowContext(ctx,
-		`SELECT idem_key, result FROM action_completions WHERE service = ? AND action = ?`, service, action).Scan(&stored, &result)
+		`SELECT idem_key, result FROM action_completions WHERE resource = ? AND action = ?`, name, action).Scan(&stored, &result)
 	switch {
 	case err == sql.ErrNoRows:
 		return nil, false, nil
@@ -226,16 +226,16 @@ func (c *Catalog) CompletedAction(ctx context.Context, service, action, key stri
 
 // RecordCompletion remembers that action finished under key, replacing the
 // previous key of the same service and action.
-func (c *Catalog) RecordCompletion(ctx context.Context, service, action, key string, result []byte) error {
+func (c *Catalog) RecordCompletion(ctx context.Context, name, action, key string, result []byte) error {
 	if key == "" {
 		return nil
 	}
 	err := c.db.Write(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO action_completions (service, action, idem_key, completed_at, result) VALUES (?, ?, ?, ?, ?)
-			 ON CONFLICT (service, action) DO UPDATE SET idem_key = excluded.idem_key,
+			`INSERT INTO action_completions (resource, action, idem_key, completed_at, result) VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT (resource, action) DO UPDATE SET idem_key = excluded.idem_key,
 			   completed_at = excluded.completed_at, result = excluded.result`,
-			service, action, key, c.now().UnixMilli(), string(result))
+			name, action, key, c.now().UnixMilli(), string(result))
 		return err
 	})
 	if err != nil {
@@ -245,7 +245,7 @@ func (c *Catalog) RecordCompletion(ctx context.Context, service, action, key str
 }
 
 // PruneDeployments keeps the newest keep deployments of each service and
-// deletes the rest, including those of deleted services. A deployment that
+// deletes the rest, including those of unmanaged services. A deployment that
 // is still running is never deleted. It returns how many rows were removed;
 // a non-positive keep keeps everything.
 func (c *Catalog) PruneDeployments(ctx context.Context, keep int) (int64, error) {
@@ -257,7 +257,7 @@ func (c *Catalog) PruneDeployments(ctx context.Context, keep int) (int64, error)
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM deployments WHERE outcome <> ? AND id NOT IN (
 			   SELECT id FROM (
-			     SELECT id, ROW_NUMBER() OVER (PARTITION BY service ORDER BY id DESC) AS pos FROM deployments
+			     SELECT id, ROW_NUMBER() OVER (PARTITION BY resource ORDER BY id DESC) AS pos FROM deployments
 			   ) WHERE pos <= ?)`, OutcomeRunning, keep)
 		if err != nil {
 			return err

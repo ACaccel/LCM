@@ -44,6 +44,9 @@ func TestDefaults(t *testing.T) {
 	if !c.IsLoopback() {
 		t.Error("default listen address must be loopback")
 	}
+	if !reflect.DeepEqual(c.AlertResourceLabels, []string{"lcm_resource", "resource", "lcm_service", "service"}) {
+		t.Errorf("alert resource labels = %v", c.AlertResourceLabels)
+	}
 	if got := c.DBPath(); got != filepath.Join("data", "lcm.db") {
 		t.Errorf("DBPath = %q", got)
 	}
@@ -114,7 +117,7 @@ func TestInvalidValues(t *testing.T) {
 		{"zero concurrency", nil, []string{"--monitor-concurrency", "0"}, "monitor concurrency"},
 		{"rollup shorter than raw", nil, []string{"--monitor-raw-retention", "48h", "--monitor-rollup-retention", "24h"}, "rollup retention"},
 		{"negative raw retention", nil, []string{"--monitor-raw-retention=-1h"}, "raw retention"},
-		{"empty alert labels", map[string]string{EnvAlertServiceLabels: " , "}, nil, "alert service labels"},
+		{"empty alert labels", map[string]string{EnvAlertResourceLabels: " , "}, nil, "alert resource labels"},
 		{"zero timeline retention", nil, []string{"--timeline-retention", "0s"}, "timeline retention"},
 		{"zero run keep", nil, []string{"--run-retention-keep", "0"}, "run retention keep"},
 		{"zero deployment keep", map[string]string{EnvDeploymentKeep: "0"}, nil, "deployment retention keep"},
@@ -191,9 +194,9 @@ func TestComponentSettings(t *testing.T) {
 		EnvSecretsDir: "/s", EnvCalendarDir: "/c", EnvSystemctl: "/bin/sc", EnvDocker: "/bin/dk", EnvGit: "/bin/git",
 		EnvSystemctlPrivilege: "doas", EnvRuntimeStatusTimeout: "3s", EnvRuntimeActionTimeout: "2m", EnvLockTTL: "30m",
 		EnvMonitorConcurrency: "2", EnvMonitorRawRetention: "24h", EnvMonitorRollupRetention: "48h",
-		EnvAlertServiceLabels: "svc, app ,", EnvTimelineRetention: "720h", EnvRunRetentionKeep: "5",
+		EnvAlertResourceLabels: "svc, app ,", EnvTimelineRetention: "720h", EnvRunRetentionKeep: "5",
 		EnvRunRetentionAge: "48h", EnvDeploymentKeep: "7", EnvPruneInterval: "10m", EnvGitHubWebhookSecret: "gh-hook",
-	}, "--git", "/usr/bin/git", "--alert-service-labels", "a,b")
+	}, "--git", "/usr/bin/git", "--alert-resource-labels", "a,b")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,8 +206,8 @@ func TestComponentSettings(t *testing.T) {
 	if c.Git != "/usr/bin/git" {
 		t.Errorf("flag must override env, git = %q", c.Git)
 	}
-	if !reflect.DeepEqual(c.AlertServiceLabels, []string{"a", "b"}) {
-		t.Errorf("alert labels = %v", c.AlertServiceLabels)
+	if !reflect.DeepEqual(c.AlertResourceLabels, []string{"a", "b"}) {
+		t.Errorf("alert labels = %v", c.AlertResourceLabels)
 	}
 	if c.GitHubWebhookSecret != "gh-hook" {
 		t.Errorf("github webhook secret = %q", c.GitHubWebhookSecret)
@@ -217,13 +220,13 @@ func TestComponentSettings(t *testing.T) {
 	}
 
 	env, err := FromEnv(func(k string) string {
-		if k == EnvAlertServiceLabels {
+		if k == EnvAlertResourceLabels {
 			return "x,y"
 		}
 		return ""
 	})
-	if err != nil || !reflect.DeepEqual(env.AlertServiceLabels, []string{"x", "y"}) {
-		t.Errorf("env alert labels = %v, %v", env.AlertServiceLabels, err)
+	if err != nil || !reflect.DeepEqual(env.AlertResourceLabels, []string{"x", "y"}) {
+		t.Errorf("env alert labels = %v, %v", env.AlertResourceLabels, err)
 	}
 }
 
@@ -344,5 +347,25 @@ func TestSecurityConfiguration(t *testing.T) {
 		return ""
 	}); err == nil {
 		t.Fatal("accepted malformed flag")
+	}
+}
+
+func TestConnectionsFile(t *testing.T) {
+	c, err := load(t, map[string]string{EnvConnectionsFile: "/etc/lcm/connections.yaml"})
+	if err != nil || c.ConnectionsFile != "/etc/lcm/connections.yaml" {
+		t.Fatalf("env: %q, %v", c.ConnectionsFile, err)
+	}
+	c, err = load(t, map[string]string{EnvConnectionsFile: "/etc/lcm/a.yaml"}, "--connections-file", "/etc/lcm/b.yaml")
+	if err != nil || c.ConnectionsFile != "/etc/lcm/b.yaml" {
+		t.Fatalf("flag: %q, %v", c.ConnectionsFile, err)
+	}
+}
+
+func TestRemovedAlertLabelVariable(t *testing.T) {
+	_, err := FromEnv(func(k string) string {
+		return map[string]string{"LCM_ALERT_SERVICE_LABELS": "service"}[k]
+	})
+	if err == nil || !strings.Contains(err.Error(), "LCM_ALERT_SERVICE_LABELS") || !strings.Contains(err.Error(), EnvAlertResourceLabels) {
+		t.Fatalf("err = %v", err)
 	}
 }

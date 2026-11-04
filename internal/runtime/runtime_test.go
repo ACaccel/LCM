@@ -12,16 +12,28 @@ import (
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
-func svc(t *testing.T, runtimeYAML string) *model.Service {
+// svc returns the validated runtime of a service resource; runtimeYAML
+// starts with "type: <adapter>" followed by the adapter's config fields.
+func svc(t *testing.T, runtimeYAML string) model.Runtime {
 	t.Helper()
-	s, err := model.DecodeService([]byte("apiVersion: lcm/v1\nkind: Service\nmetadata: { name: app }\nspec:\n  runtime:\n    " + runtimeYAML + "\n"))
+	head, fields, _ := strings.Cut(runtimeYAML, "\n")
+	if fields == "" {
+		fields = "    {}"
+	}
+	doc := "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: app }\nspec:\n  type: service\n  adapter: " +
+		strings.TrimPrefix(head, "type: ") + "\n  config:\n" + fields + "\n"
+	r, err := model.DecodeResource([]byte(doc))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	c, ok := r.Service()
+	if !ok {
+		t.Fatal("not a service")
+	}
+	return c.Runtime(r.Spec.Adapter)
 }
 
-func adapter(t *testing.T, f *execx.Fake, s *model.Service) rt.Adapter {
+func adapter(t *testing.T, f *execx.Fake, s model.Runtime) rt.Adapter {
 	t.Helper()
 	a, err := rt.NewRegistry(f, rt.Options{}).For(s)
 	if err != nil {
@@ -289,7 +301,7 @@ func TestCapabilitiesOf(t *testing.T) {
 		"type: command\n    stop: b\n    restart: r":   {Stop: true, Restart: true},
 	}
 	for doc, want := range cases {
-		if got := rt.CapabilitiesOf(svc(t, doc).Spec.Runtime); got != want {
+		if got := rt.CapabilitiesOf(svc(t, doc)); got != want {
 			t.Errorf("%q: %+v, want %+v", doc, got, want)
 		}
 	}

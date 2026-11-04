@@ -1,14 +1,14 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { alertsQuery, deploymentsSinceQuery, runsQuery, serviceQuery, servicesQuery, timelineQuery } from "../api/queries";
-import type { ServiceSummary } from "../api/types";
-import { HealthPill, ManagedBadges } from "../components/badges";
+import { alertsQuery, deploymentsSinceQuery, resourceQuery, resourcesQuery, resourceTypesQuery, runsQuery, timelineQuery } from "../api/queries";
+import type { Health, ResourceSummary } from "../api/types";
+import { HealthPill, ManagedBadges, StatePill, TypeTag } from "../components/badges";
 import { Sparkline } from "../components/charts";
 import { TimelineEvents } from "../components/timeline-list";
 import { Async, Empty, ErrorBox, PageHead, Spinner } from "../components/ui";
 import { formatTime, formatUptime, shortVersion, startOfDay } from "../lib/format";
 import { s } from "../strings";
-import { useServiceSpark } from "../hooks";
+import { useResourceSpark } from "../hooks";
 import { healthView } from "../lib/status";
 
 function Stat({ value, label, tone }: { value: number | string; label: string; tone?: "warn" | "bad" }) {
@@ -21,23 +21,29 @@ function Stat({ value, label, tone }: { value: number | string; label: string; t
   );
 }
 
-function ServiceCard({ svc }: { svc: ServiceSummary }) {
-  const { buckets, uptime, hasChecks, pending } = useServiceSpark(svc.name);
-  const last = useQuery(serviceQuery(svc.name)).data?.lastDeployment;
-  const tone = healthView(svc.health).tone;
+function ResourceCard({ r }: { r: ResourceSummary }) {
+  const { buckets, uptime, hasChecks, pending } = useResourceSpark(r.name);
+  const last = useQuery(resourceQuery(r.name)).data?.service?.lastDeployment;
+  const tone = healthView(r.health).tone;
   return (
-    <Link to={`/services/${encodeURIComponent(svc.name)}`} className="svc-card">
+    <Link to={`/resources/${encodeURIComponent(r.name)}`} className="svc-card">
       <div className="top">
-        <span className="name" title={svc.name}>
-          {svc.name}
+        <span className="name" title={r.name}>
+          {r.name}
         </span>
-        <HealthPill health={svc.health} />
+        <HealthPill health={r.health} />
       </div>
-      <div className="meta">
-        {s.state[svc.state] ?? svc.state} · <code>{shortVersion(svc.deployedVersion)}</code>
-        <br />
-        {last ? `${s.overview.lastDeploy} ${formatTime(last.finishedAt ?? last.startedAt)}` : s.overview.noDeploy}
+      <div className="row" style={{ gap: 4 }}>
+        <TypeTag type={r.type} />
+        <StatePill state={r.state} />
       </div>
+      {r.type === "service" && (
+        <div className="meta">
+          <code>{shortVersion(r.deployedVersion)}</code>
+          <br />
+          {last ? `${s.overview.lastDeploy} ${formatTime(last.finishedAt ?? last.startedAt)}` : s.overview.noDeploy}
+        </div>
+      )}
       {buckets.length > 0 ? (
         <>
           <Sparkline buckets={buckets} tone={tone === "info" ? "neutral" : tone} />
@@ -51,21 +57,70 @@ function ServiceCard({ svc }: { svc: ServiceSummary }) {
         </div>
       )}
       <div className="row" style={{ gap: 4 }}>
-        <ManagedBadges managedBy={svc.managedBy} />
+        <ManagedBadges managedBy={r.managedBy} />
       </div>
     </Link>
   );
 }
 
+const HEALTHS: Health[] = ["healthy", "degraded", "down", "unknown"];
+
+/** Counts per type and health, with links into the filtered resource list. */
+function TypeSummary({ items }: { items: ResourceSummary[] }) {
+  const types = useQuery(resourceTypesQuery());
+  const names = types.data?.map((t) => t.type) ?? [...new Set(items.map((r) => r.type))];
+  return (
+    <div className="table-wrap">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>{s.resources.columns.type}</th>
+            <th className="num">{s.overview.total}</th>
+            {HEALTHS.map((h) => (
+              <th key={h} className="num">
+                {s.health[h]}
+              </th>
+            ))}
+            <th className="num">{s.overview.retired}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {names.map((type) => {
+            const of = items.filter((r) => r.type === type);
+            const managed = of.filter((r) => r.phase === "managed");
+            return (
+              <tr key={type}>
+                <td>
+                  <Link to={`/resources?type=${type}`}>{s.resourceType[type]}</Link>
+                </td>
+                <td className="num">{of.length}</td>
+                {HEALTHS.map((h) => {
+                  const n = managed.filter((r) => r.health === h).length;
+                  return (
+                    <td key={h} className="num">
+                      {n > 0 ? <Link to={`/resources?type=${type}&health=${h}&phase=managed`}>{n}</Link> : 0}
+                    </td>
+                  );
+                })}
+                <td className="num">{of.length - managed.length}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function OverviewPage() {
-  const services = useQuery(servicesQuery());
+  const resources = useQuery(resourcesQuery());
   const activeRuns = useInfiniteQuery(runsQuery({ status: ["queued", "running", "suspended"] }));
   const alerts = useQuery(alertsQuery());
   const deploys = useQuery(deploymentsSinceQuery(startOfDay()));
   const events = useInfiniteQuery(timelineQuery({}));
 
-  const list = services.data ?? [];
-  const count = (h: string) => list.filter((x) => x.health === h).length;
+  const list = (resources.data ?? []).filter((x) => x.phase === "managed");
+  const count = (h: Health) => list.filter((x) => x.health === h).length;
   const active = activeRuns.data?.pages.flatMap((p) => p.items).length ?? 0;
   const firing = alerts.data?.filter((a) => !a.resolvedAt).length ?? 0;
 
@@ -83,19 +138,25 @@ export function OverviewPage() {
         <Stat value={firing} label={s.overview.firingAlerts} tone={firing ? "warn" : undefined} />
       </div>
 
-      <h3>{s.overview.services}</h3>
-      <Async q={services}>
+      <Async q={resources}>
         {(items) =>
           items.length === 0 ? (
             <Empty>
-              {s.overview.noServices} <Link to="/services?create=1">{s.overview.createFirst}</Link>
+              {s.overview.noResources} <Link to="/resources?create=1">{s.overview.createFirst}</Link>
             </Empty>
           ) : (
-            <div className="cards">
-              {items.map((svc) => (
-                <ServiceCard key={svc.name} svc={svc} />
-              ))}
-            </div>
+            <>
+              <h3>{s.overview.byType}</h3>
+              <TypeSummary items={items} />
+              <h3>{s.overview.resources}</h3>
+              <div className="cards">
+                {items
+                  .filter((r) => r.phase === "managed")
+                  .map((r) => (
+                    <ResourceCard key={r.id} r={r} />
+                  ))}
+              </div>
+            </>
           )
         }
       </Async>
@@ -107,7 +168,7 @@ export function OverviewPage() {
         <ErrorBox error={events.error} onRetry={() => void events.refetch()} />
       ) : (
         <>
-          <TimelineEvents entries={(events.data.pages[0]?.items ?? []).slice(0, 10)} showService />
+          <TimelineEvents entries={(events.data.pages[0]?.items ?? []).slice(0, 10)} showResource />
           <p>
             <Link to="/timeline">{s.overview.viewAll}</Link>
           </p>

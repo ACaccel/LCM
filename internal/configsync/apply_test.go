@@ -12,6 +12,7 @@ import (
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 func TestApplyCreateUpdateUnchanged(t *testing.T) {
@@ -23,7 +24,7 @@ func TestApplyCreateUpdateUnchanged(t *testing.T) {
 	// Results come back in the order of the input.
 	res := e.apply(configsync.Options{}, pol, svc, mod)
 	order := []string{res[0].Ref().String(), res[1].Ref().String(), res[2].Ref().String()}
-	if strings.Join(order, ",") != "Policy/echo,Service/web,Module/greet" || res[2].Index != 2 {
+	if strings.Join(order, ",") != "Policy/echo,Resource/web,Module/greet" || res[2].Index != 2 {
 		t.Fatalf("result order = %v", order)
 	}
 	for _, r := range res {
@@ -34,7 +35,7 @@ func TestApplyCreateUpdateUnchanged(t *testing.T) {
 			t.Fatalf("create diff of %s = %q", r.Ref(), r.Diff)
 		}
 	}
-	if _, err := e.cat.Get(e.ctx, "web"); err != nil {
+	if _, err := e.res.Get(e.ctx, "web"); err != nil {
 		t.Fatal(err)
 	}
 	if infos, _ := e.eng.Policies(e.ctx); len(infos) != 1 || infos[0].DeployedVersion != 1 {
@@ -49,9 +50,9 @@ func TestApplyCreateUpdateUnchanged(t *testing.T) {
 	}
 
 	// A change shows up as a diff of canonical YAML and bumps the version.
-	changed := serviceYAML("web", "  dependsOn: [db]\n")
-	r := wantAction(t, e.apply(configsync.Options{}, changed), "Service/web", configsync.ActionUpdate)
-	if r.Version != 2 || !strings.Contains(r.Diff, "+  dependsOn:\n") || !strings.Contains(r.Diff, "+    - db\n") {
+	changed := serviceYAML("web", "  relations: [{ type: dependsOn, target: db }]\n")
+	r := wantAction(t, e.apply(configsync.Options{}, changed), "Resource/web", configsync.ActionUpdate)
+	if r.Version != 2 || !strings.Contains(r.Diff, "+  relations:\n") || !strings.Contains(r.Diff, "+      target: db\n") {
 		t.Fatalf("update result = %+v", r)
 	}
 }
@@ -67,8 +68,8 @@ func TestApplyDryRunWritesNothing(t *testing.T) {
 			t.Fatalf("dry run: %+v", r)
 		}
 	}
-	if recs, _ := e.cat.List(e.ctx); len(recs) != 0 {
-		t.Fatalf("dry run created services: %v", recs)
+	if recs, _ := e.res.List(e.ctx, resource.Filter{}); len(recs) != 0 {
+		t.Fatalf("dry run created resources: %v", recs)
 	}
 	if recs, _ := e.mods.List(e.ctx); len(recs) != 0 {
 		t.Fatalf("dry run created modules: %v", recs)
@@ -92,19 +93,19 @@ func TestApplyReportsEachDocument(t *testing.T) {
 	e := newEnv(t)
 	res := e.apply(configsync.Options{},
 		serviceYAML("good", ""),
-		"apiVersion: lcm/v1\nkind: Service\nmetadata: { name: broken }\nspec:\n  runtime: { type: systemd }\n",
-		serviceYAML("badhost", "  host: mars\n"),
+		"apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: broken }\nspec: { type: service, adapter: systemd, config: {} }\n",
+		"apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: noconn }\nspec: { type: router, adapter: xiaomi, config: {} }\n",
 		serviceYAML("badcheck", "  checks:\n    - { name: c, type: http }\n"),
 		"kind: Nonsense\n",
 		policyYAML("nomodule", "    - { id: start, type: trigger.manual, next: { out: [m] } }\n    - { id: m, type: module, props: { module: absent } }\n"),
-		serviceYAML("good", "  dependsOn: [x]\n"),
+		serviceYAML("good", "  relations: [{ type: dependsOn, target: x }]\n"),
 	)
-	wantAction(t, res, "Service/good", configsync.ActionCreate)
-	if r := wantAction(t, res, "Service/broken", configsync.ActionFailed); len(r.Issues) == 0 || !strings.HasPrefix(r.Issues[0].Path, "spec.runtime") {
+	wantAction(t, res, "Resource/good", configsync.ActionCreate)
+	if r := wantAction(t, res, "Resource/broken", configsync.ActionFailed); len(r.Issues) == 0 || !strings.HasPrefix(r.Issues[0].Path, "spec.config") {
 		t.Fatalf("broken issues = %v", r.Issues)
 	}
-	if r := wantAction(t, res, "Service/badhost", configsync.ActionFailed); r.Issues[0].Path != "spec.host" {
-		t.Fatalf("badhost issues = %v", r.Issues)
+	if r := wantAction(t, res, "Resource/noconn", configsync.ActionFailed); r.Issues[0].Path != "spec.connection" {
+		t.Fatalf("noconn issues = %v", r.Issues)
 	}
 	wantAction(t, res, "Policy/nomodule", configsync.ActionFailed)
 	var dup, unknown int
@@ -120,8 +121,8 @@ func TestApplyReportsEachDocument(t *testing.T) {
 		t.Fatalf("duplicates=%d unnamed failures=%d in %+v", dup, unknown, res)
 	}
 	// Failures did not stop the valid document, and the first definition won.
-	rec, err := e.cat.Get(e.ctx, "good")
-	if err != nil || len(rec.Spec.Spec.DependsOn) != 0 {
+	rec, err := e.res.Get(e.ctx, "good")
+	if err != nil || len(rec.Document.Spec.Relations) != 0 {
 		t.Fatalf("good = %+v, %v", rec, err)
 	}
 }
@@ -153,7 +154,7 @@ func TestApplyPolicyPicksUpChangedModule(t *testing.T) {
 
 func TestApplyAuditsTheCaller(t *testing.T) {
 	e := newEnv(t)
-	e.apply(configsync.Options{}, serviceYAML("web", ""), serviceYAML("bad", "  host: mars\n"))
+	e.apply(configsync.Options{}, serviceYAML("web", ""), serviceYAML("bad", "  relations: [{ type: dependsOn, target: bad }]\n"))
 	entries, err := e.audit.List(e.ctx, 100, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +162,7 @@ func TestApplyAuditsTheCaller(t *testing.T) {
 	var create, apply *audit.Entry
 	for i := range entries {
 		switch entries[i].Action {
-		case "service.create":
+		case "resource.save":
 			create = &entries[i]
 		case "config.apply":
 			apply = &entries[i]
@@ -177,8 +178,10 @@ func TestExportRoundTrip(t *testing.T) {
 	e := newEnv(t)
 	e.apply(configsync.Options{},
 		moduleYAML("greet", "1"),
-		serviceYAML("web", "  checks:\n    - { name: c, type: tcp, props: { address: \"127.0.0.1:1\" } }\n  jobs:\n    reindex: { command: \"app reindex\" }\n"),
-		serviceYAML("api", "  dependsOn: [web]\n"),
+		"apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: web }\nspec:\n  type: service\n  adapter: command\n"+
+			"  config:\n    start: s\n    jobs:\n      reindex: { command: \"app reindex\" }\n"+
+			"  checks:\n    - { name: c, type: tcp, props: { address: \"127.0.0.1:1\" } }\n",
+		serviceYAML("api", "  relations: [{ type: dependsOn, target: web }]\n"),
 		policyYAML("echo", echoNodes),
 	)
 	out, err := e.sync.Export(e.ctx, configsync.Selector{})
@@ -228,16 +231,16 @@ func TestExportRoundTrip(t *testing.T) {
 	}
 
 	// Selectors.
-	one, err := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindService, Name: "web"})
+	one, err := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindResource, Name: "web"})
 	if err != nil || strings.Count(string(one), "kind:") != 1 || !strings.Contains(string(one), "name: web") {
 		t.Fatalf("export web = %q, %v", one, err)
 	}
-	svcs, _ := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindService})
-	if strings.Count(string(svcs), "kind: Service") != 2 || strings.Contains(string(svcs), "---\nkind: Policy") {
-		t.Fatalf("export services = %q", svcs)
+	svcs, _ := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindResource})
+	if strings.Count(string(svcs), "kind: Resource") != 2 || strings.Contains(string(svcs), "---\nkind: Policy") {
+		t.Fatalf("export resources = %q", svcs)
 	}
-	if _, err := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindService, Name: "ghost"}); err == nil {
-		t.Fatal("exporting a missing service succeeded")
+	if _, err := e.sync.Export(e.ctx, configsync.Selector{Kind: model.KindResource, Name: "ghost"}); err == nil {
+		t.Fatal("exporting a missing resource succeeded")
 	}
 	if _, err := e.sync.Export(e.ctx, configsync.Selector{Name: "web"}); err == nil {
 		t.Fatal("a name without a kind was accepted")
@@ -267,7 +270,7 @@ func TestSplitDocuments(t *testing.T) {
 	if err := configsync.StreamError(configsync.SplitDocuments("f", []byte("a: [\n"))); err == nil {
 		t.Fatal("unparseable stream accepted")
 	}
-	if k, n := configsync.Head([]byte("kind: Service\nmetadata: { name: x }\nspec: [")); k != model.KindService || n != "x" {
+	if k, n := configsync.Head([]byte("kind: Resource\nmetadata: { name: x }\nspec: [")); k != model.KindResource || n != "x" {
 		// A body that cannot be parsed at all has no head.
 		if k != "" || n != "" {
 			t.Fatalf("head = %s %s", k, n)
@@ -277,15 +280,17 @@ func TestSplitDocuments(t *testing.T) {
 
 func TestParseKind(t *testing.T) {
 	for in, want := range map[string]model.Kind{
-		"service": model.KindService, "Services": model.KindService, "policies": model.KindPolicy,
+		"resource": model.KindResource, "Resources": model.KindResource, " res ": model.KindResource, "policies": model.KindPolicy,
 		"Policy": model.KindPolicy, "module": model.KindModule, "modules": model.KindModule,
 	} {
 		if got, err := configsync.ParseKind(in); err != nil || got != want {
 			t.Errorf("ParseKind(%q) = %q, %v", in, got, err)
 		}
 	}
-	if _, err := configsync.ParseKind("host"); err == nil {
-		t.Error("ParseKind accepted host")
+	for _, old := range []string{"host", "service", "machine"} {
+		if _, err := configsync.ParseKind(old); err == nil {
+			t.Errorf("ParseKind accepted %s", old)
+		}
 	}
 }
 

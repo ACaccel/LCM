@@ -116,7 +116,7 @@ func TestEventStreamFiltersHeartbeatsAndEnds(t *testing.T) {
 	wantError(t, e.do("GET", "/api/v1/events", nil, withBearer(ingest)), http.StatusForbidden, codeForbidden)
 	wantError(t, e.do("GET", "/api/v1/events?types=signal,bogus", nil, withSession(e.login())), http.StatusBadRequest, codeBadRequest)
 
-	c := openStream(t, srv.URL+"/api/v1/events?service=web&types=signal,action", h)
+	c := openStream(t, srv.URL+"/api/v1/events?resource=web&types=signal,action", h)
 	if ct := c.resp.Header.Get("Content-Type"); ct != "text/event-stream" || c.resp.StatusCode != http.StatusOK {
 		t.Fatalf("response = %d %q", c.resp.StatusCode, ct)
 	}
@@ -126,13 +126,13 @@ func TestEventStreamFiltersHeartbeatsAndEnds(t *testing.T) {
 
 	// The stream is subscribed once the first line arrived, so these are
 	// not lost; the filtered ones never show up.
-	hub.Publish(events.Event{Type: events.TypeSignal, Service: "db", Data: map[string]any{"n": 0}})
-	hub.Publish(events.Event{Type: events.TypeRun, Service: "web", Data: map[string]any{"n": 1}})
-	hub.Publish(events.Event{Type: events.TypeSignal, Service: "web", Run: "r1", Data: map[string]any{"n": 2}})
-	hub.Publish(events.Event{Type: events.TypeAction, Service: "web", Data: map[string]any{"n": 3}})
+	hub.Publish(events.Event{Type: events.TypeSignal, Resource: "db", Data: map[string]any{"n": 0}})
+	hub.Publish(events.Event{Type: events.TypeRun, Resource: "web", Data: map[string]any{"n": 1}})
+	hub.Publish(events.Event{Type: events.TypeSignal, Resource: "web", Run: "r1", Data: map[string]any{"n": 2}})
+	hub.Publish(events.Event{Type: events.TypeAction, Resource: "web", Data: map[string]any{"n": 3}})
 
 	name, data := c.event()
-	if name != "signal" || data["type"] != "signal" || data["service"] != "web" || data["run"] != "r1" ||
+	if name != "signal" || data["type"] != "signal" || data["resource"] != "web" || data["run"] != "r1" ||
 		data["data"].(map[string]any)["n"] != float64(2) || data["id"] == nil || data["time"] == nil {
 		t.Fatalf("first event = %s %v", name, data)
 	}

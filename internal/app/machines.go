@@ -45,7 +45,7 @@ func convertCoverage(c observe.Coverage) machine.Coverage {
 	return machine.Coverage{State: string(c.State), Reason: string(c.Reason)}
 }
 
-func (o machineObserver) Observe(ctx context.Context, c model.MachineMonitoring) (machine.Snapshot, error) {
+func (o machineObserver) Observe(ctx context.Context, c model.MachineConfig) (machine.Snapshot, error) {
 	p, err := observe.NewLinux(observe.Config{Filesystems: c.Filesystems, Interfaces: c.Interfaces, Units: c.Units, PSI: true, CommandTimeout: 2 * time.Second}, o.runner, nil, o.clock)
 	if err != nil {
 		return machine.Snapshot{}, err
@@ -91,7 +91,7 @@ func (o machineObserver) Observe(ctx context.Context, c model.MachineMonitoring)
 	return s, err
 }
 
-func (o machineObserver) ReadJournal(ctx context.Context, c model.MachineMonitoring, cursor string, last time.Time) (machine.JournalBatch, error) {
+func (o machineObserver) ReadJournal(ctx context.Context, c model.MachineConfig, cursor string, last time.Time) (machine.JournalBatch, error) {
 	j, err := observe.NewJournal(observe.JournalConfig{Units: c.Units, CommandTimeout: 5 * time.Second}, o.runner, o.clock)
 	if err != nil {
 		return machine.JournalBatch{}, err

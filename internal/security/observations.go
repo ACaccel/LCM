@@ -12,6 +12,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 )
 
@@ -22,9 +23,10 @@ type MachineReader interface {
 	Get(context.Context, string) (machine.Record, error)
 }
 
-// ServiceReader reuses the monitor's persisted status and configured hysteresis.
+// ServiceReader reuses the monitor's persisted status and configured
+// hysteresis; only resources of type service are read.
 type ServiceReader interface {
-	Services() []monitor.ServiceStatus
+	Resources() []monitor.ResourceStatus
 }
 
 // Poll reconciles the latest persisted observations. Progress advances only
@@ -81,7 +83,10 @@ func (m *Manager) Poll(ctx context.Context, machines MachineReader, services Ser
 			}
 		}
 	}
-	for _, s := range services.Services() {
+	for _, s := range services.Resources() {
+		if s.Type != model.ResourceService {
+			continue
+		}
 		var latest time.Time
 		fresh := len(s.Checks) > 0
 		for _, check := range s.Checks {
@@ -94,7 +99,7 @@ func (m *Manager) Poll(ctx context.Context, machines MachineReader, services Ser
 		}
 		// Service failures retain their own identity. A missing/stale check is
 		// a monitoring gap, never evidence that the service is under attack.
-		sourceKey := "service:" + s.Service
+		sourceKey := "service:" + s.Resource
 		status, severity, summary := "resolved", "info", "Service health recovered"
 		fingerprint := "health"
 		if !fresh || s.Health == monitor.HealthUnknown {
@@ -128,7 +133,7 @@ func (m *Manager) Poll(ctx context.Context, machines MachineReader, services Ser
 		if prev == marker {
 			continue
 		}
-		e := Event{EventID: nativeID(r.ID+":"+sourceKey, marker), MachineID: r.ID, Service: s.Service, Source: "service", Fingerprint: fingerprint, Status: status, Severity: severity, Summary: summary, ObservedAt: latest}
+		e := Event{EventID: nativeID(r.ID+":"+sourceKey, marker), MachineID: r.ID, Service: s.Resource, Source: "service", Fingerprint: fingerprint, Status: status, Severity: severity, Summary: summary, ObservedAt: latest}
 		if _, err = m.ingest(ctx, e, true); err != nil {
 			return err
 		}
@@ -225,7 +230,7 @@ func (m *Manager) retireRemovedServices(ctx context.Context) error {
 	type removedEpisode struct{ id, service string }
 	var retired []removedEpisode
 	err := m.cfg.DB.Write(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id,service FROM security_incidents WHERE machine_id=? AND service!='' AND state='firing' AND NOT EXISTS(SELECT 1 FROM services WHERE services.name=security_incidents.service) ORDER BY seq LIMIT 500`, m.cfg.MachineID)
+		rows, err := tx.QueryContext(ctx, `SELECT id,service FROM security_incidents WHERE machine_id=? AND service!='' AND state='firing' AND NOT EXISTS(SELECT 1 FROM resources r WHERE r.name=security_incidents.service AND r.type='service' AND r.phase!='unmanaged') ORDER BY seq LIMIT 500`, m.cfg.MachineID)
 		if err != nil {
 			return err
 		}

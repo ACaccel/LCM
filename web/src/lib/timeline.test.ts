@@ -4,7 +4,7 @@ import { entryKey, flattenTimeline, insertLive, matchesFilter } from "./timeline
 
 const e = (n: number, over: Partial<TimelineEntry> = {}): TimelineEntry => ({
   id: n,
-  service: "web",
+  resource: "web",
   time: `2026-10-28T10:00:${String(60 - n).padStart(2, "0")}Z`.replace(":60Z", ":59Z"),
   kind: "action",
   summary: `entry ${n}`,
@@ -39,7 +39,7 @@ describe("timeline merge", () => {
     expect(merged.map((x) => x.summary)).toEqual(["entry 7", "entry 6", "entry 5"]);
   });
 
-  it("matches entries against service and kind filters", () => {
+  it("matches entries against resource and kind filters", () => {
     expect(matchesFilter(e(1), "", [])).toBe(true);
     expect(matchesFilter(e(1), "web", ["action"])).toBe(true);
     expect(matchesFilter(e(1), "api", [])).toBe(false);

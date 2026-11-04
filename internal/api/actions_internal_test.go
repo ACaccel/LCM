@@ -12,10 +12,10 @@ func TestActionTrackerForgetsOldestFinishedActionsFirst(t *testing.T) {
 	tr := newActionTracker(3)
 	now := time.Now()
 
-	running := tr.begin(actionDTO{Service: "web", Action: "start"})
+	running := tr.begin(actionDTO{Resource: "web", Action: "start"})
 	var finished []string
 	for i := range 4 {
-		a := tr.begin(actionDTO{Service: fmt.Sprintf("svc%d", i), Action: "stop"})
+		a := tr.begin(actionDTO{Resource: fmt.Sprintf("svc%d", i), Action: "stop"})
 		tr.finish(a.ID, now, nil, nil)
 		finished = append(finished, a.ID)
 	}
@@ -37,7 +37,7 @@ func TestActionTrackerForgetsOldestFinishedActionsFirst(t *testing.T) {
 
 func TestActionTrackerRecordsOutcome(t *testing.T) {
 	tr := newActionTracker(10)
-	a := tr.begin(actionDTO{Service: "web", Action: "restart"})
+	a := tr.begin(actionDTO{Resource: "web", Action: "restart"})
 	if a.Status != actionRunning || !strings.HasPrefix(a.ID, "act_") {
 		t.Fatalf("begun action = %+v", a)
 	}
@@ -53,7 +53,7 @@ func TestActionTrackerRecordsOutcome(t *testing.T) {
 		t.Error("finished action still counts as running")
 	}
 
-	long := tr.begin(actionDTO{Service: "db", Action: "backup"})
+	long := tr.begin(actionDTO{Resource: "db", Action: "backup"})
 	done = tr.finish(long.ID, time.Now(), nil, errors.New(strings.Repeat("x", 5000)))
 	if len(done.Error) > maxActionError+3 {
 		t.Errorf("error text not capped: %d bytes", len(done.Error))

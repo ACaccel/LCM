@@ -44,12 +44,13 @@ var (
 	ErrNotFound = errors.New("runtime: not found")
 )
 
-// Adapter controls one runtime type. svc is a validated service document.
+// Adapter controls one runtime type. rt is the validated runtime of a
+// service resource.
 type Adapter interface {
-	Status(ctx context.Context, svc *model.Service) (Status, error)
-	Start(ctx context.Context, svc *model.Service) error
-	Stop(ctx context.Context, svc *model.Service) error
-	Restart(ctx context.Context, svc *model.Service) error
+	Status(ctx context.Context, rt model.Runtime) (Status, error)
+	Start(ctx context.Context, rt model.Runtime) error
+	Stop(ctx context.Context, rt model.Runtime) error
+	Restart(ctx context.Context, rt model.Runtime) error
 }
 
 // Capabilities lists the process actions a service's runtime can perform.
@@ -127,11 +128,11 @@ func NewRegistry(runner execx.Runner, opts Options) *Registry {
 	}}
 }
 
-// For returns the adapter of svc's runtime type.
-func (r *Registry) For(svc *model.Service) (Adapter, error) {
-	a, ok := r.adapters[svc.Spec.Runtime.Type]
+// For returns the adapter of a runtime type.
+func (r *Registry) For(rt model.Runtime) (Adapter, error) {
+	a, ok := r.adapters[rt.Type]
 	if !ok {
-		return nil, fmt.Errorf("runtime: no adapter for type %q", svc.Spec.Runtime.Type)
+		return nil, fmt.Errorf("runtime: no adapter for type %q", rt.Type)
 	}
 	return a, nil
 }
@@ -163,13 +164,13 @@ func trim(s string) string {
 
 type external struct{}
 
-func (external) Status(context.Context, *model.Service) (Status, error) {
+func (external) Status(context.Context, model.Runtime) (Status, error) {
 	return Status{State: StateUnknown, Detail: map[string]string{"reason": "externally managed"}}, nil
 }
 
-func (external) Start(context.Context, *model.Service) error   { return errExternal("start") }
-func (external) Stop(context.Context, *model.Service) error    { return errExternal("stop") }
-func (external) Restart(context.Context, *model.Service) error { return errExternal("restart") }
+func (external) Start(context.Context, model.Runtime) error   { return errExternal("start") }
+func (external) Stop(context.Context, model.Runtime) error    { return errExternal("stop") }
+func (external) Restart(context.Context, model.Runtime) error { return errExternal("restart") }
 
 func errExternal(action string) error {
 	return fmt.Errorf("%w: %s on an external service (LCM does not control its process)", ErrUnsupported, action)

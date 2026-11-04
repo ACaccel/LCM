@@ -9,7 +9,7 @@ import (
 func TestTemplatesList(t *testing.T) {
 	x := newSite(t)
 	items := x.call("GET", v1+"/templates", nil).want(http.StatusOK).items()
-	if len(items) != 4 || items[0]["id"] != "auto-deploy" || items[0]["serviceParam"] != "service" {
+	if len(items) != 4 || items[0]["id"] != "auto-deploy" || items[0]["resourceParam"] != "resource" {
 		t.Fatalf("templates = %v", items)
 	}
 	params := items[0]["params"].([]any)
@@ -30,7 +30,7 @@ func TestTemplateInstantiate(t *testing.T) {
 	x := newSite(t)
 	x.createService(serviceDoc("web", ""))
 	body := map[string]any{
-		"name": "web-restart", "params": map[string]any{"service": "web", "healthTimeout": "2m"}, "dryRun": true,
+		"name": "web-restart", "params": map[string]any{"resource": "web", "healthTimeout": "2m"}, "dryRun": true,
 	}
 	path := v1 + "/templates/restart-on-down/instantiate"
 
@@ -49,15 +49,15 @@ func TestTemplateInstantiate(t *testing.T) {
 	}
 	pol := x.call("GET", v1+"/policies/web-restart", nil).want(http.StatusOK).obj()
 	meta := pol["document"].(map[string]any)["metadata"].(map[string]any)
-	if pol["deployed"] != true || meta["labels"].(map[string]any)["service"] != "web" ||
+	if pol["deployed"] != true || meta["labels"].(map[string]any)["resource"] != "web" ||
 		meta["annotations"].(map[string]any)["lcm.dev/template"] != "restart-on-down" {
 		t.Fatalf("policy = %v", pol)
 	}
 	trig := pol["triggers"].([]any)[0].(map[string]any)["props"].(map[string]any)
-	if trig["services"].([]any)[0] != "web" {
+	if trig["resources"].([]any)[0] != "web" {
 		t.Fatalf("trigger props = %v", trig)
 	}
-	// The template's lifecycle nodes read params.service, which resolves
+	// The template's lifecycle nodes read params.resource, which resolves
 	// without running the policy.
 	list := x.call("GET", v1+"/policies", nil).want(http.StatusOK).items()
 	targets := list[0]["targets"].([]any)
@@ -66,7 +66,7 @@ func TestTemplateInstantiate(t *testing.T) {
 	}
 	for _, tg := range targets {
 		m := tg.(map[string]any)
-		if m["service"] != "web" || !strings.HasPrefix(m["type"].(string), "lifecycle.") {
+		if m["resource"] != "web" || !strings.HasPrefix(m["type"].(string), "lifecycle.") {
 			t.Fatalf("targets = %v", targets)
 		}
 	}
@@ -95,7 +95,7 @@ func TestTemplateInstantiateErrors(t *testing.T) {
 	path := v1 + "/templates/restart-on-down/instantiate"
 
 	x.call("POST", v1+"/templates/nope/instantiate", map[string]any{"name": "p"}).wantError(http.StatusNotFound, "not_found")
-	x.call("POST", path, map[string]any{"params": map[string]any{"service": "web"}}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	x.call("POST", path, map[string]any{"params": map[string]any{"resource": "web"}}).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	x.call("POST", path, `{"name":"p","bogus":1}`).wantError(http.StatusBadRequest, "bad_request")
 
 	issues := func(params map[string]any, name string) []any {
@@ -110,17 +110,17 @@ func TestTemplateInstantiateErrors(t *testing.T) {
 		}
 		return false
 	}
-	if is := issues(map[string]any{}, "p"); !hasPath(is, "params.service") {
+	if is := issues(map[string]any{}, "p"); !hasPath(is, "params.resource") {
 		t.Errorf("missing service: %v", is)
 	}
-	if is := issues(map[string]any{"service": "ghost"}, "p"); !hasPath(is, "params.service") {
+	if is := issues(map[string]any{"resource": "ghost"}, "p"); !hasPath(is, "params.resource") {
 		t.Errorf("unknown service: %v", is)
 	}
-	if is := issues(map[string]any{"service": "web", "healthTimeout": "soon"}, "p"); !hasPath(is, "params.healthTimeout") {
+	if is := issues(map[string]any{"resource": "web", "healthTimeout": "soon"}, "p"); !hasPath(is, "params.healthTimeout") {
 		t.Errorf("bad duration: %v", is)
 	}
 	// A name the compiler rejects is reported as a document problem.
-	if is := issues(map[string]any{"service": "web"}, "Bad Name"); len(is) == 0 {
+	if is := issues(map[string]any{"resource": "web"}, "Bad Name"); len(is) == 0 {
 		t.Error("invalid policy name accepted")
 	}
 	x.call("GET", v1+"/policies", nil).want(http.StatusOK)
@@ -128,5 +128,5 @@ func TestTemplateInstantiateErrors(t *testing.T) {
 		t.Errorf("%d policies stored after failed instantiations", got)
 	}
 	// Token scope: ingest tokens may not instantiate.
-	x.call("POST", path, map[string]any{"name": "p", "params": map[string]any{"service": "web"}}, bearer(x.ingest)).wantError(http.StatusForbidden, "forbidden")
+	x.call("POST", path, map[string]any{"name": "p", "params": map[string]any{"resource": "web"}}, bearer(x.ingest)).wantError(http.StatusForbidden, "forbidden")
 }

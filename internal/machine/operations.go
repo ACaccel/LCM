@@ -14,22 +14,18 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
-type directKey struct{}
-
 // DirectRequest marks an authenticated console/CLI/API boundary, never a policy run.
-func DirectRequest(ctx context.Context) context.Context {
-	return context.WithValue(ctx, directKey{}, true)
-}
+func DirectRequest(ctx context.Context) context.Context { return auth.WithDirect(ctx) }
 
 func requireDirect(ctx context.Context) error {
 	a, err := actor(ctx)
 	if err != nil {
 		return err
 	}
-	direct, _ := ctx.Value(directKey{}).(bool)
-	if !direct || (a.Kind != auth.KindUser && a.Kind != auth.KindToken && a != auth.CLI) {
+	if !auth.IsDirect(ctx) || (a.Kind != auth.KindUser && a.Kind != auth.KindToken && a != auth.CLI) {
 		return ErrForbidden
 	}
 	return nil
@@ -66,7 +62,7 @@ type PowerBackend interface {
 type Operation struct {
 	Evidence   *Status      `json:"evidence,omitempty"`
 	ID         string       `json:"id"`
-	MachineID  string       `json:"machineId"`
+	ResourceID string       `json:"resourceId"`
 	Action     string       `json:"action"`
 	State      string       `json:"state"`
 	Unresolved bool         `json:"unresolved"`
@@ -85,7 +81,7 @@ type Operation struct {
 // Maintenance keeps the durable write gate until an explicit verified exit.
 type Maintenance struct {
 	Preview      MaintenancePreview `json:"preview"`
-	MachineID    string             `json:"machineId"`
+	ResourceID   string             `json:"resourceId"`
 	State        string             `json:"state"`
 	EnteredAt    time.Time          `json:"enteredAt"`
 	Actor        Actor              `json:"actor"`
@@ -109,7 +105,7 @@ func (m *Manager) Capabilities(ctx context.Context, name string) ([]Capability, 
 	switch {
 	case m.power == nil:
 		reason = "restricted helper is not configured"
-	case r.Phase != "managed":
+	case r.Phase != resource.PhaseManaged:
 		reason = "machine is retired"
 	case r.Status.Snapshot == nil || r.Status.Snapshot.Init != "systemd":
 		reason = "power control requires a verified Linux/systemd host"
@@ -134,7 +130,7 @@ func (m *Manager) Maintenance(ctx context.Context, name string) (*Maintenance, e
 		return nil, err
 	}
 	var body string
-	err = m.db.Reader().QueryRowContext(ctx, `SELECT body FROM machine_maintenance WHERE machine_id=?`, r.ID).Scan(&body)
+	err = m.db.Reader().QueryRowContext(ctx, `SELECT body FROM machine_maintenance WHERE resource_id=?`, r.ID).Scan(&body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -161,11 +157,11 @@ func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, ack
 	if r.Version != expected {
 		return Maintenance{}, ErrConflict
 	}
-	if r.Phase != "managed" {
+	if r.Phase != resource.PhaseManaged {
 		return Maintenance{}, precondition("machine is retired")
 	}
 	a, _ := actor(ctx)
-	v := Maintenance{MachineID: r.ID, State: "active", EnteredAt: m.clk.Now().UTC(), Actor: actorInfo(a), Reason: reason, Acknowledged: true}
+	v := Maintenance{ResourceID: r.ID, State: "active", EnteredAt: m.clk.Now().UTC(), Actor: actorInfo(a), Reason: reason, Acknowledged: true}
 	err = m.gate.Exclusive(ctx, func(tx *sql.Tx) error {
 		p, err := preview(ctx, tx, r)
 		if err != nil {
@@ -184,11 +180,15 @@ func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, ack
 				return precondition("controller update or another maintenance dependency is pending")
 			}
 		}
-		var version, count int
-		if err := tx.QueryRowContext(ctx, `SELECT version FROM machines WHERE id=? AND phase='managed'`, r.ID).Scan(&version); err != nil {
+		var count int
+		cur, err := current(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
-		if version != expected {
+		if cur.phase != resource.PhaseManaged {
+			return precondition("machine is retired")
+		}
+		if cur.version != expected {
 			return ErrConflict
 		}
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance`).Scan(&count); err != nil {
@@ -197,7 +197,7 @@ func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, ack
 		if count > 0 {
 			return precondition("maintenance is already active")
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,machine_id,state,entered_at,body) VALUES('local',?,?,?,?)`, r.ID, v.State, v.EnteredAt.UnixMilli(), body)
+		_, err = tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,resource_id,state,entered_at,body) VALUES('local',?,?,?,?)`, r.ID, v.State, v.EnteredAt.UnixMilli(), body)
 		return err
 	})
 	if err == nil {
@@ -238,24 +238,20 @@ func (m *Manager) ExitMaintenance(ctx context.Context, name, reason string, expe
 		if err != nil {
 			return err
 		}
-		var currentBody string
-		if err := tx.QueryRowContext(ctx, `SELECT status FROM machines WHERE id=?`, r.ID).Scan(&currentBody); err != nil {
+		cur, err := current(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
-		var current storedStatus
-		if err := json.Unmarshal([]byte(currentBody), &current); err != nil {
-			return err
-		}
-		if current.Snapshot == nil || !current.Snapshot.ObservedAt.After(anchor) {
+		if cur.status.Snapshot == nil || !cur.status.Snapshot.ObservedAt.After(anchor) {
 			return precondition("observe fresh health after maintenance or manual resolution before exit")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_operations WHERE machine_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
 			return precondition("resolve the outstanding operation first")
 		}
-		res, err := tx.ExecContext(ctx, `DELETE FROM machine_maintenance WHERE machine_id=?`, r.ID)
+		res, err := tx.ExecContext(ctx, `DELETE FROM machine_maintenance WHERE resource_id=?`, r.ID)
 		if err != nil {
 			return err
 		}
@@ -275,7 +271,7 @@ var idempotencyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$
 
 func recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, error) {
 	var body string
-	if err := tx.QueryRowContext(ctx, `SELECT body FROM machine_maintenance WHERE machine_id=?`, id).Scan(&body); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT body FROM machine_maintenance WHERE resource_id=?`, id).Scan(&body); err != nil {
 		return time.Time{}, err
 	}
 	var maintenance Maintenance
@@ -283,7 +279,7 @@ func recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, erro
 		return time.Time{}, err
 	}
 	anchor := maintenance.EnteredAt
-	rows, err := tx.QueryContext(ctx, `SELECT body FROM machine_operations WHERE machine_id=?`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=?`, id)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -350,8 +346,8 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 	}
 	a, _ := actor(ctx)
 	now := m.clk.Now().UTC()
-	op := Operation{ID: newID(), MachineID: r.ID, Action: action, State: "pending", Unresolved: true, Version: expected, CreatedAt: now, UpdatedAt: now, Actor: actorInfo(a)}
-	validUntil := r.Status.Snapshot.ObservedAt.Add(r.Document.Spec.Monitoring.StaleAfter.D())
+	op := Operation{ID: newID(), ResourceID: r.ID, Action: action, State: "pending", Unresolved: true, Version: expected, CreatedAt: now, UpdatedAt: now, Actor: actorInfo(a)}
+	validUntil := r.Status.Snapshot.ObservedAt.Add(r.Config.StaleAfter.D())
 	if capTime := now.Add(5 * time.Minute); validUntil.After(capTime) {
 		validUntil = capTime
 	}
@@ -361,29 +357,30 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 		return Operation{}, err
 	}
 	err = m.db.Write(ctx, func(tx *sql.Tx) error {
-		var count, version int
+		var count int
 		if err := m.verifyFreshTx(ctx, tx, r, true); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT version FROM machines WHERE id=?`, r.ID).Scan(&version); err != nil {
+		cur, err := current(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
-		if version != expected {
+		if cur.version != expected {
 			return ErrConflict
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE machine_id=? AND state='active'`, r.ID).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count != 1 {
 			return precondition("maintenance is not ready")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_operations WHERE machine_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
 			return precondition("an unresolved operation already exists")
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO machine_operations(id,machine_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`, op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body)
+		_, err = tx.ExecContext(ctx, `INSERT INTO resource_operations(id,resource_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`, op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body)
 		return err
 	})
 	if err != nil {
@@ -468,44 +465,37 @@ func (m *Manager) saveSubmitting(ctx context.Context, op *Operation, r Record) e
 		if err := m.verifyFreshTx(ctx, tx, r, true); err != nil {
 			return err
 		}
-		var raw string
-		if err := tx.QueryRowContext(ctx, `SELECT status FROM machines WHERE id=?`, r.ID).Scan(&raw); err != nil {
+		cur, err := current(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
-		var latest storedStatus
-		if err := json.Unmarshal([]byte(raw), &latest); err != nil {
-			return err
-		}
+		latest := cur.status
 		if !powerEvidenceReady(latest.Status) || latest.Snapshot.Init != "systemd" {
 			return precondition("required OS evidence changed during preparation")
 		}
 		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE machine_id=? AND state='active'`, r.ID).Scan(&active); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&active); err != nil {
 			return err
 		}
 		if active != 1 || !m.clk.Now().Before(op.Request.ValidUntil) {
 			return precondition("maintenance or health authorization expired")
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE machine_operations SET state=?,updated_at=?,body=? WHERE id=? AND unresolved=1`, op.State, op.UpdatedAt.UnixMilli(), body, op.ID)
+		_, err = tx.ExecContext(ctx, `UPDATE resource_operations SET state=?,updated_at=?,body=? WHERE id=? AND unresolved=1`, op.State, op.UpdatedAt.UnixMilli(), body, op.ID)
 		return err
 	})
 }
 
 func (m *Manager) verifyFreshTx(ctx context.Context, tx *sql.Tx, r Record, healthy bool) error {
-	var version int
-	var body, phase string
-	if err := tx.QueryRowContext(ctx, `SELECT version,status,phase FROM machines WHERE id=?`, r.ID).Scan(&version, &body, &phase); err != nil {
+	cur, err := current(ctx, tx, r.ID)
+	if err != nil {
 		return err
 	}
+	version, status := cur.version, cur.status
 	if version != r.Version {
 		return ErrConflict
 	}
-	var status storedStatus
-	if err := json.Unmarshal([]byte(body), &status); err != nil {
-		return err
-	}
 	s := status.Snapshot
-	if phase != "managed" || status.DocumentVersion != version || s == nil || r.Status.Snapshot == nil || s.BootID != r.Status.Snapshot.BootID || status.Identity != "verified" || s.ObservedAt.After(m.clk.Now()) || m.clk.Now().Sub(s.ObservedAt) > r.Document.Spec.Monitoring.StaleAfter.D() || (healthy && status.Health != "healthy") {
+	if cur.phase != resource.PhaseManaged || status.DocumentVersion != version || s == nil || r.Status.Snapshot == nil || s.BootID != r.Status.Snapshot.BootID || status.Identity != "verified" || s.ObservedAt.After(m.clk.Now()) || m.clk.Now().Sub(s.ObservedAt) > r.Config.StaleAfter.D() || (healthy && status.Health != "healthy") {
 		return precondition("required observations changed or expired during preparation")
 	}
 	return nil
@@ -520,19 +510,19 @@ func (m *Manager) saveOperation(ctx context.Context, op *Operation) error {
 	var event *Event
 	err = m.db.Write(ctx, func(tx *sql.Tx) error {
 		var priorBody string
-		if err := tx.QueryRowContext(ctx, `SELECT body FROM machine_operations WHERE id=?`, op.ID).Scan(&priorBody); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE id=?`, op.ID).Scan(&priorBody); err != nil {
 			return err
 		}
 		prior, err := decodeOperation(priorBody, nil)
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE machine_operations SET state=?,unresolved=?,updated_at=?,body=? WHERE id=?`, op.State, op.Unresolved, op.UpdatedAt.UnixMilli(), body, op.ID)
+		_, err = tx.ExecContext(ctx, `UPDATE resource_operations SET state=?,unresolved=?,updated_at=?,body=? WHERE id=?`, op.State, op.Unresolved, op.UpdatedAt.UnixMilli(), body, op.ID)
 		if err != nil {
 			return err
 		}
 		if prior.State != op.State || prior.Unresolved != op.Unresolved || prior.Reason != op.Reason {
-			e := Event{MachineID: op.MachineID, OperationID: op.ID, Source: "control", Key: newID(), Kind: "machine.operation.changed", Severity: severity(op.State), OccurredAt: op.UpdatedAt, IngestedAt: op.UpdatedAt, Reason: op.State}
+			e := Event{ResourceID: op.ResourceID, OperationID: op.ID, Source: "control", Key: newID(), Kind: "machine.operation.changed", Severity: severity(op.State), OccurredAt: op.UpdatedAt, IngestedAt: op.UpdatedAt, Reason: op.State}
 			if err := insertEvent(ctx, tx, &e); err != nil {
 				return err
 			}
@@ -548,7 +538,7 @@ func (m *Manager) saveOperation(ctx context.Context, op *Operation) error {
 
 func (m *Manager) operationByKey(ctx context.Context, id, key string) (Operation, error) {
 	var body string
-	err := m.db.Reader().QueryRowContext(ctx, `SELECT body FROM machine_operations WHERE machine_id=? AND idempotency_key=?`, id, key).Scan(&body)
+	err := m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? AND idempotency_key=?`, id, key).Scan(&body)
 	return decodeOperation(body, err)
 }
 
@@ -570,7 +560,7 @@ func (m *Manager) Operation(ctx context.Context, name, id string) (Operation, er
 		return Operation{}, err
 	}
 	var body string
-	err = m.db.Reader().QueryRowContext(ctx, `SELECT body FROM machine_operations WHERE machine_id=? AND id=?`, r.ID, id).Scan(&body)
+	err = m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? AND id=?`, r.ID, id).Scan(&body)
 	return decodeOperation(body, err)
 }
 
@@ -579,7 +569,7 @@ func (m *Manager) Operations(ctx context.Context, name string) ([]Operation, err
 	if err != nil {
 		return nil, err
 	}
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT body FROM machine_operations WHERE machine_id=? ORDER BY created_at DESC LIMIT 200`, r.ID)
+	rows, err := m.db.Reader().QueryContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? ORDER BY created_at DESC LIMIT 200`, r.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -603,7 +593,7 @@ func (m *Manager) Operations(ctx context.Context, name string) ([]Operation, err
 func (m *Manager) Reconcile(ctx context.Context) error {
 	m.controlMu.Lock()
 	defer m.controlMu.Unlock()
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT body FROM machine_operations WHERE unresolved=1`)
+	rows, err := m.db.Reader().QueryContext(ctx, `SELECT o.body FROM resource_operations o JOIN resources r ON r.id = o.resource_id WHERE o.unresolved=1 AND r.type='machine'`)
 	if err != nil {
 		return err
 	}
@@ -638,11 +628,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 				op.Reason = "helper receipt unavailable"
 			} else {
 				op.Receipt = &receipt
-				var name string
-				if err = m.db.Reader().QueryRowContext(ctx, `SELECT name FROM machines WHERE id=? AND phase!='unmanaged'`, op.MachineID).Scan(&name); err != nil {
-					return err
-				}
-				r, readErr := m.Get(ctx, name)
+				r, readErr := m.Get(ctx, "@"+op.ResourceID)
 				if readErr == nil && rebootVerified(*op, receipt, r) {
 					op.State = "succeeded"
 					op.Unresolved = false

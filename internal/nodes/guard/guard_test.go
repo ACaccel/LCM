@@ -163,7 +163,7 @@ func TestWindowWaitThroughEngine(t *testing.T) {
 	guard.Register(h.Registry)
 	e := h.Open()
 	// The harness clock starts at 2026-01-01 00:00 UTC.
-	h.Deploy(e, "apiVersion: lcm/v1\nkind: Policy\nmetadata: { name: deploy }\nspec:\n  nodes:\n"+`
+	h.Deploy(e, "apiVersion: lcm/v2\nkind: Policy\nmetadata: { name: deploy }\nspec:\n  nodes:\n"+`
     - { id: start, type: trigger.manual, next: { out: [win] } }
     - id: win
       type: guard.window

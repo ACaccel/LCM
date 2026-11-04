@@ -1,4 +1,4 @@
-// Package configsync is policy-as-code: it applies Service, Machine, Policy and
+// Package configsync is policy-as-code: it applies Resource, Policy and
 // Module documents from files or from git repositories, tracks which
 // resources a repository owns, and tells the operator when local edits and
 // the repository disagree.
@@ -17,7 +17,7 @@
 //
 // A new commit that changes the document of a drifted resource is never
 // applied. The sync keeps the resource as it is, remembers the newer
-// document as pending, and notifies (a timeline entry for services and a
+// document as pending, and notifies (a timeline entry for resources and a
 // warning signal with source "configsync"). The operator resolves it by
 // applying the repository version (Resolve with useGit) or by keeping the
 // current one (Resolve without), which accepts the pending document as the
@@ -45,8 +45,8 @@
 //
 // # Privileges
 //
-// Documents only describe services, machines, policies and modules. Command
-// allowlists, the privilege prefix and the units LCM may touch live in the
+// Documents only describe resources, policies and modules. Command
+// allowlists, connection addresses and credentials, the privilege prefix and the units LCM may touch live in the
 // host configuration and are never read from a document.
 package configsync
 
@@ -66,10 +66,10 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/execx"
-	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/maintenance"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
+	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/store"
 )
@@ -78,8 +78,6 @@ import (
 var (
 	// ErrNotFound means a source or an ownership record does not exist.
 	ErrNotFound = errors.New("configsync: not found")
-	// ErrMachinesUnavailable rejects Machine requests when no manager is configured.
-	ErrMachinesUnavailable = errors.New("configsync: machine management is not available")
 	// ErrExists means a source with that name already exists.
 	ErrExists = errors.New("configsync: source already exists")
 )
@@ -90,25 +88,21 @@ const SourceName = "configsync"
 // DefaultGitTimeout bounds each git command.
 const DefaultGitTimeout = 2 * time.Minute
 
-// CheckValidator validates the health checks of a service document. The
-// monitor implements it.
-type CheckValidator interface {
-	ValidateChecks(checks []model.Check, path string) model.Issues
-}
-
 // Config configures a Syncer.
 type Config struct {
-	DB      *store.DB
-	Audit   *audit.Log
+	DB    *store.DB
+	Audit *audit.Log
+	// Resources stores Resource documents.
+	Resources *resource.Store
+	// Catalog keeps the per-resource timeline that notifications go to.
 	Catalog *catalog.Catalog
 	Modules *modules.Store
 	Engine  *engine.Engine
-	// Machines manages Machine documents; optional for legacy callers.
-	Machines *machine.Manager
 	// Gate coordinates complete writes with local machine maintenance; optional.
 	Gate *maintenance.Gate
-	// Checks validates service health checks; optional.
-	Checks CheckValidator
+	// Checks validates resource health checks in dry runs before anything
+	// is written; optional. The resource store validates again on write.
+	Checks resource.CheckValidator
 	// Bus receives conflict notifications; optional.
 	Bus *signal.Bus
 	// Runner runs git; required for sources.
@@ -126,21 +120,21 @@ type Config struct {
 
 // Syncer applies documents, owns the ownership table and runs the sources.
 type Syncer struct {
-	db       *store.DB
-	audit    *audit.Log
-	cat      *catalog.Catalog
-	mods     *modules.Store
-	eng      *engine.Engine
-	machines *machine.Manager
-	gate     *maintenance.Gate
-	checks   CheckValidator
-	bus      *signal.Bus
-	runner   execx.Runner
-	gitBin   string
-	gitTime  time.Duration
-	dir      string
-	clk      clock.Clock
-	log      *slog.Logger
+	db      *store.DB
+	audit   *audit.Log
+	res     *resource.Store
+	cat     *catalog.Catalog
+	mods    *modules.Store
+	eng     *engine.Engine
+	gate    *maintenance.Gate
+	checks  resource.CheckValidator
+	bus     *signal.Bus
+	runner  execx.Runner
+	gitBin  string
+	gitTime time.Duration
+	dir     string
+	clk     clock.Clock
+	log     *slog.Logger
 
 	// applyMu serializes applies so that ownership decisions never race
 	// with each other.
@@ -165,11 +159,11 @@ type Syncer struct {
 
 // New returns a Syncer.
 func New(cfg Config) (*Syncer, error) {
-	if cfg.DB == nil || cfg.Audit == nil || cfg.Catalog == nil || cfg.Modules == nil || cfg.Engine == nil {
-		return nil, errors.New("configsync: DB, Audit, Catalog, Modules and Engine are required")
+	if cfg.DB == nil || cfg.Audit == nil || cfg.Resources == nil || cfg.Catalog == nil || cfg.Modules == nil || cfg.Engine == nil {
+		return nil, errors.New("configsync: DB, Audit, Resources, Catalog, Modules and Engine are required")
 	}
 	s := &Syncer{
-		db: cfg.DB, audit: cfg.Audit, cat: cfg.Catalog, mods: cfg.Modules, eng: cfg.Engine, checks: cfg.Checks, machines: cfg.Machines, gate: cfg.Gate,
+		db: cfg.DB, audit: cfg.Audit, res: cfg.Resources, cat: cfg.Catalog, mods: cfg.Modules, eng: cfg.Engine, checks: cfg.Checks, gate: cfg.Gate,
 		bus: cfg.Bus, runner: cfg.Runner, gitBin: cfg.Git, gitTime: cfg.GitTimeout, dir: cfg.Dir, clk: cfg.Clock, log: cfg.Log,
 		forced: map[string]bool{}, kick: make(chan struct{}, 1), inflight: map[string]int{},
 	}
@@ -190,17 +184,15 @@ func New(cfg Config) (*Syncer, error) {
 }
 
 // kindRank orders kinds for applying: modules before the policies that use
-// them, services before the policies that act on them.
+// them, resources before the policies that act on them.
 func kindRank(k model.Kind) int {
 	switch k {
 	case model.KindModule:
 		return 1
-	case model.KindService:
+	case model.KindResource:
 		return 2
-	case model.KindMachine:
-		return 3
 	case model.KindPolicy:
-		return 4
+		return 3
 	}
 	return 0
 }
