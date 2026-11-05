@@ -4,13 +4,12 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -136,6 +135,26 @@ func (x *env) noRuns(t *testing.T, policy string, seen map[string]bool) {
 }
 
 func (x *env) timers(n int) { x.h.T.Helper(); x.h.WaitTimers(n) }
+
+// storedRuns returns the ids of the stored runs of policy, oldest first.
+// A run is stored before Engine.Start returns, so once a watcher has armed
+// its next timer every run it started is listed; observer events, which
+// are delivered asynchronously, may still be on their way.
+func (x *env) storedRuns(t *testing.T, policy string) []string {
+	t.Helper()
+	page, err := x.e.ListRuns(context.Background(), engine.RunQuery{Policy: policy, Limit: engine.MaxRunLimit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Next != "" {
+		t.Fatalf("more than %d runs of %s", engine.MaxRunLimit, policy)
+	}
+	ids := make([]string, 0, len(page.Runs))
+	for _, r := range slices.Backward(page.Runs) {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
 
 func event(t *testing.T, v engine.RunView) map[string]any {
 	t.Helper()
@@ -490,10 +509,8 @@ func cronRestart(t *testing.T, catchUp string) (*env, []engine.RunView) {
 	x.sync(t)
 	x.timers(baseTimers + 1)
 	var views []engine.RunView
-	for _, ev := range x.h.Events.Events() {
-		if ev.Kind == engine.EventRunQueued && ev.Policy == "job" {
-			views = append(views, x.h.Wait(x.e, ev.RunID))
-		}
+	for _, id := range x.storedRuns(t, "job") {
+		views = append(views, x.h.Wait(x.e, id))
 	}
 	return x, views
 }
@@ -537,47 +554,14 @@ func TestCronCatchUpAll(t *testing.T) {
 func TestCronCatchUpAllIsCapped(t *testing.T) {
 	x := newEnv(t, nil, "")
 	x.h.Deploy(x.e, policy("job", trig("trigger.cron", `{ schedule: "* * * * *", catchUp: all }`)))
-	waitForCronCheckpoint := func() {
-		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			var raw string
-			err := x.h.DB.Reader().QueryRowContext(context.Background(), `SELECT data FROM trigger_state WHERE policy='job' AND node_id='t'`).Scan(&raw)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				t.Fatal(err)
-			}
-			var state struct {
-				LastFire int64 `json:"lastFire"`
-			}
-			if err == nil {
-				if err = json.Unmarshal([]byte(raw), &state); err != nil {
-					t.Fatal(err)
-				}
-				if state.LastFire == x.h.Clock.Now().UnixMilli() {
-					return
-				}
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("cron catch-up did not persist its completion checkpoint")
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}
 	x.sync(t)
-	waitForCronCheckpoint()
+	x.timers(1)
 	x.m.Close()
 	x.h.Clock.Advance(3 * time.Hour) // 180 missed minutes
 	x.m = x.newManager(t, nil, "")
 	x.sync(t)
-	// Engine timers may be armed while catch-up is still queuing runs.
-	// The persisted cron checkpoint is written only after the whole batch.
-	waitForCronCheckpoint()
-	n := 0
-	for _, ev := range x.h.Events.Events() {
-		if ev.Kind == engine.EventRunQueued && ev.Policy == "job" {
-			n++
-		}
-	}
+	x.timers(1) // Armed once the whole catch-up batch has been started.
+	n := len(x.storedRuns(t, "job"))
 	if n != trigger.MaxCatchUp {
 		t.Fatalf("started %d runs, want the cap %d", n, trigger.MaxCatchUp)
 	}
