@@ -904,31 +904,50 @@ func (e *Engine) Wait(ctx context.Context, runID string) (RunView, error) {
 // their buffers were full.
 func (e *Engine) ObserverDrops() uint64 { return e.obs.dropped() }
 
+// pruneBatch bounds the runs (with their nodes) deleted per transaction, so
+// that a large prune does not hold the single writer connection for long.
+var pruneBatch = 500
+
 // Prune deletes terminal runs of each policy except the newest keep runs
-// and runs created within olderThan of now. It returns the number of runs
-// deleted.
+// and runs created within olderThan of now. It deletes in batches, each in
+// its own transaction, and returns the number of runs deleted; after an
+// error the earlier batches stay deleted.
 func (e *Engine) Prune(ctx context.Context, keep int, olderThan time.Duration) (int64, error) {
 	if keep < 0 || olderThan < 0 {
 		return 0, errors.New("engine: prune: keep and olderThan must not be negative")
 	}
 	cutoff := e.clock.Now().Add(-olderThan).UnixMilli()
-	var n int64
-	err := e.db.Write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM runs
-			WHERE status NOT IN ('queued', 'running', 'suspended') AND created_at < ?
-			AND id NOT IN (SELECT id FROM (
-				SELECT id, ROW_NUMBER() OVER (PARTITION BY policy ORDER BY id DESC) AS rn FROM runs
-			) WHERE rn <= ?)`, cutoff, keep)
-		if err != nil {
-			return err
-		}
-		n, err = res.RowsAffected()
-		return err
-	})
-	if err != nil {
-		return 0, fmt.Errorf("engine: prune: %w", err)
+	// A run is beyond the newest keep of its policy when its id is older
+	// than the keep-th newest id; a policy with fewer runs yields NULL and
+	// keeps them all. The runs_policy_id index serves the lookup.
+	query := `DELETE FROM runs WHERE id IN (
+		SELECT id FROM runs AS r
+		WHERE r.status NOT IN ('queued', 'running', 'suspended') AND r.created_at < ?1`
+	if keep > 0 {
+		query += `
+		AND r.id < (SELECT k.id FROM runs AS k WHERE k.policy = r.policy ORDER BY k.id DESC LIMIT 1 OFFSET ?2)`
 	}
-	return n, nil
+	query += `
+		ORDER BY r.id LIMIT ?3)`
+	var total int64
+	for {
+		var n int64
+		err := e.db.Write(ctx, func(tx *sql.Tx) error {
+			res, err := tx.ExecContext(ctx, query, cutoff, keep-1, pruneBatch)
+			if err != nil {
+				return err
+			}
+			n, err = res.RowsAffected()
+			return err
+		})
+		if err != nil {
+			return total, fmt.Errorf("engine: prune: %w", err)
+		}
+		total += n
+		if n < int64(pruneBatch) {
+			return total, nil
+		}
+	}
 }
 
 // Close stops accepting work, waits for in-flight node executions to

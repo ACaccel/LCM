@@ -330,6 +330,65 @@ func TestPrune(t *testing.T) {
 	}
 }
 
+func TestPruneInBatches(t *testing.T) {
+	restore := engine.SetPruneBatch(2)
+	defer restore()
+	h := enginetest.New(t)
+	e := h.Open()
+	for _, name := range []string{"pa", "pb"} {
+		h.Deploy(e, gatedPolicy(name, "{ mode: parallel, limit: 10 }"))
+	}
+	// An old run that is still active is never pruned.
+	active := h.Start(e, "pa", map[string]any{"gate": "held"})
+	h.Entered("held")
+	h.Clock.Advance(time.Hour)
+	runs := map[string][]string{}
+	for i := range 7 {
+		for _, name := range []string{"pa", "pb"} {
+			id := h.Start(e, name, map[string]any{"n": i})
+			h.Wait(e, id)
+			runs[name] = append(runs[name], id)
+		}
+		h.Clock.Advance(time.Hour)
+	}
+	exists := func(id string) bool {
+		_, err := e.Run(context.Background(), id)
+		if err != nil && !errors.Is(err, engine.ErrRunNotFound) {
+			t.Fatalf("run %s: %v", id, err)
+		}
+		return err == nil
+	}
+
+	// Runs are 7h..1h old. Keep the newest three runs of each policy (the
+	// active one counts) and everything younger than 150 minutes: four
+	// runs of each policy go, across several batches.
+	n, err := e.Prune(context.Background(), 3, 150*time.Minute)
+	if err != nil || n != 8 {
+		t.Fatalf("pruned %d, %v; want 8", n, err)
+	}
+	for name, ids := range runs {
+		for i, id := range ids {
+			if gone := !exists(id); gone != (i < 4) {
+				t.Fatalf("%s run %d: gone = %v", name, i, gone)
+			}
+		}
+	}
+	if !exists(active) {
+		t.Fatal("active run pruned")
+	}
+
+	// keep 0 removes every terminal run older than the cutoff.
+	n, err = e.Prune(context.Background(), 0, 0)
+	if err != nil || n != 6 {
+		t.Fatalf("pruned %d, %v; want 6", n, err)
+	}
+	if !exists(active) {
+		t.Fatal("active run pruned")
+	}
+	h.Release("held")
+	h.Wait(e, active)
+}
+
 func TestConfigValidation(t *testing.T) {
 	h := enginetest.New(t)
 	for _, cfg := range []engine.Config{{}, {DB: h.DB}, {DB: h.DB, Registry: h.Registry, Workers: -1}} {

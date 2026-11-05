@@ -15,3 +15,12 @@ func SetBeforeRunInsert(f func()) (restore func()) {
 	beforeRunInsert = f
 	return func() { beforeRunInsert = nil }
 }
+
+// SetPruneBatch sets the number of runs Prune deletes per transaction,
+// until the returned function runs. Tests using it must not run in
+// parallel.
+func SetPruneBatch(n int) (restore func()) {
+	old := pruneBatch
+	pruneBatch = n
+	return func() { pruneBatch = old }
+}
