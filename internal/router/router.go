@@ -45,7 +45,6 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
-	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/connection"
 	"github.com/ACaccel/lcm/internal/maintenance"
@@ -53,6 +52,7 @@ import (
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/resource/operation"
 	"github.com/ACaccel/lcm/internal/router/xiaomi"
 	"github.com/ACaccel/lcm/internal/secret"
 	"github.com/ACaccel/lcm/internal/store"
@@ -267,6 +267,7 @@ type Manager struct {
 	onEvent   func(resource.Event)
 	httpc     *http.Client
 	sem       chan struct{}
+	ops       *operation.Store[Status, Request, Receipt]
 
 	// locks serializes observations and operations per router.
 	locksMu sync.Mutex
@@ -305,12 +306,21 @@ func New(c Config) (*Manager, error) {
 	if c.Connections == nil {
 		c.Connections = &connection.Set{}
 	}
-	return &Manager{
+	m := &Manager{
 		db: c.DB, resources: c.Resources, audit: c.Audit, gate: c.Gate, conns: c.Connections, secrets: c.Secrets,
 		native: c.Native, clk: c.Clock, log: c.Log, onEvent: c.OnEvent, httpc: c.HTTP,
 		sem: make(chan struct{}, c.Concurrency), locks: map[string]*routerLocks{}, clients: map[string]Client{},
 		loops: map[string]*loop{}, changed: map[string]bool{}, kick: make(chan struct{}, 1),
-	}, nil
+	}
+	var err error
+	m.ops, err = operation.New[Status, Request, Receipt](operation.Config{
+		DB: c.DB, Audit: c.Audit, Clock: c.Clock, Type: model.ResourceRouter, Severity: severity, Publish: m.publish,
+		Errors: operation.Errors{NotFound: ErrNotFound, Conflict: ErrConflict, Precondition: precondition},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (m *Manager) locksFor(id string) *routerLocks {
@@ -391,28 +401,6 @@ func (m *Manager) publish(events []resource.Event) {
 	for _, e := range events {
 		m.onEvent(e)
 	}
-}
-
-func actor(ctx context.Context) (auth.Actor, error) {
-	a, ok := auth.ActorFrom(ctx)
-	if !ok || !a.Kind.Valid() || a.ID == "" {
-		return auth.Actor{}, audit.ErrNoActor
-	}
-	return a, nil
-}
-
-// requireDirect refuses everything but a direct administrator request
-// (auth.WithDirect) by a user, a token or the local CLI; policy runs never
-// carry the mark.
-func requireDirect(ctx context.Context) error {
-	a, err := actor(ctx)
-	if err != nil {
-		return err
-	}
-	if !auth.IsDirect(ctx) || (a.Kind != auth.KindUser && a.Kind != auth.KindToken && a != auth.CLI) {
-		return ErrForbidden
-	}
-	return nil
 }
 
 func precondition(reason string) error { return fmt.Errorf("%w: %s", ErrPrecondition, reason) }

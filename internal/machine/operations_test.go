@@ -13,11 +13,14 @@ import (
 
 type fakePower struct {
 	submits      int
+	queries      int
 	receipt      Receipt
 	preflightErr error
 	submitErr    error
 	prepareErr   error
+	queryErr     error
 	prepareHook  func()
+	queryHook    func()
 }
 
 func (f *fakePower) Preflight(context.Context) error { return f.preflightErr }
@@ -36,7 +39,13 @@ func (f *fakePower) Submit(_ context.Context, r PowerRequest) (Receipt, error) {
 	f.receipt = Receipt{State: "accepted", BootID: r.BootID, AcceptedAt: time.Date(2026, 11, 1, 0, 1, 0, 0, time.UTC)}
 	return f.receipt, f.submitErr
 }
-func (f *fakePower) Query(context.Context, PowerRequest) (Receipt, error) { return f.receipt, nil }
+func (f *fakePower) Query(context.Context, PowerRequest) (Receipt, error) {
+	f.queries++
+	if f.queryHook != nil {
+		f.queryHook()
+	}
+	return f.receipt, f.queryErr
+}
 
 func readyPower(t *testing.T) (*testEnv, *fakePower) {
 	t.Helper()

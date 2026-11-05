@@ -6,9 +6,7 @@ package machine
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +22,7 @@ import (
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/resource/operation"
 	"github.com/ACaccel/lcm/internal/store"
 )
 
@@ -187,6 +186,7 @@ type Manager struct {
 	onEvent              func(Event)
 	resources            *resource.Store
 	native               NativeHealth
+	ops                  *operation.Store[Status, PowerRequest, Receipt]
 	pollMu               sync.Mutex
 	controlMu            sync.Mutex
 
@@ -212,19 +212,19 @@ func New(c Config) (*Manager, error) {
 	if c.Log == nil {
 		c.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Manager{db: c.DB, audit: c.Audit, clk: c.Clock, gate: c.Gate, observer: c.Observer, power: c.Power, log: c.Log, onEvent: c.OnEvent, resources: c.Resources, native: c.Native, maintenancePreflight: c.MaintenancePreflight}, nil
+	m := &Manager{db: c.DB, audit: c.Audit, clk: c.Clock, gate: c.Gate, observer: c.Observer, power: c.Power, log: c.Log, onEvent: c.OnEvent, resources: c.Resources, native: c.Native, maintenancePreflight: c.MaintenancePreflight}
+	var err error
+	m.ops, err = operation.New[Status, PowerRequest, Receipt](operation.Config{
+		DB: c.DB, Audit: c.Audit, Clock: c.Clock, Type: model.ResourceMachine, Severity: severity, Publish: m.publish,
+		Errors: operation.Errors{NotFound: ErrNotFound, Conflict: ErrConflict, Precondition: precondition},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
-func newID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b[:])
-	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
-}
+func newID() string { return store.NewID() }
 
 func actor(ctx context.Context) (auth.Actor, error) {
 	a, ok := auth.ActorFrom(ctx)

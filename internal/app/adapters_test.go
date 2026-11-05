@@ -13,6 +13,8 @@ import (
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/lock"
+	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/machine/power"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/resource"
@@ -147,5 +149,24 @@ func TestMigrationWarningsStopOnceFixed(t *testing.T) {
 	if strings.Count(out, "converted document needs review") != 2 || !strings.Contains(out, "name=stale") || !strings.Contains(out, "name=mod") ||
 		strings.Contains(out, "name=fixed") || strings.Contains(out, "name=gone") {
 		t.Fatalf("logged:\n%s", out)
+	}
+}
+
+// The helper's answer that it has no receipt of a request reaches the
+// machine type as ErrReceiptMissing, and only for a query: it proves that a
+// pending request was never prepared and so never submitted.
+func TestMachinePowerMapsMissingReceipt(t *testing.T) {
+	runner := (&execx.Fake{}).Reply(power.WrapperPath, `{"version":1,"code":"receipt-missing"}`, 0)
+	p := machinePower{client: power.Client{Runner: runner}, runner: runner}
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	req := machine.PowerRequest{
+		ControllerID: "11111111-1111-4111-8111-111111111111", OperationID: "22222222-2222-4222-8222-222222222222",
+		BootID: "33333333-3333-4333-8333-333333333333", Action: "reboot", IssuedAt: now, ValidUntil: now.Add(time.Minute),
+	}
+	if _, err := p.Query(context.Background(), req); !errors.Is(err, machine.ErrReceiptMissing) {
+		t.Fatalf("query: %v", err)
+	}
+	if _, err := p.call(context.Background(), power.Prepare, req); err == nil || errors.Is(err, machine.ErrReceiptMissing) {
+		t.Fatalf("prepare: %v", err)
 	}
 }

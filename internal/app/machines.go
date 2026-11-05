@@ -162,6 +162,9 @@ func helperBinding(r machine.PowerRequest) power.Binding {
 func (p machinePower) call(ctx context.Context, method power.Method, r machine.PowerRequest) (machine.Receipt, error) {
 	res, err := p.client.Call(ctx, power.Request{Version: power.Version, Method: method, Binding: helperBinding(r)})
 	if err != nil {
+		if method == power.Query && res.Code == "receipt-missing" {
+			return machine.Receipt{}, machine.ErrReceiptMissing
+		}
 		return machine.Receipt{}, err
 	}
 	if res.Receipt == nil {

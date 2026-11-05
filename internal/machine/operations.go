@@ -2,33 +2,23 @@ package machine
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
-	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/resource/operation"
 )
 
 // DirectRequest marks an authenticated console/CLI/API boundary, never a policy run.
 func DirectRequest(ctx context.Context) context.Context { return auth.WithDirect(ctx) }
 
 func requireDirect(ctx context.Context) error {
-	a, err := actor(ctx)
-	if err != nil {
-		return err
-	}
-	if !auth.IsDirect(ctx) || (a.Kind != auth.KindUser && a.Kind != auth.KindToken && a != auth.CLI) {
-		return ErrForbidden
-	}
-	return nil
+	_, err := operation.RequireDirect(ctx, ErrForbidden)
+	return err
 }
 
 // PowerRequest is fixed before the helper can perform a side effect.
@@ -58,28 +48,12 @@ type PowerBackend interface {
 	Query(context.Context, PowerRequest) (Receipt, error)
 }
 
+// ErrReceiptMissing is the helper's answer to a query for a request it has
+// no receipt of: it never prepared, and so never submitted, the request.
+var ErrReceiptMissing = errors.New("machine: helper has no receipt of the request")
+
 // Operation survives controller restarts and retains the original unverified result.
-type Operation struct {
-	Evidence   *Status      `json:"evidence,omitempty"`
-	ID         string       `json:"id"`
-	ResourceID string       `json:"resourceId"`
-	Action     string       `json:"action"`
-	State      string       `json:"state"`
-	Unresolved bool         `json:"unresolved"`
-	Version    int          `json:"version"`
-	CreatedAt  time.Time    `json:"createdAt"`
-	UpdatedAt  time.Time    `json:"updatedAt"`
-	Actor      Actor        `json:"actor"`
-	Request    PowerRequest `json:"request"`
-	Receipt    *Receipt     `json:"receipt"`
-	Reason     string       `json:"reason"`
-	// RequestReason is the operator's reason for the request; Reason
-	// explains the current state.
-	RequestReason string     `json:"requestReason,omitempty"`
-	Resolution    string     `json:"resolution,omitempty"`
-	ResolvedBy    *Actor     `json:"resolvedBy,omitempty"`
-	ResolvedAt    *time.Time `json:"resolvedAt,omitempty"`
-}
+type Operation = operation.Operation[Status, PowerRequest, Receipt]
 
 // Maintenance keeps the durable write gate until an explicit verified exit.
 // Acknowledged is always true: the confirmed request that entered it
@@ -158,7 +132,7 @@ func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, exp
 	if err := requireDirect(ctx); err != nil {
 		return Maintenance{}, err
 	}
-	if !validReason(reason) {
+	if !operation.ValidReason(reason) {
 		return Maintenance{}, precondition("a reason is required")
 	}
 	r, err := m.Get(ctx, name)
@@ -232,17 +206,13 @@ func (m *Manager) enterTx(ctx context.Context, tx *sql.Tx, r Record, reason, act
 	return v, err
 }
 
-func validReason(v string) bool {
-	return strings.TrimSpace(v) != "" && len(v) <= 1000 && !strings.ContainsAny(v, "\x00\r")
-}
-
 func (m *Manager) ExitMaintenance(ctx context.Context, name, reason string, expected int) error {
 	m.controlMu.Lock()
 	defer m.controlMu.Unlock()
 	if err := requireDirect(ctx); err != nil {
 		return err
 	}
-	if !validReason(reason) {
+	if !operation.ValidReason(reason) {
 		return precondition("a resolution reason is required")
 	}
 	r, err := m.Get(ctx, name)
@@ -256,11 +226,10 @@ func (m *Manager) ExitMaintenance(ctx context.Context, name, reason string, expe
 		return ErrConflict
 	}
 	err = m.gate.Exclusive(ctx, func(tx *sql.Tx) error {
-		var count int
 		if err := m.verifyFreshTx(ctx, tx, r, true); err != nil {
 			return err
 		}
-		anchor, err := recoveryAnchor(ctx, tx, r.ID)
+		anchor, err := m.recoveryAnchor(ctx, tx, r.ID)
 		if err != nil {
 			return err
 		}
@@ -271,10 +240,11 @@ func (m *Manager) ExitMaintenance(ctx context.Context, name, reason string, expe
 		if cur.status.Snapshot == nil || !cur.status.Snapshot.ObservedAt.After(anchor) {
 			return precondition("observe fresh health after maintenance or manual resolution before exit")
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
+		unresolved, err := m.ops.UnresolvedCount(ctx, tx, r.ID)
+		if err != nil {
 			return err
 		}
-		if count > 0 {
+		if unresolved > 0 {
 			return precondition(resource.ResolveOperationFirst)
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM machine_maintenance WHERE resource_id=?`, r.ID)
@@ -293,9 +263,7 @@ func (m *Manager) ExitMaintenance(ctx context.Context, name, reason string, expe
 	return m.record(ctx, "maintenance.exit", name, map[string]any{"reason": reason})
 }
 
-var idempotencyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
-
-func recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, error) {
+func (m *Manager) recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, error) {
 	var body string
 	if err := tx.QueryRowContext(ctx, `SELECT body FROM machine_maintenance WHERE resource_id=?`, id).Scan(&body); err != nil {
 		return time.Time{}, err
@@ -315,7 +283,7 @@ func recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, erro
 		if err := rows.Scan(&raw); err != nil {
 			return time.Time{}, err
 		}
-		op, err := decodeOperation(raw, nil)
+		op, err := m.ops.Decode(raw)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -333,17 +301,18 @@ func recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, erro
 func (m *Manager) Submit(ctx context.Context, name string, req resource.OperationRequest) (Operation, error) {
 	m.controlMu.Lock()
 	defer m.controlMu.Unlock()
-	if err := requireDirect(ctx); err != nil {
+	a, err := operation.RequireDirect(ctx, ErrForbidden)
+	if err != nil {
 		return Operation{}, err
 	}
 	action, key, expected := req.Action, req.Key, req.Version
 	if action != "reboot" && action != "graceful-shutdown" {
 		return Operation{}, ErrUnsupported
 	}
-	if !idempotencyPattern.MatchString(key) {
+	if !operation.ValidKey(key) {
 		return Operation{}, precondition("a bounded idempotency key is required")
 	}
-	if !validReason(req.Reason) {
+	if !operation.ValidReason(req.Reason) {
 		return Operation{}, precondition("a reason is required")
 	}
 	r, err := m.Get(ctx, name)
@@ -353,15 +322,14 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 	if req.Confirm != r.Name {
 		return Operation{}, precondition("confirm the request with the exact resource name")
 	}
-	hashBytes := sha256.Sum256([]byte(r.ID + "\x00" + action + "\x00" + fmtVersion(expected)))
-	hash := hex.EncodeToString(hashBytes[:])
-	if prior, err := m.operationByKey(ctx, r.ID, key); err == nil {
-		if prior.Request.RequestHash != hash {
-			return Operation{}, ErrConflict
+	hash := operation.RequestHash(r.ID, action, expected)
+	if prior, ok, err := m.ops.Replay(ctx, r.ID, key, hash); err != nil || ok {
+		if err == nil {
+			// The control lock is held, so no Submit is working on a prior
+			// request still pending or submitting: it was abandoned.
+			err = m.closeAbandoned(context.WithoutCancel(ctx), &prior)
 		}
-		return prior, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return Operation{}, err
+		return prior, err
 	}
 	if r.Version != expected {
 		return Operation{}, ErrConflict
@@ -377,18 +345,13 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 	if err != nil {
 		return Operation{}, err
 	}
-	a, _ := actor(ctx)
-	now := m.clk.Now().UTC()
-	op := Operation{ID: newID(), ResourceID: r.ID, Action: action, State: "pending", Unresolved: true, Version: expected, CreatedAt: now, UpdatedAt: now, Actor: actorInfo(a), RequestReason: req.Reason}
+	op := m.ops.Start(r.ID, action, expected, actorInfo(a), req.Reason)
+	now := op.CreatedAt
 	validUntil := r.Status.Snapshot.ObservedAt.Add(r.Config.StaleAfter.D())
 	if capTime := now.Add(5 * time.Minute); validUntil.After(capTime) {
 		validUntil = capTime
 	}
 	op.Request = PowerRequest{ControllerID: r.ID, OperationID: op.ID, RequestHash: hash, Action: action, BootID: r.Status.Snapshot.BootID, IssuedAt: now, ValidUntil: validUntil, Deadline: now.Add(10 * time.Minute)}
-	body, err := encode(op)
-	if err != nil {
-		return Operation{}, err
-	}
 	// Entering maintenance needs the exclusive gate, which refuses while
 	// other local writes are in flight. Active maintenance already excludes
 	// them and is reused as it is.
@@ -410,11 +373,11 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 		if cur.version != expected {
 			return ErrConflict
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
+		if n, err := m.ops.UnresolvedCount(ctx, tx, r.ID); err != nil || n > 0 {
+			if err == nil {
+				err = precondition(resource.OperationUnresolved)
+			}
 			return err
-		}
-		if count > 0 {
-			return precondition(resource.OperationUnresolved)
 		}
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&count); err != nil {
 			return err
@@ -432,7 +395,7 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 			}
 			events = append(events, e)
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO resource_operations(id,resource_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`, op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body); err != nil {
+		if err := m.ops.InsertTx(ctx, tx, &op, key, hash); err != nil {
 			return err
 		}
 		e, err := m.recordTx(ctx, tx, "operation.submit", name, r.ID, map[string]any{"operationId": op.ID, "action": action, "reason": req.Reason})
@@ -440,67 +403,55 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 		return err
 	})
 	if err != nil {
-		if prior, e := m.operationByKey(ctx, r.ID, key); e == nil && prior.Request.RequestHash == hash {
+		if prior, ok, e := m.ops.Replay(ctx, r.ID, key, hash); e == nil && ok {
 			return prior, nil
 		}
 		return Operation{}, err
 	}
 	m.publish(events)
 	// From here on the outcome must be recorded even if the caller goes
-	// away: an operation left pending blocks every power action until an
-	// operator resolves it. The helper calls are bounded by their own
-	// timeouts.
+	// away: an operation left pending blocks every power action until it is
+	// closed. The helper calls are bounded by their own timeouts.
 	ctx = context.WithoutCancel(ctx)
 	receipt, err := m.power.Prepare(ctx, op.Request)
 	if err != nil {
-		op.State = "failed"
-		op.Unresolved = false
-		op.Reason = resource.HelperPrepareFailed
-		return op, m.saveOperation(ctx, &op)
+		op.State, op.Unresolved, op.Reason = operation.Failed, false, resource.HelperPrepareFailed
+		return op, m.ops.Save(ctx, &op, operation.Change{})
 	}
 	op.Receipt = &receipt
 	if receipt.State != "prepared" {
-		op.State = "indeterminate"
-		op.Reason = resource.HelperNoPrepared
-		return op, m.saveOperation(ctx, &op)
+		op.State, op.Reason = operation.Indeterminate, resource.HelperNoPrepared
+		return op, m.ops.Save(ctx, &op, operation.Change{})
 	}
-	op.State = "submitting"
-	if err = m.saveSubmitting(ctx, &op, r); err != nil {
-		op.State = "failed"
-		op.Unresolved = false
-		op.Reason = resource.PreconditionsChanged
-		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	// Submitting is the durable fence: the helper is asked to submit only
+	// once it is stored, so an operation found still pending was never
+	// submitted.
+	op.State = operation.Submitting
+	if err = m.ops.Save(ctx, &op, operation.Change{Check: func(tx *sql.Tx) error { return m.submittableTx(ctx, tx, r, op.Request) }}); err != nil {
+		op.State, op.Unresolved, op.Reason = operation.Failed, false, resource.PreconditionsChanged
+		fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		if saveErr := m.saveOperation(fctx, &op); saveErr != nil {
-			return op, saveErr
-		}
-		return op, nil
+		return op, m.ops.Save(fctx, &op, operation.Change{})
 	}
-	receipt, err = m.power.Submit(ctx, op.Request)
+	// A new variable: op.Receipt still points at the prepare receipt, which
+	// a failed submission must not overwrite.
+	submitted, err := m.power.Submit(ctx, op.Request)
 	if err != nil {
-		op.State = "indeterminate"
-		op.Reason = resource.HelperUnverified
+		op.State, op.Reason = operation.Indeterminate, resource.HelperUnverified
 	} else {
-		op.Receipt = &receipt
-		op.State = "observing"
-		if receipt.State != "accepted" {
-			op.State = "indeterminate"
-			op.Reason = resource.HelperNoAcceptance
+		op.Receipt = &submitted
+		op.State = operation.Observing
+		if submitted.State != "accepted" {
+			op.State, op.Reason = operation.Indeterminate, resource.HelperNoAcceptance
 		}
 		if action == "graceful-shutdown" {
-			op.State = "indeterminate"
-			op.Reason = resource.NoPowerOffEvidence
+			op.State, op.Reason = operation.Indeterminate, resource.NoPowerOffEvidence
 		}
 	}
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	fctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if saveErr := m.saveOperation(fctx, &op); saveErr != nil {
-		return op, saveErr
-	}
-	return op, nil
+	return op, m.ops.Save(fctx, &op, operation.Change{})
 }
-
-func fmtVersion(v int) string { return strconv.Itoa(v) }
 
 func powerEvidenceReady(s Status) bool {
 	if s.Snapshot == nil {
@@ -514,34 +465,28 @@ func powerEvidenceReady(s Status) bool {
 	return !math.IsNaN(s.Snapshot.UptimeSeconds) && !math.IsInf(s.Snapshot.UptimeSeconds, 0) && s.Snapshot.UptimeSeconds >= 0 && s.Snapshot.UptimeSeconds < float64((100*365*24*time.Hour)/time.Second)
 }
 
-func (m *Manager) saveSubmitting(ctx context.Context, op *Operation, r Record) error {
-	op.UpdatedAt = m.clk.Now().UTC()
-	body, err := encode(op)
+// submittableTx rechecks within tx, before the submitting fence is stored,
+// that the observations and maintenance authorizing req still hold.
+func (m *Manager) submittableTx(ctx context.Context, tx *sql.Tx, r Record, req PowerRequest) error {
+	if err := m.verifyFreshTx(ctx, tx, r, true); err != nil {
+		return err
+	}
+	cur, err := current(ctx, tx, r.ID)
 	if err != nil {
 		return err
 	}
-	return m.db.Write(ctx, func(tx *sql.Tx) error {
-		if err := m.verifyFreshTx(ctx, tx, r, true); err != nil {
-			return err
-		}
-		cur, err := current(ctx, tx, r.ID)
-		if err != nil {
-			return err
-		}
-		latest := cur.status
-		if !powerEvidenceReady(latest.Status) || latest.Snapshot.Init != "systemd" {
-			return precondition("required OS evidence changed during preparation")
-		}
-		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&active); err != nil {
-			return err
-		}
-		if active != 1 || !m.clk.Now().Before(op.Request.ValidUntil) {
-			return precondition("maintenance or health authorization expired")
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE resource_operations SET state=?,updated_at=?,body=? WHERE id=? AND unresolved=1`, op.State, op.UpdatedAt.UnixMilli(), body, op.ID)
+	latest := cur.status
+	if !powerEvidenceReady(latest.Status) || latest.Snapshot.Init != "systemd" {
+		return precondition("required OS evidence changed during preparation")
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&active); err != nil {
 		return err
-	})
+	}
+	if active != 1 || !m.clk.Now().Before(req.ValidUntil) {
+		return precondition("maintenance or health authorization expired")
+	}
+	return nil
 }
 
 func (m *Manager) verifyFreshTx(ctx context.Context, tx *sql.Tx, r Record, healthy bool) error {
@@ -560,180 +505,166 @@ func (m *Manager) verifyFreshTx(ctx context.Context, tx *sql.Tx, r Record, healt
 	return nil
 }
 
-func (m *Manager) saveOperation(ctx context.Context, op *Operation) error {
-	op.UpdatedAt = m.clk.Now().UTC()
-	body, err := encode(op)
-	if err != nil {
-		return err
-	}
-	var event *Event
-	err = m.db.Write(ctx, func(tx *sql.Tx) error {
-		var priorBody string
-		if err := tx.QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE id=?`, op.ID).Scan(&priorBody); err != nil {
-			return err
-		}
-		prior, err := decodeOperation(priorBody, nil)
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE resource_operations SET state=?,unresolved=?,updated_at=?,body=? WHERE id=?`, op.State, op.Unresolved, op.UpdatedAt.UnixMilli(), body, op.ID)
-		if err != nil {
-			return err
-		}
-		if prior.State != op.State || prior.Unresolved != op.Unresolved || prior.Reason != op.Reason {
-			e := Event{ResourceID: op.ResourceID, OperationID: op.ID, Source: "control", Key: newID(), Kind: "machine.operation.changed", Severity: severity(op.State), OccurredAt: op.UpdatedAt, IngestedAt: op.UpdatedAt, Reason: op.State}
-			if err := insertEvent(ctx, tx, &e); err != nil {
-				return err
-			}
-			event = &e
-		}
-		return nil
-	})
-	if err == nil && event != nil {
-		m.publish([]Event{*event})
-	}
-	return err
-}
-
-func (m *Manager) operationByKey(ctx context.Context, id, key string) (Operation, error) {
-	var body string
-	err := m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? AND idempotency_key=?`, id, key).Scan(&body)
-	return decodeOperation(body, err)
-}
-
-func decodeOperation(body string, err error) (Operation, error) {
-	if errors.Is(err, sql.ErrNoRows) {
-		return Operation{}, ErrNotFound
-	}
-	if err != nil {
-		return Operation{}, err
-	}
-	var op Operation
-	err = json.Unmarshal([]byte(body), &op)
-	return op, err
-}
-
+// Operation returns one operation of a machine.
 func (m *Manager) Operation(ctx context.Context, name, id string) (Operation, error) {
 	r, err := m.Get(ctx, name)
 	if err != nil {
 		return Operation{}, err
 	}
-	var body string
-	err = m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? AND id=?`, r.ID, id).Scan(&body)
-	return decodeOperation(body, err)
+	return m.ops.Get(ctx, r.ID, id)
 }
 
+// Operations returns the newest operations of a machine first.
 func (m *Manager) Operations(ctx context.Context, name string) ([]Operation, error) {
 	r, err := m.Get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? ORDER BY created_at DESC LIMIT 200`, r.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := []Operation{}
-	for rows.Next() {
-		var body string
-		if err = rows.Scan(&body); err != nil {
-			return nil, err
-		}
-		op, err := decodeOperation(body, nil)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, op)
-	}
-	return out, rows.Err()
+	return m.ops.List(ctx, r.ID)
 }
 
-// Reconcile only queries receipts. It never resubmits an interrupted operation.
+// Reconcile decides unresolved operations. It runs at startup and every
+// minute and never resubmits an interrupted operation. Abandoned
+// operations are closed after a receipt query. Other operations are decided
+// from the stored receipt and observations: the helper is queried only for
+// a reboot whose stored receipt is not an acceptance while fresh
+// observations within its deadline show a new boot, since only then can a
+// receipt change the outcome. An operation whose outcome did not change is
+// not written.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	m.controlMu.Lock()
 	defer m.controlMu.Unlock()
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT o.body FROM resource_operations o JOIN resources r ON r.id = o.resource_id WHERE o.unresolved=1 AND r.type='machine'`)
-	if err != nil {
-		return err
-	}
-	var ops []Operation
-	for rows.Next() {
-		var body string
-		if err = rows.Scan(&body); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		op, err := decodeOperation(body, nil)
-		if err != nil {
-			_ = rows.Close()
-			return err
-		}
-		ops = append(ops, op)
-	}
-	err = rows.Err()
-	_ = rows.Close()
+	ops, err := m.ops.Unresolved(ctx, "")
 	if err != nil {
 		return err
 	}
 	for i := range ops {
 		op := &ops[i]
-		if m.power == nil {
-			op.State = "indeterminate"
-			op.Reason = resource.HelperDownOnRecovery
+		if op.State == operation.Pending || op.State == operation.Submitting {
+			err = m.closeAbandoned(ctx, op)
 		} else {
-			receipt, queryErr := m.power.Query(ctx, op.Request)
-			if queryErr != nil {
-				op.State = "indeterminate"
-				op.Reason = resource.HelperNoReceipt
-			} else {
-				op.Receipt = &receipt
-				r, readErr := m.Get(ctx, "@"+op.ResourceID)
-				if readErr == nil && rebootVerified(*op, receipt, r) {
-					op.State = "succeeded"
-					op.Unresolved = false
-					op.Reason = resource.BootVerified
-					op.Evidence = &r.Status
-				} else if !m.clk.Now().Before(op.Request.Deadline) || op.Action == "graceful-shutdown" || op.State == "pending" || op.State == "submitting" {
-					op.State = "indeterminate"
-					op.Reason = resource.NoCompletionEvidence
-				}
-			}
+			m.decide(ctx, op)
+			err = m.ops.Save(ctx, op, operation.Change{})
 		}
-		if err = m.saveOperation(ctx, op); err != nil {
+		if err != nil && !errors.Is(err, operation.ErrStale) {
 			return err
 		}
 	}
 	return nil
 }
 
-func rebootVerified(op Operation, receipt Receipt, r Record) bool {
+// decide settles an observing or indeterminate operation from its stored
+// receipt and the latest observations: succeeded on verified reboot
+// evidence, indeterminate once an observing reboot passed its deadline.
+// A shutdown is never verified.
+func (m *Manager) decide(ctx context.Context, op *Operation) {
+	if op.Action != "reboot" {
+		if op.State == operation.Observing {
+			op.State, op.Reason = operation.Indeterminate, resource.NoCompletionEvidence
+		}
+		return
+	}
+	if r, err := m.Get(ctx, "@"+op.ResourceID); err == nil && newBootObserved(*op, r) {
+		if (op.Receipt == nil || op.Receipt.State != "accepted") && m.power != nil {
+			if receipt, err := m.power.Query(ctx, op.Request); err == nil {
+				op.Receipt = &receipt
+			}
+		}
+		if op.Receipt != nil && rebootVerified(*op, *op.Receipt, r) {
+			ev := r.Status
+			op.State, op.Unresolved, op.Reason, op.Evidence = operation.Succeeded, false, resource.BootVerified, &ev
+			return
+		}
+	}
+	if op.State == operation.Observing && !m.clk.Now().Before(op.Request.Deadline) {
+		op.State, op.Reason = operation.Indeterminate, resource.NoCompletionEvidence
+	}
+}
+
+// closeAbandoned closes op when it is still pending or submitting although
+// no Submit is working on it; the caller holds the control lock. The
+// helper's independent receipt is queried first, so that a controller
+// database restored from before the handoff cannot hide it. A pending
+// request failed only when the helper has no receipt of it or one showing
+// that nothing was requested from the OS: the helper submits nothing it
+// did not prepare, and LCM asks it to submit only after storing the
+// submitting fence. A submitting request may have reached the helper, so
+// it is indeterminate unless a reboot is verified. Neither is ever
+// submitted again.
+func (m *Manager) closeAbandoned(ctx context.Context, op *Operation) error {
+	if op.State != operation.Pending && op.State != operation.Submitting {
+		return nil
+	}
+	pending := op.State == operation.Pending
+	if m.power == nil {
+		op.CloseAbandoned(false)
+		op.Reason = resource.HelperDownOnRecovery
+	} else if receipt, err := m.power.Query(ctx, op.Request); errors.Is(err, ErrReceiptMissing) {
+		op.CloseAbandoned(pending)
+	} else if err != nil {
+		op.CloseAbandoned(false)
+		op.Reason = resource.HelperNoReceipt
+	} else {
+		op.Receipt = &receipt
+		if r, err := m.Get(ctx, "@"+op.ResourceID); err == nil && rebootVerified(*op, receipt, r) {
+			ev := r.Status
+			op.State, op.Unresolved, op.Reason, op.Evidence = operation.Succeeded, false, resource.BootVerified, &ev
+		} else {
+			op.CloseAbandoned(pending && (receipt.State == "prepared" || receipt.State == "failed"))
+		}
+	}
+	err := m.ops.Save(ctx, op, operation.Change{})
+	if errors.Is(err, operation.ErrStale) {
+		cur, gerr := m.ops.Get(ctx, op.ResourceID, op.ID)
+		if gerr != nil {
+			return gerr
+		}
+		*op = cur
+		return nil
+	}
+	return err
+}
+
+// newBootObserved reports whether fresh verified healthy observations,
+// taken after op was created and by its deadline, show a boot other than
+// the one the request was bound to.
+func newBootObserved(op Operation, r Record) bool {
 	s := r.Status.Snapshot
-	if op.Action != "reboot" || receipt.State != "accepted" || receipt.BootID != op.Request.BootID || !r.Status.Fresh || r.Status.Identity != "verified" || r.Status.Health != "healthy" || !powerEvidenceReady(r.Status) || s == nil || s.BootID == op.Request.BootID || !s.ObservedAt.After(op.CreatedAt) {
+	return op.Action == "reboot" && r.Status.Fresh && r.Status.Identity == "verified" && r.Status.Health == "healthy" && powerEvidenceReady(r.Status) &&
+		s != nil && s.BootID != op.Request.BootID && s.ObservedAt.After(op.CreatedAt) && !s.ObservedAt.After(op.Request.Deadline)
+}
+
+func rebootVerified(op Operation, receipt Receipt, r Record) bool {
+	if !newBootObserved(op, r) || receipt.State != "accepted" || receipt.BootID != op.Request.BootID {
 		return false
 	}
+	s := r.Status.Snapshot
 	bootAt := s.ObservedAt.Add(-time.Duration(s.UptimeSeconds * float64(time.Second)))
-	return !s.ObservedAt.After(op.Request.Deadline) && !receipt.AcceptedAt.Before(op.CreatedAt) && !receipt.AcceptedAt.After(op.Request.ValidUntil) && !bootAt.Before(receipt.AcceptedAt.Add(-time.Minute)) && !bootAt.After(op.Request.Deadline.Add(time.Minute))
+	return !receipt.AcceptedAt.Before(op.CreatedAt) && !receipt.AcceptedAt.After(op.Request.ValidUntil) && !bootAt.Before(receipt.AcceptedAt.Add(-time.Minute)) && !bootAt.After(op.Request.Deadline.Add(time.Minute))
 }
 
 // Resolve closes review without rewriting an unverified operation as success.
 func (m *Manager) Resolve(ctx context.Context, name, id, reason string, expected int) (Operation, error) {
 	m.controlMu.Lock()
 	defer m.controlMu.Unlock()
-	if err := requireDirect(ctx); err != nil {
+	a, err := operation.RequireDirect(ctx, ErrForbidden)
+	if err != nil {
 		return Operation{}, err
 	}
-	if !validReason(reason) {
+	if !operation.ValidReason(reason) {
 		return Operation{}, precondition("a resolution reason is required")
 	}
 	op, err := m.Operation(ctx, name, id)
 	if err != nil {
 		return Operation{}, err
 	}
-	if !op.Unresolved {
-		return Operation{}, precondition("operation is already resolved")
+	// With the control lock held no Submit is in flight, so a pending or
+	// submitting operation was abandoned; close it before judging it.
+	if err := m.closeAbandoned(context.WithoutCancel(ctx), &op); err != nil {
+		return Operation{}, err
 	}
-	if op.State != "indeterminate" {
-		return Operation{}, precondition("only indeterminate operations can be manually resolved")
+	if err := m.ops.CheckResolvable(op); err != nil {
+		return Operation{}, err
 	}
 	r, err := m.Get(ctx, name)
 	if err != nil {
@@ -754,16 +685,15 @@ func (m *Manager) Resolve(ctx context.Context, name, id, reason string, expected
 			return Operation{}, precondition("request quiescence is unverified; expiry does not revoke an accepted OS action")
 		}
 	}
-	a, _ := actor(ctx)
-	now := m.clk.Now().UTC()
-	op.Unresolved = false
-	op.Resolution = reason
-	info := actorInfo(a)
-	op.ResolvedBy = &info
-	op.ResolvedAt = &now
-	if err = m.saveOperation(ctx, &op); err != nil {
+	op.MarkResolved(actorInfo(a), reason, m.clk.Now().UTC())
+	err = m.ops.Save(ctx, &op, operation.Change{Audit: &operation.Audit{
+		Action: "operation.resolve", Target: name, Details: map[string]any{"operationId": id, "reason": reason, "unverified": true},
+	}})
+	if errors.Is(err, operation.ErrStale) {
+		return Operation{}, precondition("operation changed; reload it")
+	}
+	if err != nil {
 		return Operation{}, err
 	}
-	err = m.record(ctx, "operation.resolve", name, map[string]any{"operationId": id, "reason": reason, "unverified": true})
-	return op, err
+	return op, nil
 }

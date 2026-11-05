@@ -923,23 +923,24 @@ func failSubmitAudit(t *testing.T, e *env) {
 	}
 }
 
-func TestRebootNotSentWhenAuditFails(t *testing.T) {
+// The audit entry of a submission commits with the operation, so a
+// request whose audit entry cannot be stored is neither stored nor sent.
+func TestRebootNotStoredWhenAuditFails(t *testing.T) {
 	e := newEnv(t)
 	e.create(t, "router", "home")
 	e.observe(t, "router")
 	failSubmitAudit(t, e)
-	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
-	if err == nil || op.State != "failed" || op.Unresolved || op.Receipt == nil || op.Receipt.Outcome != "not-sent" {
-		t.Fatalf("submit = %+v, %v", op, err)
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1)); err == nil || !strings.Contains(err.Error(), "audit unavailable") {
+		t.Fatalf("submit: %v", err)
 	}
-	stored, _ := e.m.Operation(e.ctx, "router", op.ID)
-	if stored.State != "failed" || stored.Unresolved {
-		t.Fatalf("stored = %+v", stored)
+	if ops, err := e.m.Operations(e.ctx, "router"); err != nil || len(ops) != 0 {
+		t.Fatalf("operations = %+v, %v", ops, err)
 	}
-	// A retry with the same key reports the failure without sending.
-	again, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
-	if err != nil || again.ID != op.ID || again.State != "failed" || e.fake.Reboots() != 0 {
-		t.Fatalf("retry = %+v, %v", again, err)
+	if caps, err := e.m.Capabilities(e.ctx, "router"); err != nil || !caps[0].Available {
+		t.Fatalf("capabilities = %+v, %v", caps, err)
+	}
+	if slices.Contains(e.kinds(), "router.operation.submit:") || e.fake.Reboots() != 0 {
+		t.Fatalf("events %v, reboots %d", e.kinds(), e.fake.Reboots())
 	}
 }
 
@@ -1036,5 +1037,29 @@ func TestObserveDoesNotReviveRetiredRouter(t *testing.T) {
 	}
 	if _, ok := e.native.get("router"); ok {
 		t.Fatal("retired router reports native health")
+	}
+}
+
+// The audit entry of a resolution commits with it.
+func TestResolveAuditCommitsWithTheResolution(t *testing.T) {
+	e := newEnv(t)
+	e.create(t, "router", "home")
+	r := e.observe(t, "router")
+	insertOperation(t, e, r, "op-lost", "key-1", "submitting")
+	e.clk.Advance(11 * time.Minute)
+	restore := storetest.FailInserts(t, e.db, "audit_log")
+	if _, err := e.m.Resolve(e.direct(), "router", "op-lost", "checked", 1); err == nil {
+		t.Fatal("resolved without an audit entry")
+	}
+	if got, _ := e.m.Operation(e.ctx, "router", "op-lost"); got.State != "indeterminate" || !got.Unresolved {
+		t.Fatalf("after a failed resolve = %+v", got)
+	}
+	restore()
+	if got, err := e.m.Resolve(e.direct(), "router", "op-lost", "checked", 1); err != nil || got.Unresolved {
+		t.Fatalf("resolve = %+v, %v", got, err)
+	}
+	var n int
+	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'router.operation.resolve'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("audit entries = %d, %v", n, err)
 	}
 }

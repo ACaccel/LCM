@@ -2,32 +2,15 @@ package router
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/connection"
 	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/resource/operation"
 	"github.com/ACaccel/lcm/internal/router/xiaomi"
-)
-
-// Operation states.
-const (
-	statePending       = "pending"
-	stateSubmitting    = "submitting"
-	stateObserving     = "observing"
-	stateSucceeded     = "succeeded"
-	stateFailed        = "failed"
-	stateIndeterminate = "indeterminate"
 )
 
 // Receipt outcomes, from xiaomi.RebootOutcome.
@@ -62,50 +45,13 @@ type Receipt struct {
 
 // Operation is a durable reboot request; its JSON form is the API's
 // ResourceOperation.
-type Operation struct {
-	Evidence   *Status        `json:"evidence,omitempty"`
-	ID         string         `json:"id"`
-	ResourceID string         `json:"resourceId"`
-	Action     string         `json:"action"`
-	State      string         `json:"state"`
-	Unresolved bool           `json:"unresolved"`
-	Version    int            `json:"version"`
-	CreatedAt  time.Time      `json:"createdAt"`
-	UpdatedAt  time.Time      `json:"updatedAt"`
-	Actor      resource.Actor `json:"actor"`
-	Request    Request        `json:"request"`
-	Receipt    *Receipt       `json:"receipt"`
-	Reason     string         `json:"reason"`
-	// RequestReason is the operator's reason for the request; Reason
-	// explains the current state.
-	RequestReason string          `json:"requestReason,omitempty"`
-	Resolution    string          `json:"resolution,omitempty"`
-	ResolvedBy    *resource.Actor `json:"resolvedBy,omitempty"`
-	ResolvedAt    *time.Time      `json:"resolvedAt,omitempty"`
-}
+type Operation = operation.Operation[Status, Request, Receipt]
 
 // Capability explains whether an operation can be submitted now.
 type Capability struct {
 	Action    string
 	Available bool
 	Reason    string
-}
-
-var idempotencyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
-
-func newID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b[:])
-	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
-}
-
-func validReason(v string) bool {
-	return strings.TrimSpace(v) != "" && len(v) <= 1000 && !strings.ContainsAny(v, "\x00\r")
 }
 
 // Capabilities reports whether a reboot can be submitted now and why not.
@@ -143,13 +89,14 @@ func (m *Manager) rebootBlocked(ctx context.Context, r Record) (string, error) {
 		return resource.NoUptime, nil
 	}
 	db := m.db.Reader()
-	var unresolved, maint int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id = ? AND unresolved = 1`, r.ID).Scan(&unresolved); err != nil {
+	unresolved, err := m.ops.UnresolvedCount(ctx, db, r.ID)
+	if err != nil {
 		return "", err
 	}
 	if unresolved > 0 {
 		return resource.OperationUnresolved, nil
 	}
+	var maint int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance`).Scan(&maint); err != nil {
 		return "", err
 	}
@@ -164,17 +111,18 @@ func (m *Manager) rebootBlocked(ctx context.Context, r Record) (string, error) {
 // same idempotency key with the same version returns the first operation
 // instead of sending again.
 func (m *Manager) Submit(ctx context.Context, ref string, req resource.OperationRequest) (Operation, error) {
-	if err := requireDirect(ctx); err != nil {
+	a, err := operation.RequireDirect(ctx, ErrForbidden)
+	if err != nil {
 		return Operation{}, err
 	}
 	action, key, expected := req.Action, req.Key, req.Version
 	if action != connection.ActionReboot {
 		return Operation{}, fmt.Errorf("%w: only reboot is supported", ErrUnsupported)
 	}
-	if !idempotencyPattern.MatchString(key) {
+	if !operation.ValidKey(key) {
 		return Operation{}, precondition("a bounded idempotency key is required")
 	}
-	if !validReason(req.Reason) {
+	if !operation.ValidReason(req.Reason) {
 		return Operation{}, precondition("a reason is required")
 	}
 	r, err := m.Get(ctx, ref)
@@ -187,21 +135,15 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 	locks := m.locksFor(r.ID)
 	locks.control.Lock()
 	defer locks.control.Unlock()
-	sum := sha256.Sum256([]byte(r.ID + "\x00" + action + "\x00" + strconv.Itoa(expected)))
-	hash := hex.EncodeToString(sum[:])
-	if prior, err := m.operationByKey(ctx, r.ID, key); err == nil {
-		if prior.Request.RequestHash != hash {
-			return Operation{}, ErrConflict
+	hash := operation.RequestHash(r.ID, action, expected)
+	if prior, ok, err := m.ops.Replay(ctx, r.ID, key, hash); err != nil || ok {
+		if err == nil {
+			// The control lock is held, so no Submit is in flight: a prior
+			// request still pending or submitting was abandoned and must
+			// not be reported as if it were progressing.
+			err = m.closeAbandoned(context.WithoutCancel(ctx), &prior)
 		}
-		// The control lock is held, so no Submit is in flight: a prior
-		// request still pending or submitting was abandoned and must not
-		// be reported as if it were progressing.
-		if err := m.closeAbandoned(context.WithoutCancel(ctx), &prior); err != nil {
-			return Operation{}, err
-		}
-		return prior, nil
-	} else if !errors.Is(err, ErrNotFound) {
-		return Operation{}, err
+		return prior, err
 	}
 	if r.Version != expected {
 		return Operation{}, ErrConflict
@@ -225,21 +167,13 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 	}
 	defer release()
 
-	a, _ := actor(ctx)
-	now := m.clk.Now().UTC()
+	op := m.ops.Start(r.ID, action, expected, resource.ActorOf(a), req.Reason)
 	baseline, _ := bootAt(r.Status.Snapshot)
-	op := Operation{
-		ID: newID(), ResourceID: r.ID, Action: action, State: statePending, Unresolved: true, Version: expected,
-		CreatedAt: now, UpdatedAt: now, Actor: resource.ActorOf(a), RequestReason: req.Reason,
-		Request: Request{
-			Action: action, Connection: r.Connection, RequestHash: hash, IssuedAt: now, Deadline: now.Add(rebootDeadline),
-			BaselineObservedAt: r.Status.Snapshot.ObservedAt, BaselineBootAt: baseline,
-		},
+	op.Request = Request{
+		Action: action, Connection: r.Connection, RequestHash: hash, IssuedAt: op.CreatedAt, Deadline: op.CreatedAt.Add(rebootDeadline),
+		BaselineObservedAt: r.Status.Snapshot.ObservedAt, BaselineBootAt: baseline,
 	}
-	body, err := encode(op)
-	if err != nil {
-		return Operation{}, err
-	}
+	var event resource.Event
 	err = m.db.Write(ctx, func(tx *sql.Tx) error {
 		cur, err := readCurrent(ctx, tx, r.ID)
 		if err != nil {
@@ -251,34 +185,26 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 		if cur.phase != resource.PhaseManaged {
 			return precondition(resource.RouterNotManaged)
 		}
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id = ? AND unresolved = 1`, r.ID).Scan(&count); err != nil {
+		if err := m.ops.InsertTx(ctx, tx, &op, key, hash); err != nil {
 			return err
 		}
-		if count > 0 {
-			return precondition(resource.OperationUnresolved)
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO resource_operations(id,resource_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`,
-			op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body)
+		event, err = m.ops.RecordTx(ctx, tx, "operation.submit", r.Name, r.ID, op.ID, map[string]any{"operationId": op.ID, "action": action, "connection": r.Connection, "reason": req.Reason})
 		return err
 	})
 	if err != nil {
-		if prior, e := m.operationByKey(ctx, r.ID, key); e == nil && prior.Request.RequestHash == hash {
+		if prior, ok, e := m.ops.Replay(ctx, r.ID, key, hash); e == nil && ok {
 			return prior, nil
 		}
 		return Operation{}, err
 	}
+	m.publish([]resource.Event{event})
 	// From here on the outcome must be recorded even if the caller goes
 	// away: a request that may have reached the router is never repeated,
 	// and one that was not sent must not stay pending.
 	ctx = context.WithoutCancel(ctx)
-	if err := m.record(ctx, "operation.submit", r, op.ID, map[string]any{"operationId": op.ID, "action": action, "connection": r.Connection, "reason": req.Reason}); err != nil {
-		m.failUnsent(ctx, &op, resource.NotSentAudit)
-		return op, err
-	}
-	op.State = stateSubmitting
-	if err := m.saveOperation(ctx, &op, statePending); err != nil {
-		op.State = statePending
+	op.State = operation.Submitting
+	if err := m.ops.Save(ctx, &op, operation.Change{}); err != nil {
+		op.State = operation.Pending
 		m.failUnsent(ctx, &op, resource.NotSentState)
 		return op, err
 	}
@@ -286,16 +212,16 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 	submittedAt := m.clk.Now().UTC()
 	switch outcome {
 	case xiaomi.RebootAccepted:
-		op.State, op.Receipt = stateObserving, &Receipt{Outcome: receiptAccepted, SubmittedAt: submittedAt}
+		op.State, op.Receipt = operation.Observing, &Receipt{Outcome: receiptAccepted, SubmittedAt: submittedAt}
 		op.Reason = resource.RouterAccepted
 	case xiaomi.RebootUnknown:
-		op.State, op.Receipt = stateObserving, &Receipt{Outcome: receiptUnknown, SubmittedAt: submittedAt}
+		op.State, op.Receipt = operation.Observing, &Receipt{Outcome: receiptUnknown, SubmittedAt: submittedAt}
 		op.Reason = resource.OutcomeUnknown
 	case xiaomi.RebootRejected:
-		op.State, op.Unresolved, op.Receipt = stateFailed, false, &Receipt{Outcome: receiptRejected, SubmittedAt: submittedAt}
+		op.State, op.Unresolved, op.Receipt = operation.Failed, false, &Receipt{Outcome: receiptRejected, SubmittedAt: submittedAt}
 		op.Reason = resource.RouterRejected
 	default:
-		op.State, op.Unresolved, op.Receipt = stateFailed, false, &Receipt{Outcome: receiptNotSent, SubmittedAt: submittedAt}
+		op.State, op.Unresolved, op.Receipt = operation.Failed, false, &Receipt{Outcome: receiptNotSent, SubmittedAt: submittedAt}
 		op.Reason = resource.NotDelivered
 		if errors.Is(sendErr, xiaomi.ErrAuth) {
 			op.Reason = resource.NotDeliveredAuth
@@ -305,10 +231,10 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 	if sendErr != nil {
 		m.log.Warn("router reboot submission", "router", r.Name, "operation", op.ID, "outcome", outcome.String(), "error", sendErr)
 	}
-	if err := m.saveOperation(ctx, &op, stateSubmitting); err != nil {
+	if err := m.ops.Save(ctx, &op, operation.Change{}); err != nil {
 		return op, err
 	}
-	if op.State == stateObserving {
+	if op.State == operation.Observing {
 		m.wake(r.ID)
 	}
 	return op, nil
@@ -316,56 +242,45 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 
 // failUnsent closes an operation that was stored but certainly not sent.
 // A failure to store that is only logged: the operation stays pending
-// until closeAbandoned or Reconcile closes it the same way.
+// until closeAbandoned closes it the same way.
 func (m *Manager) failUnsent(ctx context.Context, op *Operation, reason string) {
-	from := op.State
-	op.State, op.Unresolved, op.Reason = stateFailed, false, reason
+	op.State, op.Unresolved, op.Reason = operation.Failed, false, reason
 	op.Receipt = &Receipt{Outcome: receiptNotSent, SubmittedAt: m.clk.Now().UTC()}
-	if err := m.saveOperation(ctx, op, from); err != nil {
+	if err := m.ops.Save(ctx, op, operation.Change{}); err != nil {
 		m.log.Warn("router operation left pending", "operation", op.ID, "error", err)
 	}
 }
 
 // closeAbandoned closes op when it is still pending or submitting although
 // no Submit is working on it; the caller makes sure of that (control lock,
-// startup or a passed deadline). A pending request was never sent, so it
+// startup or a passed deadline). The router is asked to reboot only after
+// the submitting state is stored, so a pending request was never sent and
 // failed; a submitting one may have reached the router, so its outcome is
 // indeterminate. Neither is ever sent again. Other states are left alone.
 func (m *Manager) closeAbandoned(ctx context.Context, op *Operation) error {
-	from := op.State
-	switch from {
-	case statePending:
-		op.State, op.Unresolved = stateFailed, false
-		op.Receipt = &Receipt{Outcome: receiptNotSent, SubmittedAt: m.clk.Now().UTC()}
-		op.Reason = resource.NeverSent
-	case stateSubmitting:
-		op.State = stateIndeterminate
-		op.Reason = resource.InterruptedBeforeOutcome
-	default:
+	pending := op.State == operation.Pending
+	if !op.CloseAbandoned(pending) {
 		return nil
 	}
-	if err := m.saveOperation(ctx, op, from); err != nil {
-		if errors.Is(err, errStale) {
-			cur, gerr := m.operationByID(ctx, op.ID)
-			if gerr != nil {
-				return gerr
-			}
-			*op = cur
-			return nil
-		}
-		return err
+	if pending {
+		op.Receipt = &Receipt{Outcome: receiptNotSent, SubmittedAt: m.clk.Now().UTC()}
 	}
-	return nil
+	err := m.ops.Save(ctx, op, operation.Change{})
+	if errors.Is(err, operation.ErrStale) {
+		cur, gerr := m.ops.Get(ctx, op.ResourceID, op.ID)
+		if gerr != nil {
+			return gerr
+		}
+		*op = cur
+		return nil
+	}
+	return err
 }
 
 // observing reports whether a router has an operation waiting for evidence.
 func (m *Manager) observing(ctx context.Context, id string) bool {
-	var n int
-	if err := m.db.Reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id = ? AND unresolved = 1 AND state = ?`,
-		id, stateObserving).Scan(&n); err != nil {
-		return false
-	}
-	return n > 0
+	ops, err := m.ops.Unresolved(ctx, id, operation.Observing)
+	return err == nil && len(ops) > 0
 }
 
 // settle decides observing operations of a router from its latest status:
@@ -373,7 +288,7 @@ func (m *Manager) observing(ctx context.Context, id string) bool {
 // without it. Operations in other states are left alone.
 func (m *Manager) settle(ctx context.Context, id string) {
 	m.closeStale(ctx, id)
-	ops, err := m.unresolved(ctx, `o.resource_id = ? AND o.state = ?`, id, stateObserving)
+	ops, err := m.ops.Unresolved(ctx, id, operation.Observing)
 	if err != nil {
 		m.log.Warn("read router operations failed", "error", err)
 		return
@@ -392,15 +307,15 @@ func (m *Manager) settle(ctx context.Context, id string) {
 		switch {
 		case rebootVerified(*op, r.Status):
 			ev := r.Status
-			op.State, op.Unresolved, op.Evidence = stateSucceeded, false, &ev
+			op.State, op.Unresolved, op.Evidence = operation.Succeeded, false, &ev
 			op.Reason = resource.RouterBooted
 		case !now.Before(op.Request.Deadline):
-			op.State = stateIndeterminate
+			op.State = operation.Indeterminate
 			op.Reason = resource.NoRebootEvidence
 		default:
 			continue
 		}
-		if err := m.saveOperation(ctx, op, stateObserving); err != nil && !errors.Is(err, errStale) {
+		if err := m.ops.Save(ctx, op, operation.Change{}); err != nil && !errors.Is(err, operation.ErrStale) {
 			m.log.Warn("save router operation failed", "operation", op.ID, "error", err)
 		}
 	}
@@ -416,7 +331,7 @@ func (m *Manager) closeStale(ctx context.Context, id string) {
 		return
 	}
 	defer locks.control.Unlock()
-	ops, err := m.unresolved(ctx, `o.resource_id = ? AND o.state IN (?, ?)`, id, statePending, stateSubmitting)
+	ops, err := m.ops.Unresolved(ctx, id, operation.Pending, operation.Submitting)
 	if err != nil {
 		m.log.Warn("read router operations failed", "error", err)
 		return
@@ -450,7 +365,7 @@ func rebootVerified(op Operation, st Status) bool {
 // becomes indeterminate. Neither is sent again. Observing requests are
 // decided from the stored status.
 func (m *Manager) Reconcile(ctx context.Context) error {
-	ops, err := m.unresolved(ctx, `o.state IN (?, ?)`, statePending, stateSubmitting)
+	ops, err := m.ops.Unresolved(ctx, "", operation.Pending, operation.Submitting)
 	if err != nil {
 		return err
 	}
@@ -459,7 +374,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			return err
 		}
 	}
-	observing, err := m.unresolved(ctx, `o.state = ?`, stateObserving)
+	observing, err := m.ops.Unresolved(ctx, "", operation.Observing)
 	if err != nil {
 		return err
 	}
@@ -476,10 +391,11 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 // Resolve closes an indeterminate operation after review. It never turns
 // the operation into a success; it only records who closed it and why.
 func (m *Manager) Resolve(ctx context.Context, ref, id, reason string, expected int) (Operation, error) {
-	if err := requireDirect(ctx); err != nil {
+	a, err := operation.RequireDirect(ctx, ErrForbidden)
+	if err != nil {
 		return Operation{}, err
 	}
-	if !validReason(reason) {
+	if !operation.ValidReason(reason) {
 		return Operation{}, precondition("a resolution reason is required")
 	}
 	r, err := m.Get(ctx, ref)
@@ -489,7 +405,7 @@ func (m *Manager) Resolve(ctx context.Context, ref, id, reason string, expected 
 	locks := m.locksFor(r.ID)
 	locks.control.Lock()
 	defer locks.control.Unlock()
-	op, err := m.Operation(ctx, "@"+r.ID, id)
+	op, err := m.ops.Get(ctx, r.ID, id)
 	if err != nil {
 		return Operation{}, err
 	}
@@ -498,130 +414,26 @@ func (m *Manager) Resolve(ctx context.Context, ref, id, reason string, expected 
 	if err := m.closeAbandoned(context.WithoutCancel(ctx), &op); err != nil {
 		return Operation{}, err
 	}
+	if err := m.ops.CheckResolvable(op); err != nil {
+		return Operation{}, err
+	}
 	switch {
-	case !op.Unresolved:
-		return Operation{}, precondition("operation is already resolved")
-	case op.State != stateIndeterminate:
-		return Operation{}, precondition("only indeterminate operations can be manually resolved")
 	case r.Version != expected:
 		return Operation{}, ErrConflict
 	case m.clk.Now().Before(op.Request.Deadline):
 		return Operation{}, precondition("a request that may still take effect cannot be resolved before its deadline")
 	}
-	a, _ := actor(ctx)
-	now := m.clk.Now().UTC()
-	by := resource.ActorOf(a)
-	op.Unresolved, op.Resolution, op.ResolvedBy, op.ResolvedAt = false, reason, &by, &now
-	if err := m.saveOperation(ctx, &op, stateIndeterminate); err != nil {
-		if errors.Is(err, errStale) {
-			return Operation{}, precondition("operation changed; reload it")
-		}
-		return Operation{}, err
-	}
-	return op, m.record(ctx, "operation.resolve", r, op.ID, map[string]any{"operationId": op.ID, "reason": reason, "unverified": true})
-}
-
-// errStale means an operation changed since it was read.
-var errStale = errors.New("router: operation changed concurrently")
-
-// saveOperation stores op if it is still unresolved in state from, and
-// records an event when its state, resolution or reason changed.
-func (m *Manager) saveOperation(ctx context.Context, op *Operation, from string) error {
-	op.UpdatedAt = m.clk.Now().UTC()
-	body, err := encode(op)
-	if err != nil {
-		return err
-	}
-	var event *resource.Event
-	err = m.db.Write(ctx, func(tx *sql.Tx) error {
-		event = nil
-		res, err := tx.ExecContext(ctx, `UPDATE resource_operations SET state=?,unresolved=?,updated_at=?,body=? WHERE id=? AND state=? AND unresolved=1`,
-			op.State, op.Unresolved, op.UpdatedAt.UnixMilli(), body, op.ID, from)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return errStale
-		}
-		e := resource.Event{
-			ResourceID: op.ResourceID, OperationID: op.ID, Source: "control", Key: newID(), Kind: "router.operation.changed",
-			Severity: severity(op.State), OccurredAt: op.UpdatedAt, IngestedAt: op.UpdatedAt, Reason: op.State,
-		}
-		if !op.Unresolved && op.State == stateIndeterminate {
-			e.Reason = "resolved"
-		}
-		if err := resource.InsertEvent(ctx, tx, &e); err != nil {
-			return err
-		}
-		event = &e
-		return nil
-	})
-	if err == nil && event != nil {
-		m.publish([]resource.Event{*event})
-	}
-	return err
-}
-
-// record audits a control action and stores its event.
-func (m *Manager) record(ctx context.Context, action string, r Record, operationID string, details map[string]any) error {
-	if err := m.audit.Record(ctx, "router."+action, r.Name, audit.OutcomeOK, details); err != nil {
-		return err
-	}
-	now := m.clk.Now().UTC()
-	e := resource.Event{ResourceID: r.ID, OperationID: operationID, Source: "control", Key: newID(), Kind: "router." + action, Severity: "info", OccurredAt: now, IngestedAt: now}
-	if err := m.db.Write(ctx, func(tx *sql.Tx) error { return resource.InsertEvent(ctx, tx, &e) }); err != nil {
-		return err
-	}
-	m.publish([]resource.Event{e})
-	return nil
-}
-
-// unresolved reads the unresolved router operations matching where (over
-// alias o).
-func (m *Manager) unresolved(ctx context.Context, where string, args ...any) ([]Operation, error) {
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT o.body FROM resource_operations o JOIN resources r ON r.id = o.resource_id
-		WHERE o.unresolved = 1 AND r.type = 'router' AND `+where+` ORDER BY o.created_at`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []Operation
-	for rows.Next() {
-		var body string
-		if err := rows.Scan(&body); err != nil {
-			return nil, err
-		}
-		op, err := decodeOperation(body, nil)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, op)
-	}
-	return out, rows.Err()
-}
-
-func (m *Manager) operationByID(ctx context.Context, id string) (Operation, error) {
-	var body string
-	err := m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE id=?`, id).Scan(&body)
-	return decodeOperation(body, err)
-}
-
-func (m *Manager) operationByKey(ctx context.Context, id, key string) (Operation, error) {
-	var body string
-	err := m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? AND idempotency_key=?`, id, key).Scan(&body)
-	return decodeOperation(body, err)
-}
-
-func decodeOperation(body string, err error) (Operation, error) {
-	if errors.Is(err, sql.ErrNoRows) {
-		return Operation{}, ErrNotFound
+	op.MarkResolved(resource.ActorOf(a), reason, m.clk.Now().UTC())
+	err = m.ops.Save(ctx, &op, operation.Change{Audit: &operation.Audit{
+		Action: "operation.resolve", Target: r.Name, Details: map[string]any{"operationId": op.ID, "reason": reason, "unverified": true},
+	}})
+	if errors.Is(err, operation.ErrStale) {
+		return Operation{}, precondition("operation changed; reload it")
 	}
 	if err != nil {
 		return Operation{}, err
 	}
-	var op Operation
-	err = json.Unmarshal([]byte(body), &op)
-	return op, err
+	return op, nil
 }
 
 // Operation returns one operation of a router.
@@ -630,9 +442,7 @@ func (m *Manager) Operation(ctx context.Context, ref, id string) (Operation, err
 	if err != nil {
 		return Operation{}, err
 	}
-	var body string
-	err = m.db.Reader().QueryRowContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? AND id=?`, r.ID, id).Scan(&body)
-	return decodeOperation(body, err)
+	return m.ops.Get(ctx, r.ID, id)
 }
 
 // Operations returns the newest operations of a router first.
@@ -641,22 +451,5 @@ func (m *Manager) Operations(ctx context.Context, ref string) ([]Operation, erro
 	if err != nil {
 		return nil, err
 	}
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT body FROM resource_operations WHERE resource_id=? ORDER BY created_at DESC LIMIT 200`, r.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	out := []Operation{}
-	for rows.Next() {
-		var body string
-		if err := rows.Scan(&body); err != nil {
-			return nil, err
-		}
-		op, err := decodeOperation(body, nil)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, op)
-	}
-	return out, rows.Err()
+	return m.ops.List(ctx, r.ID)
 }

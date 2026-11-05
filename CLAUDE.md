@@ -46,7 +46,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/nodes/lifecycle/` | `lifecycle.*` nodes (prop `resource`, `acknowledgeImpact`) over the catalog manager |
 | `internal/nodes/{flow,guard,network,notify,stateful}/` | Waiting and polling, time windows, HTTP and CI requests, notifications, state and lock nodes |
 | `internal/engine/` | Compiler, scheduler, run state, checkpoints, recovery, concurrency modes, observers, static resource targets of a plan; semantics in `doc.go`; `enginetest/` harness |
-| `internal/resource/` | Resource registry for every type: IDs, versioned documents, phases, archives, relations, impact and guard, the `Type`/`TypeHooks` facade the type packages implement; observation retention with per-resource ceilings |
+| `internal/resource/` | Resource registry for every type: IDs, versioned documents, phases, archives, relations, impact and guard, the `Type`/`TypeHooks` facade the type packages implement; observation retention with per-resource ceilings; `operation/` the durable operation mechanics machines and routers share |
 | `internal/catalog/` | Service resource type: lifecycle state machine, deployments, timeline, the `Manager` that performs lifecycle and group actions, action availability and reconciliation |
 | `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external) and `CapabilitiesOf`, the actions a runtime configuration supports |
 | `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |

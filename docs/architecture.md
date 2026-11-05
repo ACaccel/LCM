@@ -46,6 +46,7 @@ A typical loop: a health check fails, `monitor` publishes a `health.changed` sig
 | `internal/store` | SQLite with one writer connection and a reader pool; numbered migrations applied at startup (0014 converts Service/Machine data to resources in Go and SQL), with rejection of a newer schema. |
 | `internal/engine` | Compiles policies into plans and runs them; checkpoints every node so runs survive restarts. |
 | `internal/resource` | Resource registry for every type: immutable IDs, versioned `lcm/v2` documents, phases, archives, relations, impact and the type facade (`Type`, `TypeHooks`) the other components implement ([resources](resources.md)). |
+| `internal/resource/operation` | Durable operation mechanics shared by machines and routers: creation under an idempotency key, compare-and-swap saves that write the change event and audit entry in the same transaction and skip unchanged rows, closing abandoned operations and resolve checks. Each type keeps its own submission and evidence. |
 | `internal/catalog` | The service type: lifecycle state machine, deployments, timeline, group actions; the `Manager` performs actions under a durable lock and reconciles states with the runtimes ([services](services.md#lifecycle-states-and-actions)). |
 | `internal/runtime` | Adapters that control processes (systemd, docker, compose, command, external) and declare which actions each configuration supports. |
 | `internal/security` | Bounded incident/traffic storage, operator handling, versioned notification preferences and durable Konata outbox. |
