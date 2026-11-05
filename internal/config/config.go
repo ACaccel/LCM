@@ -83,6 +83,8 @@ const (
 	CalendarDirName = "calendars"
 	// SourcesDirName holds LCM's own clones of config sources.
 	SourcesDirName = "sources"
+	// WorkDirName holds the build checkout of every service with a source.
+	WorkDirName = "work"
 
 	// NoPrivilege disables the systemctl privilege prefix. An empty value
 	// does the same in a flag, but an empty environment variable counts as
@@ -580,6 +582,17 @@ func (c Config) CalendarPath() string {
 // share a directory with a user's working copy.
 func (c Config) SourcesPath() string {
 	return filepath.Join(c.DataDir, SourcesDirName)
+}
+
+// WorkPath returns the absolute build directory: LCM clones the source of
+// each service into <work>/<resource name> and deploys from there. It is
+// absolute because documents are checked against it.
+func (c Config) WorkPath() (string, error) {
+	abs, err := filepath.Abs(filepath.Join(c.DataDir, WorkDirName))
+	if err != nil {
+		return "", fmt.Errorf("work dir: %w", err)
+	}
+	return abs, nil
 }
 
 // EnsureServeDirs creates the secrets, calendar and config source

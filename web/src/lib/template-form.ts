@@ -100,6 +100,8 @@ export function buildParams(t: Template, values: FormValues, resource?: string):
   const errors: Record<string, string> = {};
   const initial = initialValues(t, resource);
   for (const p of t.params) {
+    // A hidden field keeps the server's default, whatever it held before.
+    if (!isVisible(p, values)) continue;
     const v = values[p.name];
     if (p.type === "boolean") {
       params[p.name] = v === true;
@@ -135,6 +137,11 @@ export function buildParams(t: Template, values: FormValues, resource?: string):
     }
   }
   return { params, errors };
+}
+
+/** Whether a field applies to the current values, such as the chosen notification target. */
+export function isVisible(p: TemplateParam, values: FormValues): boolean {
+  return !p.visibleIf || values[p.visibleIf.param] === p.visibleIf.equals;
 }
 
 /** Whether a field is currently required. */

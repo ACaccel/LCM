@@ -15,7 +15,7 @@ LCM manages self-hosted software services, the Linux workstation running the con
 | [docs/security.md](docs/security.md) | Security console, incidents, traffic, notifications and restricted host controls |
 | [docs/policies.md](docs/policies.md) | Policies, built-in templates, policy-as-code (git config sources, ownership, drift) |
 | [docs/architecture.md](docs/architecture.md) | Components, data flow, engine semantics, security model (authentication, tokens, privileges, secrets) |
-| [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), router connections, backup, upgrade (including `lcm/v2`), remote access |
+| [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), router connections, backup, upgrade (including `lcm/v2` and service source URLs), remote access |
 | [`internal/api/openapi.yaml`](internal/api/openapi.yaml) | The API v1 reference, also served at `GET /api/v1/openapi.yaml` |
 
 ## Quick start

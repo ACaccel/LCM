@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -216,6 +217,8 @@ type env struct {
 	runner  *countingRunner
 	mgr     *catalog.Manager
 	ctx     context.Context
+	// work is the build directory; checkouts are work/<name>.
+	work string
 }
 
 type envOption func(*env, *catalog.ManagerConfig)
@@ -226,7 +229,7 @@ func withRunner(r execx.Runner) envOption {
 
 func newEnv(t *testing.T, opts ...envOption) *env {
 	t.Helper()
-	e := &env{t: t, clk: clock.NewFake(epoch), locker: newFakeLocker(),
+	e := &env{t: t, clk: clock.NewFake(epoch), locker: newFakeLocker(), work: filepath.Join(t.TempDir(), "work"),
 		runtime: &fakeRuntimes{adapters: map[string]*fakeAdapter{}, names: map[model.Runtime]string{}}}
 	e.db = storetest.Open(t)
 	e.bus = signal.NewBus(testLogger(t), e.clk.Now)
@@ -242,7 +245,7 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	}
 	e.runner = &countingRunner{inner: &execx.Fake{}}
 	cfg := catalog.ManagerConfig{
-		Catalog: e.cat, Runtimes: e.runtime, Runner: e.runner, Locker: e.locker, Log: testLogger(t),
+		Catalog: e.cat, Runtimes: e.runtime, Runner: e.runner, Locker: e.locker, Log: testLogger(t), WorkDir: e.work,
 	}
 	for _, o := range opts {
 		o(e, &cfg)

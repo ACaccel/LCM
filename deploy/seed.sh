@@ -119,6 +119,10 @@ fi
 [[ ! -s $work/monitored.yaml ]] || apply "$work/monitored.yaml"
 
 log "self-deploy service lcm"
+# The first deployment below reads the head of repo_url; LCM clones and
+# fetches source.url, so both must name the same repository.
+grep -qxF "      url: $repo_url" "$deploy_dir/lcm-self.service.yaml" ||
+	die "deploy/lcm-self.service.yaml does not set source.url: $repo_url"
 apply "$deploy_dir/lcm-self.service.yaml"
 deployed=$("$lcm" get resources lcm -o json | jq -r '.service.deployedVersion // ""')
 if [[ -n $deployed ]]; then

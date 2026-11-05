@@ -107,6 +107,18 @@ func (h serviceHooks) BeforePhase(ctx context.Context, tx *sql.Tx, p resource.Ph
 	})
 }
 
+// ValidateHost refuses what a service document cannot say on this host: a
+// source inside LCM's build directory. It implements resource.HostValidator.
+func (h serviceHooks) ValidateHost(doc *model.Resource) model.Issues {
+	cfg, ok := doc.Service()
+	if !ok || cfg.Source == nil || !h.m.sourceInWorkDir(cfg.Source) {
+		return nil
+	}
+	return model.Issues{{Path: "spec.config.source.url", Message: fmt.Sprintf(
+		"is inside LCM's build directory %s, which only ever holds the commits LCM deploys; "+
+			"set the repository new versions come from, such as the URL the checkout was cloned from", h.m.workDir)}}
+}
+
 // unmanageable reports whether a service in state may be archived: it must
 // not be running or in the middle of an action.
 func unmanageable(state State) bool {

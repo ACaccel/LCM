@@ -14,7 +14,6 @@ metadata: { name: web, labels: { tier: web } }
 spec:
   host: local
   runtime: { type: systemd, unit: web.service, scope: user }
-  source: { repo: /srv/web, branch: main }
   backup: { command: "tar czf /tmp/web.tgz /srv/web" }
   jobs: { reindex: { command: "web reindex" } }
   dependsOn: [db, cache]
@@ -31,7 +30,6 @@ spec:
   config:
     unit: web.service
     scope: user
-    source: { repo: /srv/web, branch: main }
     backup: { command: "tar czf /tmp/web.tgz /srv/web" }
     jobs: { reindex: { command: "web reindex" } }
   checks:
@@ -89,13 +87,24 @@ func TestConvertService(t *testing.T) {
 
 	// The JSON helper used by the storage migration reads the stored
 	// canonical v1 JSON and writes the v2 canonical JSON.
-	v1JSON := `{"apiVersion":"lcm/v1","kind":"Service","metadata":{"name":"web","labels":{"tier":"web"}},"spec":{"host":"local","runtime":{"type":"systemd","unit":"web.service","scope":"user"},"source":{"repo":"/srv/web","remote":"origin","branch":"main"},"backup":{"command":"tar czf /tmp/web.tgz /srv/web"},"jobs":{"reindex":{"command":"web reindex"}},"dependsOn":["db","cache"],"checks":[{"name":"http","type":"http","props":{"url":"http://127.0.0.1:8080/"}}]}}`
+	v1JSON := `{"apiVersion":"lcm/v1","kind":"Service","metadata":{"name":"web","labels":{"tier":"web"}},"spec":{"host":"local","runtime":{"type":"systemd","unit":"web.service","scope":"user"},"backup":{"command":"tar czf /tmp/web.tgz /srv/web"},"jobs":{"reindex":{"command":"web reindex"}},"dependsOn":["db","cache"],"checks":[{"name":"http","type":"http","props":{"url":"http://127.0.0.1:8080/"}}]}}`
 	b, warns, err := model.ConvertServiceV1JSON([]byte(v1JSON))
 	if err != nil || len(warns) != 0 || string(b) != string(exp) {
 		t.Fatalf("json: %v %v\n%s\nwant\n%s", err, warns, b, exp)
 	}
 	if _, _, err := model.ConvertMachineV1JSON([]byte(v1JSON)); err == nil {
 		t.Fatal("machine helper accepted a service")
+	}
+}
+
+// A v1 source names a checkout and a remote; the URL it needs is in the
+// checkout's git config, which an offline conversion cannot read.
+func TestConvertServiceSourceRefused(t *testing.T) {
+	doc := strings.Replace(v1Service, "  backup:", "  source: { repo: /srv/web, remote: upstream, branch: main }\n  backup:", 1)
+	_, _, err := model.ConvertV1([]byte(doc))
+	if err == nil || !strings.Contains(err.Error(), "spec.config.source.repo: source.repo and source.remote were replaced by source.url") ||
+		strings.Contains(err.Error(), "url: is required") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

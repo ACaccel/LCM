@@ -11,8 +11,9 @@ import (
 // version of the migration they belong to. Each runs after the SQL of its
 // migration in the same transaction, so a failure leaves the database at the
 // previous version.
-var goMigrations = map[int]func(context.Context, *sql.Tx) error{
-	14: migrateResources,
+var goMigrations = map[int]func(context.Context, *sql.Tx, migrateEnv) error{
+	resourcesMigration: func(ctx context.Context, tx *sql.Tx, _ migrateEnv) error { return migrateResources(ctx, tx) },
+	sourceMigration:    migrateServiceSources,
 }
 
 // NewID returns a random identifier in UUID version 4 form, the format of

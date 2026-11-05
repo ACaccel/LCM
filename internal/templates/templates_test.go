@@ -180,10 +180,19 @@ func TestDescriptorGuidesTheForm(t *testing.T) {
 	if p := byName["branch"]; p.Prefill != "source.branch" {
 		t.Errorf("branch = %+v", p)
 	}
-	// The repository of a service is its local checkout, which trigger.git
-	// cannot watch for new commits, so the repo parameter is not prefilled.
-	if p := byName["repo"]; p.Prefill != "" {
+	// The repository trigger.git watches is where the service's new
+	// versions come from.
+	if p := byName["repo"]; p.Prefill != "source.url" {
 		t.Errorf("repo = %+v", p)
+	}
+	// Only the fields of the chosen notification target are shown.
+	for name, target := range map[string]string{"notifySecret": "discord", "notifyUrl": "konata", "notifyTokenSecret": "konata"} {
+		if c := byName[name].VisibleIf; c == nil || c.Param != "notifyTarget" || c.Equals != target {
+			t.Errorf("%s.visibleIf = %+v", name, c)
+		}
+	}
+	if byName["notifyTarget"].VisibleIf != nil || byName["repo"].VisibleIf != nil {
+		t.Error("unconditional fields have visibleIf")
 	}
 
 	windows := []any{map[string]any{"days": []any{"mon", "fri"}, "start": "22:00", "end": "24:00"}}

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/templates"
 )
@@ -80,6 +81,17 @@ func TestDeployDocumentsApply(t *testing.T) {
 	}
 	if rule := string(readDeploy(t, "sudoers")); !strings.Contains(rule, "NOPASSWD: /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm\n") {
 		t.Errorf("deploy/sudoers does not allow the service's install command:\n%s", rule)
+	}
+	// The install command builds in the checkout LCM clones source.url into
+	// under the data directory the host configuration sets.
+	if src != nil && src.URL != "https://github.com/ACaccel/LCM.git" {
+		t.Errorf("source url = %q", src.URL)
+	}
+	if env := string(readDeploy(t, "lcm.env")); !strings.Contains(env, "\nLCM_DATA_DIR=/var/lib/lcm\n") {
+		t.Errorf("deploy/lcm.env does not keep the data directory the build checkout path assumes:\n%s", env)
+	}
+	if work, err := (config.Config{DataDir: "/var/lib/lcm"}).WorkPath(); err != nil || filepath.Join(work, "lcm") != "/var/lib/lcm/work/lcm" {
+		t.Errorf("work path = %q %v", work, err)
 	}
 }
 

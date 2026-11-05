@@ -105,7 +105,7 @@ func TestActionErrors(t *testing.T) {
 	// Missing configuration is a precondition, not a bad request.
 	x.call("POST", v1+"/resources/web/actions/backup", nil).wantError(http.StatusConflict, "precondition_failed")
 	x.call("POST", v1+"/resources/web/actions/deploy", nil).wantError(http.StatusConflict, "precondition_failed")
-	x.createService(serviceDoc("app", "    source: { repo: /srv/app, branch: main }\n"))
+	x.createService(serviceDoc("app", "    source: { url: /srv/app, branch: main }\n"))
 	x.call("POST", v1+"/resources/app/actions/deploy", map[string]string{"version": "nothex!"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	x.call("POST", v1+"/resources/app/actions/rollback", nil).wantError(http.StatusConflict, "invalid_state")
 	plan := x.call("POST", v1+"/resources/app/actions/deploy?dryRun=true", map[string]string{"version": "abc1234"}).want(http.StatusOK).obj()

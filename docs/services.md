@@ -16,7 +16,7 @@ spec:
   config:
     unit: web.service
     source:                        # optional: enables deploy and rollback
-      repo: /var/lib/lcm/work/web  # LCM's own checkout, never a developer's
+      url: https://github.com/acme/web.git   # where new versions come from
       branch: main
       build: make build
       install: ./install.sh
@@ -45,6 +45,25 @@ The adapter decides which process actions exist; its fields sit directly in `con
 
 LCM's own service uses a `command` runtime with only `status`, because it must not stop or restart itself ([self-deploy](operations.md#self-deploy)).
 
+## Source
+
+`source` says where new versions come from and how to build and install them.
+
+| Field | Meaning |
+|---|---|
+| `url` | Required. A remote (`https://`, `ssh://`, `git@host:path`) or the absolute path of a local development repository. It must not carry credentials (only the ssh user `git`) and must not point into LCM's build directory |
+| `branch` | Required. Branch a deploy without `--version` takes the head of |
+| `build`, `install` | Optional `sh -c` commands run in the build checkout |
+| `timeout` | Limit of each step, default 15m |
+
+- **Build checkout.** LCM owns one checkout per service at `<data dir>/work/<name>` (`/var/lib/lcm/work/<name>` with `deploy/`); a document cannot name it. The first deploy clones `url` there (an existing empty directory counts as missing; a non-empty directory without `.git` is refused). Every later deploy first sets the checkout's `origin` to `url`, so editing `url` switches the source at the next deploy, then fetches.
+- **Uncommitted changes.** A deploy or rollback refuses to start while tracked files in the checkout have uncommitted changes; untracked files (build output) do not count.
+- **Local development repository.** With a path as `url`, LCM clones and fetches it like a remote: commits on its branch are deployed without being pushed, and its working tree is never touched.
+- **Other commands.** `backup` and jobs of a service with a source run in the build checkout; before the first deploy has cloned it they are refused.
+- **Refused URLs.** A `url` inside `<data dir>/work/` is refused when the document is saved or validated: those checkouts only move to commits LCM deploys. `trigger.git` refuses them for the same reason ([policies](policies.md#templates)).
+
+Before storage schema 15 a source named the checkout (`source.repo`) and a remote name (`source.remote`); such documents are refused with an issue naming the field. The [upgrade](operations.md#upgrade-to-service-source-urls-schema-15) rewrites stored documents.
+
 ## Lifecycle states and actions
 
 The lifecycle state is what LCM did to the service; health (below) is what the checks observe. The console shows both side by side.
@@ -61,9 +80,9 @@ The lifecycle state is what LCM did to the service; health (below) is what the c
 | `start` | registered, stopped, failed | runtime start | start |
 | `stop` | registered, running, failed | runtime stop | stop |
 | `restart` | running, stopped, failed | runtime restart | restart, or start when inactive |
-| `deploy` | registered, running, stopped, failed | `source` | refuse if tracked files changed; `git fetch --prune`; resolve the version (default: head of the branch); `git checkout --detach`; `build`; `install`; restart (skipped when the runtime cannot restart, so `install` must apply the new version) |
-| `rollback` | running, stopped, failed | `source` and an earlier successful deployment | as deploy, to the previous successful commit, without fetching |
-| `backup` | registered, running, stopped, failed | `backup` | run the command (in the source checkout when there is one) |
+| `deploy` | registered, running, stopped, failed | `source` | clone `url` into the [build checkout](#source) when it is missing; otherwise refuse if tracked files changed, set `origin` to `url` and `git fetch --prune`; resolve the version (default: head of the branch); `git checkout --detach`; `build`; `install`; restart (skipped when the runtime cannot restart, so `install` must apply the new version) |
+| `rollback` | running, stopped, failed | `source` and an earlier successful deployment | as deploy, to the previous successful commit, without fetching (a missing checkout is cloned) |
+| `backup` | registered, running, stopped, failed | `backup` | run the command (in the build checkout when the service has a source) |
 | `run-job` | registered, running, stopped, failed | `jobs` | run the named job |
 
 Run an action with `lcm resource action <service> <action> [--version <commit>] [--job <job>] [--dry-run] [--wait]` or `POST /api/v1/resources/{resource}/actions/{action}` (202 and an id for `GET /api/v1/actions/{id}`). Every action takes the lock `resource:<name>`, so actions on one service never overlap, and writes an audit entry and a timeline entry. The action renews its lock every third of `LCM_LOCK_TTL` while it runs, so the TTL only bounds a lock left by a crashed process, not the length of an action. Once the runtime has done the work, the new state is recorded even if the request is cancelled. `?dryRun=true` (console: *預覽*) returns the steps and the [impact](resources.md#relations) without locking or changing anything; `stop`, `restart`, `deploy`, `rollback` and `run-job` on a service that others depend on or are controlled through need `acknowledgeImpact`. Build, install, backup and job commands run with `sh -c`; step timeouts default to 15 minutes (`source.timeout`) and 30 minutes (`timeout` of backup and jobs).

@@ -245,7 +245,11 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		log.Warn("pprof is enabled; it exposes runtime internals", "listen", a.pprofListener.Addr().String())
 	}
 
-	if a.DB, err = store.Open(ctx, cfg.DBPath()); err != nil {
+	workDir, err := cfg.WorkPath()
+	if err != nil {
+		return nil, err
+	}
+	if a.DB, err = store.Open(ctx, cfg.DBPath(), store.WithGit(cfg.Git), store.WithWorkDir(workDir)); err != nil {
 		return nil, err
 	}
 	ready := func(component string, attrs ...any) {
@@ -364,7 +368,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	ready("runtimes", "systemctl", cfg.Systemctl, "docker", cfg.Docker, "privilege", cfg.Privilege())
 	a.Manager, err = catalog.NewManager(catalog.ManagerConfig{
 		Catalog: a.Catalog, Runtimes: a.Runtimes, Runner: o.runner, Locker: lockAdapter{m: a.Locks},
-		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git,
+		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git, WorkDir: workDir,
 	})
 	if err != nil {
 		return nil, err
@@ -375,7 +379,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Resources.RegisterHooks(model.ResourceMachine, a.Machines.Hooks())
 	a.Resources.RegisterHooks(model.ResourceRouter, a.Routers.Hooks())
 	a.follower = a.Catalog.FollowSignals(a.ctx, a.Bus)
-	ready("catalog")
+	ready("catalog", "work", workDir)
 
 	if err = a.Machines.Reconcile(ctx); err != nil {
 		return nil, fmt.Errorf("machine recovery: %w", err)
@@ -422,7 +426,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Registry = node.NewRegistry()
 	core.Register(a.Registry)
 	lifecycle.Register(a.Registry, a.Manager)
-	trigger.Register(a.Registry)
+	trigger.Register(a.Registry, trigger.Deps{WorkDir: workDir})
 	flow.Register(a.Registry, flow.Deps{Client: o.client, Secrets: a.Secrets})
 	guard.Register(a.Registry)
 	network.Register(a.Registry, network.Deps{Client: o.client, Secrets: a.Secrets})

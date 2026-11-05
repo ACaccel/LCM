@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/ACaccel/lcm/internal/execx"
+
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
 )
 
@@ -28,14 +30,55 @@ type DB struct {
 // version of LCM than this binary; OpenExisting leaves it untouched.
 var ErrSchemaMismatch = errors.New("store: database schema does not match this binary")
 
+// Option configures the data migrations of Open and OpenExisting.
+type Option func(*migrateEnv)
+
+// WithGit sets the git program that data migrations read repository
+// configuration with; default "git".
+func WithGit(binary string) Option { return func(e *migrateEnv) { e.git = binary } }
+
+// WithWorkDir sets LCM's build directory, which holds one checkout per
+// service; default the work directory beside the database file.
+func WithWorkDir(dir string) Option { return func(e *migrateEnv) { e.workDir = dir } }
+
+// migrateEnv is what data migrations may use besides the transaction.
+type migrateEnv struct {
+	git     string
+	workDir string
+	runner  execx.Runner
+}
+
+func newMigrateEnv(dbPath string, opts []Option) (migrateEnv, error) {
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return migrateEnv{}, fmt.Errorf("store: resolve path: %w", err)
+	}
+	e := migrateEnv{git: "git", workDir: filepath.Join(filepath.Dir(abs), "work")}
+	for _, o := range opts {
+		o(&e)
+	}
+	if !filepath.IsAbs(e.workDir) {
+		return migrateEnv{}, fmt.Errorf("store: work dir %q must be absolute", e.workDir)
+	}
+	e.workDir = filepath.Clean(e.workDir)
+	if e.runner == nil {
+		e.runner = execx.New()
+	}
+	return e, nil
+}
+
 // Open opens (creating if necessary) the database at path with mode 0600 and
 // applies pending migrations.
-func Open(ctx context.Context, path string) (*DB, error) {
+func Open(ctx context.Context, path string, opts ...Option) (*DB, error) {
+	env, err := newMigrateEnv(path, opts)
+	if err != nil {
+		return nil, err
+	}
 	db, err := open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	if err := migrate(ctx, db.w); err != nil {
+	if err := migrate(ctx, db.w, env); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -48,25 +91,29 @@ func Open(ctx context.Context, path string) (*DB, error) {
 // migrated as Open does. Any other database must carry exactly the
 // migrations of this binary; otherwise OpenExisting returns an error
 // matching ErrSchemaMismatch and changes nothing.
-func OpenExisting(ctx context.Context, path string) (*DB, error) {
+func OpenExisting(ctx context.Context, path string, opts ...Option) (*DB, error) {
+	env, err := newMigrateEnv(path, opts)
+	if err != nil {
+		return nil, err
+	}
 	db, err := open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.checkSchema(ctx); err != nil {
+	if err := db.checkSchema(ctx, env); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
-func (d *DB) checkSchema(ctx context.Context) error {
+func (d *DB) checkSchema(ctx context.Context, env migrateEnv) error {
 	var tables int
 	if err := d.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&tables); err != nil {
 		return fmt.Errorf("store: read schema: %w", err)
 	}
 	if tables == 0 {
-		return migrate(ctx, d.w)
+		return migrate(ctx, d.w, env)
 	}
 	ms, err := loadMigrations()
 	if err != nil {

@@ -85,7 +85,7 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 			out.Warnings = issuesBody(warnings)
 		}
 	case *model.Resource:
-		out.Issues = issuesBody(s.monitor.ValidateChecks(d.Spec.Checks, "spec.checks"))
+		out.Issues = issuesBody(append(s.monitor.ValidateChecks(d.Spec.Checks, "spec.checks"), s.resources.ValidateHost(d)...))
 		out.Warnings = issuesBody(s.unresolvedRelations(r, d))
 	}
 	finish()

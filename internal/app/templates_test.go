@@ -150,6 +150,10 @@ func newDeployFixture(t *testing.T, params ...map[string]any) *deployFixture {
 	f.harness = newHarness(t, func(o *testOpts) { o.git, o.runner = git, runner })
 
 	// The fake checkout: --detach moves it, restarting applies it to the service.
+	// Its directory exists, so deploys fetch instead of cloning.
+	if err := os.MkdirAll(filepath.Join(f.dir, "work", "web", ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runner.On(matchCmd("status --porcelain"), func(execx.Cmd) (execx.Result, error) { return execx.Result{}, nil })
 	runner.On(matchCmd("rev-parse HEAD"), func(execx.Cmd) (execx.Result, error) {
 		return execx.Result{Output: f.served.Load().(string) + "\n"}, nil
@@ -190,7 +194,7 @@ metadata: { name: web }
 spec:
   type: service
   adapter: command
-  config: { start: web-start, stop: web-stop, restart: web-restart, status: web-status, source: { repo: /srv/web, branch: main, build: web-build, install: "true" } }
+  config: { start: web-start, stop: web-stop, restart: web-restart, status: web-status, source: { url: "https://example.com/web.git", branch: main, build: web-build, install: "true" } }
   checks:
     - { name: http, type: http, interval: %s, timeout: 2s, props: { url: %q } }
 `, checkInterval, f.web.srv.URL))

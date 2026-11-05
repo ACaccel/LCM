@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,13 @@ func TestValidateEndpoint(t *testing.T) {
 	if v := validate(serviceDoc("web", "")); v["valid"] != true || len(v["warnings"].([]any)) != 0 {
 		t.Fatalf("valid service = %v", v)
 	}
+	// A source in LCM's build directory is a host rule, reported like the
+	// structural ones and refused on save.
+	inWork := serviceDoc("web", "    source: { url: "+filepath.Join(x.dir, "work", "other")+", branch: main }\n")
+	if v := validate(inWork); v["valid"] != false || len(issues(v)) != 1 || issues(v)[0].(map[string]any)["path"] != "spec.config.source.url" {
+		t.Fatalf("source in the build directory = %v", v)
+	}
+	x.call("POST", v1+"/resources", inWork, yamlBody()).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	// A relation to a resource that does not exist yet is only a warning.
 	if v := validate(serviceDoc("web", "  relations: [{ type: dependsOn, target: db }]\n")); v["valid"] != true || len(v["warnings"].([]any)) != 1 {
 		t.Fatalf("unresolved relation = %v", v)

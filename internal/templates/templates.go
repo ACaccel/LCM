@@ -68,6 +68,16 @@ type Param struct {
 	// resource parameter selects, such as source.branch; a form may fill
 	// the parameter from it.
 	Prefill string `json:"prefill,omitempty"`
+	// VisibleIf limits the parameter to forms where another parameter, an
+	// enum, has the given value, such as the fields of one notification
+	// target. A hidden parameter keeps its default.
+	VisibleIf *Condition `json:"visibleIf,omitempty"`
+}
+
+// Condition names a value of another parameter.
+type Condition struct {
+	Param  string `json:"param"`
+	Equals string `json:"equals"`
 }
 
 // Template is one built-in policy template.
@@ -103,9 +113,12 @@ var (
 	// deployNotify lets auto-deploy report to Discord or a konata relay.
 	deployNotify = []Param{
 		{Name: "notifyTarget", Type: TypeString, Enum: []string{"discord", "konata"}, Description: "Where notifications go: discord (notifySecret) or konata (notifyUrl and notifyTokenSecret)."},
-		{Name: "notifySecret", Type: TypeSecret, Description: "discord: name of a secret that holds the webhook URL. Leave empty to send no Discord notifications."},
-		{Name: "notifyUrl", Type: TypeString, Description: "konata: the notification route URL, such as http://127.0.0.1:4100/notifications/deploys. Leave empty to send no konata notifications."},
-		{Name: "notifyTokenSecret", Type: TypeSecret, Description: "konata: name of a secret that holds the relay's bearer key."},
+		{Name: "notifySecret", Type: TypeSecret, VisibleIf: &Condition{"notifyTarget", "discord"},
+			Description: "discord: name of a secret that holds the webhook URL. Leave empty to send no Discord notifications."},
+		{Name: "notifyUrl", Type: TypeString, VisibleIf: &Condition{"notifyTarget", "konata"},
+			Description: "konata: the notification route URL, such as http://127.0.0.1:4100/notifications/deploys. Leave empty to send no konata notifications."},
+		{Name: "notifyTokenSecret", Type: TypeSecret, VisibleIf: &Condition{"notifyTarget", "konata"},
+			Description: "konata: name of a secret that holds the relay's bearer key."},
 	}
 )
 
@@ -121,7 +134,8 @@ var descriptors = []descriptor{
 			"waits for the service to become healthy and rolls back otherwise. One Discord or konata message is updated through the stages.",
 		params: append([]Param{
 			service,
-			{Name: "repo", Type: TypeString, Required: true, Description: "Git repository URL or local path that is polled for new commits."},
+			{Name: "repo", Type: TypeString, Required: true, Prefill: "source.url",
+				Description: "Git repository URL or local path that is polled for new commits; normally the service's source.url."},
 			{Name: "branch", Type: TypeString, Prefill: "source.branch", Description: "Branch to watch."},
 			{Name: "requireCI", Type: TypeBool, Description: "Deploy only commits whose GitHub Actions checks passed."},
 			{Name: "ciRepo", Type: TypeString, RequiredIf: "requireCI", Description: "GitHub repository as owner/name, for the CI check."},
@@ -230,6 +244,14 @@ func load(d descriptor) (Template, error) {
 	}
 	if !seen[d.resourceParam] {
 		return Template{}, fmt.Errorf("resource parameter %s is not described", d.resourceParam)
+	}
+	for _, p := range t.Params {
+		if c := p.VisibleIf; c != nil {
+			i := slices.IndexFunc(t.Params, func(q Param) bool { return q.Name == c.Param })
+			if i < 0 || !slices.Contains(t.Params[i].Enum, c.Equals) {
+				return Template{}, fmt.Errorf("parameter %s: visibleIf needs a value of the enum parameter %s", p.Name, c.Param)
+			}
+		}
 	}
 	return t, nil
 }

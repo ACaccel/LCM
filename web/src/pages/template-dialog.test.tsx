@@ -30,10 +30,13 @@ const template: Template = {
   resourceParam: "resource",
   params: [
     { name: "resource", type: "service", description: "", required: true },
-    { name: "repo", type: "string", description: "", required: true },
+    { name: "repo", type: "string", description: "", required: true, prefill: "source.url" },
     { name: "branch", type: "string", description: "", required: false, default: "main", prefill: "source.branch" },
     { name: "windows", type: "windows", description: "", required: false, default: [{ start: "00:00", end: "24:00" }] },
     { name: "notifyTarget", type: "string", description: "", required: false, default: "discord", enum: ["discord", "konata"] },
+    { name: "notifySecret", type: "secret", description: "", required: false, default: "", visibleIf: { param: "notifyTarget", equals: "discord" } },
+    { name: "notifyUrl", type: "string", description: "", required: false, default: "", visibleIf: { param: "notifyTarget", equals: "konata" } },
+    { name: "notifyTokenSecret", type: "secret", description: "", required: false, default: "", visibleIf: { param: "notifyTarget", equals: "konata" } },
   ],
 };
 
@@ -50,7 +53,7 @@ function setup() {
         return jsonResponse({ items: [], nextCursor: null });
       case "/api/v1/resources/web": {
         const doc = resourceFixture().document;
-        return jsonResponse(resourceFixture({ document: { ...doc, spec: { ...doc.spec, config: { unit: "web.service", source: { repo: "/srv/web", branch: "release" } } } } }));
+        return jsonResponse(resourceFixture({ document: { ...doc, spec: { ...doc.spec, config: { unit: "web.service", source: { url: "https://github.com/acme/web.git", branch: "release" } } } } }));
       }
       case "/api/v1/resources/api":
         return jsonResponse(resourceFixture({ name: "api" }));
@@ -91,14 +94,23 @@ describe("TemplateDialog", () => {
     expect((within(first).getByLabelText("開始") as HTMLInputElement).value).toBe("00:00");
     expect((within(first).getByLabelText("結束") as HTMLInputElement).value).toBe("00:00");
 
-    // Choosing a service fills the branch from its source, until the user edits it.
+    // Only the fields of the chosen notification target are shown.
+    expect(screen.getByLabelText(/Discord webhook/)).toBeTruthy();
+    expect(screen.queryByLabelText(/konata 通知路由/)).toBeNull();
+    expect(screen.queryByLabelText(/konata 金鑰/)).toBeNull();
+
+    // Choosing a service fills the repository and branch from its source, until the user edits them.
     await user.selectOptions(screen.getByLabelText(/服務/), "web");
     const branch = screen.getByLabelText(/分支/) as HTMLInputElement;
+    const repo = screen.getByLabelText(/Git repo/) as HTMLInputElement;
     await waitFor(() => expect(branch.value).toBe("release"));
+    expect(repo.value).toBe("https://github.com/acme/web.git");
     await user.selectOptions(screen.getByLabelText(/服務/), "api");
     await waitFor(() => expect(branch.value).toBe("main"));
+    expect(repo.value).toBe("");
     await user.selectOptions(screen.getByLabelText(/服務/), "web");
     await waitFor(() => expect(branch.value).toBe("release"));
+    expect(repo.value).toBe("https://github.com/acme/web.git");
 
     // Edit the window: Monday and Friday, 22:00 to midnight; add a second row.
     await user.click(within(first).getByLabelText("一"));
@@ -109,11 +121,18 @@ describe("TemplateDialog", () => {
     const second = screen.getByRole("group", { name: "時段 2" });
     await user.clear(within(second).getByLabelText("結束"));
     await user.type(within(second).getByLabelText("結束"), "05:00");
+    // A value typed for one target is not sent once another target is chosen.
+    await user.type(screen.getByLabelText(/Discord webhook/), "ops-hook");
     await user.selectOptions(target, "konata");
-    await user.type(screen.getByLabelText(/Git repo/), "https://example.com/web.git");
+    expect(screen.queryByLabelText(/Discord webhook/)).toBeNull();
+    await user.type(screen.getByLabelText(/konata 通知路由/), "http://127.0.0.1:4100/n");
+    expect(screen.getByLabelText(/konata 金鑰/)).toBeTruthy();
+    await user.clear(repo);
+    await user.type(repo, "https://example.com/web.git");
 
     await user.click(screen.getByRole("button", { name: "預覽 YAML" }));
     await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0] as { params: Record<string, unknown> }).params).not.toHaveProperty("notifySecret");
     expect(sent[0]).toMatchObject({
       name: "web-auto-deploy",
       dryRun: true,
@@ -122,6 +141,7 @@ describe("TemplateDialog", () => {
         repo: "https://example.com/web.git",
         branch: "release",
         notifyTarget: "konata",
+        notifyUrl: "http://127.0.0.1:4100/n",
         windows: [
           { days: ["mon", "fri"], start: "22:00", end: "24:00" },
           { start: "00:00", end: "05:00" },

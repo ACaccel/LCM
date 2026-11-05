@@ -7,7 +7,7 @@ import { policiesQuery, qk, resourceQuery, resourcesQuery, templatesQuery } from
 import type { Template, TemplateInstance, TemplateParam } from "../api/types";
 import { Dialog, useDialogGuard } from "../components/dialog";
 import { ErrorBox, Field, Spinner } from "../components/ui";
-import { WEEKDAYS, buildParams, initialValues, isRequired, prefillValues, suggestName } from "../lib/template-form";
+import { WEEKDAYS, buildParams, initialValues, isRequired, isVisible, prefillValues, suggestName } from "../lib/template-form";
 import type { FormValue, FormValues, WindowRow } from "../lib/template-form";
 import { s } from "../strings";
 
@@ -221,7 +221,7 @@ function Form({ templates, services, resource, onClose }: { templates: Template[
           }}
         />
       </Field>
-      {template.params.map((p) => (
+      {template.params.filter((p) => isVisible(p, values)).map((p) => (
         <ParamField
           key={`${template.id}-${p.name}`}
           param={p}

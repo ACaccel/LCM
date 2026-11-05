@@ -5171,6 +5171,16 @@ components:
             Path in the `spec.config` of the resource that the resource
             parameter selects, such as `source.branch`; a form may fill the
             parameter from it until the user edits it.
+        visibleIf:
+          type: object
+          description: |
+            Shows the parameter only while the enum parameter `param` has the
+            value `equals`, such as the fields of one notification target. A
+            hidden parameter keeps its default.
+          required: [param, equals]
+          properties:
+            param: { type: string }
+            equals: { type: string }
     TemplateInstance:
       type: object
       required: [template, name, yaml, version, deployed, warnings]

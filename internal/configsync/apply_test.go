@@ -99,8 +99,15 @@ func TestApplyReportsEachDocument(t *testing.T) {
 		"kind: Nonsense\n",
 		policyYAML("nomodule", "    - { id: start, type: trigger.manual, next: { out: [m] } }\n    - { id: m, type: module, props: { module: absent } }\n"),
 		serviceYAML("good", "  relations: [{ type: dependsOn, target: x }]\n"),
+		"apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: legacy }\nspec:\n  type: service\n  adapter: external\n"+
+			"  config: { source: { repo: /var/lib/lcm/work/legacy, remote: origin, branch: main } }\n",
 	)
 	wantAction(t, res, "Resource/good", configsync.ActionCreate)
+	// A repository document from before storage schema 15 says what replaced its fields.
+	if r := wantAction(t, res, "Resource/legacy", configsync.ActionFailed); len(r.Issues) != 1 || r.Issues[0].Path != "spec.config.source.repo" ||
+		!strings.Contains(r.Issues[0].Message, "replaced by source.url") {
+		t.Fatalf("legacy issues = %v", r.Issues)
+	}
 	if r := wantAction(t, res, "Resource/broken", configsync.ActionFailed); len(r.Issues) == 0 || !strings.HasPrefix(r.Issues[0].Path, "spec.config") {
 		t.Fatalf("broken issues = %v", r.Issues)
 	}

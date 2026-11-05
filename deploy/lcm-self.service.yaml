@@ -24,7 +24,9 @@ spec:
   config:
     status: systemctl is-active --quiet lcm.service
     source:
-      repo: /var/lib/lcm/work/lcm
+      # LCM clones this into its build checkout /var/lib/lcm/work/lcm, which
+      # the install step and the version check below use.
+      url: https://github.com/ACaccel/LCM.git
       branch: main
       # make build compiles the console (npm) and bin/lcm with the toolchains
       # bootstrap copied; caches stay under the data directory.

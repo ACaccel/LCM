@@ -33,7 +33,11 @@ func (a *app) openStore(ctx context.Context, fs *flag.FlagSet, cfg *config.Confi
 	if err := cfg.EnsureDataDir(); err != nil {
 		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	db, err := store.OpenExisting(ctx, cfg.DBPath())
+	workDir, err := cfg.WorkPath()
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	db, err := store.OpenExisting(ctx, cfg.DBPath(), store.WithGit(cfg.Git), store.WithWorkDir(workDir))
 	if err != nil {
 		return nil, nil, err
 	}

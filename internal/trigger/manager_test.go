@@ -70,12 +70,15 @@ func (f *fakeGit) RemoteHead(_ context.Context, repo, branch string) (string, er
 	return sha, nil
 }
 
+// testWorkDir is the build directory trigger.git refuses to watch.
+const testWorkDir = "/var/lib/lcm/work"
+
 // newEnv builds the harness, registers the trigger types and any extra
 // node types through pre, and opens the engine.
 func newEnv(t *testing.T, secrets secret.Source, calendarDir string, pre ...func(*enginetest.Harness, *engine.Config)) *env {
 	t.Helper()
 	h := enginetest.New(t)
-	trigger.Register(h.Registry)
+	trigger.Register(h.Registry, trigger.Deps{WorkDir: testWorkDir})
 	e := h.Open(func(cfg *engine.Config) {
 		for _, f := range pre {
 			f(h, cfg)
@@ -731,6 +734,9 @@ func TestTriggerPropsValidation(t *testing.T) {
 		`trigger.git|{ repo: "https://tok@example.com/x" }`:           "credentials",
 		`trigger.git|{ repo: r, branch: "a..b" }`:                     "branch",
 		`trigger.git|{ repo: r, interval: 1s }`:                       "minimum",
+		`trigger.git|{ repo: /var/lib/lcm/work/app }`:                 "build checkout",
+		`trigger.git|{ repo: "file:///var/lib/lcm/work/app/" }`:       "build checkout",
+		`trigger.git|{ repo: /var/lib/lcm/work }`:                     "build checkout",
 		`trigger.cron|{ schedule: "61 * * * *" }`:                     "outside",
 		`trigger.cron|{ schedule: "* * * * *", timezone: Mars/Base }`: "unknown zone",
 		`trigger.cron|{ schedule: "* * * * *", catchUp: sometimes }`:  "one of",

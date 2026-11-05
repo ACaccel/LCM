@@ -3,6 +3,8 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -352,24 +354,35 @@ func TestBackupAndJobs(t *testing.T) {
 		Reply("reindex", "index error\n", 2)
 	e := newEnv(t, withRunner(fake))
 	e.put(svcDoc("db", `
-  source: { repo: /srv/db, branch: main }
+  source: { url: /srv/db, branch: main }
   backup: { command: "pg_dump db > /backup/db.sql", timeout: 5m }
   jobs:
     reindex: { command: "app reindex", timeout: 2m }
 `), 0)
 	e.setState("db", catalog.StateRunning)
 
+	// Commands run in the build checkout, which the first deploy creates.
+	if _, err := e.mgr.Backup(e.ctx, "db", catalog.ActionOptions{}); !errors.Is(err, catalog.ErrNoCheckout) || len(fake.Calls()) != 0 {
+		t.Fatalf("backup without a checkout = %v", err)
+	}
+	checkout := filepath.Join(e.work, "db")
+	if err := os.MkdirAll(checkout, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	res, err := e.mgr.Backup(e.ctx, "db", catalog.ActionOptions{RunID: "run1"})
 	if err != nil || res.Output != "dumped 3 tables\n" || res.From != catalog.StateRunning || res.To != catalog.StateRunning {
 		t.Fatalf("backup = %+v %v", res, err)
 	}
 	call := fake.Calls()[0]
-	if call.Shell != "pg_dump db > /backup/db.sql" || call.Dir != "/srv/db" || call.Timeout.Minutes() != 5 {
+	if call.Shell != "pg_dump db > /backup/db.sql" || call.Dir != checkout || call.Timeout.Minutes() != 5 {
 		t.Fatalf("backup command = %+v", call)
 	}
 
 	if _, err := e.mgr.RunJob(e.ctx, "db", catalog.ActionOptions{Job: "reindex", RunID: "run1"}); execx.ExitCode(err) != 2 {
 		t.Fatalf("failing job: %v", err)
+	}
+	if call := fake.Calls()[1]; call.Shell != "app reindex" || call.Dir != checkout {
+		t.Fatalf("job command = %+v", call)
 	}
 	if _, err := e.mgr.RunJob(e.ctx, "db", catalog.ActionOptions{Job: "nope"}); !errors.Is(err, catalog.ErrUnknownJob) || !errors.Is(err, catalog.ErrPrecondition) {
 		t.Fatalf("unknown job: %v", err)
@@ -384,7 +397,7 @@ func TestBackupAndJobs(t *testing.T) {
 	}
 
 	page, _ := e.cat.Timeline(context.Background(), catalog.TimelineQuery{Resource: "db", Kinds: []string{catalog.KindBackup, catalog.KindJob}})
-	if len(page.Entries) != 3 {
+	if len(page.Entries) != 4 {
 		t.Fatalf("timeline = %+v", page.Entries)
 	}
 	job, backup := page.Entries[1], page.Entries[2]
@@ -456,19 +469,31 @@ func TestActionsAreAuditedAndOnTimeline(t *testing.T) {
 func TestPlan(t *testing.T) {
 	e := newEnv(t)
 	e.put(svcDoc("app", `
-  source: { repo: /srv/app, branch: main, build: "make" }
+  source: { url: "https://github.com/acme/app.git", branch: main, build: "make" }
   backup: { command: "tar c /srv/app" }
   jobs: { reindex: { command: "app reindex" } }
 `), 0)
 	e.setState("app", catalog.StateRunning)
 	ctx := context.Background()
 
+	// Without a build checkout the deploy clones one.
 	p, err := e.mgr.Plan(ctx, "app", catalog.ActionDeploy, catalog.ActionOptions{})
+	checkout := filepath.Join(e.work, "app")
+	if err != nil || !slices.Equal(stepCodes(p), []string{"step.lock", "step.recordDeployment", "step.clone", "step.resolveHead", "step.checkout", "step.build", "step.restart"}) ||
+		p.StepMessages[2].Params["url"] != "https://github.com/acme/app.git" || p.StepMessages[2].Params["dir"] != checkout {
+		t.Fatalf("first deploy plan = %+v %v", p, err)
+	}
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err = e.mgr.Plan(ctx, "app", catalog.ActionDeploy, catalog.ActionOptions{})
 	if err != nil || p.From != catalog.StateRunning || p.To != catalog.StateRunning {
 		t.Fatalf("deploy plan = %+v %v", p, err)
 	}
 	joined := strings.Join(p.Steps, "\n")
-	for _, want := range []string{"lock resource:app", "set state updating", "git fetch --prune origin", "head of origin/main", "build: make", "restart systemd unit app.service"} {
+	for _, want := range []string{"lock resource:app", "tracked files in " + checkout, "set state updating", "git remote set-url origin https://github.com/acme/app.git",
+		"git fetch --prune origin", "head of origin/main", "build: make", "restart systemd unit app.service"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("deploy plan lacks %q:\n%s", want, joined)
 		}
@@ -481,20 +506,26 @@ func TestPlan(t *testing.T) {
 			t.Errorf("step %d text %q differs from %q", i, m.Message, p.Steps[i])
 		}
 	}
-	wantCodes := []string{"step.lock", "step.refuseDirty", "step.recordDeployment", "step.fetch", "step.resolveHead", "step.checkout", "step.build", "step.restart"}
+	wantCodes := []string{"step.lock", "step.refuseDirty", "step.recordDeployment", "step.setOrigin", "step.fetch", "step.resolveHead", "step.checkout", "step.build", "step.restart"}
 	if !slices.Equal(codes, wantCodes) {
 		t.Errorf("deploy step codes = %v, want %v", codes, wantCodes)
 	}
 	if m := p.StepMessages[0]; m.Params["lock"] != "resource:app" {
 		t.Errorf("lock params = %v", m.Params)
 	}
-	if m := p.StepMessages[4]; m.Params["remote"] != "origin" || m.Params["branch"] != "main" {
+	if m := p.StepMessages[1]; m.Params["repo"] != checkout {
+		t.Errorf("refuse dirty params = %v", m.Params)
+	}
+	if m := p.StepMessages[3]; m.Params["url"] != "https://github.com/acme/app.git" {
+		t.Errorf("set origin params = %v", m.Params)
+	}
+	if m := p.StepMessages[5]; m.Params["remote"] != "origin" || m.Params["branch"] != "main" {
 		t.Errorf("resolve head params = %v", m.Params)
 	}
-	if m := p.StepMessages[7]; m.Params["runtime"] != "systemd" || m.Params["name"] != "app.service" || m.Params["scope"] != "system" {
+	if m := p.StepMessages[8]; m.Params["runtime"] != "systemd" || m.Params["name"] != "app.service" || m.Params["scope"] != "system" {
 		t.Errorf("restart params = %v", m.Params)
 	}
-	if m := p.StepMessages[6]; m.Params["command"] != "make" {
+	if m := p.StepMessages[7]; m.Params["command"] != "make" {
 		t.Errorf("build params = %v", m.Params)
 	}
 	if p, err = e.mgr.Plan(ctx, "app", catalog.ActionStop, catalog.ActionOptions{}); err != nil || p.To != catalog.StateStopped {
@@ -521,4 +552,12 @@ func TestPlan(t *testing.T) {
 	if e.locker.acquire != 0 {
 		t.Fatal("Plan must not take locks")
 	}
+}
+
+func stepCodes(p catalog.Plan) []string {
+	out := make([]string, len(p.StepMessages))
+	for i, m := range p.StepMessages {
+		out[i] = m.Code
+	}
+	return out
 }

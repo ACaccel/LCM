@@ -58,11 +58,11 @@ type realEnv struct {
 	unit    string
 	port    int
 	discord *discordRecorder
-	// origin is the bare repository LCM polls; dev is where commits are made;
-	// work is the checkout LCM deploys from.
-	origin, dev, work string
-	baseline          string
-	httpc             *http.Client
+	// origin is the bare repository LCM polls and clones into its build
+	// checkout; dev is where commits are made.
+	origin, dev string
+	baseline    string
+	httpc       *http.Client
 }
 
 func newRealEnv(t *testing.T) *realEnv {
@@ -73,7 +73,7 @@ func newRealEnv(t *testing.T) *realEnv {
 		t.Fatal(err)
 	}
 	e.unit = "lcm-e2e-" + hex.EncodeToString(suffix)
-	e.origin, e.dev, e.work = filepath.Join(e.dir, "origin.git"), filepath.Join(e.dir, "dev"), filepath.Join(e.dir, "work")
+	e.origin, e.dev = filepath.Join(e.dir, "origin.git"), filepath.Join(e.dir, "dev")
 	e.httpc = &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	e.discord = newDiscord(t)
 
@@ -185,7 +185,6 @@ func (e *realEnv) initRepos() {
 	e.sh(e.dir, "git", "init", "-q", "--bare", "--initial-branch=main", e.origin)
 	e.sh(e.dir, "git", "clone", "-q", e.origin, e.dev)
 	e.baseline = e.commit("0", true, true)
-	e.sh(e.dir, "git", "clone", "-q", e.origin, e.work)
 }
 
 func (e *realEnv) startApp() {
@@ -240,10 +239,10 @@ metadata: { name: e2e-web }
 spec:
   type: service
   adapter: systemd
-  config: { unit: %s.service, scope: user, source: { repo: %s, branch: main, build: "sh ./build.sh", install: %q } }
+  config: { unit: %s.service, scope: user, source: { url: %s, branch: main, build: "sh ./build.sh", install: %q } }
   checks:
     - { name: http, type: http, interval: 2s, timeout: 1s, props: { url: "http://127.0.0.1:%d/health" } }
-`, e.unit, e.work, install, e.port)
+`, e.unit, e.origin, install, e.port)
 	if _, err := e.app.Resources.Put(e.ctx, []byte(doc), 0); err != nil {
 		e.t.Fatal(err)
 	}

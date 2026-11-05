@@ -87,7 +87,18 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 	if version != "" && !shaRe.MatchString(version) {
 		return nil, ErrInvalidVersion
 	}
-	steps := []message.Message{message.New("step.refuseDirty", "refuse if tracked files in "+src.Repo+" have changes", "repo", src.Repo)}
+	if m.sourceInWorkDir(src) {
+		return nil, ErrSourceInWorkDir
+	}
+	dir := m.CheckoutDir(rec.Name)
+	clone, err := needsClone(dir)
+	if err != nil {
+		return nil, err
+	}
+	var steps []message.Message
+	if !clone {
+		steps = append(steps, message.New("step.refuseDirty", "refuse if tracked files in "+dir+" have changes", "repo", dir))
+	}
 	transient := StateDeploying
 	switch {
 	case action == ActionRollback:
@@ -96,8 +107,15 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 		transient = StateUpdating
 	}
 	steps = append(steps, message.New("step.recordDeployment", fmt.Sprintf("set state %s and record the deployment", transient), "state", string(transient)))
-	remote := src.EffectiveRemote()
-	fetch := message.New("step.fetch", "git fetch --prune "+remote, "remote", remote)
+	const remote = "origin"
+	fetch := []message.Message{
+		message.New("step.setOrigin", "git remote set-url origin "+src.URL, "url", src.URL),
+		message.New("step.fetch", "git fetch --prune "+remote, "remote", remote),
+	}
+	if clone {
+		steps = append(steps, message.New("step.clone", fmt.Sprintf("git clone %s into %s", src.URL, dir), "url", src.URL, "dir", dir))
+		fetch = nil
+	}
 	switch {
 	case action == ActionRollback:
 		deps, err := m.cat.Deployments(ctx, rec.Name, 100, 0)
@@ -110,10 +128,11 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 		}
 		steps = append(steps, message.New("step.rollbackTarget", "resolve rollback target "+shortSHA(v), "commit", shortSHA(v)))
 	case version != "":
-		steps = append(steps, fetch, message.New("step.resolveCommit", "resolve "+shortSHA(version), "commit", shortSHA(version)))
+		steps = append(steps, fetch...)
+		steps = append(steps, message.New("step.resolveCommit", "resolve "+shortSHA(version), "commit", shortSHA(version)))
 	default:
-		steps = append(steps, fetch,
-			message.New("step.resolveHead", fmt.Sprintf("resolve head of %s/%s", remote, src.Branch), "remote", remote, "branch", src.Branch))
+		steps = append(steps, fetch...)
+		steps = append(steps, message.New("step.resolveHead", fmt.Sprintf("resolve head of %s/%s", remote, src.Branch), "remote", remote, "branch", src.Branch))
 	}
 	steps = append(steps, message.New("step.checkout", "git checkout --detach <commit>"))
 	if src.Build != "" {

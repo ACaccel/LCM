@@ -3,7 +3,7 @@ package catalog_test
 import (
 	"context"
 	"errors"
-	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,7 +19,7 @@ func statusOnlyDoc(name, extra string) string {
 
 func TestUnsupportedRuntimeActionsAreRefused(t *testing.T) {
 	e := newEnv(t)
-	e.put(statusOnlyDoc("self", "  source: { repo: /srv/self, branch: main, install: ./install.sh }\n"), 0)
+	e.put(statusOnlyDoc("self", "  source: { url: /srv/self, branch: main, install: ./install.sh }\n"), 0)
 	e.setState("self", catalog.StateRunning)
 	ad := e.runtime.adapter("self")
 	ctx := context.Background()
@@ -58,8 +58,9 @@ func TestUnsupportedRuntimeActionsAreRefused(t *testing.T) {
 
 func TestDeployWithoutRestartLeavesItToInstall(t *testing.T) {
 	g := newGitFixture(t)
-	e := newEnv(t, realGit())
-	e.put(statusOnlyDoc("self", fmt.Sprintf("  source:\n    repo: %s\n    branch: main\n    build: %q\n    install: %q\n", g.repo, okBuild, okInstall)), 0)
+	e := newEnv(t, realGit(g))
+	g.repo = filepath.Join(g.work, "self")
+	e.put(statusOnlyDoc("self", sourceConfig(g.remote, okBuild, okInstall)), 0)
 	ad := e.runtime.adapter("self")
 
 	res, err := e.mgr.Deploy(e.ctx, "self", catalog.ActionOptions{})
@@ -77,7 +78,7 @@ func TestDeployWithoutRestartLeavesItToInstall(t *testing.T) {
 
 func TestAvailableActions(t *testing.T) {
 	e := newEnv(t)
-	e.put(statusOnlyDoc("self", "  source: { repo: /srv/self, branch: main }\n"), 0)
+	e.put(statusOnlyDoc("self", "  source: { url: /srv/self, branch: main }\n"), 0)
 	e.setState("self", catalog.StateRunning)
 	e.put(svcDoc("app", "  backup: { command: \"tar c /srv/app\" }\n"), 0)
 	e.setState("app", catalog.StateRunning)

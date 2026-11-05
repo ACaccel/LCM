@@ -81,8 +81,16 @@ var (
 	severities  = []string{signal.SeverityInfo, signal.SeverityWarning, signal.SeverityCritical}
 )
 
+// Deps is the host knowledge trigger validation needs.
+type Deps struct {
+	// WorkDir is LCM's build directory, which holds the checkouts that
+	// deploys move between commits. A trigger.git watching one would
+	// never fire, so such a repo is refused.
+	WorkDir string
+}
+
 // Register adds the trigger node types to r.
-func Register(r *node.Registry) {
+func Register(r *node.Registry, deps Deps) {
 	node.Register(r, node.Spec[SignalProps]{
 		Type: TypeSignal, Category: node.CategoryTrigger,
 		Description: "Starts a run when a matching signal (check, health, lifecycle or alert) is published. The signal is the trigger event.",
@@ -91,7 +99,7 @@ func Register(r *node.Registry) {
 	node.Register(r, node.Spec[GitProps]{
 		Type: TypeGit, Category: node.CategoryTrigger,
 		Description: "Starts a run when a branch of a git remote gets a new commit. Event: repo, branch, commit, previous.",
-		Validate:    validateGit,
+		Validate:    func(p GitProps) error { return validateGit(p, deps.WorkDir) },
 	})
 	node.Register(r, node.Spec[CronProps]{
 		Type: TypeCron, Category: node.CategoryTrigger,
@@ -143,12 +151,16 @@ func oneOf(field string, got, allowed []string) error {
 	return nil
 }
 
-func validateGit(p GitProps) error {
+func validateGit(p GitProps, workDir string) error {
+	local, isLocal := model.LocalRepoPath(p.Repo)
 	switch {
 	case strings.HasPrefix(p.Repo, "-") || strings.ContainsAny(p.Repo, "\x00\r\n"):
 		return fmt.Errorf("repo: invalid value")
 	case execx.CheckGitRemote(p.Repo) != nil:
 		return fmt.Errorf("repo: %w", execx.ErrGitCredentials)
+	case workDir != "" && isLocal && model.PathWithin(local, workDir):
+		return fmt.Errorf("repo: %s is a build checkout in LCM's build directory %s, which only moves to commits LCM deploys and never gets new ones; "+
+			"watch the repository new versions come from, the service's source.url", local, workDir)
 	case !branchRe.MatchString(p.Branch) || strings.HasPrefix(p.Branch, "-") || strings.Contains(p.Branch, ".."):
 		return fmt.Errorf("branch: invalid branch name %q", p.Branch)
 	case p.Interval.D() < MinGitInterval:

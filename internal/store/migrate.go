@@ -67,7 +67,7 @@ func loadMigrations() ([]migration, error) {
 }
 
 // migrate applies every pending migration, each in its own transaction.
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, db *sql.DB, env migrateEnv) error {
 	ms, err := loadMigrations()
 	if err != nil {
 		return err
@@ -108,14 +108,14 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if applied[m.version] {
 			continue
 		}
-		if err := apply(ctx, db, m); err != nil {
+		if err := apply(ctx, db, m, env); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func apply(ctx context.Context, db *sql.DB, m migration) error {
+func apply(ctx context.Context, db *sql.DB, m migration, env migrateEnv) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: migration %s: begin: %w", m.name, err)
@@ -125,7 +125,7 @@ func apply(ctx context.Context, db *sql.DB, m migration) error {
 		return fmt.Errorf("store: migration %s: %w", m.name, err)
 	}
 	if fn := goMigrations[m.version]; fn != nil {
-		if err := fn(ctx, tx); err != nil {
+		if err := fn(ctx, tx, env); err != nil {
 			return fmt.Errorf("store: migration %s: %w", m.name, err)
 		}
 	}

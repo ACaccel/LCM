@@ -31,7 +31,7 @@ func legacyDB(t *testing.T, upTo int) *sql.DB {
 	}
 	for _, m := range ms {
 		if m.version <= upTo {
-			if err := apply(context.Background(), db, m); err != nil {
+			if err := apply(context.Background(), db, m, testEnv(t)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -124,7 +124,7 @@ func TestResourceMigration(t *testing.T) {
 		`INSERT INTO config_ownership VALUES('Machine','workstation','repo','ws.yaml','c1',1,`+quote(wsV1)+`,'','','',0,0,1)`,
 		`INSERT INTO config_ownership VALUES('Policy','restart','repo','p.yaml','c1',1,`+quote(polV1)+`,'','','',0,1,1)`,
 	)
-	if err := migrate(ctx, db); err != nil {
+	if err := migrate(ctx, db, testEnv(t)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,7 +328,7 @@ func TestResourceMigrationRefusesNameClash(t *testing.T) {
 		`INSERT INTO machines(id,name,version,created_at,updated_at) VALUES('m-1','workstation',1,1,2)`,
 		`INSERT INTO machine_versions VALUES('m-1',1,`+quote(wsV1)+`,0,1,'{"kind":"user","id":"u1","name":"alice"}')`,
 	)
-	err := migrate(context.Background(), db)
+	err := migrate(context.Background(), db, testEnv(t))
 	if err == nil || !strings.Contains(err.Error(), `both named "workstation"`) {
 		t.Fatalf("err = %v", err)
 	}

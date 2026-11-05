@@ -19,7 +19,7 @@ const fullService = resourceHead + `spec:
   config:
     unit: app.service
     source:
-      repo: /srv/app
+      url: https://github.com/acme/app.git
       branch: main
       build: npm ci && npm run build
       timeout: 20m
@@ -54,7 +54,7 @@ func TestDecodeServiceResource(t *testing.T) {
 	if rt.Type != model.RuntimeSystemd || rt.Unit != "app.service" || rt.EffectiveScope() != model.ScopeSystem {
 		t.Fatalf("runtime = %+v", rt)
 	}
-	if cfg.Source.Remote != "origin" || cfg.Source.EffectiveTimeout() != 20*time.Minute {
+	if cfg.Source.URL != "https://github.com/acme/app.git" || cfg.Source.EffectiveTimeout() != 20*time.Minute {
 		t.Fatalf("source = %+v", cfg.Source)
 	}
 	if cfg.Jobs["reindex"].EffectiveTimeout() != 10*time.Minute || cfg.Backup.EffectiveTimeout() != 30*time.Minute {
@@ -162,14 +162,22 @@ func TestValidateServiceConfigFields(t *testing.T) {
 	cfg := func(s string) string { return head + "  config: " + s + "\n" }
 	bad := []struct{ name, doc, path, msg string }{
 		{"name", "apiVersion: lcm/v2\nkind: Resource\nmetadata: { name: Bad_Name }\nspec: { type: service, adapter: external }\n", "metadata.name", "lowercase"},
-		{"source no repo", cfg("{ source: { branch: main } }"), "spec.config.source.repo", "required"},
-		{"source relative repo", cfg("{ source: { repo: srv/app, branch: main } }"), "spec.config.source.repo", "absolute"},
-		{"source no branch", cfg("{ source: { repo: /srv/app } }"), "spec.config.source.branch", "required"},
-		{"source option-like branch", cfg("{ source: { repo: /srv/app, branch: '--upload-pack=x' } }"), "spec.config.source.branch", "invalid"},
-		{"source dotdot branch", cfg("{ source: { repo: /srv/app, branch: a..b } }"), "spec.config.source.branch", "invalid"},
-		{"source remote", cfg("{ source: { repo: /srv/app, branch: main, remote: '-x' } }"), "spec.config.source.remote", "invalid"},
-		{"source timeout", cfg("{ source: { repo: /srv/app, branch: main, timeout: -1m } }"), "spec.config.source.timeout", "negative"},
-		{"source unknown field", cfg("{ source: { repo: /srv/app, branch: main, tag: v1 } }"), "", "field tag not found"},
+		{"source no url", cfg("{ source: { branch: main } }"), "spec.config.source.url", "required"},
+		{"source relative path", cfg("{ source: { url: srv/app, branch: main } }"), "spec.config.source.url", "absolute path"},
+		{"source unclean path", cfg("{ source: { url: /srv/../app, branch: main } }"), "spec.config.source.url", "clean absolute"},
+		{"source credentials", cfg("{ source: { url: 'https://user:tok@example.com/a.git', branch: main } }"), "spec.config.source.url", "credentials"},
+		{"source option-like url", cfg("{ source: { url: '--upload-pack=x', branch: main } }"), "spec.config.source.url", "'-'"},
+		{"source remote helper", cfg("{ source: { url: 'ext::sh -c x', branch: main } }"), "spec.config.source.url", "spaces"},
+		{"source helper scheme", cfg("{ source: { url: 'fd::17', branch: main } }"), "spec.config.source.url", "remote helpers"},
+		{"source unknown scheme", cfg("{ source: { url: 'ftp://example.com/a.git', branch: main } }"), "spec.config.source.url", "schemes"},
+		{"source relative file url", cfg("{ source: { url: 'file://srv/app', branch: main } }"), "spec.config.source.url", "absolute path"},
+		{"source legacy repo", cfg("{ source: { url: /srv/app, repo: /var/lib/lcm/work/app, branch: main } }"), "spec.config.source.repo", "replaced by source.url"},
+		{"source legacy remote", cfg("{ source: { url: /srv/app, remote: origin, branch: main } }"), "spec.config.source.remote", "replaced by source.url"},
+		{"source no branch", cfg("{ source: { url: /srv/app } }"), "spec.config.source.branch", "required"},
+		{"source option-like branch", cfg("{ source: { url: /srv/app, branch: '--upload-pack=x' } }"), "spec.config.source.branch", "invalid"},
+		{"source dotdot branch", cfg("{ source: { url: /srv/app, branch: a..b } }"), "spec.config.source.branch", "invalid"},
+		{"source timeout", cfg("{ source: { url: /srv/app, branch: main, timeout: -1m } }"), "spec.config.source.timeout", "negative"},
+		{"source unknown field", cfg("{ source: { url: /srv/app, branch: main, tag: v1 } }"), "", "field tag not found"},
 		{"backup empty", cfg("{ backup: { timeout: 1m } }"), "spec.config.backup.command", "required"},
 		{"job name", cfg("{ jobs: { Bad: { command: x } } }"), "spec.config.jobs.Bad", "job names"},
 		{"job empty", cfg("{ jobs: { ok: { command: '' } } }"), "spec.config.jobs.ok.command", "required"},
@@ -185,6 +193,44 @@ func TestValidateServiceConfigFields(t *testing.T) {
 			_, err := model.DecodeResource([]byte(tt.doc))
 			assertIssue(t, err, tt.path, tt.msg)
 		})
+	}
+}
+
+func TestServiceSourceURLs(t *testing.T) {
+	head := resourceHead + "spec:\n  type: service\n  adapter: external\n  config: { source: { branch: main, url: "
+	for _, u := range []string{
+		"https://github.com/acme/app.git", "ssh://git@github.com/acme/app.git", "git@github.com:acme/app.git",
+		"host:repo", "file:///srv/app", "/home/dev/app", "git://example.com/app",
+	} {
+		if _, err := model.DecodeResource([]byte(head + "'" + u + "' } }\n")); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+
+	local := map[string]string{"/srv/app": "/srv/app", "file:///srv/app/": "/srv/app", "FILE:///x": "/x"}
+	for u, want := range local {
+		if got, ok := model.LocalRepoPath(u); !ok || got != want {
+			t.Errorf("LocalRepoPath(%q) = %q %v", u, got, ok)
+		}
+	}
+	for _, u := range []string{"https://example.com/srv/app", "git@host:/srv/app", "file://relative"} {
+		if p, ok := model.LocalRepoPath(u); ok {
+			t.Errorf("LocalRepoPath(%q) = %q", u, p)
+		}
+	}
+
+	within := map[[2]string]bool{
+		{"/var/lib/lcm/work", "/var/lib/lcm/work"}:     true,
+		{"/var/lib/lcm/work/app", "/var/lib/lcm/work"}: true,
+		{"/var/lib/lcm/work/", "/var/lib/lcm/work"}:    true,
+		{"/var/lib/lcm/workshop", "/var/lib/lcm/work"}: false,
+		{"/var/lib/lcm", "/var/lib/lcm/work"}:          false,
+		{"/x", "/"}:                                    true,
+	}
+	for in, want := range within {
+		if got := model.PathWithin(in[0], in[1]); got != want {
+			t.Errorf("PathWithin(%q, %q) = %v", in[0], in[1], got)
+		}
 	}
 }
 

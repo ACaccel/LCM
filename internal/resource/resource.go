@@ -152,6 +152,14 @@ type PhaseChange struct {
 	Actor  auth.Actor
 }
 
+// HostValidator is implemented by the TypeHooks of a type whose documents
+// have rules that depend on this host, such as a service source that must
+// not point into LCM's build directory. The store refuses a save that it
+// reports issues for.
+type HostValidator interface {
+	ValidateHost(doc *model.Resource) model.Issues
+}
+
 // CheckValidator validates check definitions against the registered check
 // types; *monitor.Monitor implements it. path is the location of the list,
 // such as "spec.checks".

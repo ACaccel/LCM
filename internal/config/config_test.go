@@ -274,6 +274,13 @@ func TestServeDirs(t *testing.T) {
 	if st, err := os.Stat(c.SourcesPath()); err != nil || c.SourcesPath() != filepath.Join(data, "sources") || st.Mode().Perm() != 0o700 {
 		t.Errorf("sources dir: %q %v %v", c.SourcesPath(), st, err)
 	}
+	// Build checkouts too, under an absolute path even for a relative data dir.
+	if w, err := c.WorkPath(); err != nil || w != filepath.Join(data, "work") {
+		t.Errorf("work dir: %q %v", w, err)
+	}
+	if w, err := (Config{DataDir: "./data"}).WorkPath(); err != nil || !filepath.IsAbs(w) || filepath.Base(w) != "work" {
+		t.Errorf("relative work dir: %q %v", w, err)
+	}
 }
 
 func TestMissingBinaries(t *testing.T) {

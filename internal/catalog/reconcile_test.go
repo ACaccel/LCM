@@ -52,7 +52,7 @@ func TestReconcileAfterCrash(t *testing.T) {
 	}
 
 	// A new manager is what a restarted process would have.
-	restarted, err := catalog.NewManager(catalog.ManagerConfig{Catalog: e.cat, Runtimes: e.runtime, Runner: e.runner, Locker: e.locker})
+	restarted, err := catalog.NewManager(catalog.ManagerConfig{Catalog: e.cat, Runtimes: e.runtime, Runner: e.runner, Locker: e.locker, WorkDir: e.work})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 | Path | Owner, mode | Contents |
 |---|---|---|
-| `/var/lib/lcm/` | lcm 0750 | Data directory (`lcm.db`, `secrets/`, `sources/`), `work/lcm` (LCM's own clone of the repository, used for self-deploy), `cache/` (Go and npm caches of its builds) |
+| `/var/lib/lcm/` | lcm 0750 | Data directory (`lcm.db`, `secrets/`, `sources/`), `work/` (build checkouts; `work/lcm` is LCM's own, used for self-deploy), `cache/` (Go and npm caches of its builds) |
 | `/etc/lcm/lcm.env` | root:lcm 0640 | Server settings ([`deploy/lcm.env`](../deploy/lcm.env)); written only when missing |
 | `/opt/lcm/toolchain/{go,node}` | root | Copies of the Go and Node.js toolchains that self-deploy builds with |
 | `/usr/local/bin/lcm`, `lcm.prev`, `lcm.failed` | root 0755 | Installed binary, the one it replaced, and the last one a verification rejected |
@@ -46,7 +46,7 @@ Later admin password changes: `sudo -u lcm /usr/local/bin/lcm admin set-password
 The `lcm` service builds and installs LCM like any other service; the auto-deploy policy runs it for every new commit on `main` whose `ci.yml` run passed:
 
 1. `trigger.git` sees the commit; `ci.status` waits for CI (unauthenticated GitHub API, 60 requests per hour per IP).
-2. `lifecycle.deploy` fetches and detaches `work/lcm` at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`.
+2. `lifecycle.deploy` points `origin` of `work/lcm` at the service's `source.url`, fetches and detaches the checkout at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`.
 3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation; use the [manual upgrade procedure](#upgrade). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared write gate blocks this self-deploy path during machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
 4. The verification restarts `lcm.service` and waits up to 60 s for `/api/v1/health` to report the new version. If it does not, it restores `lcm.prev` (keeping the rejected binary as `lcm.failed`), restarts again, logs at error priority and leaves the transient unit failed.
 5. The policy's `wait.until` was suspended across the restart and resumes in the new process. The service's `version` check passes only when the running server reports the version of the binary built in the checkout, so after a verification rollback the service stays unhealthy, the wait times out after 3 minutes and `lifecycle.rollback` rebuilds and reinstalls the previous successful commit.
@@ -100,7 +100,7 @@ Without `--purge` the database, secrets and checkout stay, so running `bootstrap
 
 ## Hosts without deploy/
 
-On another layout, follow the same pattern by hand: a dedicated system account owning the data directory, settings in an environment file, a unit like [`deploy/lcm.service`](../deploy/lcm.service), and a sudoers rule for the system units LCM may start, stop and restart (see [Security model](architecture.md#security-model)). Give the account read access to the repositories it deploys (an SSH key without passphrase or a credential helper) and ownership of the working copies named in `source.repo`. Secret files go in `<data dir>/secrets/` (one file per secret, `chmod 600`, owned by the account).
+On another layout, follow the same pattern by hand: a dedicated system account owning the data directory, settings in an environment file, a unit like [`deploy/lcm.service`](../deploy/lcm.service), and a sudoers rule for the system units LCM may start, stop and restart (see [Security model](architecture.md#security-model)). Give the account read access to the repositories it deploys (an SSH key without passphrase or a credential helper); LCM clones each service's `source.url` into `<data dir>/work/<name>` itself ([source](services.md#source)). Secret files go in `<data dir>/secrets/` (one file per secret, `chmod 600`, owned by the account).
 
 ```sh
 curl -s http://127.0.0.1:7800/api/v1/health      # {"status":"ok",...}
@@ -119,6 +119,7 @@ The unit sets neither `NoNewPrivileges=` (it would disable sudo) nor `ProtectSys
 | `secrets/` | Secret files (unless `LCM_SECRETS_DIR` moves them) |
 | `calendars/` | Calendar files for `trigger.cron` |
 | `sources/` | LCM's own clones of config-source repositories; safe to delete, they are fetched again |
+| `work/<name>` | Build checkout of each service with a [source](services.md#source); cloned again by the next deploy when deleted. Backups and jobs run in it, so delete one only when its build output is disposable |
 
 ## Backup
 
@@ -179,6 +180,33 @@ Storage schema 14 replaces Service and Machine with one `lcm/v2` Resource model 
 - Retiring a service stops it first when its runtime can; a running service whose runtime cannot stop it stays retired and `running` and cannot be unmanaged until it is resumed and stopped ([phases](services.md#lifecycle-states-and-actions)).
 - Disruptive actions on resources with dependents or control dependents need `acknowledgeImpact` ([impact](resources.md#relations)). A v1 `dependsOn` becomes a `dependsOn` relation, so conversion adds `acknowledgeImpact: true` to every `lifecycle.*` node that stops, restarts, deploys, rolls back or runs a job and did not set it; such policies behave as in v1 and are named in the migration warnings. Remove the prop where an action on a service with dependents should stop the policy; review `lcm resource impact <name>` before re-enabling automation.
 - Check, timeline and deployment history stays keyed by name; machine and router observations, events and operations are keyed by immutable ID.
+
+### Upgrade to service source URLs (schema 15)
+
+Storage schema 15 replaces `source.repo` and `source.remote` of services with `source.url`, and LCM keeps each build checkout at `<data dir>/work/<name>` itself ([source](services.md#source)). The schema changes, so self-install refuses it (`storage schema unknown or changed`) and an auto-deploy of this version fails and rolls back: pause self-deploy before the commit reaches `main`, follow the manual procedure in [Upgrade](#upgrade) and keep the pre-upgrade database/binary pair. Older binaries refuse the migrated database.
+
+**What the migration does.** Migration 0015 runs at the first start in one transaction:
+
+- For every stored version of every service document, and the repository documents config sync recorded for services, it reads `remote.<remote>.url` (default `origin`) from `<repo>/.git/config` with `git config --file` (the `LCM_GIT` program, 10 s each) and writes it as `source.url`, removing `repo` and `remote`. Each checkout and remote is read once.
+- The current version of a managed or retired service must use `<data dir>/work/<name>` as `source.repo`, where LCM keeps the checkout after the upgrade. Older versions and archives may name other paths; when such a path no longer exists, the version takes the URL of the resource's current version.
+- It refuses, changes nothing and leaves the schema at 14, so the previous binary still starts, when the current `source.repo` is another path, a checkout or its remote cannot be read, the URL carries credentials, is relative or points into `<data dir>/work/`, or an old checkout is gone and no version of that resource names a readable one. `lcm serve` exits with every problem and its fix; the unit's restarts repeat the same refusal until the old binary is back.
+
+**Pre-checks** (old binary running):
+
+1. List the service versions with a source and the checkout each names:
+
+   ```sh
+   sudo -u lcm sqlite3 -readonly /var/lib/lcm/lcm.db "SELECT r.name, r.phase, r.version, v.version,
+     json_extract(v.document, '$.spec.config.source.repo'), json_extract(v.document, '$.spec.config.source.remote')
+     FROM resources r JOIN resource_versions v ON v.resource_id = r.id
+     WHERE r.type = 'service' AND json_extract(v.document, '$.spec.config.source') IS NOT NULL ORDER BY r.name, v.version"
+   ```
+
+2. For each current version (`r.version` equals `v.version`) of a managed or retired service, the path must be `/var/lib/lcm/work/<name>`. Otherwise move the checkout there and save the service with that `source.repo`, or remove `source`, with the old binary.
+3. For each distinct path and remote, `sudo -u lcm git config --file <repo>/.git/config --get remote.<remote>.url` must print a URL without credentials (for `lcm`: `https://github.com/ACaccel/LCM.git`). Paths of older versions that no longer exist are fine when the current version passes.
+4. Config sources: `GET /api/v1/config/sources` lists them; note which own services with a source (`GET /api/v1/config/ownership`).
+
+**After the upgrade.** `lcm export resource/<name>` shows `source.url`. Git documents that still use `source.repo` or `source.remote` fail to sync with an issue naming the field and the resource keeps its migrated configuration; replace the fields with the exported `source.url` and commit. The migration rewrote the recorded repository documents too, so a repository updated to the same content shows no drift. `lcm convert` does not convert a v1 `source` ([rules](policies.md#policy-as-code)).
 
 ### Upgrade checks for stricter host configuration
 

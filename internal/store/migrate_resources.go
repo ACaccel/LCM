@@ -127,7 +127,7 @@ func migrateServices(ctx context.Context, tx *sql.Tx, _ int64) error {
 		if err := rs.Scan(&name, &v.version, &doc, &v.restoredFrom, &v.createdAt, &v.kind, &v.id, &v.name); err != nil {
 			return err
 		}
-		b, _, err := model.ConvertServiceV1JSON([]byte(doc))
+		b, _, err := convertServiceV1([]byte(doc))
 		if err != nil {
 			return fmt.Errorf("convert service %s version %d: %w", name, v.version, err)
 		}
@@ -169,9 +169,18 @@ func insertService(ctx context.Context, tx *sql.Tx, name string, vs []serviceVer
 			current = v.doc
 		}
 	}
-	doc, err := model.DecodeResource(current)
-	if err != nil {
+	// The converter validated the document, except a source that migration
+	// 15 rewrites, so only the adapter is read here.
+	var doc struct {
+		Spec struct {
+			Adapter string `json:"adapter"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(current, &doc); err != nil {
 		return fmt.Errorf("service %s version %d: %w", name, version, err)
+	}
+	if doc.Spec.Adapter == "" {
+		return fmt.Errorf("service %s version %d: no adapter in the converted document", name, version)
 	}
 	id := NewID()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO resources (id, name, type, adapter, phase, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -187,7 +196,7 @@ func insertService(ctx context.Context, tx *sql.Tx, name string, vs []serviceVer
 	if phase == "unmanaged" {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO service_states (resource_id, state, state_since) VALUES (?, ?, ?)`, id, state, since)
+	_, err := tx.ExecContext(ctx, `INSERT INTO service_states (resource_id, state, state_since) VALUES (?, ?, ?)`, id, state, since)
 	return err
 }
 
@@ -311,7 +320,7 @@ func migrateOwnership(ctx context.Context, tx *sql.Tx, _ int64) error {
 		return err
 	}
 	converters := map[string]func([]byte) ([]byte, []string, error){
-		"Service": model.ConvertServiceV1JSON,
+		"Service": convertServiceV1,
 		"Machine": model.ConvertMachineV1JSON,
 		"Policy":  model.ConvertPolicyV1JSON,
 		"Module":  model.ConvertModuleV1JSON,
@@ -534,8 +543,8 @@ func sameLayout(old string, canon []byte) (string, error) {
 // queryRows runs a query and calls scan for each row. Rows are always read
 // completely before the caller writes, so reads and writes on the
 // transaction never interleave.
-func queryRows(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows) error) error {
-	rs, err := tx.QueryContext(ctx, query)
+func queryRows(ctx context.Context, tx *sql.Tx, query string, scan func(*sql.Rows) error, args ...any) error {
+	rs, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

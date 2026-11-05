@@ -55,6 +55,23 @@ func (s *Store) Restore(ctx context.Context, ref string, version, expected int) 
 	return s.put(ctx, doc, expected, version)
 }
 
+// ValidateHost runs the host rules of the document's type (HostValidator)
+// for dry runs; every save runs them again, with the checks.
+func (s *Store) ValidateHost(doc *model.Resource) model.Issues {
+	if v, ok := s.hooksFor(doc.Spec.Type).(HostValidator); ok {
+		return v.ValidateHost(doc)
+	}
+	return nil
+}
+
+func (s *Store) validate(doc *model.Resource) model.Issues {
+	var is model.Issues
+	if s.checks != nil {
+		is = append(is, s.checks.ValidateChecks(doc.Spec.Checks, "spec.checks")...)
+	}
+	return append(is, s.ValidateHost(doc)...)
+}
+
 func (s *Store) put(ctx context.Context, doc *model.Resource, expected, restoredFrom int) (PutResult, error) {
 	actor, err := requireActor(ctx)
 	if err != nil {
@@ -72,10 +89,8 @@ func (s *Store) put(ctx context.Context, doc *model.Resource, expected, restored
 	if err != nil {
 		return PutResult{}, err
 	}
-	if s.checks != nil {
-		if is := s.checks.ValidateChecks(doc.Spec.Checks, "spec.checks"); len(is) > 0 {
-			return PutResult{}, invalid(is)
-		}
+	if is := s.validate(doc); len(is) > 0 {
+		return PutResult{}, invalid(is)
 	}
 	name := doc.Metadata.Name
 	now := s.clk.Now()

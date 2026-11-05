@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -40,7 +41,10 @@ func precondition(msg string) error { return &preconditionError{msg: msg} }
 // Precondition errors.
 var (
 	ErrNoSource         = precondition("catalog: service has no source configured")
-	ErrDirtyRepo        = precondition("catalog: source repository has uncommitted changes")
+	ErrDirtyRepo        = precondition("catalog: the build checkout has uncommitted changes to tracked files")
+	ErrNoCheckout       = precondition("catalog: the build checkout does not exist yet; deploy the service first")
+	ErrBadCheckout      = precondition("catalog: the build checkout is not a git repository; move it away so that the next deploy clones the source again")
+	ErrSourceInWorkDir  = precondition("catalog: source.url points into LCM's build directory; set it to the repository the checkout was cloned from")
 	ErrInvalidVersion   = precondition("catalog: version must be a commit sha of 7 to 64 hex digits")
 	ErrNoRollbackTarget = precondition("catalog: no earlier successful deployment to roll back to")
 	ErrNoBackup         = precondition("catalog: service has no backup command")
@@ -82,6 +86,10 @@ type ManagerConfig struct {
 	LockTTL time.Duration
 	// Git is the git binary; default "git".
 	Git string
+	// WorkDir holds the build checkout of every service with a source, in a
+	// directory named after the resource; required, absolute. It is the
+	// work directory of the data directory, which LCM alone writes to.
+	WorkDir string
 }
 
 // Manager performs lifecycle actions and phase changes on service resources.
@@ -93,6 +101,7 @@ type Manager struct {
 	log      *slog.Logger
 	lockTTL  time.Duration
 	git      string
+	workDir  string
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -103,9 +112,12 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.Catalog == nil || cfg.Runtimes == nil || cfg.Runner == nil || cfg.Locker == nil {
 		return nil, errors.New("catalog: manager needs Catalog, Runtimes, Runner and Locker")
 	}
+	if !filepath.IsAbs(cfg.WorkDir) || filepath.Clean(cfg.WorkDir) != cfg.WorkDir {
+		return nil, fmt.Errorf("catalog: WorkDir %q must be a clean absolute path", cfg.WorkDir)
+	}
 	m := &Manager{
 		cat: cfg.Catalog, runtimes: cfg.Runtimes, runner: cfg.Runner, locker: cfg.Locker,
-		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, inflight: map[string]struct{}{},
+		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, inflight: map[string]struct{}{},
 	}
 	if m.log == nil {
 		m.log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -117,6 +129,18 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		m.git = "git"
 	}
 	return m, nil
+}
+
+// CheckoutDir returns the build checkout of the service name: LCM clones
+// source.url there and deploys, backs up and runs jobs in it.
+func (m *Manager) CheckoutDir(name string) string { return filepath.Join(m.workDir, name) }
+
+// sourceInWorkDir reports whether src names a local repository inside the
+// build directory: a checkout LCM moves between commits, which never gains
+// commits of its own.
+func (m *Manager) sourceInWorkDir(src *model.Source) bool {
+	p, ok := model.LocalRepoPath(src.URL)
+	return ok && model.PathWithin(p, m.workDir)
 }
 
 // ActionOptions carries the optional inputs of an action.

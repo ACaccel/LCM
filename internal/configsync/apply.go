@@ -141,6 +141,7 @@ func (s *Syncer) validate(ctx context.Context, it *item, overlay engine.ModuleRe
 		if s.checks != nil {
 			issues = append(issues, s.checks.ValidateChecks(d.Spec.Checks, "spec.checks")...)
 		}
+		issues = append(issues, s.res.ValidateHost(d)...)
 	case *model.Policy:
 		var res engine.ModuleResolver = s.mods
 		if overlay != nil {

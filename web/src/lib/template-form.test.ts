@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Template } from "../api/types";
-import { buildParams, initialValues, isRequired, prefillValues, suggestName, windowRows, windowsValue } from "./template-form";
+import { buildParams, initialValues, isRequired, isVisible, prefillValues, suggestName, windowRows, windowsValue } from "./template-form";
 
 const tpl: Template = {
   id: "auto-deploy",
@@ -9,7 +9,7 @@ const tpl: Template = {
   resourceParam: "resource",
   params: [
     { name: "resource", type: "service", description: "", required: true },
-    { name: "repo", type: "string", description: "", required: true },
+    { name: "repo", type: "string", description: "", required: true, prefill: "source.url" },
     { name: "branch", type: "string", description: "", required: false, default: "main", prefill: "source.branch" },
     { name: "requireCI", type: "boolean", description: "", required: false, default: true },
     { name: "ciRepo", type: "string", description: "", required: false, requiredIf: "requireCI" },
@@ -76,10 +76,27 @@ describe("template form", () => {
   });
 
   it("prefills parameters from the selected resource's configuration", () => {
-    expect(prefillValues(tpl, { source: { repo: "/srv/web", branch: "release" } })).toEqual({ branch: "release" });
+    expect(prefillValues(tpl, { source: { url: "https://github.com/acme/web.git", branch: "release" } })).toEqual({
+      repo: "https://github.com/acme/web.git",
+      branch: "release",
+    });
     expect(prefillValues(tpl, { source: { branch: "" } })).toEqual({});
     expect(prefillValues(tpl, {})).toEqual({});
     expect(prefillValues(tpl, undefined)).toEqual({});
+  });
+
+  it("hides and omits the fields of another notification target", () => {
+    type Param = Template["params"][number];
+    const target: Param = { name: "notifyTarget", type: "string", description: "", required: false, default: "discord", enum: ["discord", "konata"] };
+    const secret: Param = { name: "notifySecret", type: "secret", description: "", required: false, default: "", visibleIf: { param: "notifyTarget", equals: "discord" } };
+    const url: Param = { name: "notifyUrl", type: "string", description: "", required: false, default: "", visibleIf: { param: "notifyTarget", equals: "konata" } };
+    const t: Template = { ...tpl, params: [{ name: "resource", type: "service", description: "", required: true }, target, secret, url] };
+    const values = { ...initialValues(t, "web"), notifySecret: "hook", notifyUrl: "http://x" };
+    expect([isVisible(target, values), isVisible(secret, values), isVisible(url, values)]).toEqual([true, true, false]);
+    expect(buildParams(t, values, "web").params).toEqual({ resource: "web", notifySecret: "hook" });
+    const konata = { ...values, notifyTarget: "konata" };
+    expect([isVisible(secret, konata), isVisible(url, konata)]).toEqual([false, true]);
+    expect(buildParams(t, konata, "web").params).toEqual({ resource: "web", notifyTarget: "konata", notifyUrl: "http://x" });
   });
 
   it("suggests a valid name", () => {

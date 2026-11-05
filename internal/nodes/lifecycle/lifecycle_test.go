@@ -336,7 +336,7 @@ func TestPolicyRunsLifecycleNodes(t *testing.T) {
 	}
 	ad := &engineAdapter{state: rt.StateActive}
 	mgr, err := catalog.NewManager(catalog.ManagerConfig{
-		Catalog: cat, Runtimes: engineRuntimes{ad}, Runner: noRunner{}, Locker: &memLocker{held: map[string]bool{}},
+		Catalog: cat, Runtimes: engineRuntimes{ad}, Runner: noRunner{}, Locker: &memLocker{held: map[string]bool{}}, WorkDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -448,7 +448,7 @@ func TestPolicyNodesRespectImpactGuard(t *testing.T) {
 	}
 	ad := &engineAdapter{state: rt.StateActive}
 	mgr, err := catalog.NewManager(catalog.ManagerConfig{
-		Catalog: cat, Runtimes: engineRuntimes{ad}, Runner: noRunner{}, Locker: &memLocker{held: map[string]bool{}},
+		Catalog: cat, Runtimes: engineRuntimes{ad}, Runner: noRunner{}, Locker: &memLocker{held: map[string]bool{}}, WorkDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)

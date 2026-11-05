@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -33,11 +36,12 @@ func (e *StepError) Is(target error) bool { return target == ErrDeployFailed }
 var shaRe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 
 // Deploy updates the service to opts.Version, or to the head of the
-// configured branch. The source repository must have no uncommitted
-// changes to tracked files; it is detached at the target commit, built,
-// installed and the service restarted. A runtime that cannot restart the
-// service leaves applying the new version to the install step. There is no
-// automatic rollback.
+// configured branch. The build checkout (CheckoutDir) is cloned from
+// source.url when missing; otherwise it must have no uncommitted changes to
+// tracked files and its origin is set to source.url before fetching. It is
+// detached at the target commit, built, installed and the service
+// restarted. A runtime that cannot restart the service leaves applying the
+// new version to the install step. There is no automatic rollback.
 func (m *Manager) Deploy(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionDeploy, opts, func(ctx context.Context, s *session, res *ActionResult) error {
 		return s.deploy(ctx, res, opts.Version)
@@ -75,8 +79,32 @@ func (l *stepLog) add(cmd execx.Cmd, out string) {
 
 func (l *stepLog) note(format string, args ...any) { fmt.Fprintf(&l.b, format+"\n", args...) }
 
+// git runs git in dir. The ceiling keeps git from treating a directory
+// above the build directory as the repository when a checkout lacks .git.
 func (s *session) git(dir string, timeout time.Duration, args ...string) execx.Cmd {
-	return execx.Cmd{Argv: append([]string{s.m.git}, args...), Dir: dir, Env: execx.GitEnv(), Timeout: timeout}
+	env := append(execx.GitEnv(), "GIT_CEILING_DIRECTORIES="+s.m.workDir)
+	return execx.Cmd{Argv: append([]string{s.m.git}, args...), Dir: dir, Env: env, Timeout: timeout}
+}
+
+// needsClone reports whether the build checkout dir must be cloned: it does
+// not exist or is an empty directory. Anything else without .git is not
+// LCM's checkout and is left alone.
+func needsClone(dir string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("catalog: build checkout: %w", err)
+	}
+	entries, err := os.ReadDir(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("catalog: build checkout: %w", err)
+	case len(entries) > 0:
+		return false, fmt.Errorf("%w (%s)", ErrBadCheckout, dir)
+	}
+	return true, nil
 }
 
 // deploy runs the pipeline for deploy (version may be empty) and rollback
@@ -89,17 +117,28 @@ func (s *session) deploy(ctx context.Context, res *ActionResult, version string)
 	if version != "" && !shaRe.MatchString(version) {
 		return ErrInvalidVersion
 	}
+	// Saving refuses such a URL; the build directory moves with the data
+	// directory, so a document saved under another one is checked again.
+	if s.m.sourceInWorkDir(src) {
+		return ErrSourceInWorkDir
+	}
 	timeout := src.EffectiveTimeout()
+	dir := s.m.CheckoutDir(s.name)
+	clone, err := needsClone(dir)
+	if err != nil {
+		return err
+	}
 
 	// Refuse before touching anything: a dirty checkout is not a failed
 	// deployment, the running service is unaffected.
-	status := s.git(src.Repo, timeout, "status", "--porcelain", "--untracked-files=no")
-	out, err := s.m.runner.Run(ctx, status)
-	if err != nil {
-		return fmt.Errorf("check source repository: %w", err)
-	}
-	if strings.TrimSpace(out.Output) != "" {
-		return ErrDirtyRepo
+	if !clone {
+		out, err := s.m.runner.Run(ctx, s.git(dir, timeout, "status", "--porcelain", "--untracked-files=no"))
+		if err != nil {
+			return fmt.Errorf("check build checkout %s: %w", dir, err)
+		}
+		if strings.TrimSpace(out.Output) != "" {
+			return fmt.Errorf("%w (%s)", ErrDirtyRepo, dir)
+		}
 	}
 
 	deps, err := s.m.cat.Deployments(ctx, s.name, 100, 0)
@@ -129,7 +168,7 @@ func (s *session) deploy(ctx context.Context, res *ActionResult, version string)
 	res.DeploymentID = id
 
 	log := &stepLog{}
-	sha, perr := s.pipeline(ctx, src, log, version, &previous, id)
+	sha, perr := s.pipeline(ctx, src, checkout{dir: dir, clone: clone}, log, version, &previous, id)
 	res.Version, res.PreviousVersion = sha, previous
 
 	// Bookkeeping must complete even when the action context was cancelled.
@@ -155,9 +194,17 @@ func (s *session) deploy(ctx context.Context, res *ActionResult, version string)
 	return s.m.cat.FinishDeployment(fctx, id, OutcomeSucceeded, "", log.b.String())
 }
 
-// pipeline fetches, checks out, builds, installs and restarts. It returns
-// the commit that was targeted as soon as it is known, even on failure.
-func (s *session) pipeline(ctx context.Context, src *model.Source, log *stepLog, version string, previous *string, id int64) (string, error) {
+// checkout is the build checkout of a deployment and whether it must be
+// cloned first.
+type checkout struct {
+	dir   string
+	clone bool
+}
+
+// pipeline clones or fetches, checks out, builds, installs and restarts. It
+// returns the commit that was targeted as soon as it is known, even on
+// failure.
+func (s *session) pipeline(ctx context.Context, src *model.Source, co checkout, log *stepLog, version string, previous *string, id int64) (string, error) {
 	timeout := src.EffectiveTimeout()
 	run := func(step string, c execx.Cmd) (execx.Result, error) {
 		r, err := s.m.runner.Run(ctx, c)
@@ -169,19 +216,32 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, log *stepLog,
 		return r, nil
 	}
 
-	// A rollback targets a commit that was deployed before, so it works
-	// without the remote being reachable.
-	if s.action != ActionRollback {
-		if _, err := run("fetch", s.git(src.Repo, timeout, "fetch", "--prune", src.EffectiveRemote())); err != nil {
+	switch {
+	case co.clone:
+		if err := os.MkdirAll(s.m.workDir, 0o700); err != nil {
+			log.note("error: %v", err)
+			return "", &StepError{Step: "clone", Err: err}
+		}
+		if _, err := run("clone", s.git(s.m.workDir, timeout, "clone", "--", src.URL, co.dir)); err != nil {
+			return "", err
+		}
+	case s.action != ActionRollback:
+		// The document is the authority on where versions come from, so
+		// origin follows it before every fetch. A rollback targets a commit
+		// that was deployed before and works without the remote.
+		if _, err := run("origin", s.git(co.dir, timeout, "remote", "set-url", "origin", src.URL)); err != nil {
+			return "", err
+		}
+		if _, err := run("fetch", s.git(co.dir, timeout, "fetch", "--prune", "origin")); err != nil {
 			return "", err
 		}
 	}
 
 	ref := version
 	if ref == "" {
-		ref = "refs/remotes/" + src.EffectiveRemote() + "/" + src.Branch
+		ref = "refs/remotes/origin/" + src.Branch
 	}
-	r, err := run("resolve", s.git(src.Repo, timeout, "rev-parse", "--verify", "--quiet", ref+"^{commit}"))
+	r, err := run("resolve", s.git(co.dir, timeout, "rev-parse", "--verify", "--quiet", ref+"^{commit}"))
 	if err != nil {
 		return "", err
 	}
@@ -190,8 +250,10 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, log *stepLog,
 		return "", &StepError{Step: "resolve", Err: fmt.Errorf("unexpected output %q", headCap(sha, 80))}
 	}
 
-	if *previous == "" {
-		if head, err := s.m.runner.Run(ctx, s.git(src.Repo, timeout, "rev-parse", "HEAD")); err == nil {
+	// Without a recorded deployment the checkout's HEAD is what was built
+	// last, unless the checkout is new and nothing was built from it.
+	if *previous == "" && !co.clone {
+		if head, err := s.m.runner.Run(ctx, s.git(co.dir, timeout, "rev-parse", "HEAD")); err == nil {
 			*previous = strings.TrimSpace(head.Output)
 		}
 	}
@@ -199,14 +261,14 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, log *stepLog,
 		return sha, err
 	}
 
-	if _, err := run("checkout", s.git(src.Repo, timeout, "checkout", "--detach", sha)); err != nil {
+	if _, err := run("checkout", s.git(co.dir, timeout, "checkout", "--detach", sha)); err != nil {
 		return sha, err
 	}
 	for _, step := range []struct{ name, script string }{{"build", src.Build}, {"install", src.Install}} {
 		if step.script == "" {
 			continue
 		}
-		if _, err := run(step.name, execx.Cmd{Shell: step.script, Dir: src.Repo, Timeout: timeout}); err != nil {
+		if _, err := run(step.name, execx.Cmd{Shell: step.script, Dir: co.dir, Timeout: timeout}); err != nil {
 			return sha, err
 		}
 	}

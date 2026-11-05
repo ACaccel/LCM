@@ -2,7 +2,10 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
@@ -81,8 +84,12 @@ func (m *Manager) RunJob(ctx context.Context, name string, opts ActionOptions) (
 const maxJobOutput = 2 << 10
 
 func (s *session) runCommand(ctx context.Context, c model.Command, res *ActionResult) error {
+	dir, err := s.workDir()
+	if err != nil {
+		return err
+	}
 	r, err := s.m.runner.Run(ctx, execx.Cmd{
-		Shell: c.Command, Dir: s.workDir(), Timeout: c.EffectiveTimeout(),
+		Shell: c.Command, Dir: dir, Timeout: c.EffectiveTimeout(),
 	})
 	res.Output = tailCap(r.Output, maxJobOutput)
 	if err != nil {
@@ -91,11 +98,20 @@ func (s *session) runCommand(ctx context.Context, c model.Command, res *ActionRe
 	return nil
 }
 
-// workDir is the source checkout when there is one, so that relative paths
-// in commands behave as they do for deploys.
-func (s *session) workDir() string {
-	if src := s.cfg.Source; src != nil {
-		return src.Repo
+// workDir is the build checkout of a service with a source, so that
+// relative paths in commands behave as they do for deploys. Until the first
+// deploy has cloned it there is no such directory, and running the command
+// elsewhere would change what its relative paths mean.
+func (s *session) workDir() (string, error) {
+	if s.cfg.Source == nil {
+		return "", nil
 	}
-	return ""
+	dir := s.m.CheckoutDir(s.name)
+	if _, err := os.Stat(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("%w (%s)", ErrNoCheckout, dir)
+		}
+		return "", fmt.Errorf("catalog: build checkout: %w", err)
+	}
+	return dir, nil
 }

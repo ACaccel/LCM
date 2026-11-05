@@ -3,7 +3,11 @@ package model
 import (
 	"path"
 	"regexp"
+	"strings"
 	"time"
+	"unicode"
+
+	"github.com/ACaccel/lcm/internal/execx"
 )
 
 // RuntimeType selects how LCM controls a service's process. The adapter of a
@@ -27,7 +31,6 @@ const (
 
 // Defaults applied by the accessors below when a field is left empty.
 const (
-	DefaultSourceRemote   = "origin"
 	DefaultSourceTimeout  = Duration(15 * time.Minute)
 	DefaultCommandTimeout = Duration(30 * time.Minute)
 )
@@ -97,23 +100,24 @@ func (r Runtime) EffectiveScope() string {
 	return r.Scope
 }
 
-// Source is the local working copy LCM deploys from. LCM owns this
-// checkout: deploys detach its HEAD, so it must not be a developer's.
+// Source says where new versions of a service come from and how to build
+// and install them. URL is a remote repository or an absolute path to a
+// local development repository. LCM clones it into a build checkout it owns
+// (one per resource in the work directory of the data directory) and
+// deploys from there; deploys detach that checkout's HEAD, which is why a
+// document never names it.
 type Source struct {
-	Repo    string   `yaml:"repo" json:"repo"`
-	Remote  string   `yaml:"remote,omitempty" json:"remote,omitempty"`
+	URL     string   `yaml:"url" json:"url"`
 	Branch  string   `yaml:"branch" json:"branch"`
 	Build   string   `yaml:"build,omitempty" json:"build,omitempty"`
 	Install string   `yaml:"install,omitempty" json:"install,omitempty"`
 	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-}
 
-// EffectiveRemote returns the remote name, defaulting to origin.
-func (s Source) EffectiveRemote() string {
-	if s.Remote == "" {
-		return DefaultSourceRemote
-	}
-	return s.Remote
+	// Repo and Remote are the fields URL replaced in storage schema 15.
+	// They are decoded only so that a document still using them is refused
+	// with an explanation rather than an unknown-field error.
+	Repo   string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Remote string `yaml:"remote,omitempty" json:"remote,omitempty"`
 }
 
 // EffectiveTimeout returns the timeout of each build step.
@@ -152,17 +156,15 @@ var (
 	unitRe      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]*\.(service|socket|timer|target)$`)
 	containerRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	projectRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-	remoteRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	branchRe    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
-	jobRe       = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+	// scpLikeRe matches git's [user@]host:path address form.
+	scpLikeRe = regexp.MustCompile(`^([A-Za-z0-9._-]+@)?[A-Za-z0-9][A-Za-z0-9.-]*:`)
+	branchRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+	jobRe     = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 )
 
 func (c *ServiceConfig) normalize(adapter string) {
 	if RuntimeType(adapter) == RuntimeSystemd && c.Scope == "" {
 		c.Scope = ScopeSystem
-	}
-	if c.Source != nil && c.Source.Remote == "" {
-		c.Source.Remote = DefaultSourceRemote
 	}
 }
 
@@ -251,14 +253,17 @@ func validateRuntime(r Runtime, base string, is *Issues) {
 }
 
 func validateSource(s *Source, base string, is *Issues) {
-	switch {
-	case s.Repo == "":
-		is.addf(base+".repo", "is required")
-	case !validAbsPath(s.Repo):
-		is.addf(base+".repo", "must be a clean absolute path")
+	if s.Repo != "" || s.Remote != "" {
+		field := "repo"
+		if s.Repo == "" {
+			field = "remote"
+		}
+		is.addf(base+"."+field, "source.repo and source.remote were replaced by source.url: set url to the repository LCM clones "+
+			"(for an existing checkout, the output of git -C <repo> remote get-url origin) and remove repo and remote")
 	}
-	if s.Remote != "" && (len(s.Remote) > maxNameLen || !remoteRe.MatchString(s.Remote)) {
-		is.addf(base+".remote", "invalid remote name")
+	legacyOnly := s.URL == "" && (s.Repo != "" || s.Remote != "")
+	if msg := checkSourceURL(s.URL); msg != "" && !legacyOnly {
+		is.addf(base+".url", "%s", msg)
 	}
 	switch {
 	case s.Branch == "":
@@ -275,6 +280,72 @@ func validateSource(s *Source, base string, is *Issues) {
 	if s.Timeout < 0 {
 		is.addf(base+".timeout", "must not be negative")
 	}
+}
+
+// gitSchemes are the URL schemes a source may use: the transports
+// execx.GitAllowProtocol permits.
+var gitSchemes = []string{"file", "git", "http", "https", "ssh", "git+ssh", "ssh+git"}
+
+// checkSourceURL returns why u is not a usable source URL, or "". The URL is
+// stored, shown and logged, so it must not carry credentials.
+func checkSourceURL(u string) string {
+	switch {
+	case u == "":
+		return "is required"
+	case len(u) > maxPathLen:
+		return "is too long"
+	case strings.HasPrefix(u, "-"):
+		return "must not start with '-'"
+	case strings.IndexFunc(u, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) >= 0:
+		return "must not contain spaces or control characters"
+	case strings.Contains(u, "::"):
+		return "remote helpers (transport::address) are not supported"
+	case strings.HasPrefix(u, "/"):
+		if !validAbsPath(u) {
+			return "must be a clean absolute path"
+		}
+		return ""
+	}
+	if scheme, rest, ok := strings.Cut(u, "://"); ok {
+		known := false
+		for _, s := range gitSchemes {
+			known = known || strings.EqualFold(scheme, s)
+		}
+		switch {
+		case !known:
+			return "must use one of the schemes " + strings.Join(gitSchemes, ", ")
+		case strings.EqualFold(scheme, "file") && !validAbsPath(rest):
+			return "must name a clean absolute path"
+		case strings.Trim(rest, "/") == "":
+			return "names no repository"
+		case execx.CheckGitRemote(u) != nil:
+			return execx.ErrGitCredentials.Error()
+		}
+		return ""
+	}
+	if scpLikeRe.MatchString(u) {
+		return ""
+	}
+	return "must be a remote URL (https://, ssh://, user@host:path) or an absolute path to a local repository"
+}
+
+// LocalRepoPath returns the filesystem path of a repository URL that names
+// a local repository: an absolute path or a file:// URL.
+func LocalRepoPath(u string) (string, bool) {
+	if strings.HasPrefix(u, "/") {
+		return path.Clean(u), true
+	}
+	if scheme, rest, ok := strings.Cut(u, "://"); ok && strings.EqualFold(scheme, "file") && strings.HasPrefix(rest, "/") {
+		return path.Clean(rest), true
+	}
+	return "", false
+}
+
+// PathWithin reports whether p is dir or a path below it. The comparison is
+// lexical, on clean absolute paths.
+func PathWithin(p, dir string) bool {
+	p, dir = path.Clean(p), path.Clean(dir)
+	return p == dir || strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/")
 }
 
 func validateCommand(c Command, p string, is *Issues) {

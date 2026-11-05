@@ -3096,6 +3096,15 @@ export interface components {
              *     parameter from it until the user edits it.
              */
             prefill?: string;
+            /**
+             * @description Shows the parameter only while the enum parameter `param` has the
+             *     value `equals`, such as the fields of one notification target. A
+             *     hidden parameter keeps its default.
+             */
+            visibleIf?: {
+                param: string;
+                equals: string;
+            };
         };
         TemplateInstance: {
             template: string;

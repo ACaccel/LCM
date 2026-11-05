@@ -364,6 +364,7 @@ func (e *selfEnv) serviceDoc() string {
 		e.root, e.unit, e.url("/health"), e.root+"/usr/local/libexec/lcm/self-install")
 	return e.replace("deploy/lcm-self.service.yaml", doc,
 		"/var/lib/lcm", e.root+"/var/lib/lcm",
+		"url: https://github.com/ACaccel/LCM.git", "url: "+e.origin,
 		"sudo -n /usr/local/libexec/lcm/self-install", testMode,
 		"systemctl is-active --quiet lcm.service", "systemctl --user is-active --quiet "+e.unit,
 		"http://127.0.0.1:7800", fmt.Sprintf("http://127.0.0.1:%d", e.port))
