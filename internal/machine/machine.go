@@ -20,6 +20,7 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/maintenance"
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/resource"
@@ -105,6 +106,17 @@ type Status struct {
 	Identity string    `json:"identity"`
 	Journal  Coverage  `json:"journal"`
 	Fresh    bool      `json:"fresh"`
+}
+
+// StatusView is the status as clients read it: the stored status with a
+// translatable message for each health reason.
+type StatusView struct {
+	Status
+	ReasonMessages []message.Message `json:"reasonMessages"`
+}
+
+func newStatusView(s Status) StatusView {
+	return StatusView{Status: s, ReasonMessages: resource.ReasonMessages(s.Reasons)}
 }
 
 type transition struct {

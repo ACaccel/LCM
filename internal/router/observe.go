@@ -76,12 +76,12 @@ func (m *Manager) sample(ctx context.Context, r Record) (Snapshot, error) {
 	case err == nil:
 		snap.Outcome = OutcomeOK
 	case errors.Is(err, xiaomi.ErrAuth):
-		snap.Outcome, snap.Reason = OutcomeAuthFailed, "authentication rejected"
+		snap.Outcome, snap.Reason = OutcomeAuthFailed, resource.ReasonAuthRejected
 		m.dropClient(r.Connection)
 	case errors.Is(err, xiaomi.ErrUnreachable):
-		snap.Outcome, snap.Reason = OutcomeUnreachable, "router unreachable"
+		snap.Outcome, snap.Reason = OutcomeUnreachable, resource.ReasonUnreachable
 	default:
-		snap.Outcome, snap.Reason = OutcomeUnavailable, "router answered without usable status"
+		snap.Outcome, snap.Reason = OutcomeUnavailable, resource.ReasonNoStatus
 	}
 	if err != nil {
 		// A router that stays down is logged once per change of outcome,
@@ -181,7 +181,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot) ([]
 		}
 		if at, ok := bootAt(&snap); ok {
 			if old.BootAt != nil && at.After(old.BootAt.Add(bootTolerance)) {
-				events = append(events, resource.Event{Kind: "router.boot.changed", Severity: "info", Reason: "uptime restarted"})
+				events = append(events, resource.Event{Kind: "router.boot.changed", Severity: "info", Reason: resource.ReasonUptimeRestarted})
 			}
 			next.BootAt = &at
 		}
@@ -285,7 +285,7 @@ func evaluate(s *storedStatus, t model.RouterThresholds) []resource.Event {
 			st.Count = 0
 			s.Baseline[key] = st
 		}
-		s.Health, s.Reasons = healthDown, []string{"router unreachable"}
+		s.Health, s.Reasons = healthDown, []string{resource.ReasonUnreachable}
 		return nil
 	default:
 		for key, st := range s.Baseline {
@@ -327,7 +327,7 @@ func evaluate(s *storedStatus, t model.RouterThresholds) []resource.Event {
 			s.Reasons = append(s.Reasons, key)
 		}
 		if value == nil {
-			s.Reasons = append(s.Reasons, key+" not reported")
+			s.Reasons = append(s.Reasons, resource.NotReported(key))
 		}
 	}
 	if missing {

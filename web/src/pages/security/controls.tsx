@@ -8,7 +8,7 @@ import { HostActions, Reason } from "./host-actions";
 import type { BeginHostAction } from "./host-actions";
 import { NotificationSettings } from "./notifications";
 import { Capability, HostNotConfigured, UnknownReport, auditEnabled, number, showTime, showValue, validReason } from "./shared";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 export function SecurityRules() {
   return <div className="stack"><NotificationSettings /><HostPanel mode="rules" /></div>;

@@ -4111,6 +4111,7 @@ components:
       - snapshot
       - health
       - reasons
+      - reasonMessages
       - identity
       - journal
       - fresh
@@ -4125,6 +4126,11 @@ components:
           type: array
           items:
             type: string
+        reasonMessages:
+          type: array
+          description: "`reasons` with codes (`health.*`), in the same order."
+          items:
+            $ref: '#/components/schemas/Message'
         identity:
           type: string
         journal:
@@ -4240,6 +4246,21 @@ components:
                 issues:
                   type: array
                   items: { $ref: "#/components/schemas/Issue" }
+    Message:
+      type: object
+      additionalProperties: false
+      description: |
+        A sentence the server produces for people, with a stable code and
+        parameters so that clients can translate it. `message` is the English
+        text; clients show it for a code they do not know. Free-form text has
+        an empty code.
+      required: [code, params, message]
+      properties:
+        code: { type: string, description: "Such as `health.stale` or `step.lock`; empty for free-form text." }
+        params:
+          type: object
+          additionalProperties: { type: string }
+        message: { type: string }
     Issue:
       type: object
       required: [path, message]
@@ -4455,7 +4476,7 @@ components:
           description: Accept the impact of a disruptive action; see the dry run's `impact`.
     ActionSteps:
       type: object
-      required: [resource, action, from, to, steps]
+      required: [resource, action, from, to, steps, stepMessages]
       properties:
         resource: { type: string }
         action: { $ref: "#/components/schemas/ActionName" }
@@ -4464,6 +4485,10 @@ components:
         steps:
           type: array
           items: { type: string }
+        stepMessages:
+          type: array
+          description: "`steps` with codes (`step.*`), in the same order."
+          items: { $ref: "#/components/schemas/Message" }
     ActionPlan:
       allOf:
         - $ref: "#/components/schemas/ActionSteps"
@@ -4644,7 +4669,7 @@ components:
         nextCursor: { type: [string, "null"] }
     TimelineEntry:
       type: object
-      required: [id, resource, time, kind, summary, data, ref]
+      required: [id, resource, time, kind, summary, summaryMessage, data, ref]
       properties:
         id:
           type: integer
@@ -4656,6 +4681,10 @@ components:
           type: string
           description: "For example `config.changed`, `lifecycle.changed`, `deployment`, `action`, `backup`, `job`, `check.changed`, `health.changed`, `alert`."
         summary: { type: string }
+        summaryMessage:
+          allOf:
+            - $ref: "#/components/schemas/Message"
+          description: "`summary` with a code (`timeline.*`) derived from the kind and data; entries whose data predates a code keep an empty code."
         data: { type: object, additionalProperties: true }
         ref:
           type: string
@@ -5042,6 +5071,9 @@ components:
           items: { $ref: "#/components/schemas/Issue" }
     Template:
       type: object
+      description: |
+        Titles, descriptions and parameter descriptions are English; clients
+        translate them by template `id` and parameter `name`.
       required: [id, title, description, resourceParam, params]
       properties:
         id: { type: string }
@@ -5060,11 +5092,13 @@ components:
         name: { type: string }
         type:
           type: string
-          enum: [string, boolean, duration, secret, service, strings, json]
+          enum: [string, boolean, duration, secret, service, strings, json, windows]
           description: |
             `secret` is the name of a secret, `service` the name of a service
             resource, `duration` Go syntax such as `5m`, `strings` a list of
-            strings and `json` any JSON value.
+            strings, `json` any JSON value and `windows` a list of
+            `{days, start, end}` deploy windows (days `mon`..`sun`, optional;
+            start and end `HH:MM`, end up to `24:00`).
         description: { type: string }
         required: { type: boolean }
         requiredIf:
@@ -5072,6 +5106,16 @@ components:
           description: Name of a boolean parameter that makes this one required while it is true.
         default:
           description: Absent for required parameters.
+        enum:
+          type: array
+          description: The allowed values of a string parameter.
+          items: { type: string }
+        prefill:
+          type: string
+          description: |
+            Path in the `spec.config` of the resource that the resource
+            parameter selects, such as `source.branch`; a form may fill the
+            parameter from it until the user edits it.
     TemplateInstance:
       type: object
       required: [template, name, yaml, version, deployed, warnings]
@@ -5490,7 +5534,7 @@ components:
         nextCursor: { type: [string, "null"] }
     ResourceHealth:
       type: object
-      required: [status, since, reasons]
+      required: [status, since, reasons, reasonMessages]
       properties:
         status: { $ref: "#/components/schemas/Health" }
         since: { type: [string, "null"], format: date-time }
@@ -5498,6 +5542,10 @@ components:
           type: array
           description: The type's own findings (thresholds, reachability) followed by failing checks.
           items: { type: string }
+        reasonMessages:
+          type: array
+          description: "`reasons` with codes (`health.*`), in the same order."
+          items: { $ref: "#/components/schemas/Message" }
     ResourceDetail:
       type: object
       required: [id, name, type, adapter, connection, phase, labels, document, version, createdAt, updatedAt, updatedBy, state, stateSince, health, checks, alerts, actions, operation, managedBy, unresolvedRelations]
@@ -5633,6 +5681,10 @@ components:
         unit: { type: string }
         historical: { type: boolean }
         reason: { type: string }
+        reasonMessage:
+          allOf:
+            - $ref: "#/components/schemas/Message"
+          description: "`reason` with a code that depends on the event; set by the event list when there is a reason."
         operationId: { type: string }
     ResourceCapability:
       type: object
@@ -5710,7 +5762,7 @@ components:
     RouterStatus:
       type: object
       additionalProperties: false
-      required: [snapshot, health, reasons, fresh, reachability, bootAt]
+      required: [snapshot, health, reasons, reasonMessages, fresh, reachability, bootAt]
       properties:
         snapshot:
           description: The latest observation attempt.
@@ -5721,6 +5773,10 @@ components:
         reasons:
           type: array
           items: { type: string }
+        reasonMessages:
+          type: array
+          description: "`reasons` with codes (`health.*`), in the same order."
+          items: { $ref: "#/components/schemas/Message" }
         fresh: { type: boolean, description: The latest attempt is younger than `staleAfter`. }
         reachability: { type: string, enum: [reachable, unreachable, unknown] }
         bootAt:

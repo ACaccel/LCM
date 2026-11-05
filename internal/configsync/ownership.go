@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
+	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
@@ -310,7 +311,11 @@ func (s *Syncer) Resolve(ctx context.Context, kind model.Kind, name string, useG
 		}
 	}
 	if hadConflict {
-		s.notifyResolved(ctx, ref, row.Source, "conflict resolved by "+use)
+		why := catalog.ConflictResolvedCurrent
+		if use == "git" {
+			why = catalog.ConflictResolvedGit
+		}
+		s.notifyResolved(ctx, ref, row.Source, why)
 	}
 	return s.view(ctx, *row)
 }
@@ -383,7 +388,7 @@ func (s *Syncer) Release(ctx context.Context, kind model.Kind, name string) erro
 		return fmt.Errorf("configsync: release: %w", err)
 	}
 	if row.ConflictCommit != "" {
-		s.notifyResolved(ctx, ref, row.Source, "ownership released")
+		s.notifyResolved(ctx, ref, row.Source, catalog.ConflictReleased)
 	}
 	return nil
 }

@@ -12,7 +12,7 @@ import { HostActions } from "./host-actions";
 import { NotificationTest, SettingsForm, SettingsHistory } from "./notifications";
 import { trafficSegments, trafficTotals, TrafficDisplay } from "./traffic";
 import { resourceFixture } from "../resource/test-fixtures";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const incident: Incident = { seq: 1, id: "incident-1", machineId: "machine-1", service: "", source: "aide", fingerprint: "aide-change", state: "firing", severity: "warning", summary: "Integrity differs", openedAt: "2026-11-02T01:00:00Z", observedAt: "2026-11-02T01:01:00Z", updatedAt: "2026-11-02T01:01:00Z", occurrences: 2, revision: 2, delivery: "sent", lastError: "", handling: { version: 0, acknowledged: false, note: "", silenceUntil: null, updatedAt: null, updatedBy: "" } };

@@ -2305,6 +2305,8 @@ export interface components {
             snapshot: components["schemas"]["MachineSnapshot"] | null;
             health: string;
             reasons: string[];
+            /** @description `reasons` with codes (`health.*`), in the same order. */
+            reasonMessages: components["schemas"]["Message"][];
             identity: string;
             journal: components["schemas"]["MachineCoverage"];
             fresh: boolean;
@@ -2359,6 +2361,20 @@ export interface components {
                     issues: components["schemas"]["Issue"][];
                 };
             };
+        };
+        /**
+         * @description A sentence the server produces for people, with a stable code and
+         *     parameters so that clients can translate it. `message` is the English
+         *     text; clients show it for a code they do not know. Free-form text has
+         *     an empty code.
+         */
+        Message: {
+            /** @description Such as `health.stale` or `step.lock`; empty for free-form text. */
+            code: string;
+            params: {
+                [key: string]: string;
+            };
+            message: string;
         };
         Issue: {
             /** @description Location in the document, such as `spec.nodes[3].next.true[0]`. */
@@ -2543,6 +2559,8 @@ export interface components {
             from: components["schemas"]["ServiceState"];
             to: components["schemas"]["ServiceState"];
             steps: string[];
+            /** @description `steps` with codes (`step.*`), in the same order. */
+            stepMessages: components["schemas"]["Message"][];
         };
         ActionPlan: components["schemas"]["ActionSteps"] & {
             impact: components["schemas"]["ResourceImpact"];
@@ -2707,6 +2725,8 @@ export interface components {
             /** @description For example `config.changed`, `lifecycle.changed`, `deployment`, `action`, `backup`, `job`, `check.changed`, `health.changed`, `alert`. */
             kind: string;
             summary: string;
+            /** @description `summary` with a code (`timeline.*`) derived from the kind and data; entries whose data predates a code keep an empty code. */
+            summaryMessage: components["schemas"]["Message"];
             data: {
                 [key: string]: unknown;
             };
@@ -3012,6 +3032,10 @@ export interface components {
             issues: components["schemas"]["Issue"][];
             warnings: components["schemas"]["Issue"][];
         };
+        /**
+         * @description Titles, descriptions and parameter descriptions are English; clients
+         *     translate them by template `id` and parameter `name`.
+         */
         Template: {
             id: string;
             title: string;
@@ -3025,16 +3049,26 @@ export interface components {
             /**
              * @description `secret` is the name of a secret, `service` the name of a service
              *     resource, `duration` Go syntax such as `5m`, `strings` a list of
-             *     strings and `json` any JSON value.
+             *     strings, `json` any JSON value and `windows` a list of
+             *     `{days, start, end}` deploy windows (days `mon`..`sun`, optional;
+             *     start and end `HH:MM`, end up to `24:00`).
              * @enum {string}
              */
-            type: "string" | "boolean" | "duration" | "secret" | "service" | "strings" | "json";
+            type: "string" | "boolean" | "duration" | "secret" | "service" | "strings" | "json" | "windows";
             description: string;
             required: boolean;
             /** @description Name of a boolean parameter that makes this one required while it is true. */
             requiredIf?: string;
             /** @description Absent for required parameters. */
             default?: unknown;
+            /** @description The allowed values of a string parameter. */
+            enum?: string[];
+            /**
+             * @description Path in the `spec.config` of the resource that the resource
+             *     parameter selects, such as `source.branch`; a form may fill the
+             *     parameter from it until the user edits it.
+             */
+            prefill?: string;
         };
         TemplateInstance: {
             template: string;
@@ -3342,6 +3376,8 @@ export interface components {
             since: string | null;
             /** @description The type's own findings (thresholds, reachability) followed by failing checks. */
             reasons: string[];
+            /** @description `reasons` with codes (`health.*`), in the same order. */
+            reasonMessages: components["schemas"]["Message"][];
         };
         ResourceDetail: {
             id: string;
@@ -3438,6 +3474,8 @@ export interface components {
             unit?: string;
             historical: boolean;
             reason?: string;
+            /** @description `reason` with a code that depends on the event; set by the event list when there is a reason. */
+            reasonMessage?: components["schemas"]["Message"];
             operationId?: string;
         };
         ResourceCapability: {
@@ -3526,6 +3564,8 @@ export interface components {
             snapshot: components["schemas"]["RouterSnapshot"] | null;
             health: components["schemas"]["Health"];
             reasons: string[];
+            /** @description `reasons` with codes (`health.*`), in the same order. */
+            reasonMessages: components["schemas"]["Message"][];
             /** @description The latest attempt is younger than `staleAfter`. */
             fresh: boolean;
             /** @enum {string} */

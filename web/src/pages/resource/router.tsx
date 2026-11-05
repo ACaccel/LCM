@@ -6,6 +6,7 @@ import { ErrorBox, Pill, Tag } from "../../components/ui";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/format";
 import { coverageView, cpuPercent } from "../../lib/machine";
+import { translateAll } from "../../lib/messages";
 import { healthView, reachabilityView, routerOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
 import { PowerDialog } from "./machine/dialogs";
@@ -120,7 +121,7 @@ function RouterStatusPanel({ status }: { status: RouterStatus }) {
         <dt>{s.router.bootAt}</dt>
         <dd>{status.bootAt ? formatDateTime(status.bootAt) : s.machine.unknown}</dd>
         <dt>{s.machine.healthReasons}</dt>
-        <dd>{status.reasons.join("; ") || s.common.none}</dd>
+        <dd>{translateAll(status.reasonMessages)}</dd>
       </dl>
       {status.snapshot ? <RouterSnapshotView snapshot={status.snapshot} /> : <p>{s.router.noSnapshot}</p>}
     </section>

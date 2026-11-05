@@ -63,14 +63,14 @@ describe("type-specific tabs", () => {
     const { reads } = setup(routerFixture, "/resources/gateway/monitoring");
     expect(await screen.findByText("RA70")).toBeTruthy();
     expect(screen.getAllByText("12.5%").length).toBeGreaterThan(0);
-    expect(tabNames()).toEqual(["概覽", "監控", "事件", "操作", "檢查", "時間軸", "Policy", "關係", "設定"]);
+    expect(tabNames()).toEqual(["總覽", "監控", "事件", "操作", "檢查", "時間軸", "Policy", "關係", "文件"]);
     await waitFor(() => expect(reads).toContain("/api/v1/resources/gateway/history"));
   });
 
   it("falls back to the overview for a tab the type does not have", async () => {
     setup(resourceFixture(), "/resources/web/monitoring");
-    expect(await screen.findByRole("link", { name: "概覽" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "概覽" }).getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByRole("link", { name: "總覽" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "總覽" }).getAttribute("aria-current")).toBe("page");
     expect(tabNames()).toContain("部署");
     expect(tabNames()).not.toContain("監控");
   });

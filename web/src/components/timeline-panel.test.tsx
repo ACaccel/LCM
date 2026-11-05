@@ -9,7 +9,7 @@ import { jsonResponse } from "../pages/resource/test-fixtures";
 import { s } from "../strings";
 import { TimelinePanel } from "./timeline-panel";
 
-const entry = (local: string, summary: string): TimelineEntry => ({ id: 1, resource: "web", time: new Date(local).toISOString(), kind: "alert", ref: summary, summary, data: {} });
+const entry = (local: string, summary: string): TimelineEntry => ({ id: 1, resource: "web", time: new Date(local).toISOString(), kind: "alert", ref: summary, summary, data: {}, summaryMessage: { code: "", params: {}, message: summary } });
 const entries = [entry("2026-11-04T09:30:00", "late"), entry("2026-11-04T08:00:00", "early"), entry("2026-11-03T22:15:00", "day before")];
 
 function setup(initial: string) {

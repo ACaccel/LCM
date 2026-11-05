@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import type { TimelineEntry } from "../api/types";
 import { formatDateTime, formatDuration, formatTime } from "../lib/format";
 import { timelineDot } from "../lib/status";
+import { translate } from "../lib/messages";
 import { s } from "../strings";
 
 /** Entries that come from signals nest the signal's own data one level down. */
@@ -18,7 +19,7 @@ function detailFor(e: TimelineEntry): string {
   const outcome = pick(d, "outcome");
   const ms = pick(d, "durationMs");
   if (typeof actor === "string") parts.push(actor);
-  if (typeof outcome === "string") parts.push(outcome);
+  if (typeof outcome === "string") parts.push(outcome in s.deployments.outcomes ? s.deployments.outcomes[outcome as keyof typeof s.deployments.outcomes] : outcome);
   if (typeof ms === "number") parts.push(formatDuration(ms));
   return parts.join(" · ");
 }
@@ -43,7 +44,7 @@ export function TimelineEvents({ entries, showResource }: { entries: readonly Ti
                   <Link to={`/resources/${encodeURIComponent(e.resource)}`}>{e.resource}</Link>{" "}
                 </>
               )}
-              {e.summary}
+              {translate(e.summaryMessage)}
               {detail && <small>{detail}</small>}
             </div>
           </div>

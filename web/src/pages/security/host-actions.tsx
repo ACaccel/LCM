@@ -10,7 +10,7 @@ import { ErrorBox, Field, Spinner } from "../../components/ui";
 import { clearAttempt, readAttempt, saveAttempt } from "./attempts";
 import type { Attempt } from "./attempts";
 import { MutationError, UnknownReport, showTime, validReason } from "./shared";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 export type BeginHostAction = (action: HostAction, settings: HostSettings, reason: string) => void;
 interface Prepared { preview: HostPreview; reason: string; digest: string }

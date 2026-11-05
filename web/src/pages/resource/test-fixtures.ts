@@ -7,6 +7,7 @@ const machineStatus: MachineStatus = {
   identity: "verified",
   health: "healthy",
   reasons: [],
+  reasonMessages: [],
   journal: { state: "unavailable", reason: "journal permission denied" },
   snapshot: {
     id: 1,
@@ -61,7 +62,7 @@ export function resourceFixture(over: Partial<ResourceDetail> = {}): ResourceDet
     updatedBy: actor,
     state: "running",
     stateSince: "2026-11-01T00:00:00Z",
-    health: { status: "healthy", since: "2026-11-01T00:00:00Z", reasons: [] },
+    health: { status: "healthy", since: "2026-11-01T00:00:00Z", reasons: [], reasonMessages: [] },
     checks: [],
     alerts: [],
     actions: [action("start", "action", false, "invalidState"), action("stop", "action"), action("restart", "action"), action("retire", "phase"), action("resume", "phase", false, "invalidState"), action("unmanage", "phase", false, "invalidState")],
@@ -129,6 +130,7 @@ export const routerFixture: ResourceDetail = resourceFixture({
       fresh: true,
       health: "healthy",
       reasons: [],
+      reasonMessages: [],
       reachability: "reachable",
       bootAt: "2026-10-31T23:00:00Z",
       snapshot: {

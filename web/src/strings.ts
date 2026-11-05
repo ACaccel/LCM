@@ -185,7 +185,7 @@ export const s = {
     observed: "已完成觀測",
     goOperations: "在操作頁籤以持久化操作執行",
     tabs: {
-      overview: "概覽",
+      overview: "總覽",
       deployments: "部署",
       monitoring: "監控",
       events: "事件",
@@ -195,7 +195,7 @@ export const s = {
       timeline: "時間軸",
       policies: "Policy",
       relations: "關係",
-      config: "設定",
+      config: "文件",
     },
     id: "ID",
     created: "建立時間",
@@ -302,6 +302,8 @@ export const s = {
       "check.changed": "檢查",
       "health.changed": "健康",
       alert: "告警",
+      "config.conflict": "設定衝突",
+      "config.invalid": "設定無效",
     } as Record<string, string>,
     from: "開始時間",
     to: "結束時間",
@@ -380,16 +382,26 @@ export const s = {
     previewing: "預覽中…",
     previewTitle: "將部署的 policy",
     previewStale: "參數已變更，請重新預覽。",
-    deploy: "部署",
-    deploying: "部署中…",
+    deploy: "建立並啟用",
+    deploying: "建立中…",
     warnings: "提醒",
     openPolicy: "開啟 policy",
-    // Descriptions of the built-in templates; unknown templates (and
-    // parameters) fall back to the English text from the server.
+    windowDays: "星期（不勾選表示每天）",
+    windowStart: "開始",
+    windowEnd: "結束",
+    addWindow: "新增時段",
+    removeWindow: "移除這個時段",
+    noWindows: "尚未設定時段。",
+    window: (n: number) => `時段 ${n}`,
+    weekdays: { mon: "一", tue: "二", wed: "三", thu: "四", fri: "五", sat: "六", sun: "日" } as Record<string, string>,
+    // Values of enumerated parameters.
+    enumLabels: { discord: "Discord", konata: "konata 通知轉送" } as Record<string, string>,
+    // The server describes templates in English; these translate them by
+    // template id and parameter name, and unknown ones show the English text.
     items: {
       "auto-deploy": {
         title: "自動部署",
-        description: "分支有新 commit 且 CI 通過、位於部署時段時自動部署，等待服務恢復健康，失敗則回復。同一則 Discord 訊息會隨階段更新。",
+        description: "分支有新 commit 且 CI 通過、位於部署時段時自動部署，等待服務恢復健康，失敗則回復。Discord 或 konata 上的同一則訊息會隨階段更新。",
       },
       "scheduled-backup": {
         title: "排程備份",
@@ -401,7 +413,7 @@ export const s = {
       },
       "restart-on-down": {
         title: "異常自動重啟",
-        description: "服務健康狀態轉為 down 時重啟，並回報是否恢復。簡易版沒有次數限制，限流將於 M2 的 guard 節點提供。",
+        description: "服務健康狀態轉為異常時重啟，並回報是否恢復。這個範本不限制重啟次數：持續失敗的服務每次轉為異常都會再重啟。",
       },
     } as Record<string, { title: string; description: string }>,
     params: {
@@ -413,27 +425,33 @@ export const s = {
       ciWorkflows: "必須成功的 workflow 檔",
       ciTokenSecret: "GitHub token 的 secret 名稱",
       ciWait: "等待 CI 的時間上限",
-      windows: "部署時段 (JSON)",
+      windows: "部署時段",
       timezone: "時區",
       healthTimeout: "等待恢復健康的時間上限",
+      notifyTarget: "通知管道",
       notifySecret: "Discord webhook 的 secret 名稱",
+      notifyUrl: "konata 通知路由 URL",
+      notifyTokenSecret: "konata 金鑰的 secret 名稱",
       schedule: "Cron 排程",
       heartbeatCheck: "Heartbeat 檢查名稱",
       heartbeatTimeout: "等待 heartbeat 的時間上限",
     } as Record<string, string>,
     paramHelp: {
-      resource: "policy 要處理的服務；該服務至少要有一個 critical 健康檢查，用來判斷是否健康。",
-      repo: "輪詢新 commit 的 Git repo URL 或本機路徑。",
-      branch: "要監看的分支。",
+      resource: "policy 要處理的服務。會等待恢復健康的範本，需要該服務至少有一個 critical 健康檢查。",
+      repo: "LCM 輪詢新 commit 的 Git repo，通常是遠端 URL；服務設定中的本機 checkout 不會自己出現新 commit。",
+      branch: "要監看的分支；選擇服務後會帶入該服務設定的分支。",
       requireCI: "只部署 GitHub Actions 檢查已通過的 commit。",
       ciRepo: "供 CI 檢查使用的 GitHub repo，格式為 owner/name。",
       ciWorkflows: "必須成功的 workflow 檔名，例如 ci.yml；留空表示檢查該 commit 的所有 check run。",
       ciTokenSecret: "存放 GitHub token 的 secret 名稱；私有 repo 才需要。",
       ciWait: "檢查仍在進行時，最久等待多久。",
-      windows: "允許部署的時段，格式為 {days, start, end} 的清單，days 可省略；預設不限時段。",
-      timezone: "時段所用的 IANA 時區。",
+      windows: "允許部署的時段。結束早於開始表示跨到隔天，00:00 結束表示到午夜；預設整天都可部署。",
+      timezone: "時段或排程所用的 IANA 時區，例如 Asia/Taipei。",
       healthTimeout: "等待服務恢復健康的時間上限，例如 5m。",
-      notifySecret: "存放 Discord webhook URL 的 secret 名稱；留空表示不發送通知。",
+      notifyTarget: "通知送往 Discord（使用 Discord webhook 的 secret），或送往 konata 通知轉送服務（使用 konata 的路由 URL 與金鑰）。",
+      notifySecret: "存放 Discord webhook URL 的 secret 名稱；留空表示不發送 Discord 通知。",
+      notifyUrl: "konata 的通知路由，例如 http://127.0.0.1:4100/notifications/deploys；留空表示不發送 konata 通知。",
+      notifyTokenSecret: "存放 konata 轉送金鑰（bearer key）的 secret 名稱。",
       schedule: "五欄位的 cron 表達式。",
       heartbeatCheck: "服務上的 heartbeat 檢查名稱，備份工作完成後要回報給它；留空表示不確認。",
       heartbeatTimeout: "備份開始後，最久等待 heartbeat 的時間。",
@@ -855,14 +873,90 @@ export const s = {
     title: "找不到頁面",
     body: "這個網址沒有對應的頁面。",
   },
+  // Enumerated values of machine and router observations.
+  observation: {
+    sources: {
+      probe: "探測",
+      identity: "設備身分",
+      boot: "Boot ID",
+      os: "作業系統",
+      init: "init 系統",
+      uptime: "開機時間",
+      cpu: "CPU",
+      load: "負載",
+      memory: "記憶體",
+      filesystems: "檔案系統",
+      filesystem: "檔案系統",
+      units: "systemd unit",
+      unit: "systemd unit",
+      interfaces: "網路介面",
+      interface: "網路介面",
+      psi: "PSI",
+      journal: "系統日誌 (journal)",
+    } as Record<string, string>,
+    reasons: {
+      permission_denied: "權限不足",
+      source_missing: "來源不存在",
+      invalid_data: "資料格式無效",
+      read_failed: "讀取失敗",
+      command_failed: "指令執行失敗",
+      timeout: "逾時",
+      cancelled: "已中止",
+      output_truncated: "輸出超過上限",
+      not_configured: "未設定",
+      not_systemd: "不是 systemd 系統",
+      unsupported_version: "版本不支援",
+      cursor_unavailable: "日誌讀取位置失效",
+      journal_changed: "日誌已輪替或變更",
+      lookback_exceeded: "超過補讀範圍",
+      batch_limit: "達到單次讀取上限",
+      "probe failed": "探測失敗",
+      "not configured": "未設定",
+      "journal unavailable": "無法讀取日誌",
+      "not observed": "尚未觀測",
+    } as Record<string, string>,
+    // Event kinds without the resource type prefix (machine., router.).
+    eventKinds: {
+      save: "設定已儲存",
+      managed: "恢復納管",
+      retired: "退役",
+      unmanaged: "解除納管",
+      "maintenance.enter": "進入維護",
+      "maintenance.exit": "退出維護",
+      "operation.submit": "送出操作",
+      "operation.resolve": "人工結案",
+      "operation.changed": "操作狀態變更",
+      "threshold.firing": "超過門檻",
+      "threshold.recovered": "回到門檻內",
+      "health.changed": "健康狀態變更",
+      "reachability.changed": "連線狀態變更",
+      "boot.changed": "重新開機",
+      "collector.changed": "收集來源狀態變更",
+      "collector.gap": "事件缺口",
+      "journal.unit": "unit 日誌",
+    } as Record<string, string>,
+    severities: {
+      debug: "除錯",
+      info: "資訊",
+      notice: "注意",
+      warning: "警告",
+      error: "錯誤",
+      critical: "嚴重",
+      alert: "警報",
+      emergency: "緊急",
+      unknown: "未知",
+    } as Record<string, string>,
+    eventSources: { control: "控制", poll: "輪詢", journal: "系統日誌" } as Record<string, string>,
+    reachability: { reachable: "可連線", unreachable: "無法連線", unknown: "連線狀態未知" } as Record<string, string>,
+  },
 } as const;
 
 /** Security console copy follows the application's Traditional Chinese convention. */
 export const sec = {
   title: "資安", overview: "總覽", incidents: "事件", traffic: "流量", rules: "規則與通知", checks: "排程與檢查",
-  machine: "Machine", machineHelp: "使用不可變 Machine ID 篩選；留空查詢全部。主機管理只作用於已設定的本機。",
-  service: "Service", all: "全部", unassigned: "未指定", from: "開始時間", to: "結束時間", source: "來源", severity: "嚴重度", state: "偵測狀態",
-  applyFilters: "套用篩選", filterInvalid: "請輸入有效且由早到晚的時間區間。", unknown: "未知", disabled: "停用", enabled: "啟用", healthy: "正常", problem: "異常",
+  machine: "機器",
+  service: "服務", all: "全部", unassigned: "未指定", from: "開始時間", to: "結束時間", source: "來源", severity: "嚴重度", state: "偵測狀態",
+  filterInvalid: "請輸入有效且由早到晚的時間區間。", unknown: "未知", disabled: "停用", enabled: "啟用", healthy: "健康", problem: "異常",
   refresh: "重新整理", readOnly: "唯讀", unavailable: "主機 helper 不可用或不相容。", noCapability: "此操作尚未獲得主機授權。",
   hostNotConfigured: "此 LCM 未設定資安主機（LCM_SECURITY_MACHINE_ID），沒有可用的主機控制。", hostSetupHelp: "安裝受限 helper 並設定 Machine ID 後重新啟動 LCM，請參考", hostSetupLink: "主機控制安裝說明",
   status: "監控狀態", notifications: "通知", pending: "待送", failed: "投遞失敗", overflow: "容量丟棄", expired: "過期", lastPoll: "最近檢查", lastDelivery: "最近投遞", observed: "最近觀測",
@@ -874,3 +968,122 @@ export const sec = {
   aide: "AIDE 完整性", audit: "auditd 稽核", nginx: "Nginx 入口", collector: "收集器", lastRun: "上次檢查", nextRun: "下次檢查", baseline: "基線建立", digest: "生效版本", baselineDigest: "基線版本", report: "受限檢查摘要", targets: "比對目標", queue: "收集器待送", dropped: "收集器丟棄", lost: "稽核遺失", backlog: "稽核積壓", rulesLoaded: "規則已載入",
   profiles: "核准監控範本", required: "必要，不能移除", auditProfiles: "auditd 範本", aideProfiles: "AIDE 範本", profileHelp: "只可切換 root 預先核准的選用範本。AIDE 範圍變更不會接受既有差異或自動重建基線。", noProfiles: "未回報核准範本。", hostScope: "以下控制作用於本機 Machine", schedule: "每日檢查時段", hour: "小時", minute: "分鐘", scheduleHelp: "主機當地時間，每日一次；保留 systemd timer 的執行抖動與低優先權。", scheduleAction: "預覽排程變更", scan: "手動執行 AIDE 比對", baselineRequest: "申請更新基線", baselineHelp: "本頁只建立更新申請；實際接受差異仍需本機 sudo 核准。完整原始報告與檔案內容不透過網頁公開。", nginxHelp: "僅調整已核准分類。觀察模式不會阻擋請求；本頁不能略過 R11 的資料與門檻審閱。", nginxMode: "入口模式", r11: "R11 本機核准", burst: "Burst", connections: "連線上限", preview: "預覽變更", previewTitle: "確認主機變更", previewExpires: "預覽到期", localApproval: "此操作需要後續本機 sudo 核准。", confirmHost: "我已審閱差異、作用範圍與原因", applyHost: "套用已預覽的變更", cancel: "取消", operation: "主機操作", operations: "操作紀錄", operationEmpty: "尚無主機操作紀錄。", queryOperation: "查詢操作", operationId: "操作編號", machineLink: "機器設定", collectionHealth: "收集來源健康摘要", serviceLink: "服務設定", stale: "資料超過 5 分鐘未更新", previewStale: "生效版本已變更或預覽已到期，請重新預覽。", invalidNumber: "請確認數值範圍。", retainAttempt: "原要求已保留在此瀏覽器，重新整理後可繼續查詢。", storageError: "無法保存操作編號，未送出變更。請允許此網站使用瀏覽器儲存空間。", operationStates: { prepared: "已準備", running: "執行中", succeeded: "已驗證成功", failed: "失敗", indeterminate: "結果未確定", "awaiting-local-approval": "等待本機核准" },
 } as const;
+
+/** Labels of security enum values that the console shows. */
+export const secLabels = {
+  source: { nginx: "Nginx 入口", auditd: "auditd 稽核", aide: "AIDE 完整性", collector: "收集器", machine: "機器", service: "服務" } as Record<string, string>,
+  delivery: { disabled: "未啟用", pending: "待送", sent: "已送出", failed: "投遞失敗", overflow: "容量丟棄", expired: "過期", filtered: "低於通知級別" } as Record<string, string>,
+};
+
+type Params = Record<string, string>;
+
+const label = (map: Record<string, string>, key: string | undefined) => (key ? (map[key] ?? key) : "");
+const arrow = (from: string, to: string) => (from ? `${from} → ${to}` : to);
+const metricName = (p: Params) => {
+  switch (p.metric) {
+    case "cpu":
+      return "CPU 使用率";
+    case "memory":
+      return "記憶體使用率";
+    case "disk":
+      return `磁碟 ${p.target} 使用率`;
+    case "inode":
+      return `${p.target} 的 inode 使用率`;
+    case "unit":
+      return `systemd unit ${p.target}`;
+    default:
+      return p.metric ?? "";
+  }
+};
+const runtimeTarget = (p: Params) => {
+  switch (p.runtime) {
+    case "systemd":
+      return `systemd unit ${p.name}（${p.scope === "user" ? "使用者" : "系統"} scope）`;
+    case "docker":
+      return `Docker 容器 ${p.name}`;
+    case "compose":
+      return `Compose 專案 ${p.name}`;
+    case "command":
+      return "服務（使用設定的指令）";
+    default:
+      return `${p.runtime} 服務`;
+  }
+};
+/** The label of a coverage source key such as cpu or filesystem:/var. */
+export const coverageSource = (key: string) => {
+  const [kind = "", ...rest] = key.split(":");
+  const target = rest.join(":");
+  return `${label(s.observation.sources, kind)}${target ? ` ${target}` : ""}`;
+};
+const checkStatus: Record<string, string> = { up: s.checks.up, down: s.checks.down, unknown: s.checks.unknown };
+const conflictEnd: Record<string, string> = {
+  resolvedGit: "已改用 git 的內容",
+  resolvedCurrent: "已保留目前內容",
+  released: "已解除設定來源管理",
+  agreed: "repository 與資源內容再次一致",
+  localMatches: "網頁上的修改已與 repository 一致",
+};
+
+/**
+ * Server messages by code (see lib/messages.ts). A code missing here shows
+ * the server's English text; parameters keep the server's values.
+ */
+export const msg: Record<string, (p: Params) => string> = {
+  "health.stale": () => "觀測資料過期或缺少",
+  "health.notObserved": () => "目前的設定版本尚未觀測",
+  "health.observationUnavailable": () => "必要的觀測資料無法取得",
+  "health.unreachable": () => "路由器無法連線",
+  "health.authRejected": () => "路由器拒絕登入",
+  "health.noStatus": () => "路由器有回應，但沒有可用的狀態",
+  "health.noConnection": () => "主機沒有設定這個連線",
+  "health.connectionType": () => "連線類型與 adapter 不符",
+  "health.connectionDenied": () => "連線不允許這個資源",
+  "health.threshold": (p) => (p.metric === "unit" ? `${metricName(p)} 未在執行` : `${metricName(p)}超過門檻`),
+  "health.notReported": (p) => `未回報${metricName(p)}`,
+  "health.checkDown": (p) => `檢查 ${p.check} 失敗`,
+  "health.state": (p) => label(s.health, p.health),
+  metric: (p) => metricName(p),
+  reachability: (p) => label(s.observation.reachability, p.reachability),
+  "event.bootChanged": () => "Boot ID 改變（已重新開機）",
+  "event.uptimeRestarted": () => "運作時間重新起算（已重新開機）",
+  "coverage.state": (p) => label(s.machine.coverageStates, p.state),
+  "coverage.sourceState": (p) => `${coverageSource(p.source ?? "")}：${label(s.machine.coverageStates, p.state)}`,
+  "coverage.reason": (p) => label(s.observation.reasons, p.reason),
+  "operation.state": (p) => label(s.operation.states, p.state),
+  "operation.resolved": () => "人工結案",
+  "step.lock": (p) => `取得鎖 ${p.lock}`,
+  "step.start": (p) => `啟動 ${runtimeTarget(p)}`,
+  "step.stop": (p) => `停止 ${runtimeTarget(p)}`,
+  "step.restartOrStart": (p) => `重啟 ${runtimeTarget(p)}（未執行時改為啟動）`,
+  "step.restart": (p) => `重啟 ${runtimeTarget(p)}`,
+  "step.backup": (p) => `執行備份指令：${p.command}`,
+  "step.job": (p) => `執行作業 ${p.job}：${p.command}`,
+  "step.setState": (p) => `狀態設為「${label(s.state, p.state)}」`,
+  "step.refuseDirty": (p) => `${p.repo} 中受追蹤的檔案有未提交的修改時停止`,
+  "step.recordDeployment": (p) => `狀態設為「${label(s.state, p.state)}」並記錄這次部署`,
+  "step.fetch": (p) => `從 ${p.remote} 取得最新 commit（git fetch --prune）`,
+  "step.resolveCommit": (p) => `確認版本 ${p.commit}`,
+  "step.resolveHead": (p) => `找出 ${p.remote}/${p.branch} 的最新 commit`,
+  "step.rollbackTarget": (p) => `找出回復目標 ${p.commit}`,
+  "step.checkout": () => "切換到該 commit（git checkout --detach）",
+  "step.build": (p) => `建置：${p.command}`,
+  "step.install": (p) => `安裝：${p.command}`,
+  "step.skipRestart": () => "略過重啟：runtime 無法重啟這個服務，必須由安裝步驟套用新版本",
+  "timeline.configSaved": (p) => `${p.actor} 儲存了設定版本 ${p.version}`,
+  "timeline.configRestored": (p) => `${p.actor} 將版本 ${p.from} 還原為設定版本 ${p.version}`,
+  "timeline.phase": (p) =>
+    `${p.actor} 將納管階段改為「${label(s.phase, p.phase)}」（原為「${label(s.phase, p.previous)}」）${p.reason ? `：${p.reason}` : ""}`,
+  "timeline.lifecycle": (p) =>
+    `${arrow(label(s.state, p.previous), label(s.state, p.state))}${p.action ? `（${label(s.actionName, p.action)}）` : ""}`,
+  "timeline.action": (p) =>
+    `${label(s.actionName, p.action)}${p.job ? ` ${p.job}` : ""}${label(s.deployments.outcomes, p.outcome)}${p.version ? `，版本 ${p.version}` : ""}`,
+  "timeline.check": (p) =>
+    `檢查 ${p.check}：${arrow(label(checkStatus, p.previous), label(checkStatus, p.status))}${p.message ? `（${p.message}）` : ""}`,
+  "timeline.health": (p) => `健康狀態：${arrow(label(s.health, p.previous), label(s.health, p.health))}`,
+  "timeline.alert": (p) => `告警 ${p.alert}：${p.status === "firing" ? "觸發" : p.status === "resolved" ? "已恢復" : p.status}`,
+  "timeline.configConflict": (p) => `來源 ${p.source} 的 commit ${p.commit} 修改了 ${p.path}，但這個資源已在網頁上修改；同步已略過`,
+  "timeline.configAdopt": (p) =>
+    `來源 ${p.source} 的 commit ${p.commit} 定義了 ${p.path}，但同名資源已存在、內容不同，且不由任何設定來源管理；同步沒有覆蓋它`,
+  "timeline.configInvalid": (p) => `來源 ${p.source} 的 commit ${p.commit} 中，${p.path} 的文件無效：${p.issues}；保留先前的設定`,
+  "timeline.configResolved": (p) => `來源 ${p.source} 的設定衝突已結束：${label(conflictEnd, p.reason)}`,
+};

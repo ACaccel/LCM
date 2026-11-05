@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Template } from "../api/types";
-import { buildParams, initialValues, isRequired, suggestName } from "./template-form";
+import { buildParams, initialValues, isRequired, prefillValues, suggestName, windowRows, windowsValue } from "./template-form";
 
 const tpl: Template = {
   id: "auto-deploy",
@@ -10,11 +10,12 @@ const tpl: Template = {
   params: [
     { name: "resource", type: "service", description: "", required: true },
     { name: "repo", type: "string", description: "", required: true },
-    { name: "branch", type: "string", description: "", required: false, default: "main" },
+    { name: "branch", type: "string", description: "", required: false, default: "main", prefill: "source.branch" },
     { name: "requireCI", type: "boolean", description: "", required: false, default: true },
     { name: "ciRepo", type: "string", description: "", required: false, requiredIf: "requireCI" },
     { name: "ciWorkflows", type: "strings", description: "", required: false, default: [] },
-    { name: "windows", type: "json", description: "", required: false, default: [{ start: "00:00", end: "24:00" }] },
+    { name: "windows", type: "windows", description: "", required: false, default: [{ start: "00:00", end: "24:00" }] },
+    { name: "extra", type: "json", description: "", required: false, default: { a: 1 } },
   ],
 };
 
@@ -22,7 +23,8 @@ describe("template form", () => {
   it("presets the resource and shows defaults", () => {
     const v = initialValues(tpl, "web");
     expect(v).toMatchObject({ resource: "web", repo: "", branch: "main", requireCI: true, ciWorkflows: "" });
-    expect(v["windows"]).toBe('[{"start":"00:00","end":"24:00"}]');
+    expect(v["windows"]).toEqual([{ days: [], start: "00:00", end: "00:00" }]);
+    expect(v["extra"]).toBe('{"a":1}');
   });
 
   it("sends only changed values, the resource and booleans", () => {
@@ -48,11 +50,36 @@ describe("template form", () => {
     expect(isRequired(ciRepo!, { ...off, requireCI: true })).toBe(true);
   });
 
+  it("edits windows as rows and sends them in the server's format", () => {
+    const rows = [
+      { days: ["fri", "mon"], start: "22:00", end: "00:00" },
+      { days: [], start: "02:00", end: "05:00" },
+    ];
+    const v = { ...initialValues(tpl, "web"), repo: "x", requireCI: false, windows: rows };
+    expect(buildParams(tpl, v, "web").params["windows"]).toEqual([
+      { days: ["mon", "fri"], start: "22:00", end: "24:00" },
+      { start: "02:00", end: "05:00" },
+    ]);
+    // Rows read back the same way, and unchanged rows are not sent.
+    expect(windowRows(windowsValue(rows))).toEqual([
+      { days: ["mon", "fri"], start: "22:00", end: "00:00" },
+      { days: [], start: "02:00", end: "05:00" },
+    ]);
+    expect(buildParams(tpl, { ...v, windows: initialValues(tpl)["windows"]! }, "web").params).not.toHaveProperty("windows");
+    expect(windowRows("not a list")).toEqual([]);
+  });
+
   it("rejects JSON that does not parse", () => {
-    const v = { ...initialValues(tpl, "web"), repo: "x", requireCI: false, windows: "[{" };
-    expect(buildParams(tpl, v, "web").errors["windows"]).toBeTruthy();
-    const ok = { ...v, windows: '[{"start":"02:00","end":"05:00"}]' };
-    expect(buildParams(tpl, ok, "web").params["windows"]).toEqual([{ start: "02:00", end: "05:00" }]);
+    const v = { ...initialValues(tpl, "web"), repo: "x", requireCI: false, extra: "{" };
+    expect(buildParams(tpl, v, "web").errors["extra"]).toBeTruthy();
+    expect(buildParams(tpl, { ...v, extra: '{"b":2}' }, "web").params["extra"]).toEqual({ b: 2 });
+  });
+
+  it("prefills parameters from the selected resource's configuration", () => {
+    expect(prefillValues(tpl, { source: { repo: "/srv/web", branch: "release" } })).toEqual({ branch: "release" });
+    expect(prefillValues(tpl, { source: { branch: "" } })).toEqual({});
+    expect(prefillValues(tpl, {})).toEqual({});
+    expect(prefillValues(tpl, undefined)).toEqual({});
   });
 
   it("suggests a valid name", () => {

@@ -4,7 +4,8 @@ import { useNow } from "../../../hooks";
 import { formatDateTime, formatDuration } from "../../../lib/format";
 import { coverageView, cpuPercent, machineFresh, machineHealth, percentUsed } from "../../../lib/machine";
 import type { Observed } from "../../../lib/machine";
-import { s } from "../../../strings";
+import { translateAll } from "../../../lib/messages";
+import { coverageSource, s } from "../../../strings";
 import { HistoryPanel } from "../observations";
 import { MachineTrend } from "./trend";
 
@@ -127,7 +128,7 @@ export function MachineOverview({ resource }: { resource: Observed }) {
           <dt>{s.machine.identity}</dt>
           <dd>{s.machine.identityStates[status.identity] ?? status.identity}</dd>
           <dt>{s.machine.healthReasons}</dt>
-          <dd>{status.reasons.join("; ") || s.common.none}</dd>
+          <dd>{translateAll(status.reasonMessages)}</dd>
         </dl>
       </section>
       <section className="panel stack">
@@ -151,13 +152,13 @@ export function MachineOverview({ resource }: { resource: Observed }) {
               {Object.entries(coverage).map(([source, value]) => (
                 <tr key={source}>
                   <td>
-                    {source}
+                    {coverageSource(source)}
                     {["interfaces", "psi", "journal"].includes(source) && <span className="meta"> ({s.common.optional})</span>}
                   </td>
                   <td>
                     <Pill view={coverageView(value)} />
                   </td>
-                  <td>{value?.reason ?? s.common.none}</td>
+                  <td>{value?.reason ? (s.observation.reasons[value.reason] ?? value.reason) : s.common.none}</td>
                 </tr>
               ))}
             </tbody>

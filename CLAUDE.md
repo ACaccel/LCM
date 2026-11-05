@@ -61,6 +61,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/lock/` | Durable named locks with expiry |
 | `internal/state/` | Per-policy key-value state and the `state` expression variable |
 | `internal/secret/` | Secret resolution from files and environment; values never logged |
+| `internal/message/` | `Message` (code, params, English text) for server text that clients translate |
 | `internal/events/` | In-process event hub behind SSE: bounded, filtered subscriptions fed by the bus, engine/catalog hooks, resource changes and machine/router observations |
 | `internal/modules/` | Versioned module store; also the engine's module resolver |
 | `internal/api/` | HTTP handlers (one file per resource), middleware chain, error envelope, `openapi.yaml` |

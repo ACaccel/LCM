@@ -157,16 +157,22 @@ func state(ws []window, loc *time.Location, t time.Time) (index int, open bool, 
 }
 
 func validateWindow(p WindowProps) error {
-	if len(p.Windows) == 0 {
-		return errors.New("windows: at least one window is required")
-	}
 	if _, err := time.LoadLocation(p.Timezone); err != nil {
 		return fmt.Errorf("timezone: unknown zone %q", p.Timezone)
 	}
 	if p.MaxWait < 0 {
 		return errors.New("maxWait: must not be negative")
 	}
-	ws, err := compile(p.Windows)
+	return ValidateWindows(p.Windows)
+}
+
+// ValidateWindows checks the windows of guard.window, for callers that
+// take them as data before they reach the node, such as policy templates.
+func ValidateWindows(specs []WindowSpec) error {
+	if len(specs) == 0 {
+		return errors.New("windows: at least one window is required")
+	}
+	ws, err := compile(specs)
 	if err != nil {
 		return err
 	}

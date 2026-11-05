@@ -7,7 +7,19 @@ import type { Action, ActionPlan } from "../../api/types";
 import { ActionDialog } from "./action-dialog";
 
 const noImpact = { resource: "web", dependents: [], controlDependents: [], unresolved: [], action: "deploy", acknowledgementRequired: false };
-const plan: ActionPlan = { resource: "web", action: "deploy", from: "running", to: "running", steps: ["git fetch origin main", "build: make build", "restart"], impact: noImpact };
+const plan: ActionPlan = {
+  resource: "web",
+  action: "deploy",
+  from: "running",
+  to: "running",
+  steps: ["git fetch --prune origin", "build: make build", "a step of a newer server"],
+  stepMessages: [
+    { code: "step.fetch", params: { remote: "origin" }, message: "git fetch --prune origin" },
+    { code: "step.build", params: { command: "make build" }, message: "build: make build" },
+    { code: "step.fromTheFuture", params: {}, message: "a step of a newer server" },
+  ],
+  impact: noImpact,
+};
 const impactedPlan: ActionPlan = {
   ...plan,
   impact: {
@@ -70,8 +82,11 @@ describe("ActionDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    // The dry run starts by itself and lists the steps.
-    expect(await screen.findByText("git fetch origin main")).toBeTruthy();
+    // The dry run starts by itself and lists the steps, translated by code;
+    // a code the console does not know shows the server's text.
+    expect(await screen.findByText("從 origin 取得最新 commit（git fetch --prune）")).toBeTruthy();
+    expect(screen.getByText("建置：make build")).toBeTruthy();
+    expect(screen.getByText("a step of a newer server")).toBeTruthy();
     expect(seen.map((s) => `${s.method} ${s.path}${s.query}`)).toEqual(["POST /api/v1/resources/web/actions/deploy?dryRun=true"]);
 
     await user.type(screen.getByLabelText(/版本/), "a41c9e2");

@@ -6,7 +6,7 @@ import { SecurityOverview } from "./security/overview";
 import { SecurityIncidents } from "./security/incidents";
 import { SecurityTraffic } from "./security/traffic";
 import { SecurityRules, SecurityChecks } from "./security/controls";
-import { sec } from "./security/strings";
+import { sec } from "../strings";
 import "../styles/security.css";
 
 const tabs = [["overview", sec.overview], ["incidents", sec.incidents], ["traffic", sec.traffic], ["rules", sec.rules], ["checks", sec.checks]] as const;

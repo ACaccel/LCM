@@ -202,7 +202,7 @@ func (t machineType) Status(ctx context.Context, rec resource.Record) (resource.
 	if err != nil {
 		return resource.Status{}, err
 	}
-	st := resource.Status{State: resource.StateUnknown, StateSince: rec.UpdatedAt, Detail: r.Status}
+	st := resource.Status{State: resource.StateUnknown, StateSince: rec.UpdatedAt, Detail: newStatusView(r.Status)}
 	switch {
 	case online(r) && !r.onlineSince.IsZero():
 		st.State, st.StateSince = resource.StateOnline, r.onlineSince

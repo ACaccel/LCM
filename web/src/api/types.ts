@@ -4,6 +4,7 @@ type S = components["schemas"];
 
 export type Actor = S["Actor"];
 export type Issue = S["Issue"];
+export type Message = S["Message"];
 export type Labels = S["Labels"];
 export type Health = S["Health"];
 export type ServiceState = S["ServiceState"];

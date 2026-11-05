@@ -8,6 +8,7 @@ const e = (n: number, over: Partial<TimelineEntry> = {}): TimelineEntry => ({
   time: `2026-10-28T10:00:${String(60 - n).padStart(2, "0")}Z`.replace(":60Z", ":59Z"),
   kind: "action",
   summary: `entry ${n}`,
+  summaryMessage: { code: "", params: {}, message: `entry ${n}` },
   data: {},
   ref: String(n),
   ...over,

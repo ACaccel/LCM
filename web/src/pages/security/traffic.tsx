@@ -4,7 +4,7 @@ import { trafficSeriesQuery } from "../../api/security";
 import type { Category, TrafficPoint, TrafficSeries } from "../../api/security";
 import { Async, Empty, Field } from "../../components/ui";
 import { MachineSelect, Metric, categories, number, showTime } from "./shared";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 const windows = { "1h": { ms: 3_600_000, bucket: 60, label: sec.oneHour }, "24h": { ms: 86_400_000, bucket: 300, label: sec.day }, "7d": { ms: 604_800_000, bucket: 900, label: sec.week } } as const;
 type Window = keyof typeof windows;

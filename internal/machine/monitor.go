@@ -117,7 +117,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 		}
 		var events []Event
 		if old.Snapshot != nil && old.Snapshot.BootID != "" && snap.BootID != "" && old.Snapshot.BootID != snap.BootID {
-			events = append(events, Event{Kind: "machine.boot.changed", Severity: "info", Reason: "boot identity changed"})
+			events = append(events, Event{Kind: "machine.boot.changed", Severity: "info", Reason: resource.ReasonBootChanged})
 		}
 		changes := evaluateHealth(&next, *r.Config)
 		events = append(events, changes...)
@@ -292,7 +292,7 @@ func evaluateHealth(s *storedStatus, c model.MachineConfig) []Event {
 	}
 	if unknown {
 		s.Health = "unknown"
-		s.Reasons = append(s.Reasons, "required observation unavailable")
+		s.Reasons = append(s.Reasons, resource.ReasonObservationUnavailable)
 	}
 	return events
 }

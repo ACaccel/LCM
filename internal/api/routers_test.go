@@ -68,6 +68,9 @@ func TestRouterObservationAndReboot(t *testing.T) {
 	if detail["state"] != "online" || status["health"] != "healthy" || status["fresh"] != true || status["snapshot"].(map[string]any)["outcome"] != "ok" {
 		t.Fatalf("detail = %v", detail)
 	}
+	if ms, ok := status["reasonMessages"].([]any); !ok || len(ms) != 0 {
+		t.Fatalf("reason messages = %v", status["reasonMessages"])
+	}
 	hist := x.call("GET", v1+"/resources/gateway/history", nil).want(http.StatusOK).items()
 	if len(hist) != 1 || hist[0]["type"] != "router" || hist[0]["router"].(map[string]any)["clients"] != float64(5) {
 		t.Fatalf("history = %v", hist)
@@ -110,6 +113,19 @@ func TestRouterObservationAndReboot(t *testing.T) {
 	evs := x.call("GET", v1+"/resources/gateway/events", nil).want(http.StatusOK).items()
 	if len(evs) == 0 || evs[0]["kind"] != "router.operation.submit" {
 		t.Fatalf("events = %v", evs)
+	}
+	var reasoned int
+	for _, e := range evs {
+		m, _ := e["reasonMessage"].(map[string]any)
+		if (e["reason"] != nil) != (m != nil) || m != nil && (m["message"] != e["reason"] || m["code"] == "") {
+			t.Fatalf("event %v has reason message %v", e, m)
+		}
+		if m != nil {
+			reasoned++
+		}
+	}
+	if reasoned == 0 {
+		t.Fatalf("no event with a reason: %v", evs)
 	}
 	x.call("POST", v1+"/resources/gateway/operations/"+op["id"].(string)+"/resolve", map[string]any{"reason": "checked"}, ifMatch(`"1"`)).
 		wantError(http.StatusConflict, "precondition_failed")

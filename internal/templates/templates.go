@@ -9,6 +9,8 @@
 package templates
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/ACaccel/lcm/examples"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/nodes/guard"
 	"github.com/ACaccel/lcm/internal/secret"
 )
 
@@ -42,6 +45,9 @@ const (
 	TypeStrings ParamType = "strings"
 	// TypeJSON is any JSON value; the template says what it expects.
 	TypeJSON ParamType = "json"
+	// TypeWindows is a list of guard.window windows: {days, start, end},
+	// days optional (every day).
+	TypeWindows ParamType = "windows"
 )
 
 // Param describes one template parameter.
@@ -56,6 +62,12 @@ type Param struct {
 	// Default is the value in the template document; absent for required
 	// parameters, whose value there is only an example.
 	Default any `json:"default,omitempty"`
+	// Enum lists the allowed values of a string parameter.
+	Enum []string `json:"enum,omitempty"`
+	// Prefill is a path in the spec.config of the resource that the
+	// resource parameter selects, such as source.branch; a form may fill
+	// the parameter from it.
+	Prefill string `json:"prefill,omitempty"`
 }
 
 // Template is one built-in policy template.
@@ -90,7 +102,7 @@ var (
 		Description: "Name of a secret that holds a Discord webhook URL. Leave empty to send no notifications."}
 	// deployNotify lets auto-deploy report to Discord or a konata relay.
 	deployNotify = []Param{
-		{Name: "notifyTarget", Type: TypeString, Description: "Where notifications go: discord (notifySecret) or konata (notifyUrl and notifyTokenSecret)."},
+		{Name: "notifyTarget", Type: TypeString, Enum: []string{"discord", "konata"}, Description: "Where notifications go: discord (notifySecret) or konata (notifyUrl and notifyTokenSecret)."},
 		{Name: "notifySecret", Type: TypeSecret, Description: "discord: name of a secret that holds the webhook URL. Leave empty to send no Discord notifications."},
 		{Name: "notifyUrl", Type: TypeString, Description: "konata: the notification route URL, such as http://127.0.0.1:4100/notifications/deploys. Leave empty to send no konata notifications."},
 		{Name: "notifyTokenSecret", Type: TypeSecret, Description: "konata: name of a secret that holds the relay's bearer key."},
@@ -110,13 +122,13 @@ var descriptors = []descriptor{
 		params: append([]Param{
 			service,
 			{Name: "repo", Type: TypeString, Required: true, Description: "Git repository URL or local path that is polled for new commits."},
-			{Name: "branch", Type: TypeString, Description: "Branch to watch."},
+			{Name: "branch", Type: TypeString, Prefill: "source.branch", Description: "Branch to watch."},
 			{Name: "requireCI", Type: TypeBool, Description: "Deploy only commits whose GitHub Actions checks passed."},
 			{Name: "ciRepo", Type: TypeString, RequiredIf: "requireCI", Description: "GitHub repository as owner/name, for the CI check."},
 			{Name: "ciWorkflows", Type: TypeStrings, Description: "Workflow files that must have succeeded, such as ci.yml. Empty checks every check run of the commit."},
 			{Name: "ciTokenSecret", Type: TypeSecret, Description: "Name of a secret that holds a GitHub token; needed for private repositories."},
 			{Name: "ciWait", Type: TypeDuration, Description: "How long to wait for pending checks before giving up."},
-			{Name: "windows", Type: TypeJSON, Description: `Deploy windows as a list of {days, start, end}; days is optional. The default allows every time.`},
+			{Name: "windows", Type: TypeWindows, Description: "Deploy windows: days of the week (every day when empty), start and end as HH:MM. The default allows every time."},
 			{Name: "timezone", Type: TypeString, Description: "IANA time zone of the windows."},
 			healthTimeout(),
 		}, deployNotify...),
@@ -198,6 +210,11 @@ func load(d descriptor) (Template, error) {
 		}
 		if p.Required || p.RequiredIf != "" {
 			def = nil
+		}
+		if def != nil {
+			if _, err := normalize(p, def); err != nil {
+				return Template{}, fmt.Errorf("default of parameter %s: %w", p.Name, err)
+			}
 		}
 		p.Default = def
 		if !referenced(&doc, p.Name) {
@@ -340,6 +357,8 @@ func normalize(p Param, v any) (any, error) {
 		}
 		switch {
 		case s == "":
+		case len(p.Enum) > 0 && !slices.Contains(p.Enum, s):
+			return nil, fmt.Errorf("%q is not one of %s", s, strings.Join(p.Enum, ", "))
 		case p.Type == TypeSecret && !secret.ValidName(s):
 			return nil, fmt.Errorf("%q is not a valid secret name", s)
 		case p.Type == TypeService && (len(s) > 63 || !serviceRe.MatchString(s)):
@@ -374,6 +393,21 @@ func normalize(p Param, v any) (any, error) {
 			}
 		}
 		return list, nil
+	case TypeWindows:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("must be a list of windows")
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		var ws []guard.WindowSpec
+		if err := dec.Decode(&ws); err != nil {
+			return nil, fmt.Errorf("must be a list of {days, start, end}")
+		}
+		if err := guard.ValidateWindows(ws); err != nil {
+			return nil, err
+		}
+		return v, nil
 	default:
 		return v, nil
 	}

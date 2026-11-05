@@ -11,6 +11,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/events"
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/resource"
@@ -194,6 +195,9 @@ type healthDTO struct {
 	Status  string     `json:"status"`
 	Since   *time.Time `json:"since"`
 	Reasons []string   `json:"reasons"`
+	// ReasonMessages are Reasons with codes for translation, in the same
+	// order.
+	ReasonMessages []message.Message `json:"reasonMessages"`
 }
 
 type serviceExtrasDTO struct {
@@ -265,19 +269,19 @@ func (s *Server) status(ctx context.Context, rec resource.Record) (resource.Stat
 	return t.Status(ctx, rec)
 }
 
-// healthReasons explains a combined health: the type's own reasons first,
-// then the checks that fail.
-func healthReasons(st monitor.ResourceStatus) []string {
-	out := []string{}
+// healthOf explains a combined health: the type's own reasons first, then
+// the checks that fail.
+func healthOf(st monitor.ResourceStatus) healthDTO {
+	ms := []message.Message{}
 	if st.Native != nil {
-		out = append(out, st.Native.Reasons...)
+		ms = append(ms, resource.ReasonMessages(st.Native.Reasons)...)
 	}
 	for _, c := range st.Checks {
 		if c.Status == monitor.StatusDown {
-			out = append(out, "check "+c.Name+" is down")
+			ms = append(ms, message.New("health.checkDown", "check "+c.Name+" is down", "check", c.Name))
 		}
 	}
-	return out
+	return healthDTO{Status: string(st.Health), Since: optTime(st.Since), Reasons: message.Texts(ms), ReasonMessages: ms}
 }
 
 func (s *Server) detail(ctx context.Context, r *http.Request, rec resource.Record) (resourceDetailDTO, error) {
@@ -294,7 +298,7 @@ func (s *Server) detail(ctx context.Context, r *http.Request, rec resource.Recor
 		Phase: rec.Phase, Labels: labelsOf(rec), Document: rec.Document, Version: rec.Version,
 		CreatedAt: rec.CreatedAt, UpdatedAt: rec.UpdatedAt, UpdatedBy: toActorDTO(v.Actor),
 		State: st.State, StateSince: optTime(st.StateSince),
-		Health:  healthDTO{Status: string(monitor.HealthUnknown), Reasons: []string{}},
+		Health:  healthDTO{Status: string(monitor.HealthUnknown), Reasons: []string{}, ReasonMessages: []message.Message{}},
 		Checks:  []checkStatusDTO{},
 		Alerts:  []monitor.Alert{},
 		Actions: []resourceActionDTO{},
@@ -330,7 +334,7 @@ func (s *Server) detail(ctx context.Context, r *http.Request, rec resource.Recor
 		return out, nil
 	}
 	if mst, ok := s.monitor.Resource(rec.Name); ok {
-		out.Health = healthDTO{Status: string(mst.Health), Since: optTime(mst.Since), Reasons: healthReasons(mst)}
+		out.Health = healthOf(mst)
 		for _, c := range mst.Checks {
 			out.Checks = append(out.Checks, toCheckStatusDTO(c))
 		}

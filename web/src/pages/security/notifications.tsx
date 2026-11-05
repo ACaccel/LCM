@@ -7,7 +7,7 @@ import { Async, ErrorBox, Field } from "../../components/ui";
 import { clearAttempt, readAttempt, saveAttempt } from "./attempts";
 import type { Attempt } from "./attempts";
 import { MutationError, severities, showTime, validReason } from "./shared";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 export function NotificationSettings() {
   const q = useQuery(securitySettingsQuery());

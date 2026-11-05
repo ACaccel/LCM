@@ -170,6 +170,13 @@ func TestTimelineAndDeployments(t *testing.T) {
 	if len(tl) < 3 || tl[0]["resource"] != "web" || tl[0]["data"] == nil {
 		t.Fatalf("service timeline = %v", tl)
 	}
+	for _, e := range tl {
+		m := e["summaryMessage"].(map[string]any)
+		if m["message"] != e["summary"] || e["kind"] == "lifecycle.changed" && m["code"] != "timeline.lifecycle" ||
+			e["kind"] == "config.changed" && m["code"] != "timeline.configSaved" {
+			t.Fatalf("timeline entry %v has message %v", e, m)
+		}
+	}
 	all := x.call("GET", v1+"/timeline", nil).want(http.StatusOK).items()
 	services := map[any]bool{}
 	for _, e := range all {

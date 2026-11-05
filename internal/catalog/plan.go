@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
@@ -15,6 +16,15 @@ type Plan struct {
 	From     State    `json:"from"`
 	To       State    `json:"to"`
 	Steps    []string `json:"steps"`
+	// StepMessages are Steps with codes for translation, in the same order.
+	StepMessages []message.Message `json:"stepMessages"`
+}
+
+func (p *Plan) add(ms ...message.Message) {
+	for _, m := range ms {
+		p.Steps = append(p.Steps, m.Message)
+		p.StepMessages = append(p.StepMessages, m)
+	}
 }
 
 // Plan checks that the action is allowed and returns its steps. It takes
@@ -29,47 +39,47 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 	}
 	cfg := rec.Config
 	p := Plan{Resource: name, Action: action, From: rec.State, To: rec.State}
-	p.Steps = append(p.Steps, "lock "+LockName(name))
-	target := describeRuntime(rec.Runtime())
+	p.add(message.New("step.lock", "lock "+LockName(name), "lock", LockName(name)))
+	target := runtimeStep(rec.Runtime())
 
 	switch action {
 	case ActionStart:
 		p.To = StateRunning
-		p.Steps = append(p.Steps, "start "+target)
+		p.add(target("step.start", "start "))
 	case ActionStop:
 		p.To = StateStopped
-		p.Steps = append(p.Steps, "stop "+target)
+		p.add(target("step.stop", "stop "))
 	case ActionRestart:
 		p.To = StateRunning
-		p.Steps = append(p.Steps, "restart (or start when inactive) "+target)
+		p.add(target("step.restartOrStart", "restart (or start when inactive) "))
 	case ActionBackup:
 		if cfg.Backup == nil {
 			return Plan{}, ErrNoBackup
 		}
-		p.Steps = append(p.Steps, "run backup command: "+cfg.Backup.Command)
+		p.add(message.New("step.backup", "run backup command: "+cfg.Backup.Command, "command", cfg.Backup.Command))
 	case ActionRunJob:
 		job, ok := cfg.Jobs[opts.Job]
 		if !ok {
 			return Plan{}, fmt.Errorf("%w: %q", ErrUnknownJob, opts.Job)
 		}
-		p.Steps = append(p.Steps, fmt.Sprintf("run job %s: %s", opts.Job, job.Command))
+		p.add(message.New("step.job", fmt.Sprintf("run job %s: %s", opts.Job, job.Command), "job", opts.Job, "command", job.Command))
 	case ActionDeploy, ActionRollback:
 		steps, err := m.deploySteps(ctx, rec, action, opts.Version)
 		if err != nil {
 			return Plan{}, err
 		}
-		p.Steps = append(p.Steps, steps...)
+		p.add(steps...)
 		p.To = StateRunning
 	default:
 		return Plan{}, fmt.Errorf("catalog: unknown action %q", action)
 	}
 	if p.To != p.From {
-		p.Steps = append(p.Steps, fmt.Sprintf("set state %s", p.To))
+		p.add(message.New("step.setState", fmt.Sprintf("set state %s", p.To), "state", string(p.To)))
 	}
 	return p, nil
 }
 
-func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version string) ([]string, error) {
+func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version string) ([]message.Message, error) {
 	src := rec.Config.Source
 	if src == nil {
 		return nil, ErrNoSource
@@ -77,7 +87,7 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 	if version != "" && !shaRe.MatchString(version) {
 		return nil, ErrInvalidVersion
 	}
-	steps := []string{"refuse if tracked files in " + src.Repo + " have changes"}
+	steps := []message.Message{message.New("step.refuseDirty", "refuse if tracked files in "+src.Repo+" have changes", "repo", src.Repo)}
 	transient := StateDeploying
 	switch {
 	case action == ActionRollback:
@@ -85,7 +95,9 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 	case rec.State == StateRunning:
 		transient = StateUpdating
 	}
-	steps = append(steps, fmt.Sprintf("set state %s and record the deployment", transient))
+	steps = append(steps, message.New("step.recordDeployment", fmt.Sprintf("set state %s and record the deployment", transient), "state", string(transient)))
+	remote := src.EffectiveRemote()
+	fetch := message.New("step.fetch", "git fetch --prune "+remote, "remote", remote)
 	switch {
 	case action == ActionRollback:
 		deps, err := m.cat.Deployments(ctx, rec.Name, 100, 0)
@@ -96,36 +108,47 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 		if !ok {
 			return nil, ErrNoRollbackTarget
 		}
-		steps = append(steps, "resolve rollback target "+shortSHA(v))
+		steps = append(steps, message.New("step.rollbackTarget", "resolve rollback target "+shortSHA(v), "commit", shortSHA(v)))
 	case version != "":
-		steps = append(steps, "git fetch --prune "+src.EffectiveRemote(), "resolve "+shortSHA(version))
+		steps = append(steps, fetch, message.New("step.resolveCommit", "resolve "+shortSHA(version), "commit", shortSHA(version)))
 	default:
-		steps = append(steps, "git fetch --prune "+src.EffectiveRemote(),
-			fmt.Sprintf("resolve head of %s/%s", src.EffectiveRemote(), src.Branch))
+		steps = append(steps, fetch,
+			message.New("step.resolveHead", fmt.Sprintf("resolve head of %s/%s", remote, src.Branch), "remote", remote, "branch", src.Branch))
 	}
-	steps = append(steps, "git checkout --detach <commit>")
+	steps = append(steps, message.New("step.checkout", "git checkout --detach <commit>"))
 	if src.Build != "" {
-		steps = append(steps, "build: "+src.Build)
+		steps = append(steps, message.New("step.build", "build: "+src.Build, "command", src.Build))
 	}
 	if src.Install != "" {
-		steps = append(steps, "install: "+src.Install)
+		steps = append(steps, message.New("step.install", "install: "+src.Install, "command", src.Install))
 	}
 	if !rt.CapabilitiesOf(rec.Runtime()).Restart {
-		return append(steps, "skip restart: the runtime cannot restart this service, so the install step must apply the new version"), nil
+		return append(steps, message.New("step.skipRestart", "skip restart: the runtime cannot restart this service, so the install step must apply the new version")), nil
 	}
-	return append(steps, "restart "+describeRuntime(rec.Runtime())), nil
+	return append(steps, runtimeStep(rec.Runtime())("step.restart", "restart ")), nil
 }
 
-func describeRuntime(r model.Runtime) string {
+// runtimeStep returns a constructor of steps that act on the runtime r. The
+// parameters name the runtime type, the unit, container or project, and
+// the systemd scope.
+func runtimeStep(r model.Runtime) func(code, verb string) message.Message {
+	var text, name, scope string
 	switch r.Type {
 	case model.RuntimeSystemd:
-		return fmt.Sprintf("systemd unit %s (%s scope)", r.Unit, r.EffectiveScope())
+		name, scope = r.Unit, r.EffectiveScope()
+		text = fmt.Sprintf("systemd unit %s (%s scope)", r.Unit, scope)
 	case model.RuntimeDocker:
-		return "docker container " + r.Container
+		name = r.Container
+		text = "docker container " + r.Container
 	case model.RuntimeCompose:
-		return fmt.Sprintf("compose project %s", r.Project)
+		name = r.Project
+		text = "compose project " + r.Project
 	case model.RuntimeCommand:
-		return "service via configured commands"
+		text = "service via configured commands"
+	default:
+		text = string(r.Type) + " service"
 	}
-	return string(r.Type) + " service"
+	return func(code, verb string) message.Message {
+		return message.New(code, verb+text, "runtime", string(r.Type), "name", name, "scope", scope)
+	}
 }

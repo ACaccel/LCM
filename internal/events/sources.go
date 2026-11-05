@@ -6,6 +6,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
 )
@@ -58,13 +59,15 @@ func (h *Hub) Observer() engine.Observer {
 type TimelineEntry struct {
 	// ID is 0 for entries announced by an event whose row id is not known;
 	// clients refetch the timeline instead of relying on it.
-	ID       int64          `json:"id"`
-	Resource string         `json:"resource"`
-	Time     time.Time      `json:"time"`
-	Kind     string         `json:"kind"`
-	Summary  string         `json:"summary"`
-	Data     map[string]any `json:"data"`
-	Ref      string         `json:"ref"`
+	ID       int64     `json:"id"`
+	Resource string    `json:"resource"`
+	Time     time.Time `json:"time"`
+	Kind     string    `json:"kind"`
+	Summary  string    `json:"summary"`
+	// SummaryMessage is Summary with a code for translation.
+	SummaryMessage message.Message `json:"summaryMessage"`
+	Data           map[string]any  `json:"data"`
+	Ref            string          `json:"ref"`
 }
 
 // NewTimelineEntry converts a catalog entry.
@@ -73,7 +76,10 @@ func NewTimelineEntry(e catalog.Entry) TimelineEntry {
 	if data == nil {
 		data = map[string]any{}
 	}
-	return TimelineEntry{ID: e.ID, Resource: e.Resource, Time: e.Time.UTC(), Kind: e.Kind, Summary: e.Summary, Data: data, Ref: e.Ref}
+	return TimelineEntry{
+		ID: e.ID, Resource: e.Resource, Time: e.Time.UTC(), Kind: e.Kind, Summary: e.Summary,
+		SummaryMessage: catalog.EntryMessage(e), Data: data, Ref: e.Ref,
+	}
 }
 
 // Timeline announces a stored timeline entry.

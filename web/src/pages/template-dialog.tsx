@@ -3,15 +3,13 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { client, unwrap } from "../api/client";
-import { qk, resourcesQuery, templatesQuery } from "../api/queries";
+import { policiesQuery, qk, resourceQuery, resourcesQuery, templatesQuery } from "../api/queries";
 import type { Template, TemplateInstance, TemplateParam } from "../api/types";
 import { Dialog, useDialogGuard } from "../components/dialog";
 import { ErrorBox, Field, Spinner } from "../components/ui";
-import { buildParams, initialValues, isRequired, suggestName } from "../lib/template-form";
-import type { FormValues } from "../lib/template-form";
+import { WEEKDAYS, buildParams, initialValues, isRequired, prefillValues, suggestName } from "../lib/template-form";
+import type { FormValue, FormValues, WindowRow } from "../lib/template-form";
 import { s } from "../strings";
-
-const NAME_RE = /^[a-z]([a-z0-9-]*[a-z0-9])?$/;
 
 function templateTitle(t: Template): string {
   return s.templates.items[t.id]?.title ?? t.title;
@@ -21,17 +19,60 @@ function templateDescription(t: Template): string {
   return s.templates.items[t.id]?.description ?? t.description;
 }
 
+/** Rows of deploy windows: the days each starts on, its start and its end. */
+function WindowsEditor({ id, rows, onChange }: { id: string; rows: WindowRow[]; onChange: (rows: WindowRow[]) => void }) {
+  const set = (i: number, row: WindowRow) => onChange(rows.map((r, j) => (j === i ? row : r)));
+  return (
+    <div className="stack" id={id}>
+      {rows.length === 0 && <p className="meta">{s.templates.noWindows}</p>}
+      {rows.map((row, i) => (
+        <fieldset key={i} className="row window-row" aria-label={s.templates.window(i + 1)}>
+          <span role="group" aria-label={s.templates.windowDays}>
+            {WEEKDAYS.map((d) => (
+              <label key={d} className="check">
+                <input
+                  type="checkbox"
+                  checked={row.days.includes(d)}
+                  onChange={(e) => set(i, { ...row, days: e.target.checked ? [...row.days, d] : row.days.filter((x) => x !== d) })}
+                />
+                {s.templates.weekdays[d]}
+              </label>
+            ))}
+          </span>
+          <label>
+            {s.templates.windowStart}{" "}
+            <input type="time" value={row.start} onChange={(e) => set(i, { ...row, start: e.target.value })} />
+          </label>
+          <label>
+            {s.templates.windowEnd}{" "}
+            <input type="time" value={row.end} onChange={(e) => set(i, { ...row, end: e.target.value })} />
+          </label>
+          <button type="button" className="btn small" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+            {s.templates.removeWindow}
+          </button>
+        </fieldset>
+      ))}
+      <div>
+        <button type="button" className="btn small" onClick={() => onChange([...rows, { days: [], start: "00:00", end: "00:00" }])}>
+          {s.templates.addWindow}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface FieldProps {
   param: TemplateParam;
   values: FormValues;
   services: string[];
   error?: string;
-  onChange: (v: string | boolean) => void;
+  onChange: (v: FormValue) => void;
 }
 
 function ParamField({ param, values, services, error, onChange }: FieldProps) {
   const id = `tpl-${param.name}`;
   const value = values[param.name];
+  const text = typeof value === "string" ? value : "";
   const required = isRequired(param, values);
   const label = `${s.templates.params[param.name] ?? param.name}${required ? " *" : ""}`;
   const hint = (
@@ -42,36 +83,46 @@ function ParamField({ param, values, services, error, onChange }: FieldProps) {
     </>
   );
   let input;
-  switch (param.type) {
-    case "boolean":
-      input = (
-        <input id={id} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
-      );
-      break;
-    case "service":
-      input = (
-        <select id={id} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value)} required={required}>
-          <option value="">{s.templates.selectService}</option>
-          {services.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-      );
-      break;
-    case "json":
-      input = (
-        <textarea id={id} rows={3} spellCheck={false} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value)} />
-      );
-      break;
-    default:
-      input = (
-        <input id={id} type="text" spellCheck={false} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value)} />
-      );
+  if (param.enum?.length) {
+    input = (
+      <select id={id} value={text} onChange={(e) => onChange(e.target.value)} required={required}>
+        {!param.enum.includes(text) && <option value={text}>{text}</option>}
+        {param.enum.map((v) => (
+          <option key={v} value={v}>
+            {s.templates.enumLabels[v] ?? v}
+          </option>
+        ))}
+      </select>
+    );
+  } else {
+    switch (param.type) {
+      case "boolean":
+        input = <input id={id} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
+        break;
+      case "service":
+        input = (
+          <select id={id} value={text} onChange={(e) => onChange(e.target.value)} required={required}>
+            <option value="">{s.templates.selectService}</option>
+            {services.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        );
+        break;
+      case "windows":
+        input = <WindowsEditor id={id} rows={Array.isArray(value) ? value : []} onChange={onChange} />;
+        break;
+      case "json":
+        input = <textarea id={id} rows={3} spellCheck={false} value={text} onChange={(e) => onChange(e.target.value)} />;
+        break;
+      default:
+        input = <input id={id} type="text" spellCheck={false} value={text} onChange={(e) => onChange(e.target.value)} />;
+    }
   }
   return (
-    <Field label={label} htmlFor={id} hint={hint}>
+    <Field label={label} htmlFor={param.type === "windows" && !param.enum?.length ? undefined : id} hint={hint}>
       {input}
     </Field>
   );
@@ -82,19 +133,32 @@ function Form({ templates, services, resource, onClose }: { templates: Template[
   const navigate = useNavigate();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const template = templates.find((t) => t.id === templateId);
-  const [values, setValues] = useState<FormValues>(() => (templates[0] ? initialValues(templates[0], resource) : {}));
+  const [entered, setEntered] = useState<FormValues>(() => (templates[0] ? initialValues(templates[0], resource) : {}));
+  // Fields the user changed; prefilled values never replace them.
+  const [edited, setEdited] = useState<ReadonlySet<string>>(new Set());
+  const target = template ? entered[template.resourceParam] : undefined;
+  const service = typeof target === "string" && target !== "" ? target : undefined;
+  const prefills = template?.params.some((p) => p.prefill) ?? false;
+  const targetDetail = useQuery({ ...resourceQuery(service ?? ""), enabled: prefills && service !== undefined });
+  const values = useMemo<FormValues>(() => {
+    if (!template || !targetDetail.data || targetDetail.data.name !== service) return entered;
+    const filled = prefillValues(template, targetDetail.data.document?.spec.config);
+    const out = { ...entered };
+    for (const [k, v] of Object.entries(filled)) if (!edited.has(k)) out[k] = v;
+    return out;
+  }, [template, targetDetail.data, service, entered, edited]);
   // The name follows the template and target resource until the user types one.
   const [typedName, setTypedName] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
-  const target = template ? values[template.resourceParam] : undefined;
-  const name = typedName ?? suggestName(templateId, typeof target === "string" && target !== "" ? target : undefined);
+  const name = typedName ?? suggestName(templateId, service);
   const [preview, setPreview] = useState<{ yaml: string; warnings: TemplateInstance["warnings"]; key: string } | null>(null);
 
-  const existing = useQuery({ queryKey: qk.policies(), queryFn: async () => (await unwrap(client.GET("/policies", { params: { query: { limit: 500 } } }))).items });
+  // The server checks the name; the list only warns about a taken one early.
+  const existing = useQuery(policiesQuery());
   const taken = useMemo(() => new Set((existing.data ?? []).map((p) => p.name)), [existing.data]);
 
   const built = useMemo(() => (template ? buildParams(template, values, resource) : { params: {}, errors: {} }), [template, values, resource]);
-  const nameProblem = name === "" ? "" : !NAME_RE.test(name) ? s.templates.policyNameHelp : taken.has(name) ? s.templates.exists : "";
+  const nameProblem = taken.has(name) ? s.templates.exists : "";
   const key = JSON.stringify([templateId, name, built.params]);
   const hasErrors = Object.keys(built.errors).length > 0 || name === "" || nameProblem !== "";
 
@@ -102,7 +166,8 @@ function Form({ templates, services, resource, onClose }: { templates: Template[
     const t = templates.find((x) => x.id === id);
     if (!t) return;
     setTemplateId(id);
-    setValues(initialValues(t, resource));
+    setEntered(initialValues(t, resource));
+    setEdited(new Set());
     setPreview(null);
   }
 
@@ -163,7 +228,10 @@ function Form({ templates, services, resource, onClose }: { templates: Template[
           values={values}
           services={services}
           error={touched || preview || previewM.isError ? built.errors[p.name] : undefined}
-          onChange={(v) => setValues((cur) => ({ ...cur, [p.name]: v }))}
+          onChange={(v) => {
+            setEntered((cur) => ({ ...cur, [p.name]: v }));
+            setEdited((cur) => new Set(cur).add(p.name));
+          }}
         />
       ))}
       <ErrorBox error={previewM.error ?? deployM.error} />

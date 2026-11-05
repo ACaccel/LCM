@@ -11,8 +11,8 @@ import (
 
 // Timeline entry kinds and alert names written by the sync.
 const (
-	KindConflict = "config.conflict"
-	KindInvalid  = "config.invalid"
+	KindConflict = catalog.KindConfigConflict
+	KindInvalid  = catalog.KindConfigInvalid
 )
 
 // SignalPrefix starts the kind of every signal the sync publishes about a
@@ -37,7 +37,7 @@ func (s *Syncer) notifyConflict(ctx context.Context, ref Ref, source, path, comm
 		msg = fmt.Sprintf("commit %s of source %s defines %s (%s), which already exists with different content and is not managed by a source; the sync did not overwrite it",
 			shortCommit(commit), source, ref, path)
 	}
-	s.timeline(ctx, ref, KindConflict, msg, map[string]any{"source": source, "commit": commit, "path": path})
+	s.timeline(ctx, ref, KindConflict, msg, map[string]any{"source": source, "commit": commit, "path": path, "adopt": adopt})
 	s.alert(ctx, ref, source, KindConflict, "firing", signal.SeverityWarning, msg, map[string]any{"commit": commit, "path": path})
 	s.log.Warn("config sync conflict", "source", source, "resource", ref.String(), "commit", commit)
 }
@@ -51,16 +51,26 @@ func (s *Syncer) notifyInvalid(ctx context.Context, res Result, o applyOpts) {
 	}
 	msg := fmt.Sprintf("commit %s of source %s has an invalid document %s (%s): %s; the previous configuration stays",
 		shortCommit(o.commit), o.source, ref, res.Path, res.Issues.Error())
-	s.timeline(ctx, ref, KindInvalid, msg, map[string]any{"source": o.source, "commit": o.commit, "path": res.Path})
+	s.timeline(ctx, ref, KindInvalid, msg, map[string]any{"source": o.source, "commit": o.commit, "path": res.Path, "issues": res.Issues.Error()})
 	s.alert(ctx, ref, o.source, KindInvalid, "firing", signal.SeverityWarning, msg, map[string]any{"commit": o.commit, "path": res.Path})
 	s.log.Warn("config sync document invalid", "source", o.source, "resource", ref.String(), "commit", o.commit)
 }
 
-// notifyResolved closes a conflict notification.
+// resolvedText explains each way a conflict ends.
+var resolvedText = map[string]string{
+	catalog.ConflictResolvedGit:     "conflict resolved by git",
+	catalog.ConflictResolvedCurrent: "conflict resolved by current",
+	catalog.ConflictReleased:        "ownership released",
+	catalog.ConflictAgreed:          "the repository and the resource agree again",
+	catalog.ConflictLocalMatches:    "local changes now match the repository",
+}
+
+// notifyResolved closes a conflict notification; why is one of the
+// catalog.Conflict* reasons.
 func (s *Syncer) notifyResolved(ctx context.Context, ref Ref, source, why string) {
-	msg := fmt.Sprintf("config conflict on %s (source %s) is over: %s", ref, source, why)
+	msg := fmt.Sprintf("config conflict on %s (source %s) is over: %s", ref, source, resolvedText[why])
 	s.alert(ctx, ref, source, KindConflict, "resolved", signal.SeverityInfo, msg, nil)
-	s.timeline(ctx, ref, KindConflict, msg, map[string]any{"source": source, "resolved": true})
+	s.timeline(ctx, ref, KindConflict, msg, map[string]any{"source": source, "resolved": true, "reason": why})
 }
 
 // timeline adds an entry to the resource's timeline; policies and modules

@@ -221,3 +221,11 @@ textarea[aria-invalid="true"] {
     height: 60vh;
   }
 }
+
+/* One deploy window of the template form. */
+.window-row {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

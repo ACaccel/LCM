@@ -130,6 +130,12 @@ func TestRenderRejectsBadParameters(t *testing.T) {
 		{"bad secret name", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "notifySecret": "../etc"}, "params.notifySecret"},
 		{"list of numbers", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "ciWorkflows": []any{1}}, "params.ciWorkflows"},
 		{"ciRepo needed while requireCI", map[string]any{"resource": "web", "repo": "x"}, "params.ciRepo"},
+		{"value outside the enum", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "notifyTarget": "slack"}, "params.notifyTarget"},
+		{"no windows", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "windows": []any{}}, "params.windows"},
+		{"window without end", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "windows": []any{map[string]any{"start": "09:00"}}}, "params.windows"},
+		{"window with a bad day", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "windows": []any{map[string]any{"days": []any{"monday"}, "start": "09:00", "end": "17:00"}}}, "params.windows"},
+		{"window with an unknown field", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "windows": []any{map[string]any{"start": "09:00", "end": "17:00", "tz": "UTC"}}}, "params.windows"},
+		{"windows not a list", map[string]any{"resource": "web", "repo": "x", "ciRepo": "a/b", "windows": "09:00-17:00"}, "params.windows"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,6 +162,39 @@ func TestRenderEmptyValuesFallBackOrOverride(t *testing.T) {
 	pol, _ := model.DecodePolicy(out)
 	if pol.Spec.Params["healthTimeout"] != "5m" || pol.Spec.Params["notifySecret"] != "" || pol.Spec.Nodes[0].Props["branch"] != "main" {
 		t.Fatalf("params = %v trigger = %v", pol.Spec.Params, pol.Spec.Nodes[0].Props)
+	}
+}
+
+func TestDescriptorGuidesTheForm(t *testing.T) {
+	tpl, _ := templates.Get("auto-deploy")
+	byName := map[string]templates.Param{}
+	for _, p := range tpl.Params {
+		byName[p.Name] = p
+	}
+	if p := byName["notifyTarget"]; !slices.Equal(p.Enum, []string{"discord", "konata"}) || p.Default != "discord" {
+		t.Errorf("notifyTarget = %+v", p)
+	}
+	if p := byName["windows"]; p.Type != templates.TypeWindows {
+		t.Errorf("windows = %+v", p)
+	}
+	if p := byName["branch"]; p.Prefill != "source.branch" {
+		t.Errorf("branch = %+v", p)
+	}
+	// The repository of a service is its local checkout, which trigger.git
+	// cannot watch for new commits, so the repo parameter is not prefilled.
+	if p := byName["repo"]; p.Prefill != "" {
+		t.Errorf("repo = %+v", p)
+	}
+
+	windows := []any{map[string]any{"days": []any{"mon", "fri"}, "start": "22:00", "end": "24:00"}}
+	out, err := tpl.Render("p", map[string]any{"resource": "web", "repo": "x", "requireCI": false, "notifyTarget": "konata", "windows": windows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol, _ := model.DecodePolicy(out)
+	got, _ := pol.Spec.Params["windows"].([]any)
+	if pol.Spec.Params["notifyTarget"] != "konata" || len(got) != 1 || got[0].(map[string]any)["end"] != "24:00" {
+		t.Fatalf("params = %v", pol.Spec.Params)
 	}
 }
 

@@ -134,7 +134,7 @@ func TestTypeStatusAndActions(t *testing.T) {
 	if st.State != resource.StateOnline || !st.StateSince.Equal(firstSample) {
 		t.Fatalf("status = %+v, want online since %s", st, firstSample)
 	}
-	if _, ok := st.Detail.(Status); !ok {
+	if v, ok := st.Detail.(StatusView); !ok || len(v.ReasonMessages) != len(v.Reasons) {
 		t.Fatalf("detail = %T", st.Detail)
 	}
 	actions := map[string]resource.Action{}

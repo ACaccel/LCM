@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/resource"
 )
@@ -139,7 +140,18 @@ func (s *Server) handleResourceEvents(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err, nil)
 		return
 	}
+	for i, it := range items {
+		if e, ok := it.Body.(resource.Event); ok {
+			items[i].Body = eventDTO{Event: e, ReasonMessage: resource.EventReasonMessage(e)}
+		}
+	}
 	writeObserved(w, items, limit)
+}
+
+// eventDTO is a stored observation event with its reason for translation.
+type eventDTO struct {
+	resource.Event
+	ReasonMessage *message.Message `json:"reasonMessage,omitempty"`
 }
 
 func (s *Server) handleResourceCapabilities(w http.ResponseWriter, r *http.Request) {

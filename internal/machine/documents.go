@@ -73,7 +73,7 @@ func (m *Manager) view(ctx context.Context, rec resource.Record) (Record, error)
 	if persisted.DocumentVersion != r.Version {
 		r.Status.Fresh = false
 		r.Status.Health = "unknown"
-		r.Status.Reasons = []string{"configuration has not been observed"}
+		r.Status.Reasons = []string{resource.ReasonNotObserved}
 	}
 	return r, nil
 }
@@ -85,7 +85,7 @@ func (m *Manager) freshen(r *Record) {
 	}
 	if !r.Status.Fresh {
 		r.Status.Health = "unknown"
-		r.Status.Reasons = []string{"observations missing or stale"}
+		r.Status.Reasons = []string{resource.ReasonStale}
 	}
 	if r.Status.Identity == "" {
 		r.Status.Identity = "verification-required"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -471,6 +472,30 @@ func TestPlan(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("deploy plan lacks %q:\n%s", want, joined)
 		}
+	}
+	// Each step has a code for translation, with the same text.
+	codes := make([]string, len(p.StepMessages))
+	for i, m := range p.StepMessages {
+		codes[i] = m.Code
+		if m.Message != p.Steps[i] {
+			t.Errorf("step %d text %q differs from %q", i, m.Message, p.Steps[i])
+		}
+	}
+	wantCodes := []string{"step.lock", "step.refuseDirty", "step.recordDeployment", "step.fetch", "step.resolveHead", "step.checkout", "step.build", "step.restart"}
+	if !slices.Equal(codes, wantCodes) {
+		t.Errorf("deploy step codes = %v, want %v", codes, wantCodes)
+	}
+	if m := p.StepMessages[0]; m.Params["lock"] != "resource:app" {
+		t.Errorf("lock params = %v", m.Params)
+	}
+	if m := p.StepMessages[4]; m.Params["remote"] != "origin" || m.Params["branch"] != "main" {
+		t.Errorf("resolve head params = %v", m.Params)
+	}
+	if m := p.StepMessages[7]; m.Params["runtime"] != "systemd" || m.Params["name"] != "app.service" || m.Params["scope"] != "system" {
+		t.Errorf("restart params = %v", m.Params)
+	}
+	if m := p.StepMessages[6]; m.Params["command"] != "make" {
+		t.Errorf("build params = %v", m.Params)
 	}
 	if p, err = e.mgr.Plan(ctx, "app", catalog.ActionStop, catalog.ActionOptions{}); err != nil || p.To != catalog.StateStopped {
 		t.Fatalf("stop plan = %+v %v", p, err)

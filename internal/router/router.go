@@ -49,6 +49,7 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/connection"
 	"github.com/ACaccel/lcm/internal/maintenance"
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/resource"
@@ -142,6 +143,17 @@ type Snapshot struct {
 	Sources       map[string]Coverage `json:"sources"`
 	Model         string              `json:"model"`
 	Firmware      string              `json:"firmware"`
+}
+
+// StatusView is the status as clients read it: the stored status with a
+// translatable message for each health reason.
+type StatusView struct {
+	Status
+	ReasonMessages []message.Message `json:"reasonMessages"`
+}
+
+func newStatusView(s Status) StatusView {
+	return StatusView{Status: s, ReasonMessages: resource.ReasonMessages(s.Reasons)}
 }
 
 // Status is the current observed state; Fresh, and with it Health, is
@@ -319,11 +331,11 @@ func (m *Manager) client(r Record) (Client, error) {
 	conn, ok := m.conns.Get(r.Connection)
 	switch {
 	case !ok:
-		return nil, errNotConfigured("connection is not configured on this host")
+		return nil, errNotConfigured(resource.ReasonNoConnection)
 	case conn.Type != r.Document.Spec.Adapter:
-		return nil, errNotConfigured("connection type does not match the adapter")
+		return nil, errNotConfigured(resource.ReasonConnectionType)
 	case !conn.AllowsResource(r.Name):
-		return nil, errNotConfigured("connection does not allow this resource")
+		return nil, errNotConfigured(resource.ReasonConnectionDenied)
 	}
 	m.clientsMu.Lock()
 	defer m.clientsMu.Unlock()
@@ -469,9 +481,9 @@ func (m *Manager) freshen(r *Record, documentVersion int) {
 		!s.ObservedAt.After(now) && now.Sub(s.ObservedAt) <= r.Config.StaleAfter.D()
 	if !r.Status.Fresh {
 		r.Status.Health = healthUnknown
-		r.Status.Reasons = []string{"observations missing or stale"}
+		r.Status.Reasons = []string{resource.ReasonStale}
 		if s != nil && documentVersion != r.Version && r.Phase == resource.PhaseManaged {
-			r.Status.Reasons = []string{"configuration has not been observed"}
+			r.Status.Reasons = []string{resource.ReasonNotObserved}
 		}
 	}
 	if r.Status.Health == "" {

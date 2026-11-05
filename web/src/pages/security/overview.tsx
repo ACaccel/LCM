@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { hostStatusQuery, incidentsQuery, securityStatusQuery } from "../../api/security";
 import { Async, ErrorBox, Tag } from "../../components/ui";
 import { HostNotConfigured, MachineSelect, Metric, UnknownReport, auditEnabled, number, showTime, stale } from "./shared";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 export function SecurityOverview({ machineId }: { machineId: string }) {
   const status = useQuery(securityStatusQuery());

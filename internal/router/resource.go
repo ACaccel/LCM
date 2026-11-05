@@ -97,7 +97,7 @@ func (t routerType) Status(ctx context.Context, rec resource.Record) (resource.S
 	if err != nil {
 		return resource.Status{}, err
 	}
-	st := resource.Status{State: resource.StateUnknown, StateSince: rec.UpdatedAt, Detail: r.Status}
+	st := resource.Status{State: resource.StateUnknown, StateSince: rec.UpdatedAt, Detail: newStatusView(r.Status)}
 	s := r.Status.Snapshot
 	switch {
 	case r.Status.Fresh && (r.state == resource.StateOnline || r.state == resource.StateOffline):

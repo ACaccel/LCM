@@ -20,6 +20,10 @@ func TestActionLifecycle(t *testing.T) {
 	if plan["from"] != "registered" || plan["to"] != "running" || len(plan["steps"].([]any)) == 0 {
 		t.Fatalf("plan = %v", plan)
 	}
+	if ms := plan["stepMessages"].([]any); len(ms) != len(plan["steps"].([]any)) || ms[0].(map[string]any)["code"] != "step.lock" ||
+		ms[1].(map[string]any)["code"] != "step.start" || ms[1].(map[string]any)["params"].(map[string]any)["runtime"] != "command" {
+		t.Fatalf("step messages = %v", ms)
+	}
 	if n := len(x.runner.Calls()); n != 0 {
 		t.Fatalf("dry run executed %d commands", n)
 	}

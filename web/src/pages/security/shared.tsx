@@ -6,7 +6,7 @@ import { resourcesQuery } from "../../api/queries";
 import type { HostAction, HostStatus } from "../../api/security";
 import { ErrorBox, Field } from "../../components/ui";
 import { formatDateTime } from "../../lib/format";
-import { sec } from "./strings";
+import { sec } from "../../strings";
 
 /**
  * Machine filter shared by the overview, incidents and traffic tabs. Machines

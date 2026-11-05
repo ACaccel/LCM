@@ -5,7 +5,14 @@ import { eventsQuery, historyQuery } from "../../api/observations";
 import type { ResourceSnapshot } from "../../api/types";
 import { ErrorBox, Spinner, Tag } from "../../components/ui";
 import { formatDateTime } from "../../lib/format";
+import { translate } from "../../lib/messages";
 import { s } from "../../strings";
+
+/** The label of an event kind; kinds start with the resource type (machine., router.). */
+function eventKind(kind: string): string {
+  const event = kind.slice(kind.indexOf(".") + 1);
+  return s.observation.eventKinds[event] ?? kind;
+}
 
 /** Stored events of a machine or router, oldest first, paged. */
 export function ResourceEvents({ resource, note }: { resource: string; note?: string }) {
@@ -35,18 +42,18 @@ export function ResourceEvents({ resource, note }: { resource: string; note?: st
                 <td>{formatDateTime(ev.occurredAt)}</td>
                 <td>{formatDateTime(ev.ingestedAt)}</td>
                 <td>
-                  {ev.source}
+                  {s.observation.eventSources[ev.source] ?? ev.source}
                   <div>
                     <Tag>{ev.historical ? s.machine.historical : s.machine.live}</Tag>
                   </div>
                 </td>
                 <td>
-                  {ev.kind}
-                  <div className="meta">{ev.severity}</div>
+                  <span title={ev.kind}>{eventKind(ev.kind)}</span>
+                  <div className="meta">{s.observation.severities[ev.severity] ?? ev.severity}</div>
                   {ev.kind.includes("gap") && <Tag>{s.machine.gap}</Tag>}
                 </td>
                 <td>
-                  {ev.reason}
+                  {ev.reasonMessage ? translate(ev.reasonMessage) : ev.reason}
                   {ev.unit && (
                     <div>
                       <code>{ev.unit}</code>

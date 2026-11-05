@@ -10,6 +10,7 @@ import { useToast } from "../components/toast";
 import { ErrorBox, PageHead, Spinner, Tag } from "../components/ui";
 import { actionLabel, reasonText } from "../lib/actions";
 import { shortVersion } from "../lib/format";
+import { translateAll } from "../lib/messages";
 import { dashboardUrl } from "../lib/yamldoc";
 import { s } from "../strings";
 import { ActionDialog } from "./resource/action-dialog";
@@ -148,7 +149,7 @@ function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefin
       </PageHead>
       {detail.health.reasons.length > 0 && (
         <p className="meta">
-          {s.resource.healthReasons}: {detail.health.reasons.join("; ")}
+          {s.resource.healthReasons}: {translateAll(detail.health.reasonMessages)}
         </p>
       )}
       {archived && <div className="banner">{s.resource.archivedBanner}</div>}

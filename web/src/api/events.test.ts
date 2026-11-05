@@ -33,6 +33,7 @@ const entry = (over: Partial<TimelineEntry> = {}): TimelineEntry => ({
   time: "2026-10-28T10:00:00Z",
   kind: "deployment",
   summary: "deployed",
+  summaryMessage: { code: "", params: {}, message: "deployed" },
   data: {},
   ref: "7",
   ...over,

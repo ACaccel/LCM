@@ -1,13 +1,57 @@
 import type { Template, TemplateParam } from "../api/types";
 import { s } from "../strings";
 
-/** Form state: one string per field, booleans for checkboxes. */
-export type FormValues = Record<string, string | boolean>;
+/** One row of a `windows` parameter, as the form edits it. */
+export interface WindowRow {
+  /** Days the window starts on (mon..sun); empty means every day. */
+  days: string[];
+  /** HH:MM, as a time input shows it. */
+  start: string;
+  end: string;
+}
 
-/** The text a default value is shown as. */
-export function defaultText(p: TemplateParam): string | boolean {
+/** Form state: text per field, booleans for checkboxes, rows for windows. */
+export type FormValue = string | boolean | WindowRow[];
+export type FormValues = Record<string, FormValue>;
+
+/** Day names of the `windows` parameter type, Monday first. */
+export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+
+/**
+ * A time input cannot show 24:00, which ends a window at midnight. 00:00 as
+ * an end means the same window (an end before the start runs into the next
+ * day), so the form shows 24:00 as 00:00 and sends 00:00 back as 24:00.
+ */
+const MIDNIGHT = "24:00";
+
+/** Rows of a windows value; anything that is not a list of windows gives none. */
+export function windowRows(v: unknown): WindowRow[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((w: unknown) => {
+    const o = (typeof w === "object" && w !== null ? w : {}) as Record<string, unknown>;
+    const end = typeof o.end === "string" ? o.end : "";
+    return {
+      days: Array.isArray(o.days) ? o.days.filter((d): d is string => typeof d === "string") : [],
+      start: typeof o.start === "string" ? o.start : "",
+      end: end === MIDNIGHT ? "00:00" : end,
+    };
+  });
+}
+
+/** The windows value of form rows. */
+export function windowsValue(rows: readonly WindowRow[]): Record<string, unknown>[] {
+  return rows.map((r) => ({
+    ...(r.days.length ? { days: WEEKDAYS.filter((d) => r.days.includes(d)) } : {}),
+    start: r.start,
+    end: r.end === "00:00" ? MIDNIGHT : r.end,
+  }));
+}
+
+/** The form value a default is shown as. */
+export function defaultText(p: TemplateParam): FormValue {
   const d = p.default;
   if (p.type === "boolean") return d === true;
+  if (p.type === "windows") return windowRows(d);
   if (d === undefined || d === null) return "";
   if (p.type === "strings") return Array.isArray(d) ? d.join(", ") : "";
   if (p.type === "json") return JSON.stringify(d);
@@ -22,11 +66,30 @@ export function initialValues(t: Template, resource?: string): FormValues {
   return out;
 }
 
+/**
+ * Values that parameters with a `prefill` path take from the selected
+ * resource's spec.config; only text values that are present count.
+ */
+export function prefillValues(t: Template, config: unknown): FormValues {
+  const out: FormValues = {};
+  for (const p of t.params) {
+    if (!p.prefill) continue;
+    let v: unknown = config;
+    for (const key of p.prefill.split(".")) {
+      v = typeof v === "object" && v !== null ? (v as Record<string, unknown>)[key] : undefined;
+    }
+    if (typeof v === "string" && v !== "") out[p.name] = v;
+  }
+  return out;
+}
+
 export interface BuiltParams {
   params: Record<string, unknown>;
   /** Field errors by parameter name, found without asking the server. */
   errors: Record<string, string>;
 }
+
+const same = (a: FormValue | undefined, b: FormValue | undefined) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Turns form values into the request's params: only values that differ from
@@ -42,13 +105,17 @@ export function buildParams(t: Template, values: FormValues, resource?: string):
       params[p.name] = v === true;
       continue;
     }
+    if (p.type === "windows") {
+      if (Array.isArray(v) && !same(v, initial[p.name])) params[p.name] = windowsValue(v);
+      continue;
+    }
     const text = typeof v === "string" ? v.trim() : "";
     const gate = p.requiredIf ? values[p.requiredIf] === true : false;
     if ((p.required || gate) && text === "") {
       errors[p.name] = s.templates.required;
       continue;
     }
-    if (p.name !== t.resourceParam && v === initial[p.name]) continue;
+    if (p.name !== t.resourceParam && same(v, initial[p.name])) continue;
     switch (p.type) {
       case "strings":
         params[p.name] = text

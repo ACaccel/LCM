@@ -9,6 +9,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/resource"
@@ -426,7 +427,7 @@ func (s *Syncer) applyOne(ctx context.Context, it *item, b *batch) Result {
 			return fail("cannot record ownership", err)
 		}
 		if own != nil && own.ConflictCommit != "" {
-			s.notifyResolved(ctx, it.Ref, b.o.source, "the repository and the resource agree again")
+			s.notifyResolved(ctx, it.Ref, b.o.source, catalog.ConflictAgreed)
 		}
 	}
 	return res
@@ -504,7 +505,7 @@ func (s *Syncer) applyDrifted(ctx context.Context, it *item, res Result, own *ow
 				return res
 			}
 			if own.ConflictCommit != "" {
-				s.notifyResolved(ctx, it.Ref, b.o.source, "local changes now match the repository")
+				s.notifyResolved(ctx, it.Ref, b.o.source, catalog.ConflictLocalMatches)
 			}
 		}
 

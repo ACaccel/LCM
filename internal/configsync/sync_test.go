@@ -228,6 +228,9 @@ func TestDriftConflictAndResolveCurrent(t *testing.T) {
 	if err != nil || len(tl.Entries) != 1 || !strings.Contains(tl.Entries[0].Summary, "edited locally") {
 		t.Fatalf("timeline = %+v, %v", tl, err)
 	}
+	if m := catalog.EntryMessage(tl.Entries[0]); m.Code != "timeline.configConflict" || m.Params["source"] != "infra" || m.Params["path"] != webPath {
+		t.Fatalf("conflict message = %+v", m)
+	}
 
 	// Syncing the same commit again does not notify twice.
 	e.syncNow("infra")
@@ -246,6 +249,10 @@ func TestDriftConflictAndResolveCurrent(t *testing.T) {
 	}
 	if sigs := alerts(sub); len(sigs) != 1 || sigs[0].Data["status"] != "resolved" {
 		t.Fatalf("resolve signals = %+v", sigs)
+	}
+	tl, _ = e.cat.Timeline(e.ctx, catalog.TimelineQuery{Resource: "web", Kinds: []string{configsync.KindConflict}, Limit: 1})
+	if m := catalog.EntryMessage(tl.Entries[0]); m.Code != "timeline.configResolved" || m.Params["reason"] != catalog.ConflictResolvedCurrent {
+		t.Fatalf("resolved message = %+v", m)
 	}
 	// The same commit no longer conflicts.
 	got = wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionSkipped)
@@ -502,6 +509,9 @@ func TestSourceDoesNotOverwriteDifferentResource(t *testing.T) {
 	if len(tl.Entries) != 1 || !strings.Contains(tl.Entries[0].Summary, "not managed by a source") {
 		t.Fatalf("timeline = %+v", tl)
 	}
+	if m := catalog.EntryMessage(tl.Entries[0]); m.Code != "timeline.configAdopt" {
+		t.Fatalf("adopt message = %+v", m)
+	}
 
 	// The same commit again neither writes nor notifies a second time.
 	got := wantAction(t, e.syncNow("infra").Items, "Resource/web", configsync.ActionSkipped)
@@ -586,6 +596,8 @@ func TestInvalidDocumentKeepsOldConfiguration(t *testing.T) {
 	}
 	if tl, _ := e.cat.Timeline(e.ctx, catalog.TimelineQuery{Resource: "web", Kinds: []string{configsync.KindInvalid}}); len(tl.Entries) != 1 {
 		t.Fatalf("timeline = %+v", tl)
+	} else if m := catalog.EntryMessage(tl.Entries[0]); m.Code != "timeline.configInvalid" || m.Params["issues"] == "" {
+		t.Fatalf("invalid message = %+v", m)
 	}
 
 	// A fix applies and clears the error; re-syncing the broken commit

@@ -3,7 +3,7 @@ import type { TimelineEntry } from "../api/types";
 import { s, sec } from "../strings";
 import { actionStatusView, checkView, deploymentOutcomeView, policyStateView, reachabilityView, routerOutcomeView, severityView, timelineDot } from "./status";
 
-const entry = (kind: string, data: Record<string, unknown>): TimelineEntry => ({ id: 1, resource: "web", time: "2026-11-05T00:00:00Z", kind, ref: "", summary: "", data });
+const entry = (kind: string, data: Record<string, unknown>): TimelineEntry => ({ id: 1, resource: "web", time: "2026-11-05T00:00:00Z", kind, ref: "", summary: "", data, summaryMessage: { code: "", params: {}, message: "" } });
 
 describe("status views", () => {
   it("shows a stale check as unknown whatever its last result", () => {

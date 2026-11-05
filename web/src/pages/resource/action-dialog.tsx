@@ -8,6 +8,7 @@ import { Dialog } from "../../components/dialog";
 import { ErrorBox, Field, Pill, Spinner } from "../../components/ui";
 import { formatDuration, shortVersion } from "../../lib/format";
 import { actionStatusView } from "../../lib/status";
+import { translate } from "../../lib/messages";
 import { useLiveState } from "../../live";
 import { s } from "../../strings";
 import { ImpactAcknowledgement, useAck } from "./impact";
@@ -200,9 +201,9 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
                 {s.action.planFrom}: {s.state[plan.plan.from]} → {s.state[plan.plan.to]}
               </p>
               <ol>
-                {plan.plan.steps.map((st, i) => (
-                  <li key={i}>
-                    <code>{st}</code>
+                {plan.plan.stepMessages.map((st, i) => (
+                  <li key={i} title={st.message}>
+                    {translate(st)}
                   </li>
                 ))}
               </ol>
