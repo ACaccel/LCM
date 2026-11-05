@@ -197,6 +197,10 @@ export function timelineDot(e: TimelineEntry): TimelineDot {
     }
     case "lifecycle.changed":
       return timelineField(d, "state") === "failed" ? "bad" : "info";
+    case "observation": {
+      const sev = timelineField(d, "severity");
+      return sev === "warning" ? "warn" : sev === "error" || sev === "critical" || sev === "alert" || sev === "emergency" ? "bad" : "info";
+    }
     default:
       return "info";
   }

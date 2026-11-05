@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, Navigate, useParams } from "react-router";
 import { client, isApiError, unwrap } from "../api/client";
 import { qk, resourceQuery } from "../api/queries";
 import type { ActionName, ResourceDetail, ResourceTypeName } from "../api/types";
@@ -18,23 +18,25 @@ import { ChecksTab } from "./resource/checks";
 import { ConfigTab, resourceRef } from "./resource/config-tab";
 import { DeploymentsTab } from "./resource/deployments";
 import { MachineOperationsTab } from "./resource/machine/controls";
-import { MachineMonitoring } from "./resource/machine/monitoring";
-import { ResourceEvents } from "./resource/observations";
 import { OverviewTab } from "./resource/overview";
 import { PhaseControls } from "./resource/phase";
 import { PoliciesTab } from "./resource/policies";
 import { RelationsTab } from "./resource/relations";
-import { RouterMonitoring, RouterOperationsTab } from "./resource/router";
+import { RouterOperationsTab } from "./resource/router";
 
 export type Tab = keyof typeof s.resource.tabs;
 
 const TYPE_TABS: Record<ResourceTypeName, Tab[]> = {
   service: ["deployments"],
-  machine: ["monitoring", "events", "maintenance"],
-  router: ["monitoring", "events", "operations"],
+  machine: ["maintenance"],
+  router: ["operations"],
 };
 
-/** The tabs of a resource: the common ones around the panels of its type. */
+/**
+ * The tabs of a resource: the common ones around the panels of its type.
+ * Observed resources show their monitoring in the overview and their events
+ * in the timeline.
+ */
 export function tabsFor(type: ResourceTypeName): Tab[] {
   return ["overview", ...TYPE_TABS[type], "checks", "timeline", "policies", "relations", "config"];
 }
@@ -116,6 +118,9 @@ function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefin
   const selector = resourceRef(detail);
   const archived = detail.phase === "unmanaged";
   const base = `/resources/${encodeURIComponent(selector)}`;
+  // Former tabs of machines and routers, kept so that old links still work.
+  if (detail.type !== "service" && tab === "monitoring") return <Navigate to={`${base}/overview`} replace />;
+  if (detail.type !== "service" && tab === "events") return <Navigate to={`${base}/timeline?kind=observation`} replace />;
   const tabs = tabsFor(detail.type);
   const active: Tab = tabs.includes(tab as Tab) ? (tab as Tab) : "overview";
   const dash = dashboardUrl(detail.document);
@@ -173,13 +178,12 @@ function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefin
           onDeploy={(version) => setPending({ action: "deploy", version })}
         />
       )}
-      {active === "monitoring" && detail.type === "machine" && <MachineMonitoring resource={detail} selector={selector} />}
-      {active === "monitoring" && detail.type === "router" && <RouterMonitoring resource={detail} selector={selector} />}
-      {active === "events" && <ResourceEvents resource={selector} note={detail.type === "machine" ? s.machine.journalNote : undefined} />}
       {active === "maintenance" && <MachineOperationsTab resource={detail} selector={selector} />}
       {active === "operations" && <RouterOperationsTab resource={detail} selector={selector} />}
       {active === "checks" && <ChecksTab resource={selector} />}
-      {active === "timeline" && <TimelinePanel resource={detail.name} />}
+      {active === "timeline" && (
+        <TimelinePanel resource={detail.name} observations={detail.type === "service" ? undefined : selector} note={detail.type === "machine" ? s.machine.journalNote : undefined} />
+      )}
       {active === "policies" && <PoliciesTab detail={detail} />}
       {active === "relations" && <RelationsTab detail={detail} />}
       {active === "config" && <ConfigTab detail={detail} />}

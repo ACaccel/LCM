@@ -1,79 +1,97 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { ResourceEvents } from "../observations";
 import { freshMachine, jsonResponse } from "../test-fixtures";
 import { MachineOverview } from "./monitoring";
 
 function wrap(children: ReactNode) {
   return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{children}</QueryClientProvider>;
 }
+
+/** Answers history requests with the given newest-first points and records them. */
+function stubHistory(items: unknown[] = []) {
+  const reads: URL[] = [];
+  vi.stubGlobal("fetch", async (req: Request) => {
+    const url = new URL(req.url);
+    expect(url.pathname).toBe("/api/v1/resources/workstation/history");
+    reads.push(url);
+    return jsonResponse({ items, nextCursor: null });
+  });
+  return reads;
+}
+
 afterEach(() => vi.unstubAllGlobals());
 
-describe("machine monitoring", () => {
+describe("machine overview", () => {
   it("shows cached healthy data as stale, with unknown optional coverage and journal permission limitations", () => {
+    stubHistory();
     const machine = freshMachine();
     machine.machine!.status!.snapshot!.observedAt = "2000-01-01T00:00:00Z";
-    render(<MachineOverview resource={machine} />);
+    render(wrap(<MachineOverview resource={machine} selector="workstation" />));
     expect(screen.getByText(/過期或無法連線不代表已關機/)).toBeTruthy();
     expect(screen.queryByText("健康", { exact: true })).toBeNull();
     const psi = screen.getAllByRole("row").find((row) => row.textContent?.startsWith("PSI"))!;
     expect(within(psi).getByText("未知", { exact: true })).toBeTruthy();
-    expect(screen.getByText("journal permission denied")).toBeTruthy();
+    expect(screen.getAllByText("journal permission denied").length).toBeGreaterThan(0);
     expect(screen.getByText(/CPU 首樣本/)).toBeTruthy();
   });
-  it("shows CPU, memory, disk and inode usage as bars marked with the configured limit", () => {
+
+  it("shows CPU, memory and disk usage as bars marked with the configured limit", () => {
+    stubHistory();
     const machine = freshMachine();
     machine.document.spec.config = { ...machine.document.spec.config, thresholds: { diskPercent: 80 } };
-    render(<MachineOverview resource={machine} />);
-    const meters = screen.getAllByRole("meter");
-    expect(meters.length).toBeGreaterThanOrEqual(3);
+    render(wrap(<MachineOverview resource={machine} selector="workstation" />));
     const disk = screen.getByRole("meter", { name: /^磁碟/ });
     expect(disk.getAttribute("aria-valuetext")).toContain("閾值 80%");
     // Memory keeps the default limit of 90%.
     expect(screen.getByRole("meter", { name: "記憶體使用率" }).getAttribute("aria-valuetext")).toContain("閾值 90%");
+    // The rest of the snapshot, such as inodes, is behind a disclosure.
+    const more = screen.getByText("更多觀測細節").closest("details")!;
+    expect(more.open).toBe(false);
+    expect(within(more).getByRole("meter", { name: /^inode/ })).toBeTruthy();
   });
-  it("pages durable journal/derived events and distinguishes gaps, source/received time and historical/live events", async () => {
-    const cursors: (string | null)[] = [];
-    vi.stubGlobal("fetch", async (req: Request) => {
-      const url = new URL(req.url);
-      expect(url.pathname).toBe("/api/v1/resources/workstation/events");
-      cursors.push(url.searchParams.get("cursor"));
-      const first = !url.searchParams.has("cursor");
-      return jsonResponse({
-        items: [
-          {
-            id: first ? 2 : 1,
-            resourceId: "machine-1",
-            source: first ? "journal" : "poll",
-            kind: first ? "machine.journal.gap" : "machine.boot.changed",
-            severity: "warning",
-            occurredAt: "2026-11-01T00:00:00Z",
-            ingestedAt: "2026-11-01T00:01:00Z",
-            historical: first,
-            reason: first ? "journal cursor expired" : "boot identity changed",
-            ...(first ? {} : { reasonMessage: { code: "event.bootChanged", params: {}, message: "boot identity changed" } }),
-          },
-        ],
-        nextCursor: first ? "opaque-page-2" : null,
-      });
+
+  it("summarizes the coverage, lists the sources that are not available and keeps the full list closed", () => {
+    stubHistory();
+    render(wrap(<MachineOverview resource={freshMachine()} selector="workstation" />));
+    // The fixture answers cpu, memory, filesystems and units out of nine sources.
+    expect(screen.getByText("4/9 可用")).toBeTruthy();
+    const all = screen.getByText("全部來源").closest("details")!;
+    expect(all.open).toBe(false);
+    expect(within(all).getAllByRole("row")).toHaveLength(10);
+    const section = screen.getByRole("heading", { name: "來源涵蓋狀態" }).closest("section")!;
+    const listed = within(section).getAllByRole("row").filter((row) => !all.contains(row));
+    const names = listed.slice(1).map((row) => row.querySelector("td")?.textContent ?? "");
+    expect(names.some((n) => n.startsWith("PSI"))).toBe(true);
+    expect(names.some((n) => n.startsWith("CPU"))).toBe(false);
+    expect(listed).toHaveLength(6);
+  });
+
+  it("plots the trend of the range that is picked, asking the server for that range", async () => {
+    const point = (id: number, at: string, cpu: number) => ({
+      id,
+      resourceId: "machine-1",
+      type: "machine",
+      observedAt: at,
+      machine: { ...freshMachine().machine!.status!.snapshot!, id, observedAt: at, cpuPercent: cpu },
     });
-    render(wrap(<ResourceEvents resource="workstation" />));
-    expect(await screen.findByText("journal cursor expired")).toBeTruthy();
-    expect(screen.getByText("事件缺口", { exact: true })).toBeTruthy();
-    expect(screen.getByText("歷史補讀", { exact: true })).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "來源時間" })).toBeTruthy();
-    expect(screen.getByRole("columnheader", { name: "接收時間" })).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "載入更多" }));
-    // A reason with a code is translated; the kind and severity are labelled.
-    expect(await screen.findByText("Boot ID 改變（已重新開機）")).toBeTruthy();
-    expect(screen.getByText("重新開機", { exact: true })).toBeTruthy();
-    expect(screen.getAllByText("警告", { exact: true })).toHaveLength(2);
-    expect(screen.getByRole("cell", { name: /^輪詢/ })).toBeTruthy();
-    expect(screen.getByText("即時事件", { exact: true })).toBeTruthy();
-    expect(cursors).toEqual([null, "opaque-page-2"]);
-    expect(screen.queryByRole("button", { name: "載入更多" })).toBeNull();
+    const reads = stubHistory([point(2, "2026-11-01T00:01:00Z", 30), point(1, "2026-11-01T00:00:00Z", 10)]);
+    render(wrap(<MachineOverview resource={freshMachine()} selector="workstation" />));
+    expect(await screen.findByRole("group", { name: /CPU 與記憶體使用率趨勢，CPU 使用率 30%/ })).toBeTruthy();
+    await waitFor(() => expect(reads).toHaveLength(1));
+    const day = reads[0]!.searchParams;
+    expect(day.get("resolution")).toBe("minute");
+    expect(day.get("step")).toBe("8m");
+    expect(Date.now() - Date.parse(day.get("from")!)).toBeGreaterThan(86_400_000 - 60_000);
+    expect(Date.now() - Date.parse(day.get("from")!)).toBeLessThan(86_400_000 + 60_000);
+
+    await userEvent.click(screen.getByRole("button", { name: "7 天" }));
+    await waitFor(() => expect(reads).toHaveLength(2));
+    const week = reads[1]!.searchParams;
+    expect(week.get("step")).toBe("56m");
+    expect(Date.now() - Date.parse(week.get("from")!)).toBeGreaterThan(7 * 86_400_000 - 60_000);
+    expect(screen.getByRole("button", { name: "7 天" }).getAttribute("aria-pressed")).toBe("true");
   });
 });

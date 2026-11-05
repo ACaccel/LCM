@@ -24,6 +24,7 @@ const svc = (name: string, over: Partial<ResourceSummary> = {}): ResourceSummary
   updatedAt: "2026-10-28T09:00:00Z",
   deployedVersion: "",
   managedBy: null,
+  relations: [],
   ...over,
 });
 

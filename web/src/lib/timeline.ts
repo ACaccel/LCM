@@ -1,4 +1,6 @@
-import type { TimelineEntry, TimelineList } from "../api/types";
+import type { ResourceEvent, TimelineEntry, TimelineList } from "../api/types";
+import { s } from "../strings";
+import { translate } from "./messages";
 
 /** A field of an entry's data; entries that come from signals nest the signal's own data one level down. */
 export function timelineField(d: Record<string, unknown>, key: string): unknown {
@@ -73,4 +75,66 @@ export function flattenTimeline(pages: readonly TimelineList[]): TimelineEntry[]
     }
   }
   return out;
+}
+
+/** The kind of a machine or router observation event shown among timeline entries. */
+export const OBSERVATION_KIND = "observation";
+
+/** The label of an event kind; kinds start with the resource type (machine., router.). */
+export function eventKindLabel(kind: string): string {
+  const event = kind.slice(kind.indexOf(".") + 1);
+  return s.observation.eventKinds[event] ?? kind;
+}
+
+/** A stored observation event as a timeline entry, placed at the time it occurred. */
+export function observationEntry(ev: ResourceEvent, resource: string): TimelineEntry {
+  const reason = ev.reasonMessage ? translate(ev.reasonMessage) : (ev.reason ?? "");
+  const label = eventKindLabel(ev.kind);
+  const summary = reason ? `${label}：${reason}` : label;
+  return {
+    id: ev.id,
+    resource,
+    time: ev.occurredAt,
+    kind: OBSERVATION_KIND,
+    ref: `observation-${ev.id}`,
+    summary,
+    summaryMessage: { code: "", params: {}, message: summary },
+    data: { severity: ev.severity, source: ev.source, unit: ev.unit ?? "", historical: ev.historical, gap: ev.kind.includes("gap") },
+  };
+}
+
+export interface TimelineStream {
+  /** Newest first, as the server pages it. */
+  items: readonly TimelineEntry[];
+  /** The server has older entries than the loaded ones. */
+  more: boolean;
+}
+
+/**
+ * Merges newest-first streams that page separately. An entry is only safe to
+ * show if no unloaded page can hold something newer: below the newest of the
+ * streams' oldest loaded entries (among streams that have more), an
+ * unloaded page may still insert entries. Those entries stay hidden until
+ * the limiting stream loads its next page, so paging never reorders what is
+ * on screen. `limiting` are the streams that must load next to show more.
+ */
+export function mergeNewestFirst(streams: readonly TimelineStream[]): { entries: TimelineEntry[]; limiting: number[] } {
+  let frontier = Number.NEGATIVE_INFINITY;
+  let limiting: number[] = [];
+  streams.forEach((st, i) => {
+    const last = st.items.at(-1);
+    if (!st.more || !last) return;
+    const t = Date.parse(last.time);
+    if (t > frontier) {
+      frontier = t;
+      limiting = [i];
+    } else if (t === frontier) {
+      limiting.push(i);
+    }
+  });
+  const entries = streams
+    .flatMap((st) => st.items)
+    .filter((e) => Date.parse(e.time) >= frontier)
+    .sort((a, b) => Date.parse(b.time) - Date.parse(a.time));
+  return { entries, limiting };
 }

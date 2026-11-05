@@ -2,10 +2,13 @@ package api_test
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/config"
@@ -58,6 +61,137 @@ func TestConnectionsAndRouterValidation(t *testing.T) {
 	}
 	x.anon("GET", v1+"/connections", nil).want(http.StatusUnauthorized)
 	x.call("GET", v1+"/connections", nil, bearer(x.ingest)).want(http.StatusForbidden)
+}
+
+func TestRouterHistoryRange(t *testing.T) {
+	x, _ := routerSite(t)
+	x.call("POST", v1+"/resources", routerResource, yamlBody()).want(http.StatusCreated)
+	// Eight samples 30 s apart, i.e. four minute points.
+	for i := range 8 {
+		if i > 0 {
+			x.clk.Advance(30 * time.Second)
+		}
+		x.call("POST", v1+"/resources/gateway/observe", nil).want(http.StatusOK)
+	}
+	stamp := func(i int) string {
+		return url.QueryEscape(epoch.Add(time.Duration(i) * 30 * time.Second).Format(time.RFC3339))
+	}
+	observed := func(path string) []string {
+		t.Helper()
+		var out []string
+		for _, it := range x.call("GET", path, nil).want(http.StatusOK).items() {
+			out = append(out, it["observedAt"].(string))
+		}
+		return out
+	}
+	base := v1 + "/resources/gateway/history"
+
+	// Without a range the order and the cursor are those of the original API.
+	all := observed(base)
+	if len(all) != 8 || !slices.IsSorted(all) {
+		t.Fatalf("unranged = %v, want 8 oldest first", all)
+	}
+	page := x.call("GET", base+"?limit=3", nil).want(http.StatusOK).obj()
+	if cursor, _ := page["nextCursor"].(string); cursor == "" || len(page["items"].([]any)) != 3 {
+		t.Fatalf("unranged page = %v", page)
+	} else if next := observed(base + "?limit=3&cursor=" + cursor); next[0] != all[3] {
+		t.Fatalf("unranged continuation starts at %s, want %s", next[0], all[3])
+	}
+
+	// A range is newest first, From inclusive and To exclusive.
+	ranged := observed(base + "?from=" + stamp(2) + "&to=" + stamp(6))
+	if len(ranged) != 4 || ranged[0] != all[5] || ranged[3] != all[2] {
+		t.Fatalf("ranged = %v, want %v..%v newest first", ranged, all[5], all[2])
+	}
+	if got := observed(base + "?from=" + stamp(6)); len(got) != 2 || got[0] != all[7] {
+		t.Fatalf("from only = %v", got)
+	}
+
+	// The cursor of a ranged page continues below its last item.
+	first := x.call("GET", base+"?from="+stamp(1)+"&limit=3", nil).want(http.StatusOK).obj()
+	cursor, _ := first["nextCursor"].(string)
+	if cursor == "" {
+		t.Fatalf("no cursor: %v", first)
+	}
+	if rest := observed(base + "?from=" + stamp(1) + "&limit=3&cursor=" + cursor); len(rest) != 3 || rest[0] != all[4] || rest[2] != all[2] {
+		t.Fatalf("ranged continuation = %v", rest)
+	}
+
+	// A step thins the range to the newest sample of each interval; minute
+	// points are placed by their minute.
+	if got := observed(base + "?step=1m"); len(got) != 4 || got[0] != all[7] || got[1] != all[5] {
+		t.Fatalf("step = %v", got)
+	}
+	if got := observed(base + "?resolution=minute&from=" + stamp(2) + "&to=" + stamp(6)); len(got) != 2 {
+		t.Fatalf("minute points = %v", got)
+	}
+
+	for _, q := range []string{"from=yesterday", "to=1", "step=soon", "step=100ms", "step=-1m", "from=" + stamp(6) + "&to=" + stamp(2), "from=" + stamp(2) + "&to=" + stamp(2)} {
+		x.call("GET", base+"?"+q, nil).wantError(http.StatusBadRequest, "bad_request")
+	}
+}
+
+func TestRouterEventsOrder(t *testing.T) {
+	x, _ := routerSite(t)
+	x.call("POST", v1+"/resources", routerResource, yamlBody()).want(http.StatusCreated)
+	x.call("POST", v1+"/resources/gateway/observe", nil).want(http.StatusOK)
+	x.clk.Advance(time.Minute)
+	body := map[string]any{"action": "reboot", "idempotencyKey": "op-1", "reason": "clear stuck WAN", "confirm": "gateway"}
+	x.call("POST", v1+"/resources/gateway/operations", body, ifMatch(`"1"`)).want(http.StatusAccepted)
+	base := v1 + "/resources/gateway/events"
+	ids := func(path string) []float64 {
+		t.Helper()
+		var out []float64
+		for _, e := range x.call("GET", path, nil).want(http.StatusOK).items() {
+			out = append(out, e["id"].(float64))
+		}
+		return out
+	}
+	oldest := ids(base)
+	if len(oldest) < 2 || !slices.IsSorted(oldest) {
+		t.Fatalf("default order = %v, want oldest first", oldest)
+	}
+	newest := ids(base + "?order=desc")
+	reversed := slices.Clone(oldest)
+	slices.Reverse(reversed)
+	if !slices.Equal(newest, reversed) {
+		t.Fatalf("desc = %v, want %v", newest, reversed)
+	}
+
+	// The cursor of a newest-first page continues below its last event.
+	var walked []float64
+	path := base + "?order=desc&limit=1"
+	for range len(oldest) + 1 {
+		page := x.call("GET", path, nil).want(http.StatusOK).obj()
+		for _, e := range page["items"].([]any) {
+			walked = append(walked, e.(map[string]any)["id"].(float64))
+		}
+		cursor, _ := page["nextCursor"].(string)
+		if cursor == "" {
+			break
+		}
+		path = base + "?order=desc&limit=1&cursor=" + cursor
+	}
+	if !slices.Equal(walked, newest) {
+		t.Fatalf("walked = %v, want %v", walked, newest)
+	}
+
+	// The range bounds the time the event occurred (the bounds themselves are
+	// covered by the component tests).
+	stamp := func(d time.Duration) string { return url.QueryEscape(epoch.Add(d).Format(time.RFC3339)) }
+	if got := ids(base + "?from=" + stamp(-time.Hour)); len(got) != len(oldest) {
+		t.Fatalf("from before everything = %v of %v", got, oldest)
+	}
+	if got := ids(base + "?from=" + stamp(time.Hour)); len(got) != 0 {
+		t.Fatalf("from after everything = %v", got)
+	}
+	if got := ids(base + "?order=desc&to=" + stamp(-time.Hour)); len(got) != 0 {
+		t.Fatalf("to before everything = %v", got)
+	}
+	after := stamp(30 * time.Second)
+	for _, q := range []string{"order=sideways", "from=now", "to=1", "order=desc&cursor=bad", "from=" + after + "&to=" + after} {
+		x.call("GET", base+"?"+q, nil).wantError(http.StatusBadRequest, "bad_request")
+	}
 }
 
 func TestRouterObservationAndReboot(t *testing.T) {

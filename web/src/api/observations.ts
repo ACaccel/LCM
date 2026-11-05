@@ -1,4 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { RANGE_MS } from "../components/chart/range";
+import type { RangeKey } from "../components/chart/range";
 import { client, unwrap } from "./client";
 import { qk } from "./queries";
 
@@ -25,21 +27,49 @@ export const maintenanceQuery = (ref: string) =>
     queryFn: () => unwrap(client.GET("/resources/{resource}/maintenance", { params: { path: { resource: ref } } })),
   });
 
-export const eventsQuery = (ref: string) =>
+/** Stored events, newest first by the time they occurred; `from` and `to` bound that time. */
+export const eventsQuery = (ref: string, range: { from?: string; to?: string } = {}) =>
   infiniteQueryOptions({
-    queryKey: qk.resourceEvents(ref),
-    ...page,
-    ...poll,
-    queryFn: ({ pageParam }) => unwrap(client.GET("/resources/{resource}/events", { params: { path: { resource: ref }, query: { limit: 50, cursor: pageParam } } })),
-  });
-
-export const historyQuery = (ref: string, resolution: "raw" | "minute" = "raw") =>
-  infiniteQueryOptions({
-    queryKey: [...qk.resourceHistory(ref), resolution],
+    queryKey: [...qk.resourceEvents(ref), "newest", range.from ?? "", range.to ?? ""],
     ...page,
     ...poll,
     queryFn: ({ pageParam }) =>
-      unwrap(client.GET("/resources/{resource}/history", { params: { path: { resource: ref }, query: { limit: 50, cursor: pageParam, resolution } } })),
+      unwrap(
+        client.GET("/resources/{resource}/events", {
+          params: { path: { resource: ref }, query: { limit: 50, cursor: pageParam, order: "desc", from: range.from, to: range.to } },
+        }),
+      ),
+  });
+
+/** Most points a history request asks for; the server allows 199 per page. */
+const HISTORY_POINTS = 180;
+
+/**
+ * The step that fits a range into one page of minute points: one snapshot
+ * per step, whole minutes because minute points are no finer.
+ */
+export function historyStep(rangeMs: number): string {
+  return `${Math.max(1, Math.ceil(rangeMs / HISTORY_POINTS / 60_000))}m`;
+}
+
+/**
+ * Minute points of the last `range`, thinned to one page and returned
+ * oldest first for plotting. The request is made when the query runs, so a
+ * poll moves the window forward.
+ */
+export const historyQuery = (ref: string, range: RangeKey) =>
+  queryOptions({
+    queryKey: [...qk.resourceHistory(ref), "range", range],
+    ...poll,
+    queryFn: async () => {
+      const from = new Date(Date.now() - RANGE_MS[range]).toISOString();
+      const list = await unwrap(
+        client.GET("/resources/{resource}/history", {
+          params: { path: { resource: ref }, query: { resolution: "minute", from, step: historyStep(RANGE_MS[range]), limit: 199 } },
+        }),
+      );
+      return [...list.items].reverse();
+    },
   });
 
 export const operationsQuery = (ref: string) =>

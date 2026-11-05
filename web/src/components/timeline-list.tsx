@@ -3,6 +3,7 @@ import type { TimelineEntry } from "../api/types";
 import { formatDateTime, formatDuration, formatTime } from "../lib/format";
 import { timelineDot } from "../lib/status";
 import { translate } from "../lib/messages";
+import { OBSERVATION_KIND } from "../lib/timeline";
 import { s } from "../strings";
 
 /** Entries that come from signals nest the signal's own data one level down. */
@@ -12,8 +13,17 @@ function pick(d: Record<string, unknown>, key: string): unknown {
   return typeof inner === "object" && inner !== null ? (inner as Record<string, unknown>)[key] : undefined;
 }
 
+function observationDetail(d: Record<string, unknown>): string {
+  const source = String(d["source"] ?? "");
+  const parts = [s.observation.eventSources[source] ?? source, d["historical"] ? s.machine.historical : s.machine.live];
+  if (d["gap"]) parts.push(s.machine.gap);
+  if (typeof d["unit"] === "string" && d["unit"]) parts.push(d["unit"]);
+  return parts.filter(Boolean).join(" · ");
+}
+
 function detailFor(e: TimelineEntry): string {
   const d = e.data ?? {};
+  if (e.kind === OBSERVATION_KIND) return observationDetail(d);
   const parts: string[] = [];
   const actor = pick(d, "actor");
   const outcome = pick(d, "outcome");

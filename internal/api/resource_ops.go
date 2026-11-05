@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/message"
@@ -80,12 +82,13 @@ func (s *Server) handleObserveResource(w http.ResponseWriter, r *http.Request) {
 	s.writeDetail(w, r, rec.ID, http.StatusOK)
 }
 
-// writeObserved pages items fetched with one extra element.
-func writeObserved(w http.ResponseWriter, items []ObservedItem, limit int) {
+// writeObserved pages items fetched with one extra element. cursor encodes
+// the position after an item.
+func writeObserved(w http.ResponseWriter, items []ObservedItem, limit int, cursor func(ObservedItem) string) {
 	var next *string
 	if len(items) > limit {
 		items = items[:limit]
-		next = encodeCursor(strconv.FormatInt(items[len(items)-1].ID, 10))
+		next = encodeCursor(cursor(items[len(items)-1]))
 	}
 	bodies := make([]any, 0, len(items))
 	for _, it := range items {
@@ -94,17 +97,57 @@ func writeObserved(w http.ResponseWriter, items []ObservedItem, limit int) {
 	writeList(w, bodies, next)
 }
 
-func (s *Server) handleResourceHistory(w http.ResponseWriter, r *http.Request) {
-	resolution := r.URL.Query().Get("resolution")
-	if resolution != "" && resolution != "raw" && resolution != "minute" {
+// idMarker is the cursor of items paged by ID alone.
+func idMarker(it ObservedItem) string { return strconv.FormatInt(it.ID, 10) }
+
+// minHistoryStep is the finest thinning of a history range; the stored
+// points are a minute apart at best.
+const minHistoryStep = time.Second
+
+// historyQuery reads the history parameters of a request. It has written a
+// 400 response when it returns false.
+func historyQuery(w http.ResponseWriter, r *http.Request) (resource.HistoryQuery, bool) {
+	var q resource.HistoryQuery
+	switch r.URL.Query().Get("resolution") {
+	case "", "raw":
+	case "minute":
+		q.Minute = true
+	default:
 		writeError(w, http.StatusBadRequest, codeBadRequest, "resolution must be raw or minute", map[string]any{"param": "resolution"})
-		return
+		return q, false
 	}
 	p, ok := pageParams(w, r)
 	if !ok {
-		return
+		return q, false
 	}
-	after, ok := idCursor(w, p)
+	if q.Cursor, ok = idCursor(w, p); !ok {
+		return q, false
+	}
+	q.Limit = min(p.limit, maxObservedPage)
+	if q.From, ok = timeParam(w, r, "from"); !ok {
+		return q, false
+	}
+	if q.To, ok = timeParam(w, r, "to"); !ok {
+		return q, false
+	}
+	if !q.From.IsZero() && !q.To.IsZero() && !q.From.Before(q.To) {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "from must be before to", map[string]any{"param": "from"})
+		return q, false
+	}
+	if raw := r.URL.Query().Get("step"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < minHistoryStep {
+			writeError(w, http.StatusBadRequest, codeBadRequest, "invalid query parameter",
+				map[string]any{"param": "step", "expected": "a duration of at least 1s, such as 5m or 1h"})
+			return q, false
+		}
+		q.Step = d
+	}
+	return q, true
+}
+
+func (s *Server) handleResourceHistory(w http.ResponseWriter, r *http.Request) {
+	q, ok := historyQuery(w, r)
 	if !ok {
 		return
 	}
@@ -112,21 +155,72 @@ func (s *Server) handleResourceHistory(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := min(p.limit, maxObservedPage)
-	items, err := obs.History(r.Context(), refOf(rec), after, limit+1, resolution == "minute")
+	limit := q.Limit
+	q.Limit++
+	items, err := obs.History(r.Context(), refOf(rec), q)
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return
 	}
-	writeObserved(w, items, limit)
+	writeObserved(w, items, limit, idMarker)
+}
+
+// eventsQuery reads the event parameters of a request. It has written a 400
+// response when it returns false.
+func eventsQuery(w http.ResponseWriter, r *http.Request) (resource.EventQuery, bool) {
+	var q resource.EventQuery
+	switch r.URL.Query().Get("order") {
+	case "", "asc":
+	case "desc":
+		q.Newest = true
+	default:
+		writeError(w, http.StatusBadRequest, codeBadRequest, "order must be asc or desc", map[string]any{"param": "order"})
+		return q, false
+	}
+	p, ok := pageParams(w, r)
+	if !ok {
+		return q, false
+	}
+	q.Limit = min(p.limit, maxObservedPage)
+	if q.Newest {
+		q.CursorAt, q.Cursor, ok = eventCursor(w, p)
+	} else {
+		q.Cursor, ok = idCursor(w, p)
+	}
+	if !ok {
+		return q, false
+	}
+	if q.From, ok = timeParam(w, r, "from"); !ok {
+		return q, false
+	}
+	if q.To, ok = timeParam(w, r, "to"); !ok {
+		return q, false
+	}
+	if !q.From.IsZero() && !q.To.IsZero() && !q.From.Before(q.To) {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "from must be before to", map[string]any{"param": "from"})
+		return q, false
+	}
+	return q, true
+}
+
+// eventCursor reads the "<occurrence ms>:<id>" cursor of newest-first
+// events; no cursor is the start.
+func eventCursor(w http.ResponseWriter, p pageReq) (at, id int64, ok bool) {
+	if p.cursor == "" {
+		return 0, 0, true
+	}
+	atText, idText, found := strings.Cut(p.cursor, ":")
+	at, errAt := strconv.ParseInt(atText, 10, 64)
+	id, errID := strconv.ParseInt(idText, 10, 64)
+	if !found || errAt != nil || errID != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "invalid cursor", map[string]any{"param": "cursor"})
+		return 0, 0, false
+	}
+	return at, id, true
 }
 
 func (s *Server) handleResourceEvents(w http.ResponseWriter, r *http.Request) {
-	p, ok := pageParams(w, r)
-	if !ok {
-		return
-	}
-	after, ok := idCursor(w, p)
+	q, ok := eventsQuery(w, r)
 	if !ok {
 		return
 	}
@@ -134,8 +228,9 @@ func (s *Server) handleResourceEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit := min(p.limit, maxObservedPage)
-	items, err := obs.Events(r.Context(), refOf(rec), after, limit+1)
+	limit := q.Limit
+	q.Limit++
+	items, err := obs.Events(r.Context(), refOf(rec), q)
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return
@@ -145,7 +240,11 @@ func (s *Server) handleResourceEvents(w http.ResponseWriter, r *http.Request) {
 			items[i].Body = eventDTO{Event: e, ReasonMessage: resource.EventReasonMessage(e)}
 		}
 	}
-	writeObserved(w, items, limit)
+	cursor := idMarker
+	if q.Newest {
+		cursor = func(it ObservedItem) string { return strconv.FormatInt(it.At, 10) + ":" + strconv.FormatInt(it.ID, 10) }
+	}
+	writeObserved(w, items, limit, cursor)
 }
 
 // eventDTO is a stored observation event with its reason for translation.

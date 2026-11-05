@@ -894,9 +894,27 @@ paths:
         - name: resolution
           in: query
           schema: { type: string, enum: [raw, minute], default: raw }
+        - name: from
+          in: query
+          description: Only snapshots observed at or after this instant (the minute of a minute point). Selects the newest-first order.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Only snapshots observed before this instant. Selects the newest-first order. Must be after `from`.
+          schema: { type: string, format: date-time }
+        - name: step
+          in: query
+          description: A Go duration of at least 1s, such as `5m` or `1h`. Keeps only the newest snapshot of each interval of this length (aligned to the Unix epoch), so a long range fits in few pages. Selects the newest-first order.
+          schema: { type: string, examples: [5m, 1h] }
+      description: |
+        Without `from`, `to` and `step` the snapshots are oldest first and
+        `cursor` continues after the last ID. With any of them they are newest
+        first and `cursor` continues before the last ID, so the recent end of a
+        range comes first. Both orders follow the snapshot IDs, which grow
+        with observation time.
       responses:
         "200":
-          description: Snapshots, oldest first; at most 199 per page.
+          description: Snapshots in the order described above; at most 199 per page.
           content:
             application/json:
               schema:
@@ -921,9 +939,25 @@ paths:
         - $ref: "#/components/parameters/Resource"
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - name: order
+          in: query
+          description: |
+            `asc` (default): oldest first by ingestion, `cursor` continues after the
+            last ID. `desc`: newest first by the time the event occurred (ties by
+            ID), so events recovered after a gap sit where they happened; `cursor`
+            continues before the last event.
+          schema: { type: string, enum: [asc, desc], default: asc }
+        - name: from
+          in: query
+          description: Only events that occurred at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Only events that occurred before this instant. Must be after `from`.
+          schema: { type: string, format: date-time }
       responses:
         "200":
-          description: Events, oldest first; at most 199 per page.
+          description: Events in the order requested; at most 199 per page.
           content:
             application/json:
               schema:
@@ -5571,7 +5605,7 @@ components:
               items: { $ref: "#/components/schemas/Relation" }
     ResourceSummary:
       type: object
-      required: [id, name, type, adapter, phase, labels, state, stateSince, health, version, updatedAt, deployedVersion, managedBy]
+      required: [id, name, type, adapter, phase, labels, state, stateSince, health, version, updatedAt, deployedVersion, managedBy, relations]
       properties:
         id: { type: string, description: Immutable ID; `@<id>` addresses any incarnation, including archives. }
         name: { type: string }
@@ -5592,6 +5626,10 @@ components:
           type: string
           description: Commit of a service's last successful deployment; empty if none and for other types.
         managedBy: { $ref: "#/components/schemas/ManagedBy" }
+        relations:
+          type: array
+          description: The relations the document declares, as in `ResourceDocument.spec.relations`, so a view of the whole fleet needs one request.
+          items: { $ref: "#/components/schemas/Relation" }
     Overview:
       type: object
       required: [generatedAt, types, attention, resources, activeRuns, deploys, firingAlerts]

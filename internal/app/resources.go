@@ -47,12 +47,12 @@ func (o machineObservations) Observe(ctx context.Context, ref string) error {
 	return err
 }
 
-func (o machineObservations) History(ctx context.Context, ref string, after int64, limit int, minute bool) ([]api.ObservedItem, error) {
+func (o machineObservations) History(ctx context.Context, ref string, q resource.HistoryQuery) ([]api.ObservedItem, error) {
 	rec, err := o.m.Get(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	snaps, err := o.m.HistoryResolution(ctx, ref, after, limit, minute)
+	snaps, err := o.m.HistoryRange(ctx, ref, q)
 	if err != nil {
 		return nil, err
 	}
@@ -65,14 +65,14 @@ func (o machineObservations) History(ctx context.Context, ref string, after int6
 	return out, nil
 }
 
-func (o machineObservations) Events(ctx context.Context, ref string, after int64, limit int) ([]api.ObservedItem, error) {
-	evs, err := o.m.Events(ctx, ref, after, limit)
+func (o machineObservations) Events(ctx context.Context, ref string, q resource.EventQuery) ([]api.ObservedItem, error) {
+	evs, err := o.m.EventsRange(ctx, ref, q)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]api.ObservedItem, 0, len(evs))
 	for _, e := range evs {
-		out = append(out, api.ObservedItem{ID: e.ID, Body: e})
+		out = append(out, api.ObservedItem{ID: e.ID, At: e.OccurredAt.UnixMilli(), Body: e})
 	}
 	return out, nil
 }
@@ -145,12 +145,12 @@ func (o routerObservations) Observe(ctx context.Context, ref string) error {
 	return err
 }
 
-func (o routerObservations) History(ctx context.Context, ref string, after int64, limit int, minute bool) ([]api.ObservedItem, error) {
+func (o routerObservations) History(ctx context.Context, ref string, q resource.HistoryQuery) ([]api.ObservedItem, error) {
 	rec, err := o.m.Get(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	snaps, err := o.m.History(ctx, ref, after, limit, minute)
+	snaps, err := o.m.HistoryRange(ctx, ref, q)
 	if err != nil {
 		return nil, err
 	}
@@ -163,14 +163,14 @@ func (o routerObservations) History(ctx context.Context, ref string, after int64
 	return out, nil
 }
 
-func (o routerObservations) Events(ctx context.Context, ref string, after int64, limit int) ([]api.ObservedItem, error) {
-	evs, err := o.m.Events(ctx, ref, after, limit)
+func (o routerObservations) Events(ctx context.Context, ref string, q resource.EventQuery) ([]api.ObservedItem, error) {
+	evs, err := o.m.EventsRange(ctx, ref, q)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]api.ObservedItem, 0, len(evs))
 	for _, e := range evs {
-		out = append(out, api.ObservedItem{ID: e.ID, Body: e})
+		out = append(out, api.ObservedItem{ID: e.ID, At: e.OccurredAt.UnixMilli(), Body: e})
 	}
 	return out, nil
 }

@@ -29,6 +29,7 @@ const summary = (name: string, type: ResourceSummary["type"], over: Partial<Reso
   updatedAt: "2026-11-01T00:00:00Z",
   deployedVersion: "",
   managedBy: null,
+  relations: [],
   ...over,
 });
 

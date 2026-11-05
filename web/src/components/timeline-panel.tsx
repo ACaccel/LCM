@@ -1,14 +1,15 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { resourcesQuery, timelineQuery } from "../api/queries";
+import { useMergedTimeline } from "../api/merged-timeline";
+import { resourcesQuery } from "../api/queries";
 import { formatDay, toLocalInput } from "../lib/format";
-import { flattenTimeline, groupByDay, localDay } from "../lib/timeline";
+import { OBSERVATION_KIND, groupByDay, localDay } from "../lib/timeline";
 import { s } from "../strings";
 import { TimelineEvents } from "./timeline-list";
 import { Empty, ErrorBox, Field, Spinner } from "./ui";
 
-const KINDS = Object.keys(s.timeline.kindNames);
+const KINDS = Object.keys(s.timeline.kindNames).filter((k) => k !== OBSERVATION_KIND);
 
 function instant(value: string | null): string | undefined {
   return value && Number.isFinite(Date.parse(value)) ? value : undefined;
@@ -27,15 +28,20 @@ function dayLabel(day: string, sample: string, now: Date): string {
  * keyboard users and browsers without IntersectionObserver. The filters live
  * in the URL (`resource` on the global timeline, `kind` once per kind,
  * `from` and `to` as RFC 3339), and entries are grouped by local day.
+ *
+ * With `observations` (the selector of a machine or router) its stored
+ * observation events are one more kind, merged into the list by time.
+ * `note` explains the limits of those events.
  */
-export function TimelinePanel({ resource, withResourceFilter }: { resource?: string; withResourceFilter?: boolean }) {
+export function TimelinePanel({ resource, withResourceFilter, observations, note }: { resource?: string; withResourceFilter?: boolean; observations?: string; note?: string }) {
   const [params, setParams] = useSearchParams();
   const picked = withResourceFilter ? (params.get("resource") ?? "") : "";
-  const kinds = KINDS.filter((k) => params.getAll("kind").includes(k));
+  const kindList = observations ? [...KINDS, OBSERVATION_KIND] : KINDS;
+  const kinds = kindList.filter((k) => params.getAll("kind").includes(k));
   const from = instant(params.get("from"));
   const to = instant(params.get("to"));
   const effective = resource ?? picked;
-  const q = useInfiniteQuery(timelineQuery({ resource: effective || undefined, kinds, from, to }));
+  const q = useMergedTimeline({ resource: effective, kinds, from, to, observations });
   const resources = useQuery({ ...resourcesQuery(), enabled: !!withResourceFilter });
   // The time inputs keep what was typed; only a valid, ordered range reaches the URL.
   const [range, setRange] = useState(() => ({ from: toLocalInput(from), to: toLocalInput(to) }));
@@ -62,7 +68,7 @@ export function TimelinePanel({ resource, withResourceFilter }: { resource?: str
   function toggle(kind: string) {
     update((next) => {
       next.delete("kind");
-      for (const k of KINDS) if (k === kind ? !kinds.includes(k) : kinds.includes(k)) next.append("kind", k);
+      for (const k of kindList) if (k === kind ? !kinds.includes(k) : kinds.includes(k)) next.append("kind", k);
     });
   }
 
@@ -84,7 +90,7 @@ export function TimelinePanel({ resource, withResourceFilter }: { resource?: str
     });
   }
 
-  const entries = q.data ? flattenTimeline(q.data.pages) : [];
+  const entries = q.entries;
   const now = new Date();
 
   return (
@@ -115,7 +121,7 @@ export function TimelinePanel({ resource, withResourceFilter }: { resource?: str
             {s.timeline.kinds}
           </legend>
           <div className="row">
-            {KINDS.map((k) => (
+            {kindList.map((k) => (
               <label key={k} className="check">
                 <input type="checkbox" checked={kinds.includes(k)} onChange={() => toggle(k)} />
                 {s.timeline.kindNames[k]}
@@ -129,9 +135,10 @@ export function TimelinePanel({ resource, withResourceFilter }: { resource?: str
           {s.timeline.rangeInvalid}
         </p>
       )}
+      {note && (!kinds.length || kinds.includes(OBSERVATION_KIND)) && <p className="meta">{note}</p>}
       {q.isPending && <Spinner />}
       <ErrorBox error={q.error} onRetry={() => void q.refetch()} />
-      {q.data && entries.length === 0 && <Empty>{s.timeline.empty}</Empty>}
+      {q.isLoaded && !hasNextPage && entries.length === 0 && <Empty>{s.timeline.empty}</Empty>}
       {groupByDay(entries).map((g) => (
         <section key={g.day} aria-label={dayLabel(g.day, g.entries[0]!.time, now)}>
           <h3 className="day-sep">

@@ -44,9 +44,11 @@ type ActionCatalog interface {
 }
 
 // ObservedItem is one stored snapshot or event. ID orders and pages the
-// items; Body is what the client receives.
+// items, together with At (Unix milliseconds of the time the event occurred)
+// for events read newest first; Body is what the client receives.
 type ObservedItem struct {
 	ID   int64
+	At   int64
 	Body any
 }
 
@@ -65,11 +67,12 @@ type Snapshot struct {
 // type. ref is a resource name or "@<id>".
 type Observations interface {
 	Observe(ctx context.Context, ref string) error
-	// History returns snapshots with an ID above after, oldest first; minute
-	// selects one-minute rollups instead of raw samples.
-	History(ctx context.Context, ref string, after int64, limit int, minute bool) ([]ObservedItem, error)
-	// Events returns stored events with an ID above after, oldest first.
-	Events(ctx context.Context, ref string, after int64, limit int) ([]ObservedItem, error)
+	// History returns the snapshots a query selects, in the order and with
+	// the cursor semantics documented on resource.HistoryQuery.
+	History(ctx context.Context, ref string, q resource.HistoryQuery) ([]ObservedItem, error)
+	// Events returns the events a query selects, in the order and with the
+	// cursor semantics documented on resource.EventQuery.
+	Events(ctx context.Context, ref string, q resource.EventQuery) ([]ObservedItem, error)
 }
 
 // Capability explains whether a durable operation can be submitted now.
@@ -195,6 +198,9 @@ type resourceSummaryDTO struct {
 	// deployment; empty otherwise.
 	DeployedVersion string        `json:"deployedVersion"`
 	ManagedBy       *managedByDTO `json:"managedBy"`
+	// Relations are the relations the document declares, so that a view of
+	// the whole fleet needs no request per resource.
+	Relations []model.Relation `json:"relations"`
 }
 
 type healthDTO struct {
@@ -519,8 +525,16 @@ func (s *Server) summary(rec resource.Record, st resource.Status, h monitor.Heal
 	return resourceSummaryDTO{
 		ID: rec.ID, Name: rec.Name, Type: rec.Type, Adapter: rec.Adapter, Phase: rec.Phase, Labels: labelsOf(rec),
 		State: st.State, StateSince: optTime(st.StateSince), Health: string(h), Version: rec.Version,
-		UpdatedAt: rec.UpdatedAt, ManagedBy: managed,
+		UpdatedAt: rec.UpdatedAt, ManagedBy: managed, Relations: relationsOf(rec),
 	}
+}
+
+// relationsOf returns the relations of the record's document, never nil.
+func relationsOf(rec resource.Record) []model.Relation {
+	if rec.Document == nil || rec.Document.Spec.Relations == nil {
+		return []model.Relation{}
+	}
+	return slices.Clone(rec.Document.Spec.Relations)
 }
 
 func (s *Server) handleResourceArchives(w http.ResponseWriter, r *http.Request) {

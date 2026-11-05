@@ -1,19 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { capabilitiesQuery } from "../../api/observations";
-import type { ResourceDetail, ResourceSnapshot, RouterSnapshot, RouterStatus } from "../../api/types";
+import { capabilitiesQuery, historyQuery } from "../../api/observations";
+import type { ResourceDetail, RouterSnapshot, RouterStatus } from "../../api/types";
 import { RANGE_MS, RangeSwitch, TimeSeriesChart, fmtCelsius, fmtCount, fmtRate, windowSeries } from "../../components/chart";
 import type { RangeKey, XY } from "../../components/chart";
-import { ErrorBox, Pill, Tag } from "../../components/ui";
+import { ErrorBox, Pill, Spinner } from "../../components/ui";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/format";
 import { capabilityReason, coverageView, cpuPercent, thresholdOf } from "../../lib/machine";
 import { translate, translateAll } from "../../lib/messages";
-import { healthView, reachabilityView, routerOutcomeView } from "../../lib/status";
+import { routerOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
 import { PowerDialog } from "./machine/dialogs";
 import { UsageTrend } from "./machine/trend";
-import { HistoryPanel } from "./observations";
+import { CoverageSummary } from "./coverage";
 import { AttemptPanel, OperationsList, useDurableOperation } from "./operations";
 
 function seconds(v: number | null): string {
@@ -77,33 +77,16 @@ export function RouterSnapshotView({ snapshot }: { snapshot: RouterSnapshot }) {
           ↑ {wan.uploadedBytes != null ? formatBytes(wan.uploadedBytes) : s.machine.unknown} / ↓ {wan.downloadedBytes != null ? formatBytes(wan.downloadedBytes) : s.machine.unknown}
         </dd>
       </dl>
-      <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>{s.router.sources}</th>
-              <th>{s.common.status}</th>
-              <th>{s.machine.reason}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sources.length === 0 && (
-              <tr>
-                <td colSpan={3}>{s.common.none}</td>
-              </tr>
-            )}
-            {sources.map(([name, c]) => (
-              <tr key={name}>
-                <td>{name}</td>
-                <td>
-                  <Pill view={coverageView(c)} />
-                </td>
-                <td>{c.reason ? (c.reasonMessage ? translate(c.reasonMessage) : c.reason) : s.common.none}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <CoverageSummary
+        source={s.router.sources}
+        rows={sources.map(([name, c]) => ({
+          key: name,
+          label: name,
+          view: coverageView(c),
+          available: c.state === "available",
+          reason: c.reason ? (c.reasonMessage ? translate(c.reasonMessage) : c.reason) : "",
+        }))}
+      />
     </div>
   );
 }
@@ -111,12 +94,7 @@ export function RouterSnapshotView({ snapshot }: { snapshot: RouterSnapshot }) {
 function RouterStatusPanel({ status }: { status: RouterStatus }) {
   return (
     <section className="panel stack">
-      <h2>{s.router.status}</h2>
-      <div className="row">
-        <Pill view={reachabilityView(status.reachability)} />
-        {status.fresh ? <Pill view={healthView(status.health)} /> : <Tag>{s.machine.stale}</Tag>}
-        <Tag>{status.fresh ? s.machine.fresh : s.machine.stale}</Tag>
-      </div>
+      <h2>{s.router.keyStatus}</h2>
       <dl className="kv">
         <dt>{s.machine.observed}</dt>
         <dd>{formatDateTime(status.snapshot?.observedAt)}</dd>
@@ -130,21 +108,16 @@ function RouterStatusPanel({ status }: { status: RouterStatus }) {
   );
 }
 
-function snapshotSummary(snap: ResourceSnapshot): string {
-  const r = snap.router;
-  if (!r) return s.machine.unknown;
-  if (r.outcome !== "ok") return s.router.outcomes[r.outcome];
-  return `${s.router.cpu} ${cpuPercent(r.cpuPercent)} · ${s.router.memory} ${cpuPercent(r.memoryPercent)}`;
-}
-
 /**
- * Stored router observations as charts: CPU and memory with their limits,
- * WAN rates, connected clients and temperature. A metric the router never
- * reported is not drawn; unreachable attempts leave gaps.
+ * Stored router observations of a range the reader picks, as charts: CPU and
+ * memory with their limits, WAN rates, connected clients and temperature. A
+ * metric the router never reported is not drawn; unreachable attempts leave
+ * gaps. Each range is a request for that range.
  */
-export function RouterCharts({ snapshots, resource }: { snapshots: ResourceSnapshot[]; resource: ResourceDetail }) {
+export function RouterCharts({ selector, resource }: { selector: string; resource: ResourceDetail }) {
   const [range, setRange] = useState<RangeKey>("24h");
-  const rows = snapshots.flatMap((x) => (x.router ? [{ id: x.id, at: x.observedAt, t: Date.parse(x.observedAt), r: x.router }] : []));
+  const q = useQuery(historyQuery(selector, range));
+  const rows = (q.data ?? []).flatMap((x) => (x.router ? [{ id: x.id, at: x.observedAt, t: Date.parse(x.observedAt), r: x.router }] : []));
   const metric = (read: (r: RouterSnapshot) => number | null | undefined): XY[] => rows.map((x) => ({ t: x.t, v: read(x.r) ?? null }));
   const has = (xy: XY[]) => xy.some((p) => p.v !== null);
   const up = metric((r) => r.wan.upBytesPerSec);
@@ -161,11 +134,14 @@ export function RouterCharts({ snapshots, resource }: { snapshots: ResourceSnaps
     { key: "temperature", title: s.chart.temperatureTitle, show: has(temperature), format: fmtCelsius, binary: false, series: [{ name: s.router.temperature, color: "var(--chart-3)", points: win?.series[3] ?? [] }] },
   ].filter((p) => p.show);
   return (
-    <div className="stack">
+    <section className="panel stack">
       <div className="chart-title">
-        <h3>{s.chart.usageTitle}</h3>
+        <h2>{s.chart.usageTitle}</h2>
         <RangeSwitch value={range} onChange={setRange} />
       </div>
+      <ErrorBox error={q.error} onRetry={() => void q.refetch()} />
+      {q.isPending && <Spinner />}
+      {q.data && rows.length === 0 && <p>{s.machine.trendEmpty}</p>}
       <UsageTrend
         range={range}
         thresholds={{ cpu: thresholdOf(resource, "cpuPercent"), memory: thresholdOf(resource, "memoryPercent") }}
@@ -181,12 +157,12 @@ export function RouterCharts({ snapshots, resource }: { snapshots: ResourceSnaps
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
-/** The router's monitoring tab: the latest status and stored history. */
-export function RouterMonitoring({ resource, selector }: { resource: ResourceDetail; selector: string }) {
+/** The router's overview: the latest status and charts over a chosen range. */
+export function RouterOverview({ resource, selector }: { resource: ResourceDetail; selector: string }) {
   const status = resource.router?.status;
   return (
     <div className="stack">
@@ -195,16 +171,11 @@ export function RouterMonitoring({ resource, selector }: { resource: ResourceDet
         <RouterStatusPanel status={status} />
       ) : (
         <section className="panel stack">
-          <h2>{s.router.status}</h2>
+          <h2>{s.router.keyStatus}</h2>
           <p>{s.router.noSnapshot}</p>
         </section>
       )}
-      <HistoryPanel
-        resource={selector}
-        summary={snapshotSummary}
-        render={(snap) => (snap.router ? <RouterSnapshotView snapshot={snap.router} /> : <p>{s.machine.unknown}</p>)}
-        trend={(snaps) => <RouterCharts snapshots={snaps} resource={resource} />}
-      />
+      <RouterCharts selector={selector} resource={resource} />
     </div>
   );
 }

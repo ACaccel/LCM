@@ -3,6 +3,7 @@ package api_test
 import (
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -223,4 +224,21 @@ func stepNamesOf(plan map[string]any) []string {
 		out = append(out, s.(map[string]any)["resource"].(string))
 	}
 	return out
+}
+
+func TestResourceListCarriesRelations(t *testing.T) {
+	x := newSite(t)
+	x.createService(serviceDoc("db", ""))
+	x.createService(serviceDoc("web", "  relations: [{ type: dependsOn, target: db }, { type: controlPath, target: ghost }]\n"))
+	byName := map[string]map[string]any{}
+	for _, it := range x.call("GET", v1+"/resources", nil).want(http.StatusOK).items() {
+		byName[it["name"].(string)] = it
+	}
+	if rels, ok := byName["db"]["relations"].([]any); !ok || len(rels) != 0 {
+		t.Fatalf("db relations = %#v, want an empty array", byName["db"]["relations"])
+	}
+	want := []any{map[string]any{"type": "dependsOn", "target": "db"}, map[string]any{"type": "controlPath", "target": "ghost"}}
+	if got := byName["web"]["relations"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("web relations = %#v", got)
+	}
 }

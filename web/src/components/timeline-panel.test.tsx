@@ -72,3 +72,92 @@ describe("timeline panel", () => {
     expect(new URLSearchParams(router.state.location.search).has("to")).toBe(false);
   });
 });
+
+describe("timeline with observation events", () => {
+  const entryAt = (time: string, summary: string): TimelineEntry => ({ id: 1, resource: "gateway", time, kind: "alert", ref: summary, summary, data: {}, summaryMessage: { code: "", params: {}, message: summary } });
+  const eventAt = (id: number, occurredAt: string, reason: string) => ({
+    id,
+    resourceId: "router-1",
+    source: "poll",
+    kind: "router.health.changed",
+    severity: "info",
+    occurredAt,
+    ingestedAt: occurredAt,
+    historical: false,
+    reason,
+  });
+  // Entries and events interleave: A 10:00, E1 09:30, B 09:00, C 08:00, E2 07:00, E3 06:00.
+  const timelinePages: Record<string, { items: TimelineEntry[]; nextCursor: string | null }> = {
+    first: { items: [entryAt("2026-11-04T10:00:00Z", "entry A"), entryAt("2026-11-04T09:00:00Z", "entry B")], nextCursor: "t2" },
+    t2: { items: [entryAt("2026-11-04T08:00:00Z", "entry C")], nextCursor: null },
+  };
+  const eventPages: Record<string, { items: ReturnType<typeof eventAt>[]; nextCursor: string | null }> = {
+    first: { items: [eventAt(3, "2026-11-04T09:30:00Z", "event one"), eventAt(2, "2026-11-04T07:00:00Z", "event two")], nextCursor: "e2" },
+    e2: { items: [eventAt(1, "2026-11-04T06:00:00Z", "event three")], nextCursor: null },
+  };
+
+  function setupMerged(initial = "/resources/gateway/timeline") {
+    const timelineReads: URLSearchParams[] = [];
+    const eventReads: URLSearchParams[] = [];
+    vi.stubGlobal("fetch", async (req: Request) => {
+      const url = new URL(req.url);
+      if (url.pathname.endsWith("/timeline")) {
+        timelineReads.push(url.searchParams);
+        return jsonResponse(timelinePages[url.searchParams.get("cursor") ?? "first"]);
+      }
+      eventReads.push(url.searchParams);
+      return jsonResponse(eventPages[url.searchParams.get("cursor") ?? "first"]);
+    });
+    const router = createMemoryRouter([{ path: "/resources/:name/timeline", element: <TimelinePanel resource="gateway" observations="gateway" /> }], { initialEntries: [initial] });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    return { timelineReads, eventReads, router };
+  }
+
+  const shown = () => [...document.querySelectorAll(".ev")].map((row) => /entry [A-C]|event (one|two|three)/.exec(row.textContent ?? "")?.[0]);
+
+  it("merges entries and events by time and loads the stream that bounds the list", async () => {
+    const { timelineReads, eventReads } = setupMerged();
+    await screen.findByText("entry A");
+    // Event two is older than what the timeline has loaded, so it waits for the timeline's next page.
+    await waitFor(() => expect(eventReads).toHaveLength(1));
+    expect(shown()).toEqual(["entry A", "event one", "entry B"]);
+    expect(eventReads[0]?.get("order")).toBe("desc");
+
+    await userEvent.click(screen.getByRole("button", { name: s.common.more }));
+    await screen.findByText("entry C");
+    expect(shown()).toEqual(["entry A", "event one", "entry B", "entry C", "event two"]);
+    expect(timelineReads.map((p) => p.get("cursor"))).toEqual([null, "t2"]);
+    expect(eventReads).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: s.common.more }));
+    await screen.findByText(/event three/);
+    expect(shown()).toEqual(["entry A", "event one", "entry B", "entry C", "event two", "event three"]);
+    expect(eventReads.map((p) => p.get("cursor"))).toEqual([null, "e2"]);
+    expect(timelineReads).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: s.common.more })).toBeNull();
+  });
+
+  it("reads only events when only the observation kind is selected", async () => {
+    const { timelineReads, eventReads, router } = setupMerged("/resources/gateway/timeline?kind=observation");
+    await screen.findByText(/event one/);
+    expect(timelineReads).toHaveLength(0);
+    expect((screen.getByRole("checkbox", { name: s.timeline.kindNames.observation }) as HTMLInputElement).checked).toBe(true);
+    expect(shown()).toEqual(["event one", "event two"]);
+    await userEvent.click(screen.getByRole("checkbox", { name: s.timeline.kindNames.alert }));
+    await waitFor(() => expect(router.state.location.search).toBe("?kind=alert&kind=observation"));
+    await screen.findByText("entry A");
+    expect(timelineReads[0]?.getAll("kinds")).toEqual(["alert"]);
+    expect(eventReads.length).toBeGreaterThan(0);
+  });
+
+  it("leaves the events out when the observation kind is not among the selected kinds", async () => {
+    const { timelineReads, eventReads } = setupMerged("/resources/gateway/timeline?kind=alert");
+    await screen.findByText("entry A");
+    expect(eventReads).toHaveLength(0);
+    expect(timelineReads[0]?.getAll("kinds")).toEqual(["alert"]);
+  });
+});

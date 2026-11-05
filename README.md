@@ -30,7 +30,7 @@ bin/lcm serve                    # http://127.0.0.1:7800, data in ./data
 
 Log in to the console, add a service under *資源 > 建立資源* (see [services](docs/services.md)), then attach a policy from a template on its *Policy* tab. For the CLI and scripts, create a token under *設定 > API token* (or `bin/lcm token create --name cli > token && chmod 600 token`).
 
-The console (Traditional Chinese, light and dark themes) shows an overview (what needs attention, counts per type and health, a day of availability per resource), resources of every type with a type filter and bulk actions on services, a detail page per type (monitoring/history, maintenance, operation evidence, relations and impact), the timeline, policies, live runs, alerts, the audit log, security (incidents, traffic, host control, notifications) and settings. It uses the REST API and one server-sent-event stream.
+The console (Traditional Chinese, light and dark themes) shows an overview (what needs attention, counts per type and health, a day of availability per resource), resources of every type with a type filter and bulk actions on services, a detail page per type (overview with usage and trends, maintenance, operation evidence, a timeline that includes machine and router events, relations and impact; see [resource detail tabs](docs/resources.md#resource-detail-tabs)), the timeline, policies, live runs, alerts, the audit log, security (incidents, traffic, host control, notifications) and settings. It uses the REST API and one server-sent-event stream.
 
 ## CLI
 

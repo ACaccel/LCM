@@ -29,6 +29,12 @@ function setup(detail: ResourceDetail, entry: string, impact: ResourceImpact = n
     reads.push(path);
     if (path.endsWith("/impact")) return jsonResponse({ ...impact, ...(url.searchParams.get("action") ? { action: url.searchParams.get("action") } : { acknowledgementRequired: false }) });
     if (path === "/api/v1/resources") return jsonResponse({ items: [], nextCursor: null });
+    if (path.endsWith("/series")) {
+      const to = Date.now();
+      return jsonResponse({ resource: detail.name, check: "http", from: new Date(to - 86_400_000).toISOString(), to: new Date(to).toISOString(), stepMs: 900_000, points: [] });
+    }
+    if (path.endsWith("/summary")) return jsonResponse({ resource: detail.name, window: "24h", uptime: 1, count: 10, failures: 0, checks: {} });
+    if (path.endsWith("/timeline")) return jsonResponse({ items: [], nextCursor: null });
     if (path.endsWith("/history") || path.endsWith("/events") || path.endsWith("/operations") || path.endsWith("/capabilities")) {
       return jsonResponse({ items: [], nextCursor: null });
     }
@@ -56,16 +62,67 @@ afterEach(() => vi.unstubAllGlobals());
 describe("type-specific tabs", () => {
   it("puts the panels of each type between the common tabs", () => {
     expect(tabsFor("service")).toEqual(["overview", "deployments", "checks", "timeline", "policies", "relations", "config"]);
-    expect(tabsFor("machine")).toEqual(["overview", "monitoring", "events", "maintenance", "checks", "timeline", "policies", "relations", "config"]);
-    expect(tabsFor("router")).toEqual(["overview", "monitoring", "events", "operations", "checks", "timeline", "policies", "relations", "config"]);
+    expect(tabsFor("machine")).toEqual(["overview", "maintenance", "checks", "timeline", "policies", "relations", "config"]);
+    expect(tabsFor("router")).toEqual(["overview", "operations", "checks", "timeline", "policies", "relations", "config"]);
   });
 
-  it("shows typed router monitoring and no service panels", async () => {
-    const { reads } = setup(routerFixture, "/resources/gateway/monitoring");
+  it("shows the router's status and charts in the overview and no service panels", async () => {
+    const { reads } = setup(routerFixture, "/resources/gateway");
     expect(await screen.findByText("RA70")).toBeTruthy();
     expect(screen.getAllByText("12.5%").length).toBeGreaterThan(0);
-    expect(tabNames()).toEqual(["總覽", "監控", "事件", "操作", "檢查", "時間軸", "Policy", "關係", "文件"]);
+    expect(tabNames()).toEqual(["總覽", "操作", "檢查", "時間軸", "Policy", "關係", "文件"]);
     await waitFor(() => expect(reads).toContain("/api/v1/resources/gateway/history"));
+    expect(screen.queryByText("最近部署")).toBeNull();
+  });
+
+  it("does not repeat the header's phase, state and health in the overview", async () => {
+    setup(freshMachine(), "/resources/workstation");
+    await screen.findByRole("heading", { name: "資源使用" });
+    // The phase pill is in the header only, and the identity list has no row for it.
+    expect(screen.getAllByText("納管中")).toHaveLength(1);
+    expect(screen.queryByText("階段", { exact: true })).toBeNull();
+    expect(screen.getAllByText("健康", { exact: true })).toHaveLength(1);
+  });
+
+  it("shows a service's check summary, uptime strip and latest deployment", async () => {
+    const detail = resourceFixture({
+      checks: [
+        { name: "http", type: "http", critical: true, intervalMs: 30_000, status: "up", stale: false, since: null, message: "", lastResult: "2026-11-01T00:00:00Z", lastLatencyMs: 12, consecutiveFailures: 0 },
+        { name: "tcp", type: "tcp", critical: false, intervalMs: 30_000, status: "down", stale: false, since: null, message: "refused", lastResult: "2026-11-01T00:00:00Z", lastLatencyMs: 0, consecutiveFailures: 3 },
+      ],
+      service: {
+        deployedVersion: "abcdef0123456789",
+        lastDeployment: { id: 1, resource: "web", action: "deploy", version: "abcdef0123456789", previousVersion: "", startedAt: "2026-11-01T00:00:00Z", finishedAt: "2026-11-01T00:01:00Z", outcome: "succeeded", actor: { kind: "user", id: "u", name: "Test admin" }, runId: "", error: "", logExcerpt: "" },
+      },
+    });
+    setup(detail, "/resources/web");
+    expect(await screen.findByText("1/2 項檢查通過")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "最近部署" })).toBeTruthy();
+    expect(screen.getAllByText("abcdef0").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole("img", { name: "可用率分段" })).toBeTruthy());
+  });
+
+  it("sends the old monitoring URL of a machine to the overview", async () => {
+    setup(freshMachine(), "/resources/workstation/monitoring");
+    expect(await screen.findByRole("heading", { name: "資源使用" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "總覽" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  it("sends the old events URL to the timeline with the observation filter", async () => {
+    const { reads } = setup(freshMachine(), "/resources/workstation/events");
+    const filter = (await screen.findByRole("checkbox", { name: "觀測事件" })) as HTMLInputElement;
+    expect(filter.checked).toBe(true);
+    expect(screen.getByRole("link", { name: "時間軸" }).getAttribute("aria-current")).toBe("page");
+    await waitFor(() => expect(reads).toContain("/api/v1/resources/workstation/events"));
+    expect(tabNames()).not.toContain("事件");
+    // Only observation events were asked for.
+    expect(reads.filter((p) => p.endsWith("/timeline"))).toHaveLength(0);
+  });
+
+  it("offers the observation filter on the timeline of a machine or router but not of a service", async () => {
+    setup(resourceFixture(), "/resources/web/timeline");
+    expect(await screen.findByRole("checkbox", { name: "部署" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "觀測事件" })).toBeNull();
   });
 
   it("falls back to the overview for a tab the type does not have", async () => {

@@ -21,6 +21,7 @@ const summaryFixture = (name: string): ResourceSummary => ({
   updatedAt: "2026-11-01T00:00:00Z",
   deployedVersion: "",
   managedBy: null,
+  relations: [],
 });
 
 const template: Template = {

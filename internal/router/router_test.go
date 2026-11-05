@@ -296,6 +296,84 @@ func TestObserveHealthyRouter(t *testing.T) {
 	}
 }
 
+// TestHistoryRange covers the ranged, newest-first form of the history read:
+// the window bounds, the step thinning, the cursor and the resolutions.
+func TestHistoryRange(t *testing.T) {
+	e := newEnv(t)
+	e.create(t, "router", "home")
+	// Ten raw samples 30 s apart: five minute points, two samples each.
+	for i := range 10 {
+		if i > 0 {
+			e.clk.Advance(30 * time.Second)
+		}
+		e.observe(t, "router")
+	}
+	at := func(i int) time.Time { return epoch.Add(time.Duration(i) * 30 * time.Second) }
+	times := func(snaps []router.Snapshot) []int {
+		out := make([]int, 0, len(snaps))
+		for _, s := range snaps {
+			out = append(out, int(s.ObservedAt.Sub(epoch)/(30*time.Second)))
+		}
+		return out
+	}
+	read := func(q resource.HistoryQuery) []int {
+		t.Helper()
+		if q.Limit == 0 {
+			q.Limit = 200
+		}
+		snaps, err := e.m.HistoryRange(e.ctx, "router", q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return times(snaps)
+	}
+
+	if got := read(resource.HistoryQuery{}); !slices.Equal(got, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+		t.Fatalf("unranged = %v, want oldest first", got)
+	}
+	if got := read(resource.HistoryQuery{From: at(3), To: at(7)}); !slices.Equal(got, []int{6, 5, 4, 3}) {
+		t.Fatalf("[3,7) = %v, want newest first with To exclusive and From inclusive", got)
+	}
+	if got := read(resource.HistoryQuery{From: at(8)}); !slices.Equal(got, []int{9, 8}) {
+		t.Fatalf("from only = %v", got)
+	}
+	if got := read(resource.HistoryQuery{To: at(2)}); !slices.Equal(got, []int{1, 0}) {
+		t.Fatalf("to only = %v", got)
+	}
+	if got := read(resource.HistoryQuery{From: at(20)}); len(got) != 0 {
+		t.Fatalf("empty window = %v", got)
+	}
+
+	// Paging continues below the cursor without repeating or skipping.
+	first, err := e.m.HistoryRange(e.ctx, "router", resource.HistoryQuery{From: at(2), Limit: 3})
+	if err != nil || !slices.Equal(times(first), []int{9, 8, 7}) {
+		t.Fatalf("first page = %v, %v", times(first), err)
+	}
+	if got := read(resource.HistoryQuery{From: at(2), Cursor: first[2].ID, Limit: 3}); !slices.Equal(got, []int{6, 5, 4}) {
+		t.Fatalf("second page = %v", got)
+	}
+
+	// The step keeps the newest sample of each epoch-aligned interval.
+	if got := read(resource.HistoryQuery{Step: time.Minute}); !slices.Equal(got, []int{9, 7, 5, 3, 1}) {
+		t.Fatalf("step 1m = %v", got)
+	}
+	if got := read(resource.HistoryQuery{Step: time.Minute, From: at(2), To: at(8)}); !slices.Equal(got, []int{7, 5, 3}) {
+		t.Fatalf("step 1m in [2,8) = %v", got)
+	}
+	if got := read(resource.HistoryQuery{Step: time.Hour}); !slices.Equal(got, []int{9}) {
+		t.Fatalf("step 1h = %v", got)
+	}
+
+	// Minute points are placed by their minute.
+	points, err := e.m.HistoryRange(e.ctx, "router", resource.HistoryQuery{Minute: true, From: epoch.Add(time.Minute), To: epoch.Add(4 * time.Minute), Limit: 10})
+	if err != nil || len(points) != 3 || !points[0].ObservedAt.After(points[2].ObservedAt) {
+		t.Fatalf("minute points = %+v, %v", points, err)
+	}
+	if all, err := e.m.History(e.ctx, "router", 0, 200, true); err != nil || len(all) != 5 || !all[0].ObservedAt.Before(all[4].ObservedAt) {
+		t.Fatalf("unranged minute points = %d, %v", len(all), err)
+	}
+}
+
 func TestThresholdsAndReachability(t *testing.T) {
 	e := newEnv(t)
 	e.create(t, "router", "home")
@@ -351,6 +429,74 @@ func TestThresholdsAndReachability(t *testing.T) {
 	if err != nil || len(evs) != len(want) || evs[0].ResourceID != rec.ID || evs[0].Source != "poll" || evs[0].ID == 0 {
 		t.Fatalf("stored events = %+v, %v", evs, err)
 	}
+}
+
+// TestEventsRange covers the newest-first read of events: ordering by the
+// time an event occurred (not by ingestion), the bounds and the cursor.
+func TestEventsRange(t *testing.T) {
+	e := newEnv(t)
+	e.create(t, "router", "home")
+	rec, err := e.store.Get(e.ctx, "router")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ingestion order a, b, c, d; occurrence order c, a, b, d with b and d
+	// sharing a time, so the order is not the ID order and has a tie.
+	at := func(minutes int) time.Time { return epoch.Add(time.Duration(minutes) * time.Minute) }
+	keyOf := map[int64]string{}
+	for _, ev := range []struct {
+		key string
+		at  time.Time
+	}{{"a", at(5)}, {"b", at(8)}, {"c", at(1)}, {"d", at(8)}} {
+		stored := resource.Event{ResourceID: rec.ID, Source: "test", Key: ev.key, Kind: "router.test", Severity: "info", OccurredAt: ev.at, IngestedAt: at(10)}
+		if err := e.db.Write(e.ctx, func(tx *sql.Tx) error { return resource.InsertEvent(e.ctx, tx, &stored) }); err != nil {
+			t.Fatal(err)
+		}
+		keyOf[stored.ID] = ev.key
+	}
+	read := func(q resource.EventQuery) ([]string, []resource.Event) {
+		t.Helper()
+		if q.Limit == 0 {
+			q.Limit = 100
+		}
+		evs, err := e.m.EventsRange(e.ctx, "router", q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(evs))
+		for _, ev := range evs {
+			out = append(out, keyOf[ev.ID])
+		}
+		return out, evs
+	}
+	same := func(got, want []string) {
+		t.Helper()
+		if !slices.Equal(got, want) {
+			t.Fatalf("events = %v, want %v", got, want)
+		}
+	}
+
+	got, _ := read(resource.EventQuery{})
+	same(got, []string{"a", "b", "c", "d"})
+	got, _ = read(resource.EventQuery{Newest: true})
+	same(got, []string{"d", "b", "a", "c"})
+	got, _ = read(resource.EventQuery{Newest: true, From: at(5), To: at(8)})
+	same(got, []string{"a"})
+	got, _ = read(resource.EventQuery{From: at(2)})
+	same(got, []string{"a", "b", "d"})
+
+	// Paging by (time, id) walks the tie between b and d without repeating or skipping.
+	var walked []string
+	query := resource.EventQuery{Newest: true, Limit: 1}
+	for range 6 {
+		keys, evs := read(query)
+		if len(keys) == 0 {
+			break
+		}
+		walked = append(walked, keys...)
+		query.Cursor, query.CursorAt = evs[0].ID, evs[0].OccurredAt.UnixMilli()
+	}
+	same(walked, []string{"d", "b", "a", "c"})
 }
 
 func TestFailedAttempts(t *testing.T) {

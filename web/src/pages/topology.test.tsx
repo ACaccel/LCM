@@ -1,16 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Relation } from "../api/types";
 import { stubGraphEnvironment } from "../test-graph-env";
-import { jsonResponse, resourceFixture } from "./resource/test-fixtures";
+import { jsonResponse } from "./resource/test-fixtures";
 import { TopologyPage } from "./topology";
 
 beforeEach(stubGraphEnvironment);
 afterEach(() => vi.unstubAllGlobals());
 
-const row = (name: string, type: "service" | "machine", health: "healthy" | "down") => ({
+const row = (name: string, type: "service" | "machine", health: "healthy" | "down", rels: Relation[]) => ({
   id: `id-${name}`,
   name,
   type,
@@ -24,6 +24,7 @@ const row = (name: string, type: "service" | "machine", health: "healthy" | "dow
   updatedAt: "2026-11-01T00:00:00Z",
   deployedVersion: "",
   managedBy: null,
+  relations: rels,
 });
 
 const relations: Record<string, Relation[]> = { web: [{ type: "dependsOn", target: "db" }], db: [{ type: "runsOn", target: "host" }], host: [], alone: [] };
@@ -33,10 +34,7 @@ function renderPage(list = ["web", "db", "host", "alone"]) {
   vi.stubGlobal("fetch", async (req: Request) => {
     const path = decodeURIComponent(new URL(req.url).pathname);
     reads.push(path);
-    if (path === "/api/v1/resources") return jsonResponse({ items: list.map((n) => row(n, n === "host" ? "machine" : "service", n === "host" ? "down" : "healthy")), nextCursor: null });
-    const name = path.split("/").pop() ?? "";
-    const base = resourceFixture({ name });
-    return jsonResponse({ ...base, document: { ...base.document, spec: { ...base.document.spec, relations: relations[name] ?? [] } } });
+    return jsonResponse({ items: list.map((n) => row(n, n === "host" ? "machine" : "service", n === "host" ? "down" : "healthy", relations[n] ?? [])), nextCursor: null });
   });
   const router = createMemoryRouter(
     [
@@ -62,6 +60,16 @@ describe("topology page", () => {
     expect(screen.queryByRole("button", { name: /^開啟資源 alone/ })).toBeNull();
     fireEvent.click(screen.getByRole("checkbox", { name: "只顯示有關係的資源" }));
     expect(await screen.findByRole("button", { name: /^開啟資源 alone/ })).toBeTruthy();
+  });
+
+  it("reads the whole fleet in one request, however many resources there are", async () => {
+    const few = renderPage(["web", "db", "host"]);
+    await screen.findByRole("button", { name: /^開啟資源 web/ });
+    expect(few.reads).toEqual(["/api/v1/resources"]);
+    cleanup();
+    const many = renderPage(["web", "db", "host", "alone", ...Array.from({ length: 20 }, (_, i) => `extra-${i}`)]);
+    await screen.findByRole("button", { name: /^開啟資源 web/ });
+    expect(many.reads).toEqual(["/api/v1/resources"]);
   });
 
   it("lists the relations as text too", async () => {

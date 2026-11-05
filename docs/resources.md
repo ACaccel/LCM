@@ -85,6 +85,7 @@ Every resource lists `actions`: name, `available` with a `reason`, `risk` (`read
 
 - A target may not exist yet; it is stored and listed in the resource detail's `unresolvedRelations` (also in the responses of create, save and restore) and in the impact's `unresolved`. Self-references and duplicate `(type, target)` pairs are invalid; at most 100 relations.
 - Only managed resources count: retired ones are neither observed nor controlled, and their relations are ignored.
+- Every item of the resource list (`GET /api/v1/resources`, and the archive list) carries the document's `relations`, so the console's topology view draws the whole fleet from one request.
 
 **Impact.** `GET /api/v1/resources/{resource}/impact[?action=]` (`lcm resource impact <name>`) returns:
 
@@ -119,6 +120,21 @@ Rebooting `home-router` then lists `workstation` as a control dependent and need
 
 - Signals carry `resource` and `resourceType`. Kinds: `check.changed`, `health.changed`, `lifecycle.changed`, `alert`, and `resource.config.conflict` / `resource.config.invalid` from config sync.
 - The SSE stream (`GET /api/v1/events`) has the types `signal`, `run`, `node`, `timeline`, `action`, `resource` (document or phase change), `observation` (stored machine and router events) and `catalog` (policy deploy/undeploy), filtered by `resource`, `resourceId`, `policy`, `run` and `types`. SSE is best effort: reload from the API after a reconnect or `overflow`.
+
+## Resource detail tabs
+
+The page header holds the name, badges (type, phase, state, health, versions, ownership) and the actions. Tabs below it:
+
+| Type | Tabs |
+|---|---|
+| service | overview, deployments, checks, timeline, policies, relations, document |
+| machine | overview, maintenance, checks, timeline, policies, relations, document |
+| router | overview, operations, checks, timeline, policies, relations, document |
+
+- **Overview** does not repeat the header. Service: check summary, 24-hour availability strip over all checks, latest deployment. Machine: CPU, memory and disk usage bars, the CPU/memory trend with a 24 h / 7 d / 30 d switch, and the [source coverage](machines.md#events-gaps-and-history) as a summary (for example `17/19 可用`) with the sources that are not available listed and the full list behind a disclosure. Router: key status, charts (CPU/memory, WAN rate, clients, temperature) with the same range switch and coverage summary. There is no per-sample list; the chart tooltip shows the values.
+- **Range switch.** Each range is one `GET .../history` request for that range (minute points, `from` = now minus the range, `step` chosen so the answer fits one page: 8 m, 56 m, 240 m), not a filter over loaded samples. See [history ranges](machines.md#events-gaps-and-history).
+- **Timeline** shows the resource's timeline. For machines and routers the stored observation events (`觀測事件`) are one more kind filter and are merged into the list by the time they occurred. The two sources page separately (`GET .../timeline` and `GET .../events?order=desc`, each with its own cursor); the console loads the stream whose oldest loaded entry is newest, and holds back entries older than that until it has loaded, so loading more never reorders what is shown. Selecting only the observation kind reads only events. The filter is the URL's `kind=observation`.
+- Old links keep working: `/resources/<name>/monitoring` opens the overview and `/resources/<name>/events` opens the timeline filtered to observation events. The security page's incident tab is separate (資安事件).
 
 ## Connections
 
@@ -185,7 +201,7 @@ Each managed router has its own loop at `interval`, at least every 30 seconds wh
 - Measurements: CPU percent and cores, memory percent, uptime, temperature, client count, WAN link/status/uptime/type and traffic rates and totals, model and firmware, with per-source coverage. WAN addresses, DNS servers, MAC addresses and the serial number are never read.
 - `state`: `online` while the latest attempt is fresh and `ok`, `offline` while it is fresh and `unreachable`, otherwise `unknown`.
 - Native health: fresh `unreachable` is `down`; CPU or memory at or above its threshold for `consecutive` fresh samples is `degraded` until the value falls to the threshold minus `hysteresis`; a missing CPU or memory value, any other failed outcome and stale data are `unknown`.
-- Events (`lcm resource events`, SSE `observation`): `router.reachability.changed`, `router.boot.changed`, `router.health.changed`, `router.threshold.firing` / `.recovered`, `router.collector.changed`. History: `lcm resource history` or `GET .../history[?resolution=minute]`.
+- Events (`lcm resource events`, SSE `observation`): `router.reachability.changed`, `router.boot.changed`, `router.health.changed`, `router.threshold.firing` / `.recovered`, `router.collector.changed`. History: `lcm resource history` or `GET .../history[?resolution=minute&from=&to=&step=]` ([ranges and order](machines.md#events-gaps-and-history)).
 - Snapshots, minute points and events share the machine [retention settings and row ceilings](machines.md#events-gaps-and-history).
 
 A rejected login is never retried within a call, so a wrong password costs one attempt per sample. After an authentication failure the password is read again from the secret on the next attempt, so a rotated secret takes effect without a restart.

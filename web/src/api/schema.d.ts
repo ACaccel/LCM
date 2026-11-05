@@ -633,7 +633,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Stored observations of a machine or router */
+        /**
+         * Stored observations of a machine or router
+         * @description Without `from`, `to` and `step` the snapshots are oldest first and
+         *     `cursor` continues after the last ID. With any of them they are newest
+         *     first and `cursor` continues before the last ID, so the recent end of a
+         *     range comes first. Both orders follow the snapshot IDs, which grow
+         *     with observation time.
+         */
         get: operations["listResourceHistory"];
         put?: never;
         post?: never;
@@ -3403,6 +3410,8 @@ export interface components {
             /** @description Commit of a service's last successful deployment; empty if none and for other types. */
             deployedVersion: string;
             managedBy: components["schemas"]["ManagedBy"];
+            /** @description The relations the document declares, as in `ResourceDocument.spec.relations`, so a view of the whole fleet needs one request. */
+            relations: components["schemas"]["Relation"][];
         };
         Overview: {
             /** Format: date-time */
@@ -4893,6 +4902,12 @@ export interface operations {
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
                 resolution?: "raw" | "minute";
+                /** @description Only snapshots observed at or after this instant (the minute of a minute point). Selects the newest-first order. */
+                from?: string;
+                /** @description Only snapshots observed before this instant. Selects the newest-first order. Must be after `from`. */
+                to?: string;
+                /** @description A Go duration of at least 1s, such as `5m` or `1h`. Keeps only the newest snapshot of each interval of this length (aligned to the Unix epoch), so a long range fits in few pages. Selects the newest-first order. */
+                step?: string;
             };
             header?: never;
             path: {
@@ -4903,7 +4918,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Snapshots, oldest first; at most 199 per page. */
+            /** @description Snapshots in the order described above; at most 199 per page. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4929,6 +4944,17 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
+                /**
+                 * @description `asc` (default): oldest first by ingestion, `cursor` continues after the
+                 *     last ID. `desc`: newest first by the time the event occurred (ties by
+                 *     ID), so events recovered after a gap sit where they happened; `cursor`
+                 *     continues before the last event.
+                 */
+                order?: "asc" | "desc";
+                /** @description Only events that occurred at or after this instant. */
+                from?: string;
+                /** @description Only events that occurred before this instant. Must be after `from`. */
+                to?: string;
             };
             header?: never;
             path: {
@@ -4939,7 +4965,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Events, oldest first; at most 199 per page. */
+            /** @description Events in the order requested; at most 199 per page. */
             200: {
                 headers: {
                     [name: string]: unknown;

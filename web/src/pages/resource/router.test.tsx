@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResourceSnapshot, RouterSnapshot } from "../../api/types";
 import { formatBytes } from "../../lib/format";
-import { RouterControls, RouterMonitoring, RouterSnapshotView } from "./router";
+import { RouterControls, RouterOverview, RouterSnapshotView } from "./router";
 import { jsonResponse, noImpact, operationFixture, routerFixture } from "./test-fixtures";
 
 const snapshot: RouterSnapshot = routerFixture.router!.status!.snapshot!;
@@ -31,8 +31,13 @@ describe("router snapshot", () => {
     expect(screen.getByText("已連結")).toBeTruthy();
     expect(screen.getByText("↑ 2.0 KiB/s / ↓ 1.0 MiB/s")).toBeTruthy();
     expect(screen.getByText("↑ 1.0 GiB / ↓ 未知")).toBeTruthy();
-    const wanRow = screen.getByRole("cell", { name: "wan" }).closest("tr")!;
+    // The source that failed is listed at once; the full list is behind a disclosure.
+    expect(screen.getByText("1/2 可用")).toBeTruthy();
+    const wanRow = screen.getAllByRole("cell", { name: "wan" })[0]!.closest("tr")!;
     expect(within(wanRow).getByText("wan status request failed")).toBeTruthy();
+    const all = screen.getByText("全部來源").closest("details")!;
+    expect(all.open).toBe(false);
+    expect(within(all).getAllByRole("row")).toHaveLength(3);
   });
 
   it("names a failed attempt instead of showing measurements as current", () => {
@@ -51,7 +56,7 @@ describe("router snapshot", () => {
     } satisfies RouterSnapshot;
     render(<RouterSnapshotView snapshot={coded} />);
     expect(screen.getByText("路由器無法連線")).toBeTruthy();
-    expect(screen.getByText("路由器回報錯誤碼 3")).toBeTruthy();
+    expect(screen.getAllByText("路由器回報錯誤碼 3").length).toBeGreaterThan(0);
     expect(screen.queryByText("router unreachable")).toBeNull();
     expect(screen.queryByText("code 3")).toBeNull();
   });
@@ -63,24 +68,51 @@ describe("router snapshot", () => {
   });
 });
 
-describe("router monitoring", () => {
-  it("shows reachability and boot time and plots stored CPU and memory", async () => {
-    const history: ResourceSnapshot[] = [
-      { id: 1, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:00:00Z", router: { ...snapshot, id: 1 } },
-      { id: 2, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:01:00Z", router: { ...snapshot, id: 2, outcome: "unreachable", cpuPercent: null, memoryPercent: null } },
-    ];
+describe("router overview", () => {
+  const history: ResourceSnapshot[] = [
+    { id: 2, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:01:00Z", router: { ...snapshot, id: 2, outcome: "unreachable", cpuPercent: null, memoryPercent: null } },
+    { id: 1, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:00:00Z", router: { ...snapshot, id: 1 } },
+  ];
+
+  function stubHistory() {
+    const reads: URL[] = [];
     vi.stubGlobal("fetch", async (req: Request) => {
-      const path = new URL(req.url).pathname;
-      if (path.endsWith("/history")) return jsonResponse({ items: history, nextCursor: null });
+      const url = new URL(req.url);
+      if (url.pathname.endsWith("/history")) {
+        reads.push(url);
+        return jsonResponse({ items: history, nextCursor: null });
+      }
       return jsonResponse({ error: { message: "Unexpected fixture request" } }, 404);
     });
-    const { container } = render(wrap(<RouterMonitoring resource={routerFixture} selector="gateway" />));
-    expect(screen.getByText("可連線")).toBeTruthy();
+    return reads;
+  }
+
+  it("shows the key status and plots stored CPU and memory without a list of samples", async () => {
+    stubHistory();
+    const { container } = render(wrap(<RouterOverview resource={routerFixture} selector="gateway" />));
     expect(screen.getByText("推估開機時間")).toBeTruthy();
+    expect(screen.getByText("RA70")).toBeTruthy();
     expect(await screen.findByRole("group", { name: /CPU 與記憶體使用率趨勢，CPU 使用率 12.5%，記憶體使用率 40%/ })).toBeTruthy();
     // The unreachable attempt has no measurements and is not plotted as zero.
     expect(container.querySelectorAll("figure circle.chart-dot")).toHaveLength(2);
-    expect([...container.querySelectorAll("summary")].map((x) => x.textContent?.split(" — ")[1])).toEqual(["CPU 使用率 12.5% · 記憶體使用率 40.0%", "無法連線"]);
+    // The only disclosure is the source list; samples are read from the chart.
+    expect([...container.querySelectorAll("summary")].map((x) => x.textContent)).toEqual(["全部來源"]);
+  });
+
+  it("asks for the range that is picked, thinned to fit one page", async () => {
+    const reads = stubHistory();
+    render(wrap(<RouterOverview resource={routerFixture} selector="gateway" />));
+    await waitFor(() => expect(reads).toHaveLength(1));
+    const day = reads[0]!.searchParams;
+    expect(day.get("resolution")).toBe("minute");
+    expect(day.get("step")).toBe("8m");
+    expect(Date.now() - Date.parse(day.get("from")!)).toBeGreaterThan(86_400_000 - 60_000);
+    expect(Date.now() - Date.parse(day.get("from")!)).toBeLessThan(86_400_000 + 60_000);
+    await userEvent.click(screen.getByRole("button", { name: "30 天" }));
+    await waitFor(() => expect(reads).toHaveLength(2));
+    const month = reads[1]!.searchParams;
+    expect(month.get("step")).toBe("240m");
+    expect(Date.now() - Date.parse(month.get("from")!)).toBeGreaterThan(30 * 86_400_000 - 60_000);
   });
 });
 

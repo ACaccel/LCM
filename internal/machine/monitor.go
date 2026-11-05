@@ -297,14 +297,21 @@ func evaluateHealth(s *storedStatus, c model.MachineConfig) []Event {
 	return events
 }
 
-// Events returns durable events after an opaque API cursor has been decoded.
+// Events returns durable events with an ID above after, oldest first.
 func (m *Manager) Events(ctx context.Context, name string, after int64, limit int) ([]Event, error) {
+	return m.EventsRange(ctx, name, resource.EventQuery{Cursor: after, Limit: limit})
+}
+
+// EventsRange reads the events a query selects; the order and the meaning
+// of its cursor are those of resource.EventQuery.
+func (m *Manager) EventsRange(ctx context.Context, name string, q resource.EventQuery) ([]Event, error) {
 	r, err := m.Get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	limit = max(1, min(limit, 200))
-	rows, err := m.db.Reader().QueryContext(ctx, `SELECT id,body FROM resource_events WHERE resource_id=? AND id>? ORDER BY id LIMIT ?`, r.ID, after, limit)
+	q.Limit = max(1, min(q.Limit, 200))
+	query, args := q.SQL(r.ID)
+	rows, err := m.db.Reader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -330,18 +337,22 @@ func (m *Manager) History(ctx context.Context, name string, after int64, limit i
 	return m.HistoryResolution(ctx, name, after, limit, false)
 }
 
-// HistoryResolution reads raw samples or the longer-lived minute points.
+// HistoryResolution reads raw samples or the longer-lived minute points,
+// oldest first, with an ID above after.
 func (m *Manager) HistoryResolution(ctx context.Context, name string, after int64, limit int, minute bool) ([]Snapshot, error) {
+	return m.HistoryRange(ctx, name, resource.HistoryQuery{Minute: minute, Cursor: after, Limit: limit})
+}
+
+// HistoryRange reads the snapshots a query selects; the order and the
+// meaning of its cursor are those of resource.HistoryQuery.
+func (m *Manager) HistoryRange(ctx context.Context, name string, q resource.HistoryQuery) ([]Snapshot, error) {
 	r, err := m.Get(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	limit = max(1, min(limit, 200))
-	query := `SELECT id,body,0,0 FROM resource_snapshots WHERE resource_id=? AND id>? ORDER BY id LIMIT ?`
-	if minute {
-		query = `SELECT id,body,cpu_sum,cpu_count FROM resource_points WHERE resource_id=? AND id>? ORDER BY id LIMIT ?`
-	}
-	rows, err := m.db.Reader().QueryContext(ctx, query, r.ID, after, limit)
+	q.Limit = max(1, min(q.Limit, 200))
+	query, args := q.SQL(r.ID)
+	rows, err := m.db.Reader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +371,7 @@ func (m *Manager) HistoryResolution(ctx context.Context, name string, after int6
 			return nil, err
 		}
 		s.ID = id
-		if minute && count > 0 && s.CPUPercent != nil {
+		if q.Minute && count > 0 && s.CPUPercent != nil {
 			average := sum / float64(count)
 			s.CPUPercent = &average
 		}

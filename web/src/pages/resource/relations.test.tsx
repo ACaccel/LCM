@@ -24,6 +24,7 @@ const summary = (name: string, type: "service" | "machine", health: "healthy" | 
   updatedAt: "2026-11-01T00:00:00Z",
   deployedVersion: "",
   managedBy: null,
+  relations: [],
 });
 
 function setup(detail: ResourceDetail, impact = noImpact(detail.name)) {

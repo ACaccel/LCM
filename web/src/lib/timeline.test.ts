@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineEntry, TimelineList } from "../api/types";
-import { entryKey, flattenTimeline, groupByDay, insertLive, localDay, matchesFilter } from "./timeline";
+import { OBSERVATION_KIND, entryKey, flattenTimeline, groupByDay, insertLive, localDay, matchesFilter, mergeNewestFirst, observationEntry } from "./timeline";
 
 const e = (n: number, over: Partial<TimelineEntry> = {}): TimelineEntry => ({
   id: n,
@@ -66,5 +66,75 @@ describe("timeline merge", () => {
 
   it("gives different entries different keys", () => {
     expect(entryKey(e(1))).not.toBe(entryKey(e(2)));
+  });
+});
+
+describe("merging newest-first streams", () => {
+  const at = (minute: number, name: string): TimelineEntry => e(minute, { time: `2026-10-28T10:${String(minute).padStart(2, "0")}:00Z`, summary: name, ref: name });
+  const names = (entries: readonly TimelineEntry[]) => entries.map((x) => x.summary);
+
+  it("interleaves the streams by time", () => {
+    const merged = mergeNewestFirst([
+      { items: [at(50, "a1"), at(30, "a2")], more: false },
+      { items: [at(40, "b1"), at(20, "b2")], more: false },
+    ]);
+    expect(names(merged.entries)).toEqual(["a1", "b1", "a2", "b2"]);
+    expect(merged.limiting).toEqual([]);
+  });
+
+  it("holds back what an unloaded page of the other stream could still precede", () => {
+    // The timeline reached 30; events not yet loaded below 40 may hold entries between.
+    const merged = mergeNewestFirst([
+      { items: [at(50, "a1"), at(30, "a2")], more: true },
+      { items: [at(40, "b1"), at(20, "b2")], more: true },
+    ]);
+    expect(names(merged.entries)).toEqual(["a1", "b1", "a2"]);
+    // a2 is the newest of the oldest loaded entries, so its stream loads next.
+    expect(merged.limiting).toEqual([0]);
+  });
+
+  it("shows everything of a stream that has no more once the other has loaded further", () => {
+    const merged = mergeNewestFirst([
+      { items: [at(50, "a1"), at(30, "a2"), at(10, "a3")], more: false },
+      { items: [at(40, "b1"), at(20, "b2")], more: true },
+    ]);
+    expect(names(merged.entries)).toEqual(["a1", "b1", "a2", "b2"]);
+    expect(merged.limiting).toEqual([1]);
+  });
+
+  it("works with one stream or none", () => {
+    expect(names(mergeNewestFirst([{ items: [at(2, "x"), at(1, "y")], more: true }, { items: [], more: false }]).entries)).toEqual(["x", "y"]);
+    expect(mergeNewestFirst([{ items: [], more: false }]).entries).toEqual([]);
+  });
+
+  it("names both streams as limiting when they stop at the same time", () => {
+    const merged = mergeNewestFirst([
+      { items: [at(50, "a1"), at(30, "a2")], more: true },
+      { items: [at(40, "b1"), at(30, "b2")], more: true },
+    ]);
+    expect(merged.limiting).toEqual([0, 1]);
+    expect(names(merged.entries)).toEqual(["a1", "b1", "a2", "b2"]);
+  });
+});
+
+describe("observation entries", () => {
+  it("places an event where it occurred and explains it with its translated reason", () => {
+    const entry = observationEntry(
+      {
+        id: 7,
+        resourceId: "m-1",
+        source: "journal",
+        kind: "machine.journal.gap",
+        severity: "warning",
+        occurredAt: "2026-10-28T09:00:00Z",
+        ingestedAt: "2026-10-28T10:00:00Z",
+        historical: true,
+        reason: "journal cursor expired",
+      },
+      "workstation",
+    );
+    expect(entry).toMatchObject({ resource: "workstation", time: "2026-10-28T09:00:00Z", kind: OBSERVATION_KIND });
+    expect(entry.summary).toContain("journal cursor expired");
+    expect(entry.data).toMatchObject({ gap: true, historical: true, severity: "warning" });
   });
 });
