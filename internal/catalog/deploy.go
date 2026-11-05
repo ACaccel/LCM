@@ -32,10 +32,6 @@ func (e *StepError) Is(target error) bool { return target == ErrDeployFailed }
 
 var shaRe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 
-// gitEnv keeps git from prompting for credentials, which would hang an
-// unattended run, and from localizing messages that we parse.
-var gitEnv = []string{"GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
-
 // Deploy updates the service to opts.Version, or to the head of the
 // configured branch. The source repository must have no uncommitted
 // changes to tracked files; it is detached at the target commit, built,
@@ -80,7 +76,7 @@ func (l *stepLog) add(cmd execx.Cmd, out string) {
 func (l *stepLog) note(format string, args ...any) { fmt.Fprintf(&l.b, format+"\n", args...) }
 
 func (s *session) git(dir string, timeout time.Duration, args ...string) execx.Cmd {
-	return execx.Cmd{Argv: append([]string{s.m.git}, args...), Dir: dir, Env: gitEnv, Timeout: timeout}
+	return execx.Cmd{Argv: append([]string{s.m.git}, args...), Dir: dir, Env: execx.GitEnv(), Timeout: timeout}
 }
 
 // deploy runs the pipeline for deploy (version may be empty) and rollback

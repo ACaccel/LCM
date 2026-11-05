@@ -53,7 +53,9 @@ policy includes those hooks instead of storing a second threshold copy.
 
 ## Recovery and local approval
 
-Every preview persists root-protected intent, digest, expiry, actor, and reason. Apply
+Every preview persists root-protected intent, digest, expiry, actor, and reason. The
+actor is declared by the caller and only a reference; LCM's audit log is the
+authoritative record ([security](../../docs/security.md)). Apply
 rechecks the digest under the global control lock and persists `running` before any
 side effect. A request ID cannot change intent. A later query reconciles AIDE using
 its actual unit and a report newer than the recorded execution start. An interrupted
@@ -61,6 +63,13 @@ configuration change becomes `indeterminate`; it is never executed again implici
 Snapshots and candidate hashes remain in the protected operation journal for local
 review. Verified command failures restore only unchanged candidate files. A failed
 rollback remains indeterminate and requires administrator review.
+
+Each fixed command may take 5 seconds and a request 25 seconds; when that deadline
+passes, the change unwinds through the same rollback, which has its own 12 second
+budget. Both stay below LCM's 45 second limit, so the outcome is in the protected
+journal before LCM stops waiting. LCM writes a `security.host.apply.start` audit
+entry before it hands an apply to the helper and stores the result with its
+`security.host.apply` entry even if the requesting client disconnects.
 
 After manually reviewing differences and completing the existing local sudo baseline
 or profile workflow, an administrator can record completion using a root-owned mode600

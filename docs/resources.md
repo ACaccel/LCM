@@ -138,14 +138,15 @@ connections:
     deviceId: "02:4c:43:4d:00:02"     # optional MAC-like login ID; see below
     insecureSkipVerify: false         # optional, for https with a self-signed certificate
     allowActions: [reboot]            # writes allowed through this connection; default none
-    allowResources: [home-router]     # resources allowed to use it; empty allows all
+    allowResources: [home-router]     # resources allowed to use it; empty or missing allows none
 ```
 
 | Rule | Detail |
 |---|---|
-| File | Regular file, not writable by group or others (for example `root:lcm 0640`), at most 1 MiB, one YAML document, unknown fields refused |
+| File | Regular file owned by root, not a symlink, not writable by group or others (for example `root:lcm 0640`); every directory above it is owned by root, not a symlink and not writable by group or others (for example `/etc/lcm`). At most 1 MiB, one YAML document, unknown fields refused |
 | Names | `name` 1-63 lowercase letters, digits or `-`, unique; `allowResources` entries are resource names, no duplicates |
-| Secret | `passwordSecret` names a secret in `LCM_SECRETS_DIR` (or `LCM_SECRET_<NAME>`); it must resolve to a non-empty value at startup. The value is never logged, audited or returned |
+| Allowlists | `allowResources` and `allowActions` are allowlists: an empty or missing list allows no resource or no write |
+| Secret | `passwordSecret` names a secret in `LCM_SECRETS_DIR` (or `LCM_SECRET_<NAME>`); it must resolve to a non-empty value at startup, from a regular file (not a symlink) of mode 0600. The value is never logged, audited or returned |
 
 ## Routers
 

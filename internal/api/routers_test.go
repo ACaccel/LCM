@@ -25,7 +25,7 @@ func routerSite(t *testing.T) (*site, *xiaomitest.Router) {
 		t.Fatal(err)
 	}
 	conns := filepath.Join(dir, "connections.yaml")
-	doc := "connections:\n  - name: home\n    type: xiaomi\n    url: " + fake.URL() + "\n    passwordSecret: router-password\n    allowActions: [reboot]\n"
+	doc := "connections:\n  - name: home\n    type: xiaomi\n    url: " + fake.URL() + "\n    passwordSecret: router-password\n    allowActions: [reboot]\n    allowResources: [gateway]\n"
 	if err := os.WriteFile(conns, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}

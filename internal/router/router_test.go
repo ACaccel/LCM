@@ -112,10 +112,12 @@ const connYAML = `connections:
     url: %URL%
     passwordSecret: router-password
     allowActions: [reboot]
+    allowResources: [router]
   - name: readonly
     type: xiaomi
     url: %URL%
     passwordSecret: router-password
+    allowResources: [readonly]
   - name: other-only
     type: xiaomi
     url: %URL%
@@ -124,6 +126,11 @@ const connYAML = `connections:
   - name: down
     type: xiaomi
     url: %DOWN%
+    passwordSecret: router-password
+    allowResources: [other]
+  - name: nobody
+    type: xiaomi
+    url: %URL%
     passwordSecret: router-password
 `
 
@@ -203,6 +210,8 @@ func TestSaveValidatesConnection(t *testing.T) {
 	for _, c := range []struct{ name, conn, want string }{
 		{"router", "absent", "not configured"},
 		{"router", "other-only", "does not allow resource"},
+		// An empty allowResources allows no resource.
+		{"router", "nobody", "does not allow resource"},
 	} {
 		_, err := e.store.Put(e.ctx, []byte(routerDoc(c.name, c.conn)), 0)
 		var is model.Issues

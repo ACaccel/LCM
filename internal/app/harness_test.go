@@ -83,7 +83,7 @@ func (h *harness) open(o testOpts) *app.App {
 	a, err := app.New(h.ctx, cfg,
 		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower),
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client),
-		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git))
+		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git), app.WithConnectionsTrust(trustTestFile))
 	if err != nil {
 		h.t.Fatalf("app.New: %v", err)
 	}

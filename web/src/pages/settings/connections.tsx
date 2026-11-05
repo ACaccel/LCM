@@ -34,7 +34,7 @@ export function ConnectionsPanel() {
                       </td>
                       <td>{c.type}</td>
                       <td>{c.allowActions.join(", ") || s.settings.connections.noActions}</td>
-                      <td>{c.allowResources.join(", ") || s.settings.connections.allResources}</td>
+                      <td>{c.allowResources.join(", ") || s.settings.connections.noResources}</td>
                       <td>
                         {c.resources.length === 0
                           ? s.common.none

@@ -5,12 +5,14 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/connection"
 	"github.com/ACaccel/lcm/internal/engine"
@@ -54,14 +56,20 @@ type Deps struct {
 	// CookieSecure sets the Secure attribute on the session cookie.
 	CookieSecure bool
 
-	// Now is the time source; defaults to time.Now.
+	// Now is the time source; defaults to Clock.Now.
 	Now func() time.Time
+	// Clock drives the timers of event streams (heartbeats and the end of
+	// a session); defaults to the real clock.
+	Clock clock.Clock
 
 	// Login hardening. Zero values select the defaults (500ms delay after a
 	// failure, 10 failures per client IP per 10 minutes).
 	LoginFailDelay   time.Duration
 	LoginMaxFailures int
 	LoginWindow      time.Duration
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For names
+	// the client of a login; empty trusts none.
+	TrustedProxies []netip.Prefix
 
 	// Components behind the resource endpoints. Handlers of a resource
 	// need its component; the foundation endpoints (health, auth, tokens,
@@ -114,8 +122,10 @@ type Server struct {
 
 	cookieSecure   bool
 	now            func() time.Time
+	clock          clock.Clock
 	loginFailDelay time.Duration
 	limiter        *failureLimiter
+	trustedProxies []netip.Prefix
 	cop            *http.CrossOriginProtection
 
 	resources *resource.Store
@@ -155,7 +165,7 @@ func New(d Deps) *Server {
 		security:     d.Security,
 		securityHost: d.SecurityHost,
 		db:           d.DB, auth: d.Auth, audit: d.Audit, log: d.Logger, version: d.Version,
-		cookieSecure: d.CookieSecure, now: d.Now, loginFailDelay: d.LoginFailDelay,
+		cookieSecure: d.CookieSecure, now: d.Now, loginFailDelay: d.LoginFailDelay, trustedProxies: d.TrustedProxies,
 		cop:     http.NewCrossOriginProtection(),
 		catalog: d.Catalog, manager: d.Manager, monitor: d.Monitor, engine: d.Engine, triggers: d.Triggers,
 		modules: d.Modules, state: d.State, locks: d.Locks, registry: d.Registry, secrets: d.Secrets,
@@ -183,8 +193,12 @@ func New(d Deps) *Server {
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}
+	s.clock = d.Clock
+	if s.clock == nil {
+		s.clock = clock.Real()
+	}
 	if s.now == nil {
-		s.now = time.Now
+		s.now = s.clock.Now
 	}
 	if s.loginFailDelay == 0 {
 		s.loginFailDelay = defaultLoginFailDelay

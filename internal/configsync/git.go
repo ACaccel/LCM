@@ -22,29 +22,13 @@ const (
 	localRef = "refs/lcm/head"
 )
 
-// gitEnv never prompts and allows only transports that cannot run commands
-// (the ext:: transport can). execx passes only a short allowlist of the
-// parent's variables, so the ssh command is passed on explicitly.
-func gitEnv() []string {
-	ssh := os.Getenv("GIT_SSH_COMMAND")
-	if ssh == "" {
-		ssh = "ssh -o BatchMode=yes"
-	}
-	return []string{
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_ALLOW_PROTOCOL=file:git:http:https:ssh",
-		"GIT_SSH_COMMAND=" + ssh,
-		"LC_ALL=C",
-	}
-}
-
 // git runs one git command in dir and returns its output.
 func (s *Syncer) git(ctx context.Context, dir string, maxOut int, args ...string) (string, error) {
 	if s.runner == nil {
 		return "", errors.New("configsync: no command runner configured")
 	}
 	res, err := s.runner.Run(ctx, execx.Cmd{
-		Argv: append([]string{s.gitBin}, args...), Dir: dir, Env: gitEnv(), Timeout: s.gitTime, MaxOutput: maxOut,
+		Argv: append([]string{s.gitBin}, args...), Dir: dir, Env: execx.GitEnv(), Timeout: s.gitTime, MaxOutput: maxOut,
 	})
 	if err != nil {
 		out := strings.TrimSpace(redact(res.Output))

@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 
 	"go.yaml.in/yaml/v3"
 
@@ -64,7 +65,7 @@ type Connection struct {
 	// the connection.
 	AllowActions []string
 	// AllowResources lists the resource names that may use the
-	// connection; empty allows every resource.
+	// connection; empty allows none.
 	AllowResources []string
 }
 
@@ -72,9 +73,9 @@ type Connection struct {
 func (c Connection) Allows(action string) bool { return slices.Contains(c.AllowActions, action) }
 
 // AllowsResource reports whether the resource named name may use the
-// connection.
+// connection. The list is an allowlist: an empty one allows no resource.
 func (c Connection) AllowsResource(name string) bool {
-	return len(c.AllowResources) == 0 || slices.Contains(c.AllowResources, name)
+	return slices.Contains(c.AllowResources, name)
 }
 
 // Set is the immutable set of configured connections. The zero value and a
@@ -144,15 +145,80 @@ type entry struct {
 	AllowResources     []string `yaml:"allowResources"`
 }
 
+// TrustCheck verifies that only the host administrator can change the
+// connections file at path; info describes the opened file. Load uses
+// RootOwned unless WithTrustCheck replaces it.
+type TrustCheck func(path string, info os.FileInfo) error
+
+// LoadOption customizes Load.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct{ trust TrustCheck }
+
+// WithTrustCheck replaces RootOwned, for tests that cannot create
+// root-owned files.
+func WithTrustCheck(c TrustCheck) LoadOption { return func(o *loadOptions) { o.trust = c } }
+
+// RootOwned is the production TrustCheck: the file and every directory
+// above it are owned by root, are not symlinks and cannot be written by
+// group or others. Otherwise the account LCM runs as, or another user,
+// could widen a connection that host configuration is meant to bound.
+func RootOwned(path string, info os.FileInfo) error {
+	if uid, ok := ownerOf(info); !ok || uid != 0 {
+		return errors.New("must be owned by root")
+	}
+	dir := filepath.Dir(path)
+	for {
+		di, err := os.Lstat(dir)
+		if err != nil {
+			return fmt.Errorf("directory %s: %w", dir, err)
+		}
+		uid, ok := ownerOf(di)
+		switch {
+		case di.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("directory %s must not be a symlink", dir)
+		case !di.IsDir():
+			return fmt.Errorf("%s is not a directory", dir)
+		case !ok || uid != 0:
+			return fmt.Errorf("directory %s must be owned by root", dir)
+		case di.Mode().Perm()&0o022 != 0:
+			return fmt.Errorf("directory %s must not be writable by group or others (mode %04o)", dir, di.Mode().Perm())
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
+}
+
+func ownerOf(info os.FileInfo) (uint32, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
+}
+
 // Load reads and validates the connections file at path. An empty path is
-// an empty set. The file must be a regular file that neither group nor
-// others can write, and every password secret must resolve through
+// an empty set. The file must be a regular file, not a symlink, that
+// neither group nor others can write and that passes the trust check
+// (RootOwned by default); every password secret must resolve through
 // secrets now, so that a misconfiguration stops the server at startup.
-func Load(path string, secrets secret.Source) (*Set, error) {
+func Load(path string, secrets secret.Source, opts ...LoadOption) (*Set, error) {
 	if path == "" {
 		return &Set{}, nil
 	}
-	f, err := os.Open(filepath.Clean(path))
+	o := loadOptions{trust: RootOwned}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("connections file: %w", err)
+	}
+	// O_NONBLOCK keeps a FIFO planted at the path from blocking startup.
+	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // the path is host configuration set by the administrator
 	if err != nil {
 		return nil, fmt.Errorf("connections file: %w", err)
 	}
@@ -166,6 +232,9 @@ func Load(path string, secrets secret.Source) (*Set, error) {
 	}
 	if info.Mode().Perm()&0o022 != 0 {
 		return nil, fmt.Errorf("connections file %s: must not be writable by group or others (mode %04o)", path, info.Mode().Perm())
+	}
+	if err := o.trust(abs, info); err != nil {
+		return nil, fmt.Errorf("connections file %s: %w", path, err)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
 	if err != nil {

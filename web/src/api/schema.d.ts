@@ -1593,7 +1593,8 @@ export interface paths {
          *     `X-Hub-Signature-256` header authenticates the request and no token is
          *     needed; otherwise an `admin` or `ingest` token is required. Other events
          *     are acknowledged and ignored. The name `github` is reserved: a
-         *     `trigger.webhook` node cannot be reached under it.
+         *     `trigger.webhook` node cannot be reached under it. Until LCM has
+         *     recovered after a start, pushes are refused with 503 and `Retry-After`.
          */
         post: operations["githubPush"];
         delete?: never;
@@ -1618,7 +1619,8 @@ export interface paths {
          *     (default `X-Hub-Signature-256`) and then needs no token; a listener without
          *     one requires an `admin` or `ingest` token. Callers without a token cannot
          *     tell an unknown name from a bad signature. Bodies larger than 128 KiB are
-         *     refused.
+         *     refused. Until LCM has recovered after a start, deliveries are refused
+         *     with 503 and `Retry-After`.
          */
         post: operations["deliverWebhook"];
         delete?: never;
@@ -2055,6 +2057,8 @@ export interface components {
             minute: number;
         };
         SecurityHostStatus: {
+            /** @description False when this LCM has no security host Machine (LCM_SECURITY_MACHINE_ID); every capability is then disabled and nothing changes until the configuration does, so clients need not poll. */
+            configured: boolean;
             available: boolean;
             reason: string;
             machineId: string;
@@ -3524,7 +3528,7 @@ export interface components {
             type: "xiaomi";
             /** @description Write actions resources may perform through the connection; others are refused. */
             allowActions: string[];
-            /** @description Resource names that may use the connection; empty allows all. */
+            /** @description Resource names that may use the connection; empty allows none. */
             allowResources: string[];
             /** @description Managed and retired resources whose document names the connection. */
             resources: string[];
@@ -6384,6 +6388,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             413: components["responses"]["TooLarge"];
+            503: components["responses"]["Unavailable"];
         };
     };
     deliverWebhook: {
@@ -6416,6 +6421,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             413: components["responses"]["TooLarge"];
+            503: components["responses"]["Unavailable"];
         };
     };
     streamEvents: {

@@ -71,6 +71,7 @@ type options struct {
 	runner          execx.Runner
 	client          *http.Client
 	git             trigger.GitRunner
+	connectionTrust connection.TrustCheck
 
 	observers []engine.Observer
 }
@@ -106,6 +107,12 @@ func WithHTTPClient(c *http.Client) Option { return func(o *options) { o.client 
 
 // WithGitRunner replaces the git remote reader of trigger.git.
 func WithGitRunner(g trigger.GitRunner) Option { return func(o *options) { o.git = g } }
+
+// WithConnectionsTrust replaces the root ownership check of the
+// connections file, for tests that cannot create root-owned files.
+func WithConnectionsTrust(c connection.TrustCheck) Option {
+	return func(o *options) { o.connectionTrust = c }
+}
 
 // WithObservers adds engine observers next to the ones the app installs.
 func WithObservers(obs ...engine.Observer) Option {
@@ -252,10 +259,15 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Bus = signal.NewBus(log.With("component", "signal"), clk.Now)
 	a.Events = events.NewHub(log.With("component", "events"), clk.Now)
 	a.Events.FollowBus(a.Bus)
-	a.Secrets = secret.New(cfg.SecretsPath(), secret.WithLogger(log.With("component", "secret")))
+	// Strict: a secret file other users can read is refused, not used.
+	a.Secrets = secret.New(cfg.SecretsPath(), secret.WithStrict(), secret.WithLogger(log.With("component", "secret")))
 	// Connections are host configuration: a broken file or an unresolvable
 	// password secret stops the server instead of failing later.
-	if a.Connections, err = connection.Load(cfg.ConnectionsFile, a.Secrets); err != nil {
+	var connOpts []connection.LoadOption
+	if o.connectionTrust != nil {
+		connOpts = append(connOpts, connection.WithTrustCheck(o.connectionTrust))
+	}
+	if a.Connections, err = connection.Load(cfg.ConnectionsFile, a.Secrets, connOpts...); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	a.State = state.New(a.DB, state.WithClock(clk.Now))
@@ -435,7 +447,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	}
 	git := o.git
 	if git == nil {
-		git = trigger.ExecGit{Binary: cfg.Git}
+		git = trigger.ExecGit{Binary: cfg.Git, Runner: o.runner, Clock: clk}
 	}
 	a.Triggers, err = trigger.NewManager(trigger.Config{
 		Engine: a.Engine, DB: a.DB, Bus: a.Bus, Clock: clk, Git: git, Secrets: a.Secrets,
@@ -480,16 +492,21 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		a.automationOnce.Do(func() { close(a.automationReady) })
 	}
 
+	proxies, err := cfg.TrustedProxyPrefixes()
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
 	info := buildinfo.Get()
 	a.api = api.New(api.Deps{
-		Machines:      a.Machines,
-		Connections:   a.Connections,
-		Resources:     a.Resources,
-		ResourceTypes: resourceTypes,
-		Security:      a.Security,
-		SecurityHost:  a.SecurityHost,
-		DB:            a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
-		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now,
+		TrustedProxies: proxies,
+		Machines:       a.Machines,
+		Connections:    a.Connections,
+		Resources:      a.Resources,
+		ResourceTypes:  resourceTypes,
+		Security:       a.Security,
+		SecurityHost:   a.SecurityHost,
+		DB:             a.DB, Auth: a.Auth, Audit: a.Audit, Logger: log,
+		Version: info.Version, CookieSecure: cfg.CookieSecure, Now: clk.Now, Clock: clk,
 		Catalog: a.Catalog, Manager: a.Manager, Monitor: a.Monitor, Engine: a.Engine, Triggers: a.Triggers,
 		Modules: a.Modules, State: a.State, Locks: a.Locks, Registry: a.Registry, Secrets: a.Secrets,
 		ConfigSync: a.ConfigSync, Events: a.Events, Context: a.ctx, GitHubWebhookSecret: cfg.GitHubWebhookSecret,

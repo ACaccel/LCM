@@ -162,6 +162,12 @@ func TestConfigSourceEndpoints(t *testing.T) {
 	x.call("POST", v1+"/config/sources", map[string]any{"name": "b", "repo": "x", "interval": "1s"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	//nolint:gosec // fixture for the rejected credentials-in-URL case
 	x.call("POST", v1+"/config/sources", map[string]any{"name": "b", "repo": "https://u:p@example.com/r"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	// A token alone in the userinfo is as secret as a password.
+	for _, repo := range []string{"https://tok@example.com/x", "http://tok@example.com/x", "ssh://alice:pw@example.com/x", "git://tok@example.com/x"} {
+		x.call("POST", v1+"/config/sources", map[string]any{"name": "b", "repo": repo}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	}
+	x.call("POST", v1+"/config/sources", map[string]any{"name": "ssh-url", "repo": "ssh://git@example.com/o/r.git"}).want(http.StatusCreated)
+	x.call("DELETE", v1+"/config/sources/ssh-url", nil).want(http.StatusNoContent)
 	x.call("POST", v1+"/config/sources", map[string]any{"name": "b", "repo": "x", "bogus": 1}).wantError(http.StatusBadRequest, "bad_request")
 
 	if got := x.call("GET", v1+"/config/sources", nil).want(http.StatusOK).items(); len(got) != 1 || got[0]["name"] != "infra" {

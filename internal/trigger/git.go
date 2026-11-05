@@ -1,15 +1,15 @@
 package trigger
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ACaccel/lcm/internal/clock"
+	"github.com/ACaccel/lcm/internal/execx"
 )
 
 // GitRunner reads the head of a remote branch. It sits behind an interface
@@ -23,56 +23,66 @@ type GitRunner interface {
 // ErrBranchNotFound is returned when the remote has no such branch.
 var ErrBranchNotFound = errors.New("trigger: branch not found on remote")
 
-// ExecGit runs `git ls-remote`. The zero value uses "git" from PATH and a
-// 30 second timeout per call.
+// ExecGit runs `git ls-remote` through an execx.Runner, so that git gets the
+// fixed environment of execx.GitEnv and none of LCM's own variables. The
+// zero value uses "git" from PATH, a real runner and clock, and a 30 second
+// timeout per call.
 type ExecGit struct {
+	Runner  execx.Runner
+	Clock   clock.Clock
 	Binary  string
 	Timeout time.Duration
 }
 
+// ErrGitTimeout is the cause of an ls-remote stopped by ExecGit.Timeout.
+var ErrGitTimeout = errors.New("trigger: git ls-remote timed out")
+
+// maxLsRemoteOutput bounds the captured output of one ls-remote; it names a
+// single ref, so anything larger is an error message.
+const maxLsRemoteOutput = 64 << 10
+
 // RemoteHead implements GitRunner.
 func (g ExecGit) RemoteHead(ctx context.Context, repo, branch string) (string, error) {
-	bin, timeout := g.Binary, g.Timeout
+	bin, timeout, runner, clk := g.Binary, g.Timeout, g.Runner, g.Clock
 	if bin == "" {
 		bin = "git"
 	}
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	if runner == nil {
+		runner = execx.New()
+	}
+	if clk == nil {
+		clk = clock.Real()
+	}
+	ctx, cancel := clock.WithTimeoutCause(ctx, clk, timeout, ErrGitTimeout)
 	defer cancel()
 
 	ref := "refs/heads/" + branch
 	// "--" keeps a repo value from being read as an option.
-	cmd := exec.CommandContext(ctx, bin, "ls-remote", "--", repo, ref) //nolint:gosec // repo and branch are validated policy props passed as arguments, not through a shell
-	cmd.Env = gitEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	cmd.WaitDelay = 2 * time.Second
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if len(msg) > 300 {
-			msg = msg[:300]
+	res, err := runner.Run(ctx, execx.Cmd{
+		Argv: []string{bin, "ls-remote", "--", repo, ref}, Env: execx.GitEnv(), MaxOutput: maxLsRemoteOutput,
+	})
+	if err != nil {
+		if cause := context.Cause(ctx); errors.Is(cause, ErrGitTimeout) {
+			return "", fmt.Errorf("git ls-remote %s: %w", ref, cause)
 		}
-		return "", fmt.Errorf("git ls-remote %s: %w: %s", ref, err, msg)
+		// Both the error (which quotes the command) and git's output may
+		// contain the repository URL, so neither is passed on unredacted.
+		msg := strings.TrimSpace(execx.RedactURLs(res.Output))
+		if len(msg) > 300 {
+			msg = msg[len(msg)-300:]
+		}
+		return "", fmt.Errorf("git ls-remote %s: %s: %s", ref, execx.RedactURLs(err.Error()), msg)
 	}
-	for line := range strings.SplitSeq(stdout.String(), "\n") {
+	for line := range strings.SplitSeq(res.Output, "\n") {
 		sha, name, ok := strings.Cut(strings.TrimSpace(line), "\t")
 		if ok && name == ref && sha != "" {
 			return sha, nil
 		}
 	}
 	return "", fmt.Errorf("%w: %s", ErrBranchNotFound, branch)
-}
-
-// gitEnv never prompts, and allows only protocols that cannot run commands
-// (the ext:: transport can).
-func gitEnv() []string {
-	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ALLOW_PROTOCOL=file:git:http:https:ssh")
-	if os.Getenv("GIT_SSH_COMMAND") == "" {
-		env = append(env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
-	}
-	return env
 }
 
 type gitWatcher struct {
@@ -168,6 +178,9 @@ func (w *gitWatcher) observe(ctx context.Context, sha string) {
 func (m *Manager) NotifyPush(ctx context.Context, repo, branch, sha string) (int, error) {
 	if sha == "" {
 		return 0, errors.New("trigger: empty commit id")
+	}
+	if !m.synced.Load() {
+		return 0, ErrNotReady
 	}
 	if err := m.Sync(ctx); err != nil {
 		return 0, err

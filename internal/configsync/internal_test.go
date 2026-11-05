@@ -129,3 +129,16 @@ spec:
 		}
 	}
 }
+
+func TestDisplayRepoHidesStoredCredentials(t *testing.T) {
+	for repo, want := range map[string]string{
+		"https://tok@example.com/x": "https://example.com/x",
+		"ssh://git@example.com/x":   "ssh://git@example.com/x",
+		"git@example.com:o/x.git":   "git@example.com:o/x.git",
+		"https://example.com/x":     "https://example.com/x",
+	} {
+		if got := (Source{Repo: repo}).DisplayRepo(); got != want {
+			t.Errorf("DisplayRepo(%q) = %q, want %q", repo, got, want)
+		}
+	}
+}

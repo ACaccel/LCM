@@ -34,7 +34,7 @@ func writeConnections(t *testing.T, url, extra string) (secrets, file string) {
 		t.Fatal(err)
 	}
 	file = filepath.Join(dir, "connections.yaml")
-	doc := "connections:\n  - name: home\n    type: xiaomi\n    url: " + url + "\n    passwordSecret: router-password\n    allowActions: [reboot]\n" + extra
+	doc := "connections:\n  - name: home\n    type: xiaomi\n    url: " + url + "\n    passwordSecret: router-password\n    allowActions: [reboot]\n    allowResources: [gateway]\n" + extra
 	if err := os.WriteFile(file, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -197,13 +197,34 @@ func TestNewRejectsInvalidConnections(t *testing.T) {
 	cfg.DataDir = filepath.Join(t.TempDir(), "d")
 	cfg.Listen = "127.0.0.1:0"
 	cfg.SecretsDir, cfg.ConnectionsFile = secrets, file
-	_, err := app.New(context.Background(), cfg, app.WithLogger(testLogger(t)))
+	trust := app.WithConnectionsTrust(trustTestFile)
+	_, err := app.New(context.Background(), cfg, app.WithLogger(testLogger(t)), trust)
 	if err == nil || !strings.Contains(err.Error(), "credentials") || strings.Contains(err.Error(), "pw@") {
 		t.Fatalf("err = %v", err)
 	}
 	_, file = writeConnections(t, "http://192.0.2.1", "")
 	cfg.SecretsDir, cfg.ConnectionsFile = t.TempDir(), file
-	if _, err := app.New(context.Background(), cfg, app.WithLogger(testLogger(t))); err == nil || !strings.Contains(err.Error(), "cannot be resolved") {
+	if _, err := app.New(context.Background(), cfg, app.WithLogger(testLogger(t)), trust); err == nil || !strings.Contains(err.Error(), "cannot be resolved") {
+		t.Fatalf("err = %v", err)
+	}
+	// A password secret that other users can read is refused, not used.
+	secrets, file = writeConnections(t, "http://192.0.2.1", "")
+	if err := os.Chmod(filepath.Join(secrets, "router-password"), 0o640); err != nil { //nolint:gosec // the test checks that a group-readable secret is refused
+		t.Fatal(err)
+	}
+	cfg.SecretsDir, cfg.ConnectionsFile = secrets, file
+	if _, err := app.New(context.Background(), cfg, app.WithLogger(testLogger(t)), trust); err == nil || !strings.Contains(err.Error(), "cannot be resolved") {
+		t.Fatalf("err = %v", err)
+	}
+	// Without the test override, a file the LCM account could rewrite stops
+	// startup.
+	secrets, file = writeConnections(t, "http://192.0.2.1", "")
+	cfg.SecretsDir, cfg.ConnectionsFile = secrets, file
+	if _, err := app.New(context.Background(), cfg, app.WithLogger(testLogger(t))); err == nil || !strings.Contains(err.Error(), "connections file") {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// trustTestFile stands in for the root ownership check of the connections
+// file, which files created by tests cannot pass.
+func trustTestFile(string, os.FileInfo) error { return nil }

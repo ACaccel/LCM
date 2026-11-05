@@ -37,7 +37,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if retry, blocked := s.limiter.blocked(ip); blocked {
 		s.log.Warn("login rate limited", "ip", ip, "request_id", requestID(r.Context()))
 		secs := int(retry.Seconds()) + 1

@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/secret"
 )
@@ -99,6 +101,35 @@ func TestEmptyAndDirectory(t *testing.T) {
 	}
 	if _, err := r.Get("sub"); err == nil {
 		t.Fatal("directory accepted")
+	}
+}
+
+func TestSymlinkAndFIFOAreRefused(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(outside, []byte("not a secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := secret.New(dir, secret.WithLookupEnv(noEnv))
+	if v, err := r.Get("link"); err == nil || v.Reveal() != "" {
+		t.Fatalf("symlink followed: %v", err)
+	}
+	// Without O_NONBLOCK, opening a FIFO with no writer blocks forever.
+	done := make(chan error, 1)
+	go func() { _, err := r.Get("fifo"); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("fifo: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a FIFO secret blocked")
 	}
 }
 

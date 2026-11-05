@@ -38,12 +38,36 @@ ACTIONS = ('aide.check', 'aide.schedule', 'nginx.configure', 'audit.profile', 'a
 CATEGORIES = ('auth', 'api', 'upload', 'socket')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'}
 MAX_JSON = 65536
+# Time budget: one fixed command may take STEP_SECONDS, the request
+# WORK_SECONDS, and a rollback gets a fresh ROLLBACK_SECONDS. The longest
+# step sequences (four for nginx.configure, two for its rollback) fit inside
+# their budgets, and both budgets together stay below the 45 second limit of
+# the Go client (internal/securityhost/runner.go), so the helper always
+# finishes and records its outcome before LCM gives up on it.
+STEP_SECONDS = 5
+WORK_SECONDS = 25
+ROLLBACK_SECONDS = 12
 
 
 class Failure(Exception):
     def __init__(self, code='unavailable'):
         self.code = code
         super().__init__(code)
+
+
+class Deadline(Failure):
+    """Raised by SIGALRM so that a stuck request unwinds through rollback."""
+
+
+def on_alarm(signum, frame):
+    raise Deadline()
+
+
+def arm_deadline(seconds):
+    # The default SIGALRM action kills the process, which would leave
+    # root-owned files half changed with no rollback and no journal update.
+    signal.signal(signal.SIGALRM, on_alarm)
+    signal.alarm(seconds)
 
 
 def stamp():
@@ -114,7 +138,7 @@ def atomic(path, value, mode=0o600):
             os.unlink(temporary)
 
 
-def run(argv, timeout=20, account=None):
+def run(argv, timeout=STEP_SECONDS, account=None):
     kwargs = {}
     if account is not None:
         kwargs = {'user': account.pw_uid, 'group': account.pw_gid, 'extra_groups': ()}
@@ -637,6 +661,9 @@ class Controls:
             if Controls().drift:
                 raise Failure()
         except BaseException:
+            # The failure may be the request deadline itself, so the rollback
+            # gets its own bounded budget instead of whatever time is left.
+            arm_deadline(ROLLBACK_SECONDS)
             rollback_ok = True
             try:
                 for path in written:
@@ -659,6 +686,7 @@ class Controls:
                     sync_optional_audit(before[str(AUDIT_OPTIONAL)] or b'', journal['auditForeignBefore'])
             except (OSError, Failure, subprocess.SubprocessError):
                 rollback_ok = False
+            signal.alarm(0)
             journal['rollbackVerified'] = rollback_ok
             atomic(journal_path, canonical(journal))
             if not rollback_ok:
@@ -696,7 +724,7 @@ def main():
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-    signal.alarm(40)
+    arm_deadline(WORK_SECONDS)
     if os.geteuid() != 0 or len(sys.argv) != 1:
         raise Failure()
     trusted(Path(__file__))

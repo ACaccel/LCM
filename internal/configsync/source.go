@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/ACaccel/lcm/internal/audit"
+	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
 )
 
@@ -31,9 +32,6 @@ var (
 	// digit and has no separators.
 	sourceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	branchRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
-	// urlPassword matches credentials embedded in a URL.
-	urlPassword = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://[^/@]*:[^/@]*@`)
-	urlUserinfo = regexp.MustCompile(`(://)[^/@\s]+@`)
 )
 
 // Source is a registered repository location that LCM pulls documents from.
@@ -76,8 +74,8 @@ func (src *Source) normalize() error {
 		bad("repo", "must not contain control characters")
 	case strings.Contains(repo, "::"):
 		bad("repo", "remote helpers (transport::address) are not supported")
-	case urlPassword.MatchString(repo):
-		bad("repo", "must not embed a password; use an SSH key or a git credential helper")
+	case execx.CheckGitRemote(repo) != nil:
+		bad("repo", execx.ErrGitCredentials.Error())
 	}
 	if src.Branch == "" {
 		src.Branch = "main"
@@ -291,8 +289,17 @@ func b2i(b bool) int {
 	return 0
 }
 
+// DisplayRepo returns the repository URL safe to show: a source stored
+// before credentials in URLs were refused has its userinfo removed.
+func (src Source) DisplayRepo() string {
+	if execx.CheckGitRemote(src.Repo) != nil {
+		return redact(src.Repo)
+	}
+	return src.Repo
+}
+
 // redact removes credentials from text that may quote a repository URL.
-func redact(s string) string { return urlUserinfo.ReplaceAllString(s, "$1") }
+func redact(s string) string { return execx.RedactURLs(s) }
 
 func (s *Syncer) dbExec(ctx context.Context, query string, args ...any) error {
 	return s.db.Write(ctx, func(tx *sql.Tx) error {

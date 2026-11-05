@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -21,6 +22,13 @@ import (
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$`)
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// applyTimeout bounds an apply once it is detached from its caller: the
+// helper's own limit plus time to store and audit the outcome.
+const applyTimeout = helperTimeout + 15*time.Second
+
+var errApplyTimeout = errors.New("securityhost: apply timed out")
+
 var actions = []string{"aide.check", "aide.schedule", "nginx.configure", "audit.profile", "aide.profile", "baseline.request"}
 
 // Client persists administrator intent separately from the root helper journal.
@@ -45,13 +53,28 @@ func New(cfg Config) (*Client, error) {
 func (c *Client) Status(ctx context.Context) (HostStatus, error) {
 	reply, err := c.run(ctx, Request{Command: "status"})
 	if err != nil || reply.Status == nil || reply.Status.MachineID != c.cfg.MachineID {
-		out := HostStatus{MachineID: c.cfg.MachineID, Reason: "Restricted host helper unavailable or incompatible; host controls are read-only.", Capabilities: []Capability{}, AIDE: AIDEStatus{Profiles: []Profile{}}, Audit: AuditStatus{Profiles: []Profile{}}, Nginx: NginxStatus{DryRunOnly: true, Limits: []Limit{}}, Collector: CollectorStatus{Health: map[string]any{}}}
-		for _, action := range actions {
-			out.Capabilities = append(out.Capabilities, Capability{Action: action, Reason: out.Reason})
-		}
+		out := readOnlyStatus(c.cfg.MachineID, "Restricted host helper unavailable or incompatible; host controls are read-only.")
+		out.Configured = true
 		return out, nil
 	}
-	return *reply.Status, nil
+	out := *reply.Status
+	out.Configured = true
+	return out, nil
+}
+
+// Unconfigured is the status of an LCM without a security host Machine:
+// there is nothing to poll, and every control is disabled with the reason.
+func Unconfigured() HostStatus {
+	return readOnlyStatus("", "Security host controls are not configured on this LCM (LCM_SECURITY_MACHINE_ID is not set).")
+}
+
+// readOnlyStatus reports no measurements and disables every action.
+func readOnlyStatus(machineID, reason string) HostStatus {
+	out := HostStatus{MachineID: machineID, Reason: reason, Capabilities: []Capability{}, AIDE: AIDEStatus{Profiles: []Profile{}}, Audit: AuditStatus{Profiles: []Profile{}}, Nginx: NginxStatus{DryRunOnly: true, Limits: []Limit{}}, Collector: CollectorStatus{Health: map[string]any{}}}
+	for _, action := range actions {
+		out.Capabilities = append(out.Capabilities, Capability{Action: action, Reason: reason})
+	}
+	return out
 }
 
 func (c *Client) run(ctx context.Context, r Request) (Response, error) {
@@ -183,6 +206,15 @@ func (c *Client) Apply(ctx context.Context, in ApplyRequest) (Operation, error) 
 	if !c.cfg.Clock.Now().Before(preview.ExpiresAt) {
 		return Operation{}, ErrConflict
 	}
+	details := map[string]any{"action": op.Action, "reason": in.Reason, "previewHash": in.PreviewHash}
+	if err = c.cfg.Audit.Record(ctx, "security.host.apply.start", op.ID, audit.OutcomeOK, details); err != nil {
+		return Operation{}, err
+	}
+	// The root helper may change the host as soon as it has the request, so
+	// from here on its outcome is stored and audited even if the caller goes
+	// away; the bound covers the helper and the bookkeeping after it.
+	ctx, cancel := clock.WithTimeoutCause(context.WithoutCancel(ctx), c.cfg.Clock, applyTimeout, errApplyTimeout)
+	defer cancel()
 	op.State = "running"
 	op.UpdatedAt = c.cfg.Clock.Now().UTC()
 	if err = c.save(ctx, op); err != nil {

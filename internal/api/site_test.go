@@ -61,7 +61,20 @@ func (g *fakeGit) set(repo, branch, sha string) {
 	g.heads[repo+"#"+branch] = sha
 }
 
+// newSite returns a site whose trigger manager has started, as it has in
+// a running server once recovery is done.
 func newSite(t *testing.T, configure ...func(*config.Config)) *site {
+	t.Helper()
+	x := newSiteBeforeStart(t, configure...)
+	if err := x.app.Triggers.Sync(x.ctx); err != nil {
+		t.Fatal(err)
+	}
+	return x
+}
+
+// newSiteBeforeStart returns a site whose background loops have not
+// started, like a server that is still recovering.
+func newSiteBeforeStart(t *testing.T, configure ...func(*config.Config)) *site {
 	t.Helper()
 	x := &site{
 		t: t, clk: clock.NewFake(epoch), runner: &execx.Fake{}, git: &fakeGit{heads: map[string]string{}},
@@ -77,6 +90,8 @@ func newSite(t *testing.T, configure ...func(*config.Config)) *site {
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(x.ctx, cfg,
 		app.WithClock(x.clk), app.WithRunner(x.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client), app.WithGitRunner(x.git),
+		// Test files belong to the test user, not root.
+		app.WithConnectionsTrust(func(string, os.FileInfo) error { return nil }),
 		app.WithLogger(slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelWarn}))))
 	if err != nil {
 		t.Fatalf("app.New: %v", err)

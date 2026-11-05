@@ -173,8 +173,15 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 
 // Session resolves a session token to its user.
 func (s *Service) Session(ctx context.Context, token string) (User, error) {
+	u, _, err := s.SessionExpiry(ctx, token)
+	return u, err
+}
+
+// SessionExpiry is Session that also returns when the session expires, so
+// that long-lived connections can end with it.
+func (s *Service) SessionExpiry(ctx context.Context, token string) (User, time.Time, error) {
 	if token == "" {
-		return User{}, ErrUnauthenticated
+		return User{}, time.Time{}, ErrUnauthenticated
 	}
 	var (
 		u       User
@@ -185,15 +192,16 @@ func (s *Service) Session(ctx context.Context, token string) (User, error) {
 		   FROM sessions s JOIN users u ON u.id = s.user_id
 		  WHERE s.token_hash = ?`, hashToken(token)).Scan(&u.ID, &u.Username, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, ErrUnauthenticated
+		return User{}, time.Time{}, ErrUnauthenticated
 	}
 	if err != nil {
-		return User{}, fmt.Errorf("auth: look up session: %w", err)
+		return User{}, time.Time{}, fmt.Errorf("auth: look up session: %w", err)
 	}
-	if !s.now().Before(time.UnixMilli(expires)) {
-		return User{}, ErrUnauthenticated
+	until := time.UnixMilli(expires)
+	if !s.now().Before(until) {
+		return User{}, time.Time{}, ErrUnauthenticated
 	}
-	return u, nil
+	return u, until, nil
 }
 
 // Logout deletes the session. Unknown tokens are ignored.

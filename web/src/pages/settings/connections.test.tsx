@@ -27,7 +27,7 @@ describe("connections", () => {
     );
     expect(await screen.findByText("home-router")).toBeTruthy();
     expect(screen.getByText("reboot")).toBeTruthy();
-    expect(screen.getByText("全部資源")).toBeTruthy();
+    expect(screen.getByText("不允許任何資源")).toBeTruthy();
     expect(screen.getByRole("link", { name: "gateway" }).getAttribute("href")).toBe("/resources/gateway");
     expect(screen.getByText("不允許寫入")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();

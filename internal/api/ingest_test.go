@@ -160,3 +160,26 @@ func TestGitHubWithoutConfiguredSecretNeedsToken(t *testing.T) {
 		wantError(http.StatusUnauthorized, "unauthenticated")
 	x.call("POST", v1+"/hooks/github", body, h, bearer(x.ingest)).want(http.StatusAccepted)
 }
+
+// Until recovery has finished, a push or webhook must not start watchers or
+// runs; the sender is told to retry.
+func TestHooksWaitForStart(t *testing.T) {
+	x := newSiteBeforeStart(t)
+	const repo = "https://github.com/acme/app.git"
+	x.call("PUT", v1+"/policies/on-push", policyDoc("on-push", "    - { id: git, type: trigger.git, props: { repo: \""+repo+"\", branch: main, interval: 1h }, next: { out: [echo] } }\n"+
+		"    - { id: echo, type: data.set, props: { values: { commit: \"{{ trigger.commit }}\" } } }\n"), yamlBody()).want(http.StatusCreated)
+	x.call("PUT", v1+"/policies/open", webhookPolicy("open", "open-hook", false), yamlBody()).want(http.StatusCreated)
+	body := []byte(`{"ref":"refs/heads/main","after":"abc1234","repository":{"clone_url":"` + repo + `"}}`)
+	r := x.call("POST", v1+"/hooks/github", body, header("X-GitHub-Event", "push"), bearer(x.ingest))
+	r.wantError(http.StatusServiceUnavailable, "unavailable")
+	if r.Head.Get("Retry-After") == "" {
+		t.Fatal("no Retry-After")
+	}
+	x.call("POST", v1+"/hooks/open-hook", "{}", bearer(x.ingest)).wantError(http.StatusServiceUnavailable, "unavailable")
+	if n := x.app.Triggers.Watching(); n != 0 {
+		t.Fatalf("watchers before start = %d", n)
+	}
+	if runs := x.call("GET", v1+"/runs", nil).want(http.StatusOK).items(); len(runs) != 0 {
+		t.Fatalf("runs before start = %v", runs)
+	}
+}

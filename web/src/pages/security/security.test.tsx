@@ -4,9 +4,10 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hostStatusQuery } from "../../api/security";
 import type { HostStatus, Incident, SecuritySettings, TrafficPoint } from "../../api/security";
 import { SecurityIncidents, HandlingForm } from "./incidents";
-import { ProfileForm, ScheduleForm } from "./controls";
+import { ProfileForm, ScheduleForm, SecurityChecks } from "./controls";
 import { HostActions } from "./host-actions";
 import { NotificationTest, SettingsForm, SettingsHistory } from "./notifications";
 import { trafficSegments, trafficTotals, TrafficDisplay } from "./traffic";
@@ -15,7 +16,7 @@ import { sec } from "./strings";
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const incident: Incident = { seq: 1, id: "incident-1", machineId: "machine-1", service: "", source: "aide", fingerprint: "aide-change", state: "firing", severity: "warning", summary: "Integrity differs", openedAt: "2026-11-02T01:00:00Z", observedAt: "2026-11-02T01:01:00Z", updatedAt: "2026-11-02T01:01:00Z", occurrences: 2, revision: 2, delivery: "sent", lastError: "", handling: { version: 0, acknowledged: false, note: "", silenceUntil: null, updatedAt: null, updatedBy: "" } };
 const settings: SecuritySettings = { version: 3, notificationsEnabled: true, cooldownSeconds: 900, minimumSeverity: "info", rootEnabled: true, notificationConfigured: true, maxSilenceSeconds: 86400 };
-const host: HostStatus = { available: true, reason: "", machineId: "machine-1", effectiveDigest: "digest-1", capabilities: [{ action: "aide.schedule", enabled: true, reason: "" }, { action: "audit.profile", enabled: true, reason: "" }, { action: "aide.check", enabled: true, reason: "" }], aide: { targets: null, result: "clean", lastRunAt: null, nextRunAt: null, baselineCreatedAt: null, baselineDigest: null, schedule: { hour: 4, minute: 20 }, profiles: [], reportSummary: null }, audit: { enabled: 1, lost: 0, backlog: 0, rulesLoaded: true, profiles: [{ name: "core", enabled: true, required: true }, { name: "optional", enabled: true, required: false }] }, nginx: { mode: null, dryRunOnly: true, r11Approved: false, limits: [] }, collector: { observedAt: null, lastDelivery: null, queued: null, dropped: null, deliveryError: null, health: {} } };
+const host: HostStatus = { configured: true, available: true, reason: "", machineId: "machine-1", effectiveDigest: "digest-1", capabilities: [{ action: "aide.schedule", enabled: true, reason: "" }, { action: "audit.profile", enabled: true, reason: "" }, { action: "aide.check", enabled: true, reason: "" }], aide: { targets: null, result: "clean", lastRunAt: null, nextRunAt: null, baselineCreatedAt: null, baselineDigest: null, schedule: { hour: 4, minute: 20 }, profiles: [], reportSummary: null }, audit: { enabled: 1, lost: 0, backlog: 0, rulesLoaded: true, profiles: [{ name: "core", enabled: true, required: true }, { name: "optional", enabled: true, required: false }] }, nginx: { mode: null, dryRunOnly: true, r11Approved: false, limits: [] }, collector: { observedAt: null, lastDelivery: null, queued: null, dropped: null, deliveryError: null, health: {} } };
 function wrap(node: ReactNode, initial = "/security/incidents") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return <QueryClientProvider client={qc}><MemoryRouter initialEntries={[initial]}>{node}</MemoryRouter></QueryClientProvider>;
@@ -115,6 +116,18 @@ describe("notification operations", () => {
 });
 
 describe("host controls", () => {
+  it("shows setup guidance for an unconfigured host and stops polling it", async () => {
+    const unconfigured: HostStatus = { ...host, configured: false, available: false, machineId: "", reason: "not configured" };
+    const fetch = vi.fn(async () => json(unconfigured)); vi.stubGlobal("fetch", fetch);
+    render(wrap(<SecurityChecks />));
+    expect(await screen.findByText(sec.hostNotConfigured)).toBeTruthy();
+    expect(screen.getByRole("link", { name: sec.hostSetupLink }).getAttribute("href")).toContain("docs/operations.md");
+    expect(screen.queryByRole("button", { name: sec.scheduleAction })).toBeNull();
+    const interval = hostStatusQuery().refetchInterval as (query: { state: { data?: HostStatus } }) => number | false;
+    expect(interval({ state: { data: unconfigured } })).toBe(false);
+    expect(interval({ state: { data: host } })).toBeGreaterThan(0);
+    expect(interval({ state: {} })).toBeGreaterThan(0);
+  });
   it("shows helper absence as read-only and never sends a scan", () => {
     const begin = vi.fn(); render(wrap(<ScheduleForm host={{ ...host, available: false, reason: "Helper not installed" }} begin={begin} />));
     expect(screen.getByText(/Helper not installed/)).toBeTruthy(); expect((screen.getByRole("button", { name: sec.scheduleAction }) as HTMLButtonElement).disabled).toBe(true); expect(begin).not.toHaveBeenCalled();

@@ -2,8 +2,10 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/audit"
+	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/events"
+	"github.com/ACaccel/lcm/internal/store/storetest"
 )
 
 // sseClient reads a server-sent event stream.
@@ -162,6 +168,101 @@ func TestEventStreamFiltersHeartbeatsAndEnds(t *testing.T) {
 	if n := hub.Subscribers(); n != 0 {
 		t.Fatalf("subscribers after disconnect = %d", n)
 	}
+}
+
+// clockStreamEnv is a stream environment whose API and auth service share a
+// fake clock.
+func clockStreamEnv(t *testing.T, heartbeat time.Duration) (*env, *clock.Fake, *httptest.Server) {
+	t.Helper()
+	clk := clock.NewFake(time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC))
+	hub := events.NewHub(nil, nil)
+	t.Cleanup(hub.Close)
+	db := storetest.Open(t)
+	svc, err := auth.NewService(db, time.Hour, auth.WithClock(clk.Now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetPassword(context.Background(), "admin", testPassword); err != nil {
+		t.Fatal(err)
+	}
+	d := Deps{
+		DB: db, Auth: svc, Audit: audit.New(db), Version: "test", Logger: slog.New(slog.DiscardHandler),
+		LoginFailDelay: time.Nanosecond, Clock: clk, Events: hub, EventHeartbeat: heartbeat,
+	}
+	srv := New(d)
+	e := &env{t: t, srv: srv, handler: srv.Handler(), auth: svc, audit: d.Audit, logs: &bytes.Buffer{}}
+	hs := httptest.NewServer(e.handler)
+	t.Cleanup(hs.Close)
+	return e, clk, hs
+}
+
+// waitEnd reads until the server closes the stream.
+func (c *sseClient) waitEnd() {
+	c.t.Helper()
+	for {
+		select {
+		case _, ok := <-c.lines:
+			if !ok {
+				return
+			}
+		case <-time.After(10 * time.Second):
+			c.t.Fatal("stream still open")
+		}
+	}
+}
+
+func TestEventStreamEndsWhenTokenIsRevoked(t *testing.T) {
+	e, clk, hs := clockStreamEnv(t, time.Minute)
+	tok, secret, err := e.auth.CreateToken(t.Context(), "console", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := http.Header{}
+	h.Set("Authorization", "Bearer "+secret)
+	c := openStream(t, hs.URL+"/api/v1/events", h)
+	if l := c.line(); l != ": connected" {
+		t.Fatalf("first line = %q", l)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := clk.WaitForTimers(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	// A valid credential keeps the stream open across a heartbeat.
+	clk.Advance(time.Minute)
+	if l := c.line(); l != "" {
+		t.Fatalf("line = %q, want the end of the connected comment", l)
+	}
+	if l := c.line(); l != ": heartbeat" {
+		t.Fatalf("line = %q, want heartbeat", l)
+	}
+	if err := clk.WaitForTimers(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.auth.RevokeToken(t.Context(), tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Minute)
+	c.waitEnd()
+}
+
+func TestEventStreamEndsWithSession(t *testing.T) {
+	e, clk, hs := clockStreamEnv(t, 24*time.Hour)
+	cookie := e.login()
+	h := http.Header{}
+	h.Set("Cookie", cookie.Name+"="+cookie.Value)
+	c := openStream(t, hs.URL+"/api/v1/events", h)
+	if l := c.line(); l != ": connected" {
+		t.Fatalf("first line = %q", l)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	// The session expiry and the heartbeat.
+	if err := clk.WaitForTimers(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	clk.Advance(time.Hour)
+	c.waitEnd()
 }
 
 // blockedWriter is a response writer whose Write blocks until released, as

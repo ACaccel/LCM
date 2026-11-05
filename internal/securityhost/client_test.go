@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,12 +23,17 @@ type fakeRunner struct {
 	digest        string
 	operations    map[string]Operation
 	now           time.Time
+	// onApply runs while the helper holds an apply request.
+	onApply func()
 }
 
 func (f *fakeRunner) Run(_ context.Context, r Request) (Response, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r.Command)
+	if r.Command == "apply" && f.onApply != nil {
+		f.onApply()
+	}
 	if f.fail {
 		return Response{}, errors.New("local secret must never escape")
 	}
@@ -79,11 +85,22 @@ func prepare(t *testing.T, c *Client, ctx context.Context, id string) (PreviewRe
 	return r, p
 }
 
+func TestStatusReportsConfiguration(t *testing.T) {
+	c, _, _, ctx := fixture(t)
+	if s, err := c.Status(ctx); err != nil || !s.Configured || !s.Available {
+		t.Fatalf("status=%+v err=%v", s, err)
+	}
+	u := Unconfigured()
+	if u.Configured || u.Available || len(u.Capabilities) != len(actions) || u.Reason == "" {
+		t.Fatalf("unconfigured=%+v", u)
+	}
+}
+
 func TestUnavailableIsReadOnlyWithoutHelperErrors(t *testing.T) {
 	c, r, _, ctx := fixture(t)
 	r.fail = true
 	s, err := c.Status(ctx)
-	if err != nil || s.Available || len(s.Capabilities) != 6 || s.Reason == "local secret must never escape" {
+	if err != nil || s.Available || !s.Configured || len(s.Capabilities) != 6 || s.Reason == "local secret must never escape" {
 		t.Fatalf("status=%+v err=%v", s, err)
 	}
 	for _, capability := range s.Capabilities {
@@ -138,6 +155,37 @@ func TestApplyReplayQueriesInsteadOfStartingTwice(t *testing.T) {
 		t.Fatalf("privileged apply calls=%d", applies)
 	}
 }
+func TestApplyOutcomeSurvivesCallerCancellation(t *testing.T) {
+	c, r, _, base := fixture(t)
+	in, p := prepare(t, c, base, "one")
+	ctx, cancel := context.WithCancel(base)
+	defer cancel()
+	// The client disconnects while the root helper is already changing the host.
+	r.onApply = cancel
+	op, err := c.Apply(ctx, ApplyRequest{RequestID: in.RequestID, PreviewHash: p.PreviewHash, Reason: in.Reason})
+	if err != nil || op.State != "running" {
+		t.Fatalf("op=%+v err=%v", op, err)
+	}
+	stored, _, _, err := c.lookup(base, in.RequestID)
+	if err != nil || stored.State != "running" || stored.EffectiveDigest != r.digest {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+	entries, err := c.cfg.Audit.List(base, 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	for _, e := range entries {
+		if e.Target == in.RequestID {
+			actions = append(actions, e.Action)
+		}
+	}
+	slices.Sort(actions)
+	if want := []string{"security.host.apply", "security.host.apply.start", "security.host.preview"}; !slices.Equal(actions, want) {
+		t.Fatalf("audit actions=%v, want %v", actions, want)
+	}
+}
+
 func TestExpiredPreviewAndAnotherActorCannotApply(t *testing.T) {
 	c, _, clk, ctx := fixture(t)
 	in, p := prepare(t, c, ctx, "one")

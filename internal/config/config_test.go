@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -358,6 +359,25 @@ func TestConnectionsFile(t *testing.T) {
 	c, err = load(t, map[string]string{EnvConnectionsFile: "/etc/lcm/a.yaml"}, "--connections-file", "/etc/lcm/b.yaml")
 	if err != nil || c.ConnectionsFile != "/etc/lcm/b.yaml" {
 		t.Fatalf("flag: %q, %v", c.ConnectionsFile, err)
+	}
+}
+
+func TestTrustedProxies(t *testing.T) {
+	c, err := load(t, map[string]string{EnvTrustedProxies: "127.0.0.1/32, ::1, 10.1.2.3/8"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.TrustedProxyPrefixes()
+	if err != nil || fmt.Sprint(got) != "[127.0.0.1/32 ::1/128 10.0.0.0/8]" {
+		t.Fatalf("prefixes = %v, %v", got, err)
+	}
+	if c, err = load(t, nil, "--trusted-proxies", "192.168.0.0/16"); err != nil || len(c.TrustedProxies) != 1 {
+		t.Fatalf("flag: %v, %v", c.TrustedProxies, err)
+	}
+	for _, bad := range []string{"localhost", "10.0.0.0/33", "fe80::1%eth0"} {
+		if _, err := load(t, map[string]string{EnvTrustedProxies: bad}); err == nil || !strings.Contains(err.Error(), "trusted proxies") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
 	}
 }
 

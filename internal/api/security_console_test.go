@@ -85,3 +85,18 @@ func TestSecurityTrafficSeriesHTTPFiltersAndGaps(t *testing.T) {
 	x.call("GET", v1+"/security/traffic/series?bucketSeconds=1", nil).wantError(422, "validation_failed")
 	x.call("GET", v1+"/security/traffic?category=api&service=__unassigned__", nil).want(200)
 }
+
+func TestSecurityHostStatusWithoutMachineIsNotAnOutage(t *testing.T) {
+	x := newSite(t)
+	body := x.call("GET", v1+"/security/host", nil).want(200).obj()
+	if body["configured"] != false || body["available"] != false || !strings.Contains(body["reason"].(string), "LCM_SECURITY_MACHINE_ID") {
+		t.Fatalf("status = %v", body)
+	}
+	for _, c := range body["capabilities"].([]any) {
+		if c.(map[string]any)["enabled"] != false {
+			t.Fatalf("capability enabled without a host: %v", c)
+		}
+	}
+	// The write paths still refuse.
+	x.call("GET", v1+"/security/host/operations", nil).wantError(503, "unavailable")
+}

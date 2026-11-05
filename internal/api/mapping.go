@@ -69,6 +69,9 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 	case errors.Is(err, security.ErrTestRate):
 		w.Header().Set("Retry-After", "300")
 		writeError(w, http.StatusTooManyRequests, codeRateLimited, publicMessage(err), details(nil))
+	case errors.Is(err, trigger.ErrNotReady):
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, codeUnavailable, publicMessage(err), details(nil))
 	case errors.Is(err, security.ErrDisabled):
 		writeError(w, http.StatusServiceUnavailable, codeUnavailable, publicMessage(err), details(nil))
 	case errors.Is(err, security.ErrConflict):

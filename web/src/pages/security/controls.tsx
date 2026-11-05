@@ -7,7 +7,7 @@ import { Async, Field } from "../../components/ui";
 import { HostActions, Reason } from "./host-actions";
 import type { BeginHostAction } from "./host-actions";
 import { NotificationSettings } from "./notifications";
-import { Capability, UnknownReport, auditEnabled, number, showTime, showValue, validReason } from "./shared";
+import { Capability, HostNotConfigured, UnknownReport, auditEnabled, number, showTime, showValue, validReason } from "./shared";
 import { sec } from "./strings";
 
 export function SecurityRules() {
@@ -16,7 +16,7 @@ export function SecurityRules() {
 export function SecurityChecks() { return <HostPanel mode="checks" />; }
 function HostPanel({ mode }: { mode: "rules" | "checks" }) {
   const q = useQuery(hostStatusQuery());
-  return <Async q={q}>{(host) => <HostForms host={host} mode={mode} />}</Async>;
+  return <Async q={q}>{(host) => host.configured ? <HostForms host={host} mode={mode} /> : <section className="panel stack"><HostNotConfigured /></section>}</Async>;
 }
 function HostForms({ host, mode }: { host: HostStatus; mode: "rules" | "checks" }) {
   const [draft, setDraft] = useState(host);

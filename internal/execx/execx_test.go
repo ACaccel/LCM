@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -171,6 +172,20 @@ func TestFake(t *testing.T) {
 	f.Reset()
 	if len(f.Calls()) != 0 {
 		t.Fatal("Reset kept calls")
+	}
+}
+
+func TestGitEnvAndRedaction(t *testing.T) {
+	t.Setenv("GIT_SSH_COMMAND", "")
+	env := execx.GitEnv()
+	for _, want := range []string{"GIT_TERMINAL_PROMPT=0", "GIT_ALLOW_PROTOCOL=file:git:http:https:ssh", "GIT_SSH_COMMAND=ssh -o BatchMode=yes", "LC_ALL=C"} {
+		if !slices.Contains(env, want) {
+			t.Errorf("GitEnv lacks %q: %q", want, env)
+		}
+	}
+	got := execx.RedactURLs("fetch https://tok@example.com/x and ssh://git@host/y")
+	if got != "fetch https://example.com/x and ssh://host/y" {
+		t.Fatalf("RedactURLs = %q", got)
 	}
 }
 

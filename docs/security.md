@@ -213,12 +213,20 @@ percentiles or source-IP rankings are inferred.
 Host changes pass through `internal/securityhost` to a fixed no-argument root-owned
 JSON helper. They require a digest-bound preview, reason, explicit confirmation and
 stable operation ID. Query the original operation after a lost response; an
-indeterminate result is never blindly replayed. Missing/incompatible helpers remain
+indeterminate result is never blindly replayed. Without `LCM_SECURITY_MACHINE_ID`,
+`GET /security/host` answers 200 with `configured: false` and every capability
+disabled; the console shows setup guidance and stops polling. Missing/incompatible helpers remain
 read-only with unknown measurements. Required audit coverage cannot be disabled,
 optional profiles require local root approval, and the helper has no R11 enabling
 operation. Baseline requests and AIDE profile choices require local sudo review;
 the web application cannot replace or accept an integrity baseline. Complete raw
 reports remain local; the UI receives bounded status, configured targets and counts.
+The `actor` stored in the helper's protected journal is declared by its caller and
+is not verified by the helper: anything that can run the helper's sudo entry point
+as the `lcm` account (including commands in resource documents, which run as `lcm`)
+can name any actor. Treat it as a reference only; LCM's audit log
+(`security.host.preview`, `security.host.apply.start`, `security.host.apply`) is the
+authoritative record of who requested a change.
 The [host helper contract](../deploy/security-host/README.md) owns installation,
 privileged paths, limits, protected receipts and recovery procedures.
 

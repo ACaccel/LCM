@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ const (
 	requestIDKey ctxKey = iota
 	requestStateKey
 	scopeKey
+	credentialExpiryKey
 )
 
 // requestState lets inner middleware report facts to the access log.
@@ -164,7 +166,7 @@ func (s *Server) crossOrigin(next http.Handler) http.Handler {
 // leave the request anonymous; handlers decide whether that is acceptable.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		actor, scope, ok, err := s.resolveActor(r)
+		actor, scope, until, ok, err := s.resolveActor(r)
 		if err != nil {
 			s.internalError(w, r, err)
 			return
@@ -174,46 +176,63 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				st.actor, st.known = actor, true
 			}
 			ctx := context.WithValue(r.Context(), scopeKey, scope)
+			ctx = context.WithValue(ctx, credentialExpiryKey, until)
 			r = r.WithContext(auth.WithActor(ctx, actor))
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// resolveActor also reports the scope of the credential: sessions are
-// always admin, tokens carry their own.
-func (s *Server) resolveActor(r *http.Request) (auth.Actor, auth.Scope, bool, error) {
+// resolveActor also reports the scope of the credential (sessions are
+// always admin, tokens carry their own) and when it expires; zero means
+// it does not expire by itself.
+func (s *Server) resolveActor(r *http.Request) (auth.Actor, auth.Scope, time.Time, bool, error) {
 	if h := r.Header.Get("Authorization"); h != "" {
 		scheme, token, found := strings.Cut(h, " ")
 		if !found || !strings.EqualFold(scheme, "Bearer") {
-			return auth.Actor{}, "", false, nil
+			return auth.Actor{}, "", time.Time{}, false, nil
 		}
 		actor, scope, err := s.auth.VerifyTokenScope(r.Context(), strings.TrimSpace(token))
 		switch {
 		case err == nil:
-			return actor, scope, true, nil
+			return actor, scope, time.Time{}, true, nil
 		case errors.Is(err, auth.ErrUnauthenticated):
-			return auth.Actor{}, "", false, nil
+			return auth.Actor{}, "", time.Time{}, false, nil
 		}
-		return auth.Actor{}, "", false, err
+		return auth.Actor{}, "", time.Time{}, false, err
 	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		user, err := s.auth.Session(r.Context(), c.Value)
+		user, until, err := s.auth.SessionExpiry(r.Context(), c.Value)
 		switch {
 		case err == nil:
-			return user.Actor(), auth.ScopeAdmin, true, nil
+			return user.Actor(), auth.ScopeAdmin, until, true, nil
 		case errors.Is(err, auth.ErrUnauthenticated):
-			return auth.Actor{}, "", false, nil
+			return auth.Actor{}, "", time.Time{}, false, nil
 		}
-		return auth.Actor{}, "", false, err
+		return auth.Actor{}, "", time.Time{}, false, err
 	}
-	return auth.Actor{}, "", false, nil
+	return auth.Actor{}, "", time.Time{}, false, nil
+}
+
+// stillAdmin reports whether the credential of r still authenticates the
+// same actor with admin scope. Long-lived responses call it to notice a
+// revoked token or an ended session.
+func (s *Server) stillAdmin(r *http.Request, want auth.Actor) bool {
+	actor, scope, _, ok, err := s.resolveActor(r)
+	return err == nil && ok && scope == auth.ScopeAdmin && actor == want
 }
 
 // scopeFrom returns the scope of the authenticated caller.
 func scopeFrom(ctx context.Context) (auth.Scope, bool) {
 	sc, ok := ctx.Value(scopeKey).(auth.Scope)
 	return sc, ok
+}
+
+// credentialExpiry returns when the caller's credential expires; zero means
+// it does not expire by itself (API tokens).
+func credentialExpiry(ctx context.Context) time.Time {
+	t, _ := ctx.Value(credentialExpiryKey).(time.Time)
+	return t
 }
 
 // requireAny allows any authenticated actor, whatever the token scope. It
@@ -265,12 +284,41 @@ func (s *Server) requireSession(action string, h http.HandlerFunc) http.HandlerF
 	}
 }
 
-// clientIP returns the peer address. Forwarding headers are not trusted
-// because LCM listens on loopback by default and has no proxy configuration.
-func clientIP(r *http.Request) string {
+// clientIP returns the address failed logins are counted against. It is
+// the peer address, unless the peer is a trusted proxy: then it is the
+// rightmost X-Forwarded-For entry that is not itself a trusted proxy, so a
+// client cannot choose its address by sending the header itself.
+func (s *Server) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	peer, err := netip.ParseAddr(host)
+	if err != nil || !s.trustedProxy(peer) {
+		return host
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	client := host
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			// A malformed entry ends the chain the trusted proxies vouch for.
+			break
+		}
+		client = hop.Unmap().String()
+		if !s.trustedProxy(hop) {
+			break
+		}
+	}
+	return client
+}
+
+func (s *Server) trustedProxy(a netip.Addr) bool {
+	a = a.Unmap()
+	for _, p := range s.trustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }

@@ -14,8 +14,13 @@ import (
 // No helper output or stderr is returned as an error; it may contain local data.
 type systemRunner struct{}
 
+// helperTimeout exceeds the helper's own work and rollback budgets
+// (WORK_SECONDS + ROLLBACK_SECONDS in helper.py), so a request normally ends
+// with the helper's recorded outcome rather than with LCM giving up.
+const helperTimeout = 45 * time.Second
+
 func (systemRunner) Run(ctx context.Context, request Request) (Response, error) {
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, helperTimeout)
 	defer cancel()
 	input, err := json.Marshal(request)
 	if err != nil || len(input) > 16384 {

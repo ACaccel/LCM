@@ -74,8 +74,9 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
 | `LCM_COOKIE_SECURE` | `--cookie-secure` | `false` | Set the `Secure` attribute on the session cookie; enable behind HTTPS |
 | `LCM_SESSION_TTL` | `--session-ttl` | `168h` | Login session lifetime |
+| `LCM_TRUSTED_PROXIES` | `--trusted-proxies` | empty | Comma-separated CIDR prefixes (or single addresses) of reverse proxies. Only when the peer is one of them, failed logins are counted against the rightmost `X-Forwarded-For` address that is not a trusted proxy; empty uses the peer address. Invalid entries stop startup |
 | `LCM_ENGINE_WORKERS` | `--engine-workers` | `0` | Policy engine worker pool size; `0` selects `max(GOMAXPROCS*2, 4)` |
-| `LCM_SECRETS_DIR` | `--secrets-dir` | `<data dir>/secrets` | Directory of secret files (one file per secret, mode 0600 recommended); created with mode 0700. Environment variables `LCM_SECRET_<NAME>` are the fallback |
+| `LCM_SECRETS_DIR` | `--secrets-dir` | `<data dir>/secrets` | Directory of secret files (one regular file per secret, mode 0600; a looser mode or a symlink is refused); created with mode 0700. Environment variables `LCM_SECRET_<NAME>` are the fallback |
 | `LCM_CALENDAR_DIR` | `--calendar-dir` | `<data dir>/calendars` | Directory that `trigger.cron` calendar files are confined to |
 | `LCM_SYSTEMCTL` / `LCM_DOCKER` / `LCM_GIT` | `--systemctl` / `--docker` / `--git` | `systemctl` / `docker` / `git` | Program paths; a missing program only logs a warning at startup |
 | `LCM_JOURNALCTL` | `--journalctl` | `journalctl` | Program used for bounded local Machine journal reads; unavailable access is shown as source coverage |
@@ -88,7 +89,7 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw check results and machine/router snapshots are kept |
 | `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long check rollups and machine/router minute points are kept; must not be shorter than raw retention |
 | `LCM_ALERT_RESOURCE_LABELS` | `--alert-resource-labels` | `lcm_resource,resource,lcm_service,service` | Comma-separated alert labels that name the affected resource; the first present wins |
-| `LCM_CONNECTIONS_FILE` | `--connections-file` | empty | Host [connections file](docs/resources.md#connections) for network-reached resources such as routers; read once at startup, an invalid file or unresolvable password secret stops startup; empty means no connections |
+| `LCM_CONNECTIONS_FILE` | `--connections-file` | empty | Host [connections file](docs/resources.md#connections) for network-reached resources such as routers; read once at startup; it must be owned by root in root-owned directories, and an invalid file or unresolvable password secret stops startup; empty means no connections |
 | `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long timeline entries and machine/router events are kept; unresolved evidence has retention exceptions |
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |
 | `LCM_RUN_RETENTION_AGE` | `--run-retention-age` | `720h` | Finished runs younger than this are kept; older ones beyond the newest N are deleted |
@@ -108,8 +109,8 @@ The API is described by the hand-written OpenAPI 3.1 document [`internal/api/ope
 - Resources live under `/api/v1/resources` (`@<id>` reads any incarnation), archives under `/resource-archives`, host connections under `/connections` (read only).
 - Service actions run in the background (`POST /api/v1/resources/{resource}/actions/{action}`, 202 and an id for `GET /api/v1/actions/{id}`); `?dryRun=true` returns the plan and impact instead. Disruptive actions on resources others depend on need `acknowledgeImpact` (409 `impact_unacknowledged` otherwise); group actions use `/resource-groups/actions`.
 - Machine and router operations are durable `/api/v1/resources/{resource}/operations` records; acceptance does not prove completion. See the [machine](docs/machines.md#maintenance-and-power-requests) and [router](docs/resources.md#reboot) completion rules.
-- `GET /api/v1/events` streams signals, run and node progress, timeline entries, action progress, resource changes and machine/router observations as server-sent events, filtered by `resource`, `resourceId`, `policy`, `run` and `types`. SSE is best effort; clients recover current state and history from the API after disconnect or overflow.
-- Alerts (`/hooks/alerts/{source}`), heartbeats (`/heartbeats/{resource}/{check}`) and webhooks (`/hooks/{name}`, `/hooks/github`) feed LCM from outside.
+- `GET /api/v1/events` streams signals, run and node progress, timeline entries, action progress, resource changes and machine/router observations as server-sent events, filtered by `resource`, `resourceId`, `policy`, `run` and `types`. SSE is best effort; clients recover current state and history from the API after disconnect or overflow. A stream checks its token or session again at every heartbeat (15 s) and ends when it was revoked, logged out or expired; a session stream also ends at the session expiry.
+- Alerts (`/hooks/alerts/{source}`), heartbeats (`/heartbeats/{resource}/{check}`) and webhooks (`/hooks/{name}`, `/hooks/github`) feed LCM from outside. Webhooks answer 503 with `Retry-After` until startup recovery has finished, so they never start runs or watchers ahead of it.
 
 Browsers authenticate with a session cookie, scripts with `Authorization: Bearer <token>`; token scopes and what each may call are in the [security model](docs/architecture.md#security-model).
 

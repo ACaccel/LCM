@@ -109,6 +109,9 @@ type CollectorStatus struct {
 	Health        map[string]any `json:"health"`
 }
 type HostStatus struct {
+	// Configured is false when this LCM has no security host Machine
+	// (LCM_SECURITY_MACHINE_ID); host controls then do not exist here.
+	Configured      bool            `json:"configured"`
 	Available       bool            `json:"available"`
 	Reason          string          `json:"reason"`
 	MachineID       string          `json:"machineId"`

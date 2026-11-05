@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -59,6 +60,7 @@ const (
 	EnvPruneInterval             = "LCM_PRUNE_INTERVAL"
 	EnvGitHubWebhookSecret       = "LCM_GITHUB_WEBHOOK_SECRET" //nolint:gosec // names an environment variable, not a credential
 	EnvConnectionsFile           = "LCM_CONNECTIONS_FILE"
+	EnvTrustedProxies            = "LCM_TRUSTED_PROXIES"
 )
 
 // Defaults.
@@ -186,6 +188,11 @@ type Config struct {
 	// (routers and the like); empty means no connections. It is loaded and
 	// validated at startup by internal/connection.
 	ConnectionsFile string
+
+	// TrustedProxies lists the CIDR prefixes (or single addresses) of
+	// reverse proxies whose X-Forwarded-For header names the client. Empty
+	// trusts no proxy: the peer address is the client.
+	TrustedProxies []string
 }
 
 // Default returns the configuration used when nothing is set.
@@ -341,6 +348,9 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	str(&c.MemoryLimit, EnvMemoryLimit)
 	str(&c.PprofListen, EnvPprofListen)
 	str(&c.ConnectionsFile, EnvConnectionsFile)
+	if v := getenv(EnvTrustedProxies); v != "" {
+		c.TrustedProxies = splitList(v)
+	}
 	return errors.Join(errs...)
 }
 
@@ -409,6 +419,8 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 		"YAML file of host-configured connections such as routers, none when empty ("+EnvConnectionsFile+")")
 	fs.StringVar(&c.GitHubWebhookSecret, "github-webhook-secret", c.GitHubWebhookSecret,
 		"name of the secret that verifies GitHub push webhooks ("+EnvGitHubWebhookSecret+")")
+	fs.Var(stringList{&c.TrustedProxies}, "trusted-proxies",
+		"comma-separated CIDR prefixes of reverse proxies whose X-Forwarded-For is trusted ("+EnvTrustedProxies+")")
 }
 
 // RegisterDataDirFlag registers only the data directory flag, for commands
@@ -494,6 +506,9 @@ func (c Config) validateComponents() []error {
 			errs = append(errs, fmt.Errorf("pprof listen %q: must be a loopback address", c.PprofListen))
 		}
 	}
+	if _, err := c.TrustedProxyPrefixes(); err != nil {
+		errs = append(errs, err)
+	}
 	if c.GitHubWebhookSecret != "" && !secret.ValidName(c.GitHubWebhookSecret) {
 		errs = append(errs, fmt.Errorf("github webhook secret %q: not a valid secret name", c.GitHubWebhookSecret))
 	}
@@ -513,6 +528,24 @@ func (c Config) validateComponents() []error {
 		}
 	}
 	return errs
+}
+
+// TrustedProxyPrefixes parses TrustedProxies. A single address stands for
+// the prefix of just that address.
+func (c Config) TrustedProxyPrefixes() ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, raw := range c.TrustedProxies {
+		p, err := netip.ParsePrefix(raw)
+		if err != nil {
+			a, aerr := netip.ParseAddr(raw)
+			if aerr != nil || a.Zone() != "" {
+				return nil, fmt.Errorf("trusted proxies: %q is not a CIDR prefix or IP address", raw)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }
 
 // Privilege returns the systemctl privilege prefix as an argv list. A

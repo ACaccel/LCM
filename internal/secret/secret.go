@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // EnvPrefix is the prefix of environment variables that hold secrets: the
@@ -137,9 +138,14 @@ func (r *Resolver) Get(name string) (Value, error) {
 
 func (r *Resolver) fromFile(name string) (Value, bool, error) {
 	path := filepath.Join(r.dir, name)
-	f, err := os.Open(path) //nolint:gosec // name is validated to contain no path separators
+	// A symlink could point the secret at any file LCM can read, and a FIFO
+	// would block the reader; neither is opened.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // name is validated to contain no path separators
 	if errors.Is(err, os.ErrNotExist) {
 		return Value{}, false, nil
+	}
+	if errors.Is(err, syscall.ELOOP) {
+		return Value{}, false, fmt.Errorf("secret: %q is a symlink", name)
 	}
 	if err != nil {
 		return Value{}, false, fmt.Errorf("secret: open %q: %w", name, err)

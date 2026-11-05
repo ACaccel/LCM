@@ -180,9 +180,20 @@ Storage schema 14 replaces Service and Machine with one `lcm/v2` Resource model 
 - Disruptive actions on resources with dependents or control dependents need `acknowledgeImpact` ([impact](resources.md#relations)). A v1 `dependsOn` becomes a `dependsOn` relation, so conversion adds `acknowledgeImpact: true` to every `lifecycle.*` node that stops, restarts, deploys, rolls back or runs a job and did not set it; such policies behave as in v1 and are named in the migration warnings. Remove the prop where an action on a service with dependents should stop the policy; review `lcm resource impact <name>` before re-enabling automation.
 - Check, timeline and deployment history stays keyed by name; machine and router observations, events and operations are keyed by immutable ID.
 
+### Upgrade checks for stricter host configuration
+
+This release keeps the storage schema, so self-install applies it automatically. It refuses host configuration that earlier versions accepted; check the host before it reaches `main`, or pause self-deploy until you have:
+
+1. **Connections file** (when `LCM_CONNECTIONS_FILE` is set): it must be owned by root, and every directory above it (for example `/etc` and `/etc/lcm`) must be owned by root and not writable by group or others. Check with `namei -l /etc/lcm/connections.yaml`; fix with `sudo chown root:lcm /etc/lcm/connections.yaml && sudo chmod 0640 /etc/lcm/connections.yaml`.
+2. **`allowResources`**: an empty or missing list now allows no resource. Add the name of every router resource that uses each connection, for example `allowResources: [gateway]`; otherwise LCM refuses to save those resources and their observation and reboots stop.
+3. **Secret files**: files in the secrets directory must be regular files, not symlinks, of mode 0600. List offenders with `sudo find /var/lib/lcm/secrets -mindepth 1 \( ! -type f -o -perm /077 \) -ls` and fix them with `chmod 600`. An unresolvable connection password stops startup; other secrets fail the node or check that uses them.
+4. **Repository URLs**: a config source or `trigger.git` URL with userinfo other than the ssh user `git` (for example `https://token@host/...`) is refused. Policies that use one are refused at deploy and are not restored at startup; existing sources keep syncing but are shown without the userinfo. Replace them with a credential-free URL.
+
+If the new binary cannot start, the self-install verification restores the previous one; fix the configuration and deploy again.
+
 ### Router connections
 
-To manage a [router](resources.md#routers), store its web password as a secret (for example `/var/lib/lcm/secrets/home-router-password`, owned by `lcm`, mode 0600), write the connections file (for example `/etc/lcm/connections.yaml`, `root:lcm 0640`), set `LCM_CONNECTIONS_FILE` in `/etc/lcm/lcm.env` and restart LCM. A wrong file or unresolvable secret stops startup; check `journalctl -u lcm`. Then apply the router document. Real-device acceptance of the router adapter is still pending.
+To manage a [router](resources.md#routers), store its web password as a secret (for example `/var/lib/lcm/secrets/home-router-password`, owned by `lcm`, mode 0600), write the connections file (for example `/etc/lcm/connections.yaml`, `root:lcm 0640`, owned by root in root-owned directories, listing the router in `allowResources`), set `LCM_CONNECTIONS_FILE` in `/etc/lcm/lcm.env` and restart LCM. A wrong file or unresolvable secret stops startup; check `journalctl -u lcm`. Then apply the router document. Real-device acceptance of the router adapter is still pending.
 
 ## Resource use
 
@@ -190,7 +201,7 @@ The target is under 50 MB resident. `LCM_MEMORY_LIMIT` (default `40MiB`, `off` d
 
 ## Remote access
 
-LCM serves plain HTTP. For access beyond localhost run a TLS-terminating reverse proxy (nginx, Caddy) in front, keep LCM on `127.0.0.1`, and set `LCM_COOKIE_SECURE=true`. The event stream (`/api/v1/events`) needs response buffering turned off in the proxy.
+LCM serves plain HTTP. For access beyond localhost run a TLS-terminating reverse proxy (nginx, Caddy) in front, keep LCM on `127.0.0.1`, and set `LCM_COOKIE_SECURE=true`. Login rate limiting counts failures per client address; behind a proxy every client has the proxy's address, so one client can lock out all of them. When the proxy sets `X-Forwarded-For` (replacing or appending to a client-supplied value), set `LCM_TRUSTED_PROXIES` to its address, for example `127.0.0.1/32,::1/128` for a local proxy. The event stream (`/api/v1/events`) needs response buffering turned off in the proxy.
 
 
 ## Security console host controls

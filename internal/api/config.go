@@ -217,7 +217,7 @@ type sourceDTO struct {
 
 func toSourceDTO(src configsync.Source) sourceDTO {
 	return sourceDTO{
-		Name: src.Name, Repo: src.Repo, Branch: src.Branch, Path: src.Path, Interval: src.Interval.String(),
+		Name: src.Name, Repo: src.DisplayRepo(), Branch: src.Branch, Path: src.Path, Interval: src.Interval.String(),
 		Enabled: src.Enabled, LastCommit: src.LastCommit, LastSyncAt: optTime(src.LastSyncAt), LastError: src.LastError,
 		Syncing: src.Syncing, CreatedAt: src.CreatedAt, UpdatedAt: src.UpdatedAt,
 	}

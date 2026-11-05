@@ -196,6 +196,37 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(self.apply(request, preview)['state'], 'indeterminate')
         self.assertFalse(any(command[0] == '/usr/sbin/nginx' for command, account in self.commands[before:]))
 
+    def test_deadline_during_step_rolls_back(self):
+        alarms = []
+        patch.object(H.signal, 'alarm', alarms.append).start()
+        previous = H.signal.getsignal(H.signal.SIGALRM)
+        self.addCleanup(H.signal.signal, H.signal.SIGALRM, previous)
+        H.arm_deadline(H.WORK_SECONDS)
+        before = {p: p.read_bytes() for p in (H.GLOBAL, H.API_HOOK, H.SOCKET_HOOK, H.POLICY)}
+        request, preview = self.preview('nginx.configure', self.limits())
+        fired = [False]
+        def expire(command):
+            # The first reload stands for a step that is still running when
+            # the request deadline passes.
+            if command == ['/usr/bin/systemctl', 'reload', 'nginx.service'] and not fired[0]:
+                fired[0] = True
+                H.signal.getsignal(H.signal.SIGALRM)(H.signal.SIGALRM, None)
+            return False
+        self.fail_command = expire
+        operation = self.apply(request, preview)
+        self.assertTrue(fired[0])
+        self.assertEqual(operation['state'], 'failed')
+        for path, value in before.items():
+            self.assertEqual(path.read_bytes(), value)
+        self.assertEqual(alarms, [H.WORK_SECONDS, H.ROLLBACK_SECONDS, 0])
+
+    def test_step_timeouts_fit_the_deadlines(self):
+        # nginx.configure runs at most four fixed commands and its rollback two.
+        self.assertLess(4 * H.STEP_SECONDS, H.WORK_SECONDS)
+        self.assertLess(2 * H.STEP_SECONDS, H.ROLLBACK_SECONDS)
+        # internal/securityhost/runner.go gives the helper 45 seconds.
+        self.assertLess(H.WORK_SECONDS + H.ROLLBACK_SECONDS, 45)
+
     def test_interrupted_noncheck_mutation_requires_local_review(self):
         request, preview = self.preview()
         path = H.Controls().journal_path(request['requestId'])

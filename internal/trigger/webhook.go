@@ -59,6 +59,9 @@ func (m *Manager) deliver(ctx context.Context, name string, headers http.Header,
 	if len(body) > MaxWebhookBody {
 		return nil, ErrBodyTooLarge
 	}
+	if !m.synced.Load() {
+		return nil, ErrNotReady
+	}
 	type listener struct {
 		policy, node string
 		props        WebhookProps

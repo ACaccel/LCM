@@ -728,6 +728,7 @@ func TestTriggerPropsValidation(t *testing.T) {
 		`trigger.signal|{ kinds: [nope] }`:                            "not one of",
 		`trigger.signal|{ severities: [fatal] }`:                      "not one of",
 		`trigger.git|{ repo: "-oops" }`:                               "repo",
+		`trigger.git|{ repo: "https://tok@example.com/x" }`:           "credentials",
 		`trigger.git|{ repo: r, branch: "a..b" }`:                     "branch",
 		`trigger.git|{ repo: r, interval: 1s }`:                       "minimum",
 		`trigger.cron|{ schedule: "61 * * * *" }`:                     "outside",

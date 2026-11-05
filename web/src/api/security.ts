@@ -32,7 +32,8 @@ interface ApplyInput { requestId: string; previewHash: string; reason: string }
 const poll = { staleTime: 0, refetchInterval: 15_000 } as const;
 export const sk = { all: ["security"] as const, detail: (id: string) => ["security", "incident", id] as const };
 export const securityStatusQuery = () => queryOptions({ queryKey: [...sk.all, "status"], queryFn: ({ signal }) => unwrap(client.GET("/security/status", { signal })), ...poll });
-export const hostStatusQuery = () => queryOptions({ queryKey: [...sk.all, "host"], queryFn: ({ signal }) => unwrap(client.GET("/security/host", { signal })), ...poll });
+// An unconfigured host stays that way until LCM is reconfigured and restarted, so it is not polled.
+export const hostStatusQuery = () => queryOptions({ queryKey: [...sk.all, "host"], queryFn: ({ signal }) => unwrap(client.GET("/security/host", { signal })), ...poll, refetchInterval: (query) => query.state.data?.configured === false ? false : poll.refetchInterval });
 export const securitySettingsQuery = () => queryOptions({ queryKey: [...sk.all, "settings"], queryFn: ({ signal }) => unwrap(client.GET("/security/settings", { signal })), ...poll });
 export const settingsHistoryQuery = () => queryOptions({ queryKey: [...sk.all, "settings-history"], queryFn: ({ signal }) => unwrap(client.GET("/security/settings/history", { signal })), ...poll });
 export const incidentsQuery = (filter: IncidentFilter) => infiniteQueryOptions({

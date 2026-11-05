@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
@@ -270,6 +271,56 @@ func TestLoginRateLimited(t *testing.T) {
 	wantError(t, w, http.StatusTooManyRequests, codeRateLimited)
 	if n, err := strconv.Atoi(w.Header().Get("Retry-After")); err != nil || n <= 0 {
 		t.Errorf("Retry-After = %q", w.Header().Get("Retry-After"))
+	}
+}
+
+func TestLoginRateLimitTrustsOnlyConfiguredProxies(t *testing.T) {
+	proxy := netip.MustParsePrefix("127.0.0.1/32")
+	e := newEnv(t, func(d *Deps) { d.TrustedProxies = []netip.Prefix{proxy} })
+	bad := map[string]string{"username": "admin", "password": "wrong password!!"}
+	from := func(remote, forwarded string) reqOpt {
+		return func(r *http.Request) {
+			r.RemoteAddr = remote
+			if forwarded != "" {
+				r.Header.Set("X-Forwarded-For", forwarded)
+			}
+		}
+	}
+	// One client behind the proxy exhausts its own budget; a spoofed
+	// left-hand entry does not give it a fresh one.
+	for range defaultLoginMaxFailures {
+		e.do("POST", "/api/v1/auth/login", bad, from("127.0.0.1:5000", "198.51.100.7"))
+	}
+	wantStatus(t, e.do("POST", "/api/v1/auth/login", bad, from("127.0.0.1:5000", "203.0.113.99, 198.51.100.7")), http.StatusTooManyRequests)
+	// Another client behind the same proxy is not locked out.
+	wantStatus(t, e.do("POST", "/api/v1/auth/login", bad, from("127.0.0.1:5000", "198.51.100.8")), http.StatusUnauthorized)
+
+	// A peer that is not a trusted proxy cannot pick its address.
+	for range defaultLoginMaxFailures {
+		e.do("POST", "/api/v1/auth/login", bad, from("192.0.2.10:5000", "198.51.100.20"))
+	}
+	wantStatus(t, e.do("POST", "/api/v1/auth/login", bad, from("192.0.2.10:5000", "198.51.100.21")), http.StatusTooManyRequests)
+}
+
+func TestClientIP(t *testing.T) {
+	s := New(Deps{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("::1/128")}})
+	for _, c := range []struct{ remote, xff, want string }{
+		{"192.0.2.1:1", "198.51.100.1", "192.0.2.1"},
+		{"10.0.0.1:1", "", "10.0.0.1"},
+		{"10.0.0.1:1", "198.51.100.1", "198.51.100.1"},
+		{"10.0.0.1:1", "198.51.100.1, 10.0.0.2", "198.51.100.1"},
+		{"[::1]:1", "203.0.113.5, 198.51.100.1", "198.51.100.1"},
+		{"10.0.0.1:1", "junk", "10.0.0.1"},
+		{"10.0.0.1:1", "10.0.0.3", "10.0.0.3"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = c.remote
+		if c.xff != "" {
+			r.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := s.clientIP(r); got != c.want {
+			t.Errorf("clientIP(%s, %q) = %s, want %s", c.remote, c.xff, got, c.want)
+		}
 	}
 }
 

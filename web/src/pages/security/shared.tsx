@@ -25,6 +25,11 @@ export function Capability({ host, action, children }: { host: HostStatus; actio
   const reason = !host.available ? host.reason || sec.unavailable : !cap?.enabled ? cap?.reason || sec.noCapability : "";
   return <div className="stack"><div>{reason && <p className="banner warn">{sec.readOnly}：{reason}</p>}</div>{children(Boolean(reason))}</div>;
 }
+// The operations guide owns the helper installation procedure.
+const hostSetupGuide = "https://github.com/ACaccel/lcm/blob/main/docs/operations.md#security-console-host-controls";
+export function HostNotConfigured() {
+  return <div className="stack" role="status"><p className="banner warn">{sec.hostNotConfigured}</p><p className="meta">{sec.hostSetupHelp} <a href={hostSetupGuide} target="_blank" rel="noreferrer">{sec.hostSetupLink}</a></p></div>;
+}
 export function UnknownReport({ value }: { value: unknown }) {
   if (value === null || value === undefined || value === "" || (typeof value === "object" && Object.keys(value).length === 0)) return <p className="meta">{sec.unknown}</p>;
   return <pre className="block security-report">{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre>;

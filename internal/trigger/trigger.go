@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/signal"
@@ -146,6 +147,8 @@ func validateGit(p GitProps) error {
 	switch {
 	case strings.HasPrefix(p.Repo, "-") || strings.ContainsAny(p.Repo, "\x00\r\n"):
 		return fmt.Errorf("repo: invalid value")
+	case execx.CheckGitRemote(p.Repo) != nil:
+		return fmt.Errorf("repo: %w", execx.ErrGitCredentials)
 	case !branchRe.MatchString(p.Branch) || strings.HasPrefix(p.Branch, "-") || strings.Contains(p.Branch, ".."):
 		return fmt.Errorf("branch: invalid branch name %q", p.Branch)
 	case p.Interval.D() < MinGitInterval:

@@ -2266,7 +2266,8 @@ paths:
         `X-Hub-Signature-256` header authenticates the request and no token is
         needed; otherwise an `admin` or `ingest` token is required. Other events
         are acknowledged and ignored. The name `github` is reserved: a
-        `trigger.webhook` node cannot be reached under it.
+        `trigger.webhook` node cannot be reached under it. Until LCM has
+        recovered after a start, pushes are refused with 503 and `Retry-After`.
       security:
         - bearerAuth: []
         - signature: []
@@ -2289,6 +2290,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "413": { $ref: "#/components/responses/TooLarge" }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /hooks/{name}:
     post:
       tags: [Ingest]
@@ -2300,7 +2302,8 @@ paths:
         (default `X-Hub-Signature-256`) and then needs no token; a listener without
         one requires an `admin` or `ingest` token. Callers without a token cannot
         tell an unknown name from a bad signature. Bodies larger than 128 KiB are
-        refused.
+        refused. Until LCM has recovered after a start, deliveries are refused
+        with 503 and `Retry-After`.
       security:
         - bearerAuth: []
         - signature: []
@@ -2330,6 +2333,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "413": { $ref: "#/components/responses/TooLarge" }
+        "503": { $ref: "#/components/responses/Unavailable" }
 
   /events:
     get:
@@ -3514,6 +3518,7 @@ components:
       type: object
       additionalProperties: false
       required:
+      - configured
       - available
       - reason
       - machineId
@@ -3524,6 +3529,9 @@ components:
       - nginx
       - collector
       properties:
+        configured:
+          type: boolean
+          description: False when this LCM has no security host Machine (LCM_SECURITY_MACHINE_ID); every capability is then disabled and nothing changes until the configuration does, so clients need not poll.
         available:
           type: boolean
         reason:
@@ -5710,7 +5718,7 @@ components:
           items: { type: string }
         allowResources:
           type: array
-          description: Resource names that may use the connection; empty allows all.
+          description: Resource names that may use the connection; empty allows none.
           items: { type: string }
         resources:
           type: array

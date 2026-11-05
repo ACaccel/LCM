@@ -15,7 +15,10 @@ func (s *Server) hostAvailable(w http.ResponseWriter) bool {
 	return true
 }
 func (s *Server) handleSecurityHost(w http.ResponseWriter, r *http.Request) {
-	if !s.hostAvailable(w) {
+	// An unconfigured host is a lasting state, not an outage: the status
+	// says so, and clients stop polling instead of retrying a 503.
+	if s.securityHost == nil {
+		writeJSON(w, 200, securityhost.Unconfigured())
 		return
 	}
 	status, err := s.securityHost.Status(r.Context())

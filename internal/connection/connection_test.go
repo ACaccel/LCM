@@ -54,7 +54,7 @@ func TestParse(t *testing.T) {
 		t.Fatalf("home = %+v", home)
 	}
 	lab, _ := s.Get("lab")
-	if lab.Username != "operator" || lab.Allows("reboot") || !lab.AllowsResource("anything") || !lab.InsecureSkipVerify || lab.DeviceID != "02:00:00:00:00:02" {
+	if lab.Username != "operator" || lab.Allows("reboot") || lab.AllowsResource("anything") || !lab.InsecureSkipVerify || lab.DeviceID != "02:00:00:00:00:02" {
 		t.Fatalf("lab = %+v", lab)
 	}
 	list[0].AllowActions[0] = "changed"
@@ -112,22 +112,61 @@ func TestLoad(t *testing.T) {
 	if err := os.WriteFile(path, []byte(valid), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if s, err := connection.Load(path, testSecrets); err != nil || len(s.List()) != 2 {
-		t.Fatalf("load: %v, %v", s, err)
+	// Tests cannot create root-owned files; the trust check is replaced,
+	// every other check still applies.
+	var checked string
+	trust := connection.WithTrustCheck(func(p string, _ os.FileInfo) error { checked = p; return nil })
+	if s, err := connection.Load(path, testSecrets, trust); err != nil || len(s.List()) != 2 || checked != path {
+		t.Fatalf("load: %v, %v (checked %q)", s, err, checked)
+	}
+	link := filepath.Join(dir, "link.yaml")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Load(link, testSecrets, trust); err == nil {
+		t.Fatal("symlink accepted")
 	}
 	if err := os.Chmod(path, 0o664); err != nil { //nolint:gosec // the test checks that a group-writable file is refused
 		t.Fatal(err)
 	}
-	if _, err := connection.Load(path, testSecrets); err == nil || !strings.Contains(err.Error(), "writable by group or others") {
+	if _, err := connection.Load(path, testSecrets, trust); err == nil || !strings.Contains(err.Error(), "writable by group or others") {
 		t.Fatalf("group-writable: %v", err)
 	}
-	if _, err := connection.Load(filepath.Join(dir, "absent.yaml"), testSecrets); err == nil {
+	if _, err := connection.Load(filepath.Join(dir, "absent.yaml"), testSecrets, trust); err == nil {
 		t.Fatal("missing file accepted")
 	}
-	if _, err := connection.Load(dir, testSecrets); err == nil {
+	if _, err := connection.Load(dir, testSecrets, trust); err == nil {
 		t.Fatal("directory accepted")
 	}
 }
+
+func TestLoadRequiresRootOwnership(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "connections.yaml")
+	if err := os.WriteFile(path, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The file belongs to the test user; were the tests run as root, the
+	// world-writable temp directory above it is refused instead.
+	_, err := connection.Load(path, testSecrets)
+	if err == nil || !strings.Contains(err.Error(), "owned by root") && !strings.Contains(err.Error(), "writable by group or others") {
+		t.Fatalf("err = %v", err)
+	}
+	info, err := os.Stat("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A root-owned file in a root-owned path passes; "/" stands in for its
+	// parent directory chain.
+	if err := connection.RootOwned("/connections.yaml", rootInfo{info}); err != nil {
+		t.Fatalf("RootOwned: %v", err)
+	}
+}
+
+// rootInfo reports the mode and owner of a root-owned regular file.
+type rootInfo struct{ os.FileInfo }
+
+func (rootInfo) Mode() os.FileMode { return 0o640 }
 
 func TestCheck(t *testing.T) {
 	s, err := connection.Parse([]byte(valid), testSecrets)
@@ -136,7 +175,8 @@ func TestCheck(t *testing.T) {
 	}
 	cases := []struct{ name, adapter, resource, want string }{
 		{"home-router", "xiaomi", "router", ""},
-		{"lab", "xiaomi", "anything", ""},
+		// An empty allowResources is an allowlist that allows nothing.
+		{"lab", "xiaomi", "anything", "does not allow resource"},
 		{"absent", "xiaomi", "router", "not configured"},
 		{"home-router", "other", "router", "of type xiaomi"},
 		{"home-router", "xiaomi", "other", "does not allow resource"},

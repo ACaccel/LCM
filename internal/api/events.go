@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/events"
 )
 
@@ -73,16 +75,40 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tick := time.NewTicker(s.eventHeartbeat)
-	defer tick.Stop()
+	// The credential was checked once, when the stream opened. A stream may
+	// stay open for days, so a session ends it when it expires and every
+	// heartbeat checks again that the token or session is still valid.
+	actor, _ := auth.ActorFrom(r.Context())
+	expired := make(chan struct{})
+	if until := credentialExpiry(r.Context()); !until.IsZero() {
+		t := s.clock.AfterFunc(until.Sub(s.clock.Now()), func() { close(expired) })
+		defer t.Stop()
+	}
+	beat := make(chan struct{}, 1)
+	arm := func() clock.Timer {
+		return s.clock.AfterFunc(s.eventHeartbeat, func() {
+			select {
+			case beat <- struct{}{}:
+			default:
+			}
+		})
+	}
+	tick := arm()
+	defer func() { tick.Stop() }()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-tick.C:
+		case <-expired:
+			return
+		case <-beat:
+			if !s.stillAdmin(r, actor) {
+				return
+			}
 			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil || rc.Flush() != nil {
 				return
 			}
+			tick = arm()
 		case e, ok := <-sub.C:
 			if !ok {
 				if sub.Overflowed() {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/clock"
@@ -16,6 +17,10 @@ import (
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/store"
 )
+
+// ErrNotReady is returned for external events (webhooks, push
+// notifications) that arrive before the manager has started.
+var ErrNotReady = errors.New("trigger: not started yet; retry later")
 
 // DefaultSyncInterval is how often the manager reconciles its watchers with
 // the engine's deployed policies. Deploy events trigger an immediate sync,
@@ -58,6 +63,11 @@ type Manager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	kick   chan struct{}
+
+	// synced is set by the first Sync, which Run performs only after the
+	// application has recovered. Until then external events are refused,
+	// so that they cannot start watchers or runs ahead of recovery.
+	synced atomic.Bool
 
 	syncMu sync.Mutex // serializes Sync
 	mu     sync.Mutex // guards watchers and failed
@@ -160,6 +170,7 @@ func (m *Manager) Sync(ctx context.Context) error {
 	if m.ctx.Err() != nil {
 		return errors.New("trigger: manager closed")
 	}
+	m.synced.Store(true)
 
 	type want struct {
 		info engine.TriggerInfo
