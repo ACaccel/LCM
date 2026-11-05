@@ -30,7 +30,10 @@ Commands:
                               restart, backup, run-job); --version <commit> (deploy),
                               --job <job> (run-job), --dry-run, --wait
   observe <name>              Collect a read-only observation (machine, router)
-  history | events <name>     Read a page of observations or events (--limit, --cursor)
+  history | events <name>     Read a page of observations or events (--limit, --cursor);
+                              history also takes --from, --to (RFC 3339) and --step
+                              (a duration of at least 1s, such as 5m), which read a
+                              range newest first
   capabilities <name>         Show durable operations and their prerequisites
   maintenance <name> [preview|enter|exit]  Read, enter or exit machine maintenance
   operations <name>           List durable operations (--limit, --cursor)
@@ -86,6 +89,9 @@ type resourceFlags struct {
 	dryRun    bool
 	wait      bool
 	ackImpact bool
+
+	// from, to and step select the range of history.
+	from, to, step string
 	// typ and labels select the services of group-action.
 	typ    string
 	labels map[string]string
@@ -102,6 +108,9 @@ func (a *app) resource(ctx context.Context, args []string) error {
 	fs.StringVar(&f.key, "idempotency-key", "", "power request key, generated when omitted; reuse the printed key to retry an ambiguous request")
 	fs.IntVar(&f.limit, "limit", 100, "page size (1-199)")
 	fs.StringVar(&f.cursor, "cursor", "", "opaque cursor from the previous page")
+	fs.StringVar(&f.from, "from", "", "history only: earliest observation, an RFC 3339 time such as 2026-11-05T00:00:00Z")
+	fs.StringVar(&f.to, "to", "", "history only: end of the range (exclusive), an RFC 3339 time after --from")
+	fs.StringVar(&f.step, "step", "", "history only: keep the newest snapshot of each interval of this length, a duration of at least 1s such as 5m or 1h")
 	fs.StringVar(&f.format, "o", "json", "output format: json or yaml")
 	fs.StringVar(&f.job, "job", "", "name of the job to run (action run-job only)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "show the plan of an action without performing it")
@@ -270,6 +279,9 @@ func resourceRequest(pos []string, f resourceFlags) (resourceCall, error) {
 		return fail("--limit must be between 1 and 199")
 	}
 	command, name := pos[0], pos[1]
+	if command != "history" && (f.from != "" || f.to != "" || f.step != "") {
+		return fail("--from, --to and --step apply to history only")
+	}
 	req := client.Request{Method: http.MethodGet, Path: client.Path("resources", name)}
 	var body map[string]any
 	write, power, enter, impact := false, false, false, ""
@@ -282,6 +294,11 @@ func resourceRequest(pos []string, f resourceFlags) (resourceCall, error) {
 		req.Query = url.Values{"limit": {strconv.Itoa(f.limit)}}
 		if f.cursor != "" {
 			req.Query.Set("cursor", f.cursor)
+		}
+		if command == "history" {
+			if err := historyRange(req.Query, f); err != nil {
+				return fail(err.Error())
+			}
 		}
 	case "capabilities", "impact":
 		req.Path = client.Path("resources", name, command)
@@ -358,6 +375,36 @@ func resourceRequest(pos []string, f resourceFlags) (resourceCall, error) {
 		}
 	}
 	return call, nil
+}
+
+// historyRange validates --from, --to and --step and adds them to q.
+func historyRange(q url.Values, f resourceFlags) error {
+	var from, to time.Time
+	for _, p := range []struct {
+		flag, value string
+		dst         *time.Time
+	}{{"from", f.from, &from}, {"to", f.to, &to}} {
+		if p.value == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, p.value)
+		if err != nil {
+			return fmt.Errorf("--%s must be an RFC 3339 time such as 2026-11-05T00:00:00Z, got %q", p.flag, p.value)
+		}
+		*p.dst = t
+		q.Set(p.flag, t.UTC().Format(time.RFC3339Nano))
+	}
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		return errors.New("--from must be before --to")
+	}
+	if f.step != "" {
+		d, err := time.ParseDuration(f.step)
+		if err != nil || d < time.Second {
+			return fmt.Errorf("--step must be a duration of at least 1s such as 5m or 1h, got %q", f.step)
+		}
+		q.Set("step", f.step)
+	}
+	return nil
 }
 
 // prepareWrite completes a write: it reads the current version unless
