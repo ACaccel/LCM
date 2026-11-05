@@ -90,6 +90,9 @@ func TestIfElseRejoinRunsJoinOnce(t *testing.T) {
 		if v.Status != engine.RunSucceeded {
 			t.Fatalf("status = %s (%s)", v.Status, v.Error)
 		}
+		// Observers receive events asynchronously but in order per run, so
+		// every node event of this run has arrived once its finish has.
+		h.Events.WaitFor(t, "run finished", enginetest.RunEvent(engine.EventRunFinished, id))
 		if down {
 			wantStatus(t, v, map[string]engine.NodeStatus{"restart": engine.NodeCompleted, "log": engine.NodeDead, "after_log": engine.NodeDead, "join": engine.NodeCompleted})
 			if output(t, v, "join") != "restarted" {
