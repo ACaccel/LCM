@@ -115,7 +115,7 @@ spec:
 	// Reboot with an unknown answer (the router drops the connection) and
 	// a two-minute outage: the reset uptime proves the reboot.
 	fake.SetReboot(xiaomitest.RebootAcceptAndDrop, 2*time.Minute)
-	op := call("POST", "/resources/gateway/operations", map[string]any{"action": "reboot", "idempotencyKey": "reboot-1"}, `"1"`, http.StatusAccepted)
+	op := call("POST", "/resources/gateway/operations", map[string]any{"action": "reboot", "idempotencyKey": "reboot-1", "reason": "clear stuck WAN", "confirm": "gateway"}, `"1"`, http.StatusAccepted)
 	if op["state"] != "observing" || op["receipt"].(map[string]any)["outcome"] != "unknown" {
 		t.Fatalf("operation = %v", op)
 	}
@@ -138,7 +138,7 @@ spec:
 
 	// A router that stays away past the deadline leaves the outcome open.
 	fake.SetReboot(xiaomitest.RebootAccept, time.Hour)
-	op = call("POST", "/resources/gateway/operations", map[string]any{"action": "reboot", "idempotencyKey": "reboot-2"}, `"1"`, http.StatusAccepted)
+	op = call("POST", "/resources/gateway/operations", map[string]any{"action": "reboot", "idempotencyKey": "reboot-2", "reason": "clear stuck WAN", "confirm": "gateway"}, `"1"`, http.StatusAccepted)
 	h.advance(11 * time.Minute)
 	call("POST", "/resources/gateway/observe", nil, "", http.StatusOK)
 	got = call("GET", "/resources/gateway/operations/"+op["id"].(string), nil, "", http.StatusOK)

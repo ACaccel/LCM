@@ -68,6 +68,10 @@ type app struct {
 
 	// poll is the interval of --wait; zero selects one second.
 	poll time.Duration
+
+	// terminal, when set, replaces the check whether stdin is a terminal
+	// that can answer a confirmation question.
+	terminal func() bool
 }
 
 func main() {

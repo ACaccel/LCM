@@ -16,8 +16,8 @@ export function operationView(op: ResourceOperation): StatusView {
 /**
  * A durable operation request as the browser keeps it. It is persisted
  * before submitting, so a refresh or a lost response preserves the exact
- * request (action, version and idempotency key) and a retry cannot become a
- * second operation.
+ * request (action, version, idempotency key, reason and typed name) and a
+ * retry cannot become a second operation.
  */
 export interface OperationAttempt {
   resourceId: string;
@@ -25,8 +25,19 @@ export interface OperationAttempt {
   version: number;
   key: string;
   phase: "prepared" | "uncertain" | "accepted" | "rejected";
+  /** The operator's reason; attempts kept by earlier consoles have none. */
+  reason: string;
+  /** The resource name the operator typed to confirm. */
+  confirm: string;
   operationId?: string;
   /** The operator acknowledged the impact; a retry must send it again. */
+  acknowledgeImpact?: boolean;
+}
+
+/** What the operator confirmed for a new attempt. */
+export interface AttemptConfirmation {
+  reason: string;
+  confirm: string;
   acknowledgeImpact?: boolean;
 }
 
@@ -44,8 +55,8 @@ export function readAttempt(id: string): OperationAttempt | null {
   if (!raw) return null;
   const v: unknown = JSON.parse(raw);
   if (!v || typeof v !== "object") throw new Error(s.operation.storageError);
-  const stored = v as OperationAttempt & { machineId?: string };
-  const a: OperationAttempt = legacy ? { ...stored, resourceId: stored.machineId ?? "" } : stored;
+  const stored = v as Partial<OperationAttempt> & { machineId?: string };
+  const a = { reason: "", confirm: "", ...stored, ...(legacy ? { resourceId: stored.machineId ?? "" } : {}) } as OperationAttempt;
   if (
     a.resourceId !== id ||
     typeof a.action !== "string" ||
@@ -55,17 +66,23 @@ export function readAttempt(id: string): OperationAttempt | null {
     typeof a.key !== "string" ||
     !/^[\w.:-]{1,128}$/.test(a.key) ||
     !["prepared", "uncertain", "accepted", "rejected"].includes(a.phase) ||
+    typeof a.reason !== "string" ||
+    a.reason.length > 1000 ||
+    typeof a.confirm !== "string" ||
+    a.confirm.length > 253 ||
     (a.operationId !== undefined && typeof a.operationId !== "string") ||
     (a.acknowledgeImpact !== undefined && typeof a.acknowledgeImpact !== "boolean")
   )
     throw new Error(s.operation.storageError);
-  const { resourceId, action, version, key, phase, operationId, acknowledgeImpact } = a;
+  const { resourceId, action, version, key, phase, reason, confirm, operationId, acknowledgeImpact } = a;
   return {
     resourceId,
     action,
     version,
     key,
     phase,
+    reason,
+    confirm,
     ...(operationId === undefined ? {} : { operationId }),
     ...(acknowledgeImpact ? { acknowledgeImpact } : {}),
   };
@@ -80,12 +97,14 @@ export function clearAttempt(id: string): void {
   localStorage.removeItem(legacyKey(id));
 }
 
-export function newAttempt(resource: { id: string; version: number }, action: string, acknowledgeImpact = false): OperationAttempt {
+export function newAttempt(resource: { id: string; version: number }, action: string, confirmation: AttemptConfirmation): OperationAttempt {
   return {
-    ...(acknowledgeImpact ? { acknowledgeImpact } : {}),
+    ...(confirmation.acknowledgeImpact ? { acknowledgeImpact: true } : {}),
     resourceId: resource.id,
     action,
     version: resource.version,
+    reason: confirmation.reason,
+    confirm: confirmation.confirm,
     key:
       typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
@@ -98,7 +117,13 @@ export function submitAttempt(resource: string, attempt: OperationAttempt): Prom
   return unwrap(
     client.POST("/resources/{resource}/operations", {
       params: { path: { resource }, header: { "If-Match": String(attempt.version) } },
-      body: { action: attempt.action, idempotencyKey: attempt.key, ...(attempt.acknowledgeImpact ? { acknowledgeImpact: true } : {}) },
+      body: {
+        action: attempt.action,
+        idempotencyKey: attempt.key,
+        reason: attempt.reason,
+        confirm: attempt.confirm,
+        ...(attempt.acknowledgeImpact ? { acknowledgeImpact: true } : {}),
+      },
     }),
   );
 }

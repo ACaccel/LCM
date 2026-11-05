@@ -8,17 +8,19 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/maintenance"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 type fakePower struct {
-	submits     int
-	receipt     Receipt
-	submitErr   error
-	prepareErr  error
-	prepareHook func()
+	submits      int
+	receipt      Receipt
+	preflightErr error
+	submitErr    error
+	prepareErr   error
+	prepareHook  func()
 }
 
-func (f *fakePower) Preflight(context.Context) error { return nil }
+func (f *fakePower) Preflight(context.Context) error { return f.preflightErr }
 func (f *fakePower) Prepare(ctx context.Context, r PowerRequest) (Receipt, error) {
 	if f.prepareHook != nil {
 		f.prepareHook()
@@ -49,27 +51,32 @@ func readyPower(t *testing.T) (*testEnv, *fakePower) {
 }
 func enter(t *testing.T, e *testEnv) {
 	t.Helper()
-	if _, err := e.m.EnterMaintenance(DirectRequest(e.ctx), "workstation", "workloads prepared; manual recovery available", true, 1); err != nil {
+	if _, err := e.m.EnterMaintenance(DirectRequest(e.ctx), "workstation", "workloads prepared; manual recovery available", 1, ""); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// powerReq is a confirmed request for the test machine.
+func powerReq(action, key string, version int) resource.OperationRequest {
+	return resource.OperationRequest{Action: action, Key: key, Reason: "scheduled maintenance", Confirm: "workstation", Version: version}
 }
 
 func TestOperationIntentIdempotencyAndRebootEvidence(t *testing.T) {
 	e, p := readyPower(t)
 	enter(t, e)
-	if _, err := e.m.Submit(e.ctx, "workstation", "reboot", "policy-key", 1); !errors.Is(err, ErrForbidden) {
+	if _, err := e.m.Submit(e.ctx, "workstation", powerReq("reboot", "policy-key", 1)); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("policy allowed: %v", err)
 	}
 	ctx := DirectRequest(e.ctx)
-	op, err := e.m.Submit(ctx, "workstation", "reboot", "request-a", 1)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "request-a", 1))
 	if err != nil || op.State != "observing" {
 		t.Fatalf("submit %+v %v", op, err)
 	}
-	prior, err := e.m.Submit(ctx, "workstation", "reboot", "request-a", 1)
+	prior, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "request-a", 1))
 	if err != nil || prior.ID != op.ID || p.submits != 1 {
 		t.Fatalf("retry %+v %v count=%d", prior, err, p.submits)
 	}
-	if _, err = e.m.Submit(ctx, "workstation", "graceful-shutdown", "request-a", 1); !errors.Is(err, ErrConflict) {
+	if _, err = e.m.Submit(ctx, "workstation", powerReq("graceful-shutdown", "request-a", 1)); !errors.Is(err, ErrConflict) {
 		t.Fatalf("collision: %v", err)
 	}
 	if err = e.m.ExitMaintenance(ctx, "workstation", "ready", 1); !errors.Is(err, ErrPrecondition) {
@@ -109,7 +116,7 @@ func TestCancelledSubmitDoesNotStayPending(t *testing.T) {
 	ctx, cancel := context.WithCancel(DirectRequest(e.ctx))
 	defer cancel()
 	p.prepareHook = cancel
-	op, err := e.m.Submit(ctx, "workstation", "reboot", "cancelled", 1)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "cancelled", 1))
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -123,7 +130,7 @@ func TestShutdownRemainsUnverifiedAfterReturn(t *testing.T) {
 	e, p := readyPower(t)
 	enter(t, e)
 	ctx := DirectRequest(e.ctx)
-	op, err := e.m.Submit(ctx, "workstation", "graceful-shutdown", "shutdown-a", 1)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("graceful-shutdown", "shutdown-a", 1))
 	if err != nil || op.State != "indeterminate" {
 		t.Fatalf("shutdown %+v %v", op, err)
 	}
@@ -146,7 +153,7 @@ func TestShutdownRemainsUnverifiedAfterReturn(t *testing.T) {
 	}
 	e.clk.Advance(time.Nanosecond)
 	p.prepareErr = errors.New("prepare refused")
-	failed, err := e.m.Submit(ctx, "workstation", "reboot", "prepare-after-resolution", 1)
+	failed, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "prepare-after-resolution", 1))
 	if err != nil || failed.State != "failed" {
 		t.Fatalf("prepare failure %+v %v", failed, err)
 	}
@@ -167,7 +174,7 @@ func TestAmbiguousHandoffDoesNotResubmit(t *testing.T) {
 	enter(t, e)
 	ctx := DirectRequest(e.ctx)
 	p.submitErr = errors.New("transport failed")
-	op, err := e.m.Submit(ctx, "workstation", "reboot", "unknown-a", 1)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "unknown-a", 1))
 	if err != nil || op.State != "indeterminate" {
 		t.Fatalf("submit %+v %v", op, err)
 	}
@@ -175,13 +182,13 @@ func TestAmbiguousHandoffDoesNotResubmit(t *testing.T) {
 	if err = e.m.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.m.Submit(ctx, "workstation", "reboot", "unknown-a", 1); err != nil {
+	if _, err = e.m.Submit(ctx, "workstation", powerReq("reboot", "unknown-a", 1)); err != nil {
 		t.Fatal(err)
 	}
 	if p.submits != 1 {
 		t.Fatalf("repeated side effect %d", p.submits)
 	}
-	if _, err = e.m.Submit(ctx, "workstation", "power-on", "unsupported", 1); !errors.Is(err, ErrUnsupported) {
+	if _, err = e.m.Submit(ctx, "workstation", powerReq("power-on", "unsupported", 1)); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("power-on: %v", err)
 	}
 }
@@ -211,7 +218,7 @@ func TestHandoffRechecksHealthAfterSlowPreparation(t *testing.T) {
 	e, p := readyPower(t)
 	enter(t, e)
 	p.prepareHook = func() { e.clk.Advance(2 * time.Minute) }
-	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", "reboot", "slow-prepare", 1)
+	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", powerReq("reboot", "slow-prepare", 1))
 	if err != nil || op.State != "failed" || op.Unresolved || p.submits != 0 {
 		t.Fatalf("unsafe handoff %+v %v submits=%d", op, err, p.submits)
 	}
@@ -221,7 +228,7 @@ func TestHandoffRechecksOSCoverageAfterPreparation(t *testing.T) {
 	e, p := readyPower(t)
 	enter(t, e)
 	p.prepareHook = func() { e.probe.snapshot.Coverage["uptime"] = Coverage{State: "unavailable"}; e.poll(t) }
-	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", "reboot", "changed-evidence", 1)
+	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", powerReq("reboot", "changed-evidence", 1))
 	if err != nil || op.State != "failed" || p.submits != 0 {
 		t.Fatalf("unsafe handoff %+v %v submits=%d", op, err, p.submits)
 	}
@@ -231,7 +238,7 @@ func TestExpiryDoesNotRevokeAcceptedShutdown(t *testing.T) {
 	e, _ := readyPower(t)
 	enter(t, e)
 	ctx := DirectRequest(e.ctx)
-	op, err := e.m.Submit(ctx, "workstation", "graceful-shutdown", "same-boot", 1)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("graceful-shutdown", "same-boot", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +254,7 @@ func TestRebootRequiresUptimeAndBoundedBootEvidence(t *testing.T) {
 	e, _ := readyPower(t)
 	enter(t, e)
 	ctx := DirectRequest(e.ctx)
-	op, err := e.m.Submit(ctx, "workstation", "reboot", "proof", 1)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "proof", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,10 +288,10 @@ func TestMaintenanceRequiresNewObservationAndStablePreview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = e.m.EnterMaintenance(DirectRequest(e.ctx), "workstation", "prepared", true, 1, "wrong"); !errors.Is(err, ErrPrecondition) {
+	if _, err = e.m.EnterMaintenance(DirectRequest(e.ctx), "workstation", "prepared", 1, "wrong"); !errors.Is(err, ErrPrecondition) {
 		t.Fatalf("bad preview: %v", err)
 	}
-	if _, err = e.m.EnterMaintenance(DirectRequest(e.ctx), "workstation", "prepared", true, 1, p.Hash); err != nil {
+	if _, err = e.m.EnterMaintenance(DirectRequest(e.ctx), "workstation", "prepared", 1, p.Hash); err != nil {
 		t.Fatal(err)
 	}
 	if err = e.m.ExitMaintenance(DirectRequest(e.ctx), "workstation", "ready", 1); !errors.Is(err, ErrPrecondition) {
@@ -293,5 +300,109 @@ func TestMaintenanceRequiresNewObservationAndStablePreview(t *testing.T) {
 	e.poll(t)
 	if err = e.m.ExitMaintenance(DirectRequest(e.ctx), "workstation", "ready", 1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSubmitEntersMaintenanceAndRecordsInventory(t *testing.T) {
+	e, p := readyPower(t)
+	ctx := DirectRequest(e.ctx)
+	op, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "single-request", 1))
+	if err != nil || op.State != "observing" || op.RequestReason != "scheduled maintenance" || p.submits != 1 {
+		t.Fatalf("submit %+v %v submits=%d", op, err, p.submits)
+	}
+	v, err := e.m.Maintenance(ctx, "workstation")
+	if err != nil || v == nil || v.State != "active" || !v.Acknowledged || v.Action != "reboot" || v.Reason != "scheduled maintenance" || v.Preview.Hash == "" || !v.Preview.PartialCoverage {
+		t.Fatalf("maintenance %+v %v", v, err)
+	}
+	if !v.EnteredAt.Equal(op.CreatedAt) {
+		t.Fatalf("maintenance entered at %s, operation created at %s", v.EnteredAt, op.CreatedAt)
+	}
+	if _, _, err = e.cfg.Gate.Acquire(e.ctx); !errors.Is(err, maintenance.ErrActive) {
+		t.Fatalf("write gate open: %v", err)
+	}
+	var entries int
+	if err = e.db.Reader().QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action IN ('machine.maintenance.enter','machine.operation.submit') AND json_extract(details,'$.reason') = 'scheduled maintenance'`).Scan(&entries); err != nil || entries != 2 {
+		t.Fatalf("audit entries = %d, %v", entries, err)
+	}
+	// The replay returns the stored operation and enters nothing again.
+	again, err := e.m.Submit(ctx, "workstation", powerReq("reboot", "single-request", 1))
+	if err != nil || again.ID != op.ID || p.submits != 1 {
+		t.Fatalf("replay %+v %v submits=%d", again, err, p.submits)
+	}
+	if after, _ := e.m.Maintenance(ctx, "workstation"); after == nil || !after.EnteredAt.Equal(v.EnteredAt) {
+		t.Fatalf("replay changed maintenance: %+v", after)
+	}
+}
+
+func TestSubmitReusesActiveMaintenance(t *testing.T) {
+	e, p := readyPower(t)
+	enter(t, e)
+	ctx := DirectRequest(e.ctx)
+	before, _ := e.m.Maintenance(ctx, "workstation")
+	e.clk.Advance(time.Second)
+	if _, err := e.m.Submit(ctx, "workstation", powerReq("graceful-shutdown", "reuse", 1)); err != nil || p.submits != 1 {
+		t.Fatalf("submit %v submits=%d", err, p.submits)
+	}
+	after, _ := e.m.Maintenance(ctx, "workstation")
+	if after == nil || after.Action != "" || !after.EnteredAt.Equal(before.EnteredAt) || after.Reason != before.Reason {
+		t.Fatalf("maintenance replaced: %+v, was %+v", after, before)
+	}
+	var entries int
+	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'machine.maintenance.enter'`).Scan(&entries); err != nil || entries != 1 {
+		t.Fatalf("maintenance entries = %d, %v", entries, err)
+	}
+}
+
+func TestRefusedSubmitLeavesNoMaintenance(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*testing.T, *testEnv, *fakePower, *resource.OperationRequest) func()
+		want   error
+	}{
+		{"wrong name", func(_ *testing.T, _ *testEnv, _ *fakePower, r *resource.OperationRequest) func() {
+			r.Confirm = "workstation-2"
+			return nil
+		}, ErrPrecondition},
+		{"missing reason", func(_ *testing.T, _ *testEnv, _ *fakePower, r *resource.OperationRequest) func() {
+			r.Reason = ""
+			return nil
+		}, ErrPrecondition},
+		{"stale observations", func(_ *testing.T, e *testEnv, _ *fakePower, _ *resource.OperationRequest) func() {
+			e.clk.Advance(5 * time.Minute)
+			return nil
+		}, ErrPrecondition},
+		{"helper not ready", func(_ *testing.T, _ *testEnv, p *fakePower, _ *resource.OperationRequest) func() {
+			p.preflightErr = errors.New("helper unavailable")
+			return nil
+		}, ErrPrecondition},
+		{"stale version", func(_ *testing.T, _ *testEnv, _ *fakePower, r *resource.OperationRequest) func() {
+			r.Version = 2
+			return nil
+		}, ErrConflict},
+		{"write in flight", func(t *testing.T, e *testEnv, _ *fakePower, _ *resource.OperationRequest) func() {
+			_, release, err := e.cfg.Gate.Acquire(e.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return release
+		}, maintenance.ErrActive},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, p := readyPower(t)
+			req := powerReq("reboot", "refused", 1)
+			if release := tc.mutate(t, e, p, &req); release != nil {
+				defer release()
+			}
+			if _, err := e.m.Submit(DirectRequest(e.ctx), "workstation", req); !errors.Is(err, tc.want) {
+				t.Fatalf("submit: %v, want %v", err, tc.want)
+			}
+			if v, err := e.m.Maintenance(e.ctx, "workstation"); err != nil || v != nil {
+				t.Fatalf("maintenance left behind: %+v %v", v, err)
+			}
+			if ops, err := e.m.Operations(e.ctx, "workstation"); err != nil || len(ops) != 0 || p.submits != 0 {
+				t.Fatalf("operations %+v %v submits=%d", ops, err, p.submits)
+			}
+		})
 	}
 }

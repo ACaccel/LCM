@@ -33,12 +33,13 @@ func (*machineProbe) ReadJournal(context.Context, model.MachineConfig, string, t
 }
 
 type machinePowerFake struct {
-	submits int
-	receipt machine.Receipt
-	clk     *clock.Fake
+	submits      int
+	receipt      machine.Receipt
+	clk          *clock.Fake
+	preflightErr error
 }
 
-func (*machinePowerFake) Preflight(context.Context) error { return nil }
+func (p *machinePowerFake) Preflight(context.Context) error { return p.preflightErr }
 func (*machinePowerFake) Prepare(_ context.Context, r machine.PowerRequest) (machine.Receipt, error) {
 	return machine.Receipt{State: "prepared", BootID: r.BootID}, nil
 }
@@ -117,8 +118,9 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 	if !preview.PartialCoverage || !preview.ControllerOffline || !preview.ManualPowerOn {
 		t.Fatal("missing impact disclosure")
 	}
-	call("POST", "/resources/workstation/maintenance", `{"reason":"ready","acknowledged":true}`, admin, "1", 422)
-	body := `{"reason":"workloads prepared","acknowledged":true,"previewHash":"` + preview.Hash + `"}`
+	call("POST", "/resources/workstation/maintenance", `{"reason":"ready","previewHash":"short"}`, admin, "1", 422)
+	call("POST", "/resources/workstation/maintenance", `{"reason":"ready","acknowledged":true}`, admin, "1", 400)
+	body := `{"reason":"workloads prepared","previewHash":"` + preview.Hash + `"}`
 	h.putService(checkedService)
 	call("POST", "/resources/workstation/maintenance", body, admin, "1", 409)
 	w = call("GET", "/resources/workstation/maintenance/preview", "", admin, "", 200)
@@ -128,7 +130,7 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 	if len(preview.Workloads) != 1 || preview.Workloads[0].Name != "cache" {
 		t.Fatalf("impact missing %+v", preview)
 	}
-	body = `{"reason":"workloads prepared","acknowledged":true,"previewHash":"` + preview.Hash + `"}`
+	body = `{"reason":"workloads prepared","previewHash":"` + preview.Hash + `"}`
 	call("POST", "/resources/workstation/maintenance", body, admin, "1", 200)
 	call("PUT", "/resources/workstation", doc, admin, "1", 409)
 	call("PUT", "/policies/blocked", `{"apiVersion":"lcm/v2","kind":"Policy","metadata":{"name":"blocked"},"spec":{"nodes":[{"id":"start","type":"trigger.manual"}]}}`, admin, "", 409)
@@ -137,7 +139,8 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 		t.Fatalf("catalog bypassed gate: %v", err)
 	}
 	call("POST", "/resources/workstation/maintenance/exit", `{"reason":"ready"}`, admin, "1", 409)
-	w = call("POST", "/resources/workstation/operations", `{"action":"reboot","idempotencyKey":"http-once"}`, admin, "1", 202)
+	reboot := `{"action":"reboot","idempotencyKey":"http-once","reason":"kernel update","confirm":"workstation"}`
+	w = call("POST", "/resources/workstation/operations", reboot, admin, "1", 202)
 	var op machine.Operation
 	if err = json.Unmarshal(w.Body.Bytes(), &op); err != nil {
 		t.Fatal(err)
@@ -145,8 +148,8 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 	if op.State != "observing" || power.submits != 1 {
 		t.Fatalf("operation %+v submits=%d", op, power.submits)
 	}
-	call("POST", "/resources/workstation/operations", `{"action":"reboot","idempotencyKey":"http-once"}`, admin, "1", 202)
-	call("POST", "/resources/workstation/operations", `{"action":"power-on","idempotencyKey":"unsupported"}`, admin, "1", 409)
+	call("POST", "/resources/workstation/operations", reboot, admin, "1", 202)
+	call("POST", "/resources/workstation/operations", `{"action":"power-on","idempotencyKey":"unsupported","reason":"r","confirm":"workstation"}`, admin, "1", 409)
 	// The detail shows the operation while its outcome is open.
 	w = call("GET", "/resources/workstation", "", admin, "", 200)
 	var detail struct {
@@ -168,6 +171,88 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 	call("GET", "/health", "", "", "", http.StatusOK)
 }
 
+// One confirmed request enters maintenance and submits the power request;
+// a refused request leaves no maintenance behind.
+func TestMachinePowerSingleRequest(t *testing.T) {
+	clk := clock.NewFake(epoch)
+	power := &machinePowerFake{clk: clk}
+	h := newHarness(t, func(o *testOpts) { o.clk = clk; o.machineObserver = &machineProbe{}; o.machinePower = power })
+	_, admin, err := h.app.Auth.CreateToken(h.ctx, "machine-admin", auth.ScopeAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body, version string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer "+admin)
+		if version != "" {
+			r.Header.Set("If-Match", version)
+		}
+		w := httptest.NewRecorder()
+		h.app.Handler().ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: got %d want %d: %s", method, path, w.Code, want, w.Body.String())
+		}
+		return w
+	}
+	observe := func() {
+		t.Helper()
+		for range 2 {
+			clk.Advance(30 * time.Second)
+			call("POST", "/resources/workstation/observe", "", "", 200)
+		}
+	}
+	noMaintenance := func(step string) {
+		t.Helper()
+		if w := call("GET", "/resources/workstation/maintenance", "", "", 200); !strings.Contains(w.Body.String(), `"maintenance":null`) {
+			t.Fatalf("%s left maintenance behind: %s", step, w.Body.String())
+		}
+	}
+	call("POST", "/resources", `{"apiVersion":"lcm/v2","kind":"Resource","metadata":{"name":"workstation"},"spec":{"type":"machine","adapter":"local"}}`, "", 201)
+	h.putService(checkedService)
+	observe()
+	request := func(key, confirm string) string {
+		return `{"action":"reboot","idempotencyKey":"` + key + `","reason":"kernel update","confirm":"` + confirm + `"}`
+	}
+
+	call("POST", "/resources/workstation/operations", request("wrong-name", "laptop"), "1", 409)
+	noMaintenance("wrong name")
+	call("POST", "/resources/workstation/operations", `{"action":"reboot","idempotencyKey":"no-reason","confirm":"workstation"}`, "1", 409)
+	noMaintenance("missing reason")
+	power.preflightErr = errors.New("helper unavailable")
+	call("POST", "/resources/workstation/operations", request("helper", "workstation"), "1", 409)
+	noMaintenance("unready helper")
+	power.preflightErr = nil
+	clk.Advance(10 * time.Minute)
+	call("POST", "/resources/workstation/operations", request("stale", "workstation"), "1", 409)
+	noMaintenance("stale observations")
+	if power.submits != 0 {
+		t.Fatalf("refused requests reached the helper: %d", power.submits)
+	}
+
+	observe()
+	w := call("POST", "/resources/workstation/operations", request("single", "workstation"), "1", 202)
+	var op machine.Operation
+	if err = json.Unmarshal(w.Body.Bytes(), &op); err != nil || op.State != "observing" || op.RequestReason != "kernel update" || power.submits != 1 {
+		t.Fatalf("operation %s (%v) submits=%d", w.Body.String(), err, power.submits)
+	}
+	w = call("GET", "/resources/workstation/maintenance", "", "", 200)
+	var got struct{ Maintenance *machine.Maintenance }
+	if err = json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Maintenance == nil || got.Maintenance.Action != "reboot" ||
+		len(got.Maintenance.Preview.Workloads) != 1 || got.Maintenance.Preview.Workloads[0].Name != "cache" {
+		t.Fatalf("maintenance %s (%v)", w.Body.String(), err)
+	}
+	// The replay, as a client sends it after a lost answer, returns the same operation.
+	w = call("POST", "/resources/workstation/operations", request("single", "workstation"), "1", 202)
+	var replay machine.Operation
+	if err = json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ID != op.ID || power.submits != 1 {
+		t.Fatalf("replay %s (%v) submits=%d", w.Body.String(), err, power.submits)
+	}
+	// The automatic maintenance stays until an explicit exit, which the open outcome refuses.
+	call("POST", "/resources/workstation/maintenance/exit", `{"reason":"done"}`, "1", 409)
+}
+
 func TestDeferredRecoveryWithPartialErrorReleasesProducers(t *testing.T) {
 	probe := &machineProbe{}
 	h := newHarness(t, func(o *testOpts) { o.machineObserver = probe })
@@ -175,7 +260,7 @@ func TestDeferredRecoveryWithPartialErrorReleasesProducers(t *testing.T) {
 	if _, err := h.app.Resources.Put(h.ctx, []byte("apiVersion: lcm/v2\nkind: Resource\nmetadata: {name: workstation}\nspec: {type: machine, adapter: local}"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.app.Machines.EnterMaintenance(machine.DirectRequest(h.ctx), "workstation", "prepared", true, 1); err != nil {
+	if _, err := h.app.Machines.EnterMaintenance(machine.DirectRequest(h.ctx), "workstation", "prepared", 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.app.DB.Write(h.ctx, func(tx *sql.Tx) error {

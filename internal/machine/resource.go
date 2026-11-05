@@ -284,8 +284,6 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 			ok, reason = false, "machine is not available"
 		case ok && unresolved > 0:
 			ok, reason = false, "an unresolved operation already exists"
-		case ok && maint == 0:
-			ok, reason = false, "enter acknowledged maintenance first"
 		}
 		out = append(out, action(op, ok, reason))
 	}

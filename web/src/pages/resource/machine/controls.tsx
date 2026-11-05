@@ -2,24 +2,22 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { capabilitiesQuery, maintenanceQuery } from "../../../api/observations";
 import type { MachineMaintenance, ResourceCapability, ResourceDetail } from "../../../api/types";
-import { Dialog } from "../../../components/dialog";
 import { ErrorBox, Spinner } from "../../../components/ui";
 import { useNow } from "../../../hooks";
 import { actionLabel } from "../../../lib/actions";
 import { formatDateTime } from "../../../lib/format";
 import { machineFresh, powerUnavailable } from "../../../lib/machine";
 import { s } from "../../../strings";
-import { ImpactAcknowledgement, useImpactAck } from "../impact";
 import { AttemptPanel, OperationsList, useDurableOperation } from "../operations";
-import { Acknowledgements, MaintenanceDialog, WorkloadDisclosure } from "./dialogs";
+import { MaintenanceDialog, PowerDialog, PowerMaintenance } from "./dialogs";
 
-const POWER = ["reboot", "graceful-shutdown", "power-on"] as const;
+const POWER = ["reboot", "graceful-shutdown"] as const;
 
 /**
- * Reboot and shutdown of the local machine. They need fresh observations,
- * a verified identity, healthy status and acknowledged maintenance, and
- * every confirmation; power-on is never offered because there is no
- * independent channel.
+ * Reboot and shutdown of the local machine. They need fresh verified
+ * healthy observations and a ready helper; one confirmed request enters
+ * maintenance (or keeps the active one) and submits. Power-on is not
+ * offered: there is no independent channel.
  */
 export function MachineControls({
   resource,
@@ -33,37 +31,23 @@ export function MachineControls({
   unavailable?: boolean;
 }) {
   const [confirm, setConfirm] = useState<{ action: string; version: number } | null>(null);
-  const [workload, setWorkload] = useState(false);
-  const [recovery, setRecovery] = useState(false);
-  const [ack, setAck] = useState(false);
-  const impact = useImpactAck(resource.name, confirm?.action ?? "", !!confirm);
   const now = useNow(true);
   const op = useDurableOperation(resource);
   const status = resource.machine?.status;
   const readiness = unavailable || !machineFresh(resource, now) || status?.identity !== "verified" || status.health !== "healthy" || resource.phase !== "managed";
-  const inMaintenance = !!maintenance?.acknowledged && maintenance.state === "active";
   return (
     <section className="panel stack">
       <h2>{s.machine.controls}</h2>
-      <p>{s.machine.powerDisclosure}</p>
       {POWER.map((action) => {
         const reason = powerUnavailable(action, caps);
-        const disabled = !!reason || !!op.attempt || !!op.storageError || readiness || !inMaintenance;
         return (
           <div className="stack" key={action}>
             <div>
               <button
                 type="button"
                 className="btn danger"
-                disabled={disabled}
-                onClick={() => {
-                  if (action === "power-on") return;
-                  setWorkload(false);
-                  setRecovery(false);
-                  setAck(false);
-                  impact.setChecked(false);
-                  setConfirm({ action, version: resource.version });
-                }}
+                disabled={!!reason || !!op.attempt || !!op.storageError || readiness}
+                onClick={() => setConfirm({ action, version: resource.version })}
               >
                 {actionLabel(action)}
               </button>
@@ -72,51 +56,25 @@ export function MachineControls({
           </div>
         );
       })}
-      {!maintenance?.acknowledged && <p className="meta">{s.machine.requireMaintenance}</p>}
+      <p className="meta">{s.machine.noPowerOn}</p>
       <ErrorBox error={op.storageError} />
       <ErrorBox error={op.mutation.error} />
       <AttemptPanel resource={resource.name} op={op} />
       {confirm && (
-        <Dialog
-          title={actionLabel(confirm.action)}
+        <PowerDialog
+          resource={resource}
+          action={confirm.action}
+          version={confirm.version}
+          disclosure={s.machine.powerDisclosure}
+          unavailable={readiness ? s.machine.notReady : powerUnavailable(confirm.action, caps)}
           onClose={() => setConfirm(null)}
-          footer={
-            <>
-              <button type="button" className="btn" onClick={() => setConfirm(null)}>
-                {s.common.cancel}
-              </button>
-              <button
-                type="button"
-                className="btn danger solid"
-                disabled={!ack || !workload || !recovery || !impact.ready || readiness || !!powerUnavailable(confirm.action, caps) || !inMaintenance}
-                onClick={() => {
-                  op.start(confirm.action, confirm.version, impact.acknowledged);
-                  setConfirm(null);
-                }}
-              >
-                {s.common.confirm}
-              </button>
-            </>
-          }
+          onConfirm={(c) => {
+            op.start(confirm.action, confirm.version, c);
+            setConfirm(null);
+          }}
         >
-          <div className="stack">
-            <p>
-              {s.operation.target}: <strong>{resource.name}</strong> / <code>{resource.id}</code> / {s.config.version(confirm.version)}
-            </p>
-            <div className="banner warn">{s.machine.powerDisclosure}</div>
-            <p>{s.machine.noPowerOn}</p>
-            <WorkloadDisclosure />
-            <p>
-              {s.machine.reason}: {maintenance?.reason}
-            </p>
-            <ImpactAcknowledgement state={impact} />
-            <Acknowledgements workload={workload} recovery={recovery} onWorkload={setWorkload} onRecovery={setRecovery} />
-            <label className="check">
-              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-              {s.machine.powerAck}
-            </label>
-          </div>
-        </Dialog>
+          <PowerMaintenance machine={resource.name} active={maintenance?.state === "active" ? maintenance : null} />
+        </PowerDialog>
       )}
     </section>
   );
@@ -147,6 +105,12 @@ export function MachineOperationsTab({ resource, selector }: { resource: Resourc
                 <dd>{active.reason}</dd>
                 <dt>{s.common.time}</dt>
                 <dd>{formatDateTime(active.enteredAt)}</dd>
+                {active.action && (
+                  <>
+                    <dt>{s.machine.enteredFor}</dt>
+                    <dd>{actionLabel(active.action)}</dd>
+                  </>
+                )}
               </dl>
             </>
           ) : (

@@ -83,7 +83,7 @@ func TestMinuteHistoryAndArchiveIsolation(t *testing.T) {
 func TestRetentionKeepsBaselineAndIndependentOperationEvidence(t *testing.T) {
 	e, p := readyPower(t)
 	enter(t, e)
-	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", "reboot", "retention", 1)
+	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", powerReq("reboot", "retention", 1))
 	if err != nil {
 		t.Fatal(err)
 	}

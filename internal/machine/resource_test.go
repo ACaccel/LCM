@@ -53,7 +53,7 @@ func TestPhaseRefusedWithUnresolvedOperation(t *testing.T) {
 	enter(t, e)
 	p := &fakePower{submitErr: errors.New("transport failed")}
 	e.m.power = p
-	if _, err := e.m.Submit(DirectRequest(e.ctx), "workstation", "reboot", "unknown", 1); err != nil {
+	if _, err := e.m.Submit(DirectRequest(e.ctx), "workstation", powerReq("reboot", "unknown", 1)); err != nil {
 		t.Fatal(err)
 	}
 	rec, _ := e.store.Get(e.ctx, "workstation")
@@ -144,7 +144,8 @@ func TestTypeStatusAndActions(t *testing.T) {
 		}
 		actions[a.Name] = a
 	}
-	if a := actions["reboot"]; a.Available || a.Kind != resource.KindOperation || a.Risk != resource.RiskDisruptive || a.Reason != "enter acknowledged maintenance first" {
+	// A power request enters maintenance itself.
+	if a := actions["reboot"]; !a.Available || a.Kind != resource.KindOperation || a.Risk != resource.RiskDisruptive || a.Reason != "" {
 		t.Fatalf("reboot before maintenance = %+v", a)
 	}
 	if !actions["retire"].Available || actions["resume"].Available || actions["unmanage"].Available || !actions["observe"].Available {

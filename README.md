@@ -48,7 +48,8 @@ The console (Traditional Chinese, light and dark themes) shows resources of ever
 | `lcm validate -f <file\|dir>` | Check documents on the server without applying them |
 | `lcm get resources\|policies\|runs\|locks\|sources\|connections [name] [--type t] [-o table\|json\|yaml] [--limit n]` | List or show objects; `--type service\|machine\|router` filters resources; `@<id>` selects an archived resource |
 | `lcm resource action <service> <action> [--version v] [--job j] [--dry-run] [--wait] [--acknowledge-impact]` | Run a service lifecycle action; `--dry-run` prints the plan and impact |
-| `lcm resource <command> <name> [flags]` | `observe`, `history`, `events`, `capabilities`, `maintenance`, `reboot`, `shutdown`, `operations`, `operation`, `resolve`, `retire`, `resume`, `unmanage`, `impact`; [confirmation and recovery rules](docs/machines.md#maintenance-and-power-requests) |
+| `lcm resource <command> <name> [flags]` | `observe`, `history`, `events`, `capabilities`, `maintenance`, `reboot`, `shutdown`, `operations`, `operation`, `resolve`, `retire`, `resume`, `unmanage`, `impact` |
+| `lcm resource reboot\|shutdown\|resolve\|retire\|resume\|unmanage\|maintenance <name> ... --reason r --confirm <name> [--yes] [--acknowledge-impact]` | Writes: the CLI reads the current version (`--version` overrides) and generates the idempotency key of a power request (`--idempotency-key` to retry one); commands with a preview ask before sending, `--yes` when stdin is not a terminal; [confirmation and recovery rules](docs/machines.md#maintenance-and-power-requests) |
 | `lcm resource group-action --label k=v [...] <action> [--dry-run] [--wait] [--acknowledge-impact]` | Run one service action on matching services in dependency order; [rules](docs/resources.md#group-actions) |
 | `lcm run <policy> [--trigger id] [--event json] [--dry-run] [--wait]` | Start a policy run |
 

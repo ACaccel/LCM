@@ -179,7 +179,7 @@ func TestConfigWritesRespectMachineGate(t *testing.T) {
 	r.commit("initial", map[string]string{"machine.yaml": machineDoc})
 	src := e.addSource("infra", r, ".")
 	e.syncNow("infra")
-	if _, err := e.machines.EnterMaintenance(machine.DirectRequest(e.ctx), "workstation", "synthetic maintenance", true, 1); err != nil {
+	if _, err := e.machines.EnterMaintenance(machine.DirectRequest(e.ctx), "workstation", "synthetic maintenance", 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, useGit := range []bool{true, false} {

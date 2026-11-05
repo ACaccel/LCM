@@ -271,6 +271,21 @@ func (m *Manager) record(ctx context.Context, action, name string, details map[s
 	return err
 }
 
+// recordTx is record within the transaction of the change, so that the
+// change, its audit entry and its event commit together. The caller
+// publishes the returned event after the commit.
+func (m *Manager) recordTx(ctx context.Context, tx *sql.Tx, action, name, id string, details map[string]any) (Event, error) {
+	if err := m.audit.RecordTx(ctx, tx, "machine."+action, name, audit.OutcomeOK, details); err != nil {
+		return Event{}, err
+	}
+	now := m.clk.Now().UTC()
+	e := Event{ResourceID: id, Source: "control", Key: newID(), Kind: "machine." + action, Severity: "info", OccurredAt: now, IngestedAt: now}
+	if op, ok := details["operationId"].(string); ok {
+		e.OperationID = op
+	}
+	return e, insertEvent(ctx, tx, &e)
+}
+
 func precondition(reason string) error { return fmt.Errorf("%w: %s", ErrPrecondition, reason) }
 
 func encode(v any) (string, error) { b, err := json.Marshal(v); return string(b), err }

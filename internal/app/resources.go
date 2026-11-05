@@ -116,8 +116,8 @@ func (o machineOperations) Get(ctx context.Context, ref, id string) (api.Operati
 	return toAPIOperation(op), err
 }
 
-func (o machineOperations) Submit(ctx context.Context, ref, action, key string, expected int) (api.Operation, error) {
-	op, err := o.m.Submit(ctx, ref, action, key, expected)
+func (o machineOperations) Submit(ctx context.Context, ref string, req resource.OperationRequest) (api.Operation, error) {
+	op, err := o.m.Submit(ctx, ref, req)
 	return toAPIOperation(op), err
 }
 
@@ -207,8 +207,8 @@ func (o routerOperations) Get(ctx context.Context, ref, id string) (api.Operatio
 	return toRouterOperation(op), err
 }
 
-func (o routerOperations) Submit(ctx context.Context, ref, action, key string, expected int) (api.Operation, error) {
-	op, err := o.m.Submit(ctx, ref, action, key, expected)
+func (o routerOperations) Submit(ctx context.Context, ref string, req resource.OperationRequest) (api.Operation, error) {
+	op, err := o.m.Submit(ctx, ref, req)
 	return toRouterOperation(op), err
 }
 

@@ -9,7 +9,7 @@ import { ErrorBox, Pill, Spinner } from "../../components/ui";
 import { actionLabel } from "../../lib/actions";
 import { formatDateTime } from "../../lib/format";
 import { clearAttempt, newAttempt, operationView, readAttempt, submitAttempt, writeAttempt } from "../../lib/operation";
-import type { OperationAttempt } from "../../lib/operation";
+import type { AttemptConfirmation, OperationAttempt } from "../../lib/operation";
 import { s } from "../../strings";
 
 const TIME_KEY = /(At|deadline|validUntil)$/;
@@ -218,7 +218,7 @@ export function useDurableOperation(resource: { id: string; name: string }) {
   });
 
   /** Persists and sends a new request; returns false when an attempt is already kept. */
-  function start(action: string, version: number, acknowledgeImpact = false): boolean {
+  function start(action: string, version: number, confirmation: AttemptConfirmation): boolean {
     if (attempt || stored.error) return false;
     try {
       const existing = readAttempt(resource.id);
@@ -226,7 +226,7 @@ export function useDurableOperation(resource: { id: string; name: string }) {
         setStored({ attempt: existing });
         return false;
       }
-      const a = newAttempt({ id: resource.id, version }, action, acknowledgeImpact);
+      const a = newAttempt({ id: resource.id, version }, action, confirmation);
       writeAttempt(a);
       setStored({ attempt: a });
       mutation.mutate(a);

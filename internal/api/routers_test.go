@@ -77,13 +77,27 @@ func TestRouterObservationAndReboot(t *testing.T) {
 	if len(caps) != 1 || caps[0]["action"] != "reboot" || caps[0]["available"] != true {
 		t.Fatalf("capabilities = %v", caps)
 	}
-	x.call("POST", v1+"/resources/gateway/maintenance", map[string]any{"reason": "x", "acknowledged": true, "previewHash": strings.Repeat("a", 64)},
+	x.call("POST", v1+"/resources/gateway/maintenance", map[string]any{"reason": "x", "previewHash": strings.Repeat("a", 64)},
 		ifMatch(`"1"`)).wantError(http.StatusConflict, "unsupported")
 
-	op := x.call("POST", v1+"/resources/gateway/operations", map[string]any{"action": "reboot", "idempotencyKey": "op-1"}, ifMatch(`"1"`)).
-		want(http.StatusAccepted).obj()
-	if op["state"] != "observing" || op["unresolved"] != true || fake.Reboots() != 1 {
+	// One request with a reason and the typed name; nothing is sent otherwise.
+	body := map[string]any{"action": "reboot", "idempotencyKey": "op-1", "reason": "clear stuck WAN", "confirm": "router"}
+	x.call("POST", v1+"/resources/gateway/operations", body, ifMatch(`"1"`)).wantError(http.StatusConflict, "precondition_failed")
+	body["confirm"] = "gateway"
+	delete(body, "reason")
+	x.call("POST", v1+"/resources/gateway/operations", body, ifMatch(`"1"`)).wantError(http.StatusConflict, "precondition_failed")
+	if fake.Reboots() != 0 {
+		t.Fatalf("unconfirmed request sent: %d", fake.Reboots())
+	}
+	body["reason"] = "clear stuck WAN"
+	op := x.call("POST", v1+"/resources/gateway/operations", body, ifMatch(`"1"`)).want(http.StatusAccepted).obj()
+	if op["state"] != "observing" || op["unresolved"] != true || op["requestReason"] != "clear stuck WAN" || fake.Reboots() != 1 {
 		t.Fatalf("operation = %v", op)
+	}
+	// The same request replays the stored operation without sending again.
+	replay := x.call("POST", v1+"/resources/gateway/operations", body, ifMatch(`"1"`)).want(http.StatusAccepted).obj()
+	if replay["id"] != op["id"] || fake.Reboots() != 1 {
+		t.Fatalf("replay = %v, reboots = %d", replay, fake.Reboots())
 	}
 	got := x.call("GET", v1+"/resources/gateway/operations/"+op["id"].(string), nil).want(http.StatusOK).obj()
 	if got["id"] != op["id"] {

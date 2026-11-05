@@ -73,12 +73,17 @@ type Operation struct {
 	Request    PowerRequest `json:"request"`
 	Receipt    *Receipt     `json:"receipt"`
 	Reason     string       `json:"reason"`
-	Resolution string       `json:"resolution,omitempty"`
-	ResolvedBy *Actor       `json:"resolvedBy,omitempty"`
-	ResolvedAt *time.Time   `json:"resolvedAt,omitempty"`
+	// RequestReason is the operator's reason for the request; Reason
+	// explains the current state.
+	RequestReason string     `json:"requestReason,omitempty"`
+	Resolution    string     `json:"resolution,omitempty"`
+	ResolvedBy    *Actor     `json:"resolvedBy,omitempty"`
+	ResolvedAt    *time.Time `json:"resolvedAt,omitempty"`
 }
 
 // Maintenance keeps the durable write gate until an explicit verified exit.
+// Acknowledged is always true: the confirmed request that entered it
+// acknowledges partial workload coverage and manual recovery.
 type Maintenance struct {
 	Preview      MaintenancePreview `json:"preview"`
 	ResourceID   string             `json:"resourceId"`
@@ -87,6 +92,9 @@ type Maintenance struct {
 	Actor        Actor              `json:"actor"`
 	Reason       string             `json:"reason"`
 	Acknowledged bool               `json:"acknowledged"`
+	// Action is the power action whose request entered maintenance; it is
+	// empty for a manual entry.
+	Action string `json:"action,omitempty"`
 }
 
 // Capability explains why a control is disabled instead of offering a no-op.
@@ -142,13 +150,16 @@ func (m *Manager) Maintenance(ctx context.Context, name string) (*Maintenance, e
 	return &v, err
 }
 
-// EnterMaintenance requires the operator to prepare unknown workloads explicitly.
-func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, acknowledged bool, expected int, previewHash ...string) (Maintenance, error) {
+// EnterMaintenance holds local writes without a power request. The
+// request acknowledges partial workload coverage and manual recovery. A
+// nonempty previewHash must match the workload inventory at entry, so that
+// what the operator reviewed is what is recorded.
+func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, expected int, previewHash string) (Maintenance, error) {
 	if err := requireDirect(ctx); err != nil {
 		return Maintenance{}, err
 	}
-	if !validReason(reason) || !acknowledged {
-		return Maintenance{}, precondition("a reason and workload/recovery acknowledgement are required")
+	if !validReason(reason) {
+		return Maintenance{}, precondition("a reason is required")
 	}
 	r, err := m.Get(ctx, name)
 	if err != nil {
@@ -160,49 +171,64 @@ func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, ack
 	if r.Phase != resource.PhaseManaged {
 		return Maintenance{}, precondition("machine is retired")
 	}
-	a, _ := actor(ctx)
-	v := Maintenance{ResourceID: r.ID, State: "active", EnteredAt: m.clk.Now().UTC(), Actor: actorInfo(a), Reason: reason, Acknowledged: true}
+	var v Maintenance
+	var event Event
 	err = m.gate.Exclusive(ctx, func(tx *sql.Tx) error {
-		p, err := preview(ctx, tx, r)
-		if err != nil {
+		var err error
+		if v, err = m.enterTx(ctx, tx, r, reason, "", previewHash, expected); err != nil {
 			return err
 		}
-		if len(previewHash) > 0 && (len(previewHash) != 1 || previewHash[0] != p.Hash) {
-			return precondition("maintenance impact changed; review a new preview")
-		}
-		v.Preview = p
-		body, err := encode(v)
-		if err != nil {
-			return err
-		}
-		if m.maintenancePreflight != nil {
-			if err := m.maintenancePreflight(ctx); err != nil {
-				return precondition("controller update or another maintenance dependency is pending")
-			}
-		}
-		var count int
-		cur, err := current(ctx, tx, r.ID)
-		if err != nil {
-			return err
-		}
-		if cur.phase != resource.PhaseManaged {
-			return precondition("machine is retired")
-		}
-		if cur.version != expected {
-			return ErrConflict
-		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance`).Scan(&count); err != nil {
-			return err
-		}
-		if count > 0 {
-			return precondition("maintenance is already active")
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,resource_id,state,entered_at,body) VALUES('local',?,?,?,?)`, r.ID, v.State, v.EnteredAt.UnixMilli(), body)
+		event, err = m.recordTx(ctx, tx, "maintenance.enter", name, r.ID, map[string]any{"reason": reason, "partialCoverageAcknowledged": true})
 		return err
 	})
-	if err == nil {
-		err = m.record(ctx, "maintenance.enter", name, map[string]any{"reason": reason, "partialCoverageAcknowledged": true})
+	if err != nil {
+		return Maintenance{}, err
 	}
+	m.publish([]Event{event})
+	return v, nil
+}
+
+// enterTx stores maintenance of r, with the workload inventory at entry,
+// within tx, which must hold the exclusive write gate. action names the
+// power request entering it, if any.
+func (m *Manager) enterTx(ctx context.Context, tx *sql.Tx, r Record, reason, action, previewHash string, expected int) (Maintenance, error) {
+	a, _ := actor(ctx)
+	v := Maintenance{ResourceID: r.ID, State: "active", EnteredAt: m.clk.Now().UTC(), Actor: actorInfo(a), Reason: reason, Acknowledged: true, Action: action}
+	p, err := preview(ctx, tx, r)
+	if err != nil {
+		return v, err
+	}
+	if previewHash != "" && previewHash != p.Hash {
+		return v, precondition("maintenance impact changed; review a new preview")
+	}
+	v.Preview = p
+	body, err := encode(v)
+	if err != nil {
+		return v, err
+	}
+	if m.maintenancePreflight != nil {
+		if err := m.maintenancePreflight(ctx); err != nil {
+			return v, precondition("controller update or another maintenance dependency is pending")
+		}
+	}
+	cur, err := current(ctx, tx, r.ID)
+	if err != nil {
+		return v, err
+	}
+	if cur.phase != resource.PhaseManaged {
+		return v, precondition("machine is retired")
+	}
+	if cur.version != expected {
+		return v, ErrConflict
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance`).Scan(&count); err != nil {
+		return v, err
+	}
+	if count > 0 {
+		return v, precondition("maintenance is already active")
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,resource_id,state,entered_at,body) VALUES('local',?,?,?,?)`, r.ID, v.State, v.EnteredAt.UnixMilli(), body)
 	return v, err
 }
 
@@ -300,22 +326,32 @@ func recoveryAnchor(ctx context.Context, tx *sql.Tx, id string) (time.Time, erro
 	return anchor, rows.Err()
 }
 
-// Submit records intent before handoff; an ambiguous handoff is never retried automatically.
-func (m *Manager) Submit(ctx context.Context, name, action, key string, expected int) (Operation, error) {
+// Submit enters maintenance unless it is already active, records intent and
+// hands the request to the helper. Maintenance entry, intent and their
+// audit entries commit together, so a refused request leaves no
+// maintenance behind. An ambiguous handoff is never retried automatically.
+func (m *Manager) Submit(ctx context.Context, name string, req resource.OperationRequest) (Operation, error) {
 	m.controlMu.Lock()
 	defer m.controlMu.Unlock()
 	if err := requireDirect(ctx); err != nil {
 		return Operation{}, err
 	}
+	action, key, expected := req.Action, req.Key, req.Version
 	if action != "reboot" && action != "graceful-shutdown" {
 		return Operation{}, ErrUnsupported
 	}
 	if !idempotencyPattern.MatchString(key) {
 		return Operation{}, precondition("a bounded idempotency key is required")
 	}
+	if !validReason(req.Reason) {
+		return Operation{}, precondition("a reason is required")
+	}
 	r, err := m.Get(ctx, name)
 	if err != nil {
 		return Operation{}, err
+	}
+	if req.Confirm != r.Name {
+		return Operation{}, precondition("confirm the request with the exact resource name")
 	}
 	hashBytes := sha256.Sum256([]byte(r.ID + "\x00" + action + "\x00" + fmtVersion(expected)))
 	hash := hex.EncodeToString(hashBytes[:])
@@ -337,16 +373,13 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 	if !caps[0].Available {
 		return Operation{}, precondition(caps[0].Reason)
 	}
-	v, err := m.Maintenance(ctx, name)
+	active, err := m.Maintenance(ctx, name)
 	if err != nil {
 		return Operation{}, err
 	}
-	if v == nil || !v.Acknowledged {
-		return Operation{}, precondition("enter acknowledged maintenance first")
-	}
 	a, _ := actor(ctx)
 	now := m.clk.Now().UTC()
-	op := Operation{ID: newID(), ResourceID: r.ID, Action: action, State: "pending", Unresolved: true, Version: expected, CreatedAt: now, UpdatedAt: now, Actor: actorInfo(a)}
+	op := Operation{ID: newID(), ResourceID: r.ID, Action: action, State: "pending", Unresolved: true, Version: expected, CreatedAt: now, UpdatedAt: now, Actor: actorInfo(a), RequestReason: req.Reason}
 	validUntil := r.Status.Snapshot.ObservedAt.Add(r.Config.StaleAfter.D())
 	if capTime := now.Add(5 * time.Minute); validUntil.After(capTime) {
 		validUntil = capTime
@@ -356,7 +389,16 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 	if err != nil {
 		return Operation{}, err
 	}
-	err = m.db.Write(ctx, func(tx *sql.Tx) error {
+	// Entering maintenance needs the exclusive gate, which refuses while
+	// other local writes are in flight. Active maintenance already excludes
+	// them and is reused as it is.
+	write := m.db.Write
+	if active == nil {
+		write = m.gate.Exclusive
+	}
+	var events []Event
+	err = write(ctx, func(tx *sql.Tx) error {
+		events = events[:0]
 		var count int
 		if err := m.verifyFreshTx(ctx, tx, r, true); err != nil {
 			return err
@@ -368,19 +410,33 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 		if cur.version != expected {
 			return ErrConflict
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&count); err != nil {
-			return err
-		}
-		if count != 1 {
-			return precondition("maintenance is not ready")
-		}
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id=? AND unresolved=1`, r.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
 			return precondition("an unresolved operation already exists")
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO resource_operations(id,resource_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`, op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body)
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&count); err != nil {
+			return err
+		}
+		switch {
+		case count == 0 && active != nil:
+			return precondition("maintenance ended while the request was prepared; submit it again")
+		case count == 0:
+			if _, err := m.enterTx(ctx, tx, r, req.Reason, action, "", expected); err != nil {
+				return err
+			}
+			e, err := m.recordTx(ctx, tx, "maintenance.enter", name, r.ID, map[string]any{"reason": req.Reason, "partialCoverageAcknowledged": true, "action": action, "operationId": op.ID})
+			if err != nil {
+				return err
+			}
+			events = append(events, e)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO resource_operations(id,resource_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`, op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body); err != nil {
+			return err
+		}
+		e, err := m.recordTx(ctx, tx, "operation.submit", name, r.ID, map[string]any{"operationId": op.ID, "action": action, "reason": req.Reason})
+		events = append(events, e)
 		return err
 	})
 	if err != nil {
@@ -389,15 +445,12 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 		}
 		return Operation{}, err
 	}
+	m.publish(events)
 	// From here on the outcome must be recorded even if the caller goes
 	// away: an operation left pending blocks every power action until an
 	// operator resolves it. The helper calls are bounded by their own
 	// timeouts.
 	ctx = context.WithoutCancel(ctx)
-	if err = m.record(ctx, "operation.submit", name, map[string]any{"operationId": op.ID, "action": action}); err != nil {
-		op.State, op.Unresolved, op.Reason = "failed", false, "request was not sent: its audit entry could not be stored"
-		return op, errors.Join(err, m.saveOperation(ctx, &op))
-	}
 	receipt, err := m.power.Prepare(ctx, op.Request)
 	if err != nil {
 		op.State = "failed"

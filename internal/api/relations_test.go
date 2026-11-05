@@ -96,7 +96,7 @@ func TestRouterRebootGuard(t *testing.T) {
 	if x.call("GET", v1+"/resources/gateway/impact?action=reboot", nil).want(http.StatusOK).obj()["acknowledgementRequired"] != true {
 		t.Fatal("reboot needs acknowledgement")
 	}
-	body := map[string]any{"action": "reboot", "idempotencyKey": "op-1"}
+	body := map[string]any{"action": "reboot", "idempotencyKey": "op-1", "reason": "clear stuck WAN", "confirm": "gateway"}
 	details := x.call("POST", v1+"/resources/gateway/operations", body, ifMatch(`"1"`)).wantError(http.StatusConflict, "impact_unacknowledged")
 	if fmt.Sprint(impactNames(details["impact"].(map[string]any)["controlDependents"])) != "[nas]" || fake.Reboots() != 0 {
 		t.Fatalf("details = %v reboots %d", details, fake.Reboots())

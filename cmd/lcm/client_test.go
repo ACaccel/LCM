@@ -407,7 +407,7 @@ func TestResourcePhaseCommand(t *testing.T) {
 	s := newServer(t)
 	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("web", ""))).want(t, 0)
 	write := func(command string) []string {
-		return []string{"resource", command, "web", "--version", "1", "--reason", "decommission", "--confirm", "web", "--acknowledge"}
+		return []string{"resource", command, "web", "--reason", "decommission", "--confirm", "web", "--yes"}
 	}
 	s.cli("", write("retire")...).want(t, 0, `"phase": "retired"`)
 	s.cli("", "get", "resources", "web").want(t, 0, "retired")
@@ -417,7 +417,7 @@ func TestResourcePhaseCommand(t *testing.T) {
 	s.cli("", "get", "resources", "web").want(t, 1)
 	// A stale version is refused by the server, not retried.
 	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("api", ""))).want(t, 0)
-	r := s.cli("", "resource", "retire", "api", "--version", "9", "--reason", "x", "--confirm", "api", "--acknowledge").want(t, 1)
+	r := s.cli("", "resource", "retire", "api", "--version", "9", "--reason", "x", "--confirm", "api", "--yes").want(t, 1)
 	if !strings.Contains(r.stderr, "version") {
 		t.Fatalf("stale version: %+v", r)
 	}

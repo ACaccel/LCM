@@ -72,7 +72,7 @@ Every resource lists `actions`: name, `available` with a `reason`, `risk` (`read
 | `phase` | `POST /resources/{r}/phase` | `retire`, `resume`, `unmanage` |
 
 - Service actions run in the background with idempotent results ([services](services.md#lifecycle-states-and-actions)); only they have `policy: true`.
-- Machine and router operations are durable: the intent is stored before anything is sent, then submitted once and observed until `succeeded`, `failed` or `indeterminate`. They need a caller-chosen idempotency key and `If-Match`; an unknown outcome stays open until an administrator resolves it. Only direct administrator requests may submit or resolve them; policies are refused.
+- Machine and router operations are durable: the intent is stored before anything is sent, then submitted once and observed until `succeeded`, `failed` or `indeterminate`. A request carries a `reason`, `confirm` (the resource's exact name), an idempotency key chosen by the client and `If-Match`; the console and CLI fill in the key and the current version. The same key, action and version return the stored operation instead of sending again. An unknown outcome stays open until an administrator resolves it. Only direct administrator requests may submit or resolve them; policies are refused.
 - A route the resource's type does not support answers 409 `unsupported`.
 
 ## Relations
@@ -192,16 +192,16 @@ A rejected login is never retried within a call, so a wrong password costs one a
 ### Reboot
 
 ```sh
-lcm resource reboot home-router --version 3 --reason 'Clear stuck WAN' --confirm home-router --acknowledge --idempotency-key home-router-001
+lcm resource reboot home-router --reason 'Clear stuck WAN' --confirm home-router
 lcm resource operation home-router <operation-id>
 ```
 
-Preconditions, also shown by `lcm resource capabilities <name>`:
+The console asks in one dialog for a reason and the typed router name; the CLI prints the impact, the version and the generated idempotency key and asks before sending (`--yes` when stdin is not a terminal). Preconditions, also shown by `lcm resource capabilities <name>`:
 
 - the router is managed, its connection is configured, matches the adapter, allows this resource and lists `reboot` in `allowActions`;
 - the latest observation is fresh and `ok`, and reports uptime;
 - no other operation of the router is unresolved and local machine maintenance is not active;
-- a direct administrator request with the current version, an idempotency key and, when the router has dependents or control dependents, `acknowledgeImpact`.
+- a direct administrator request with a reason, the router's exact name in `confirm`, the current version, an idempotency key and, when the router has dependents or control dependents, `acknowledgeImpact`.
 
 The request is stored, sent once and never resent, also after a restart; submitting it makes the router's loop observe at once. Outcomes:
 

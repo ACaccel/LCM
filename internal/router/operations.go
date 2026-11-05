@@ -63,22 +63,25 @@ type Receipt struct {
 // Operation is a durable reboot request; its JSON form is the API's
 // ResourceOperation.
 type Operation struct {
-	Evidence   *Status         `json:"evidence,omitempty"`
-	ID         string          `json:"id"`
-	ResourceID string          `json:"resourceId"`
-	Action     string          `json:"action"`
-	State      string          `json:"state"`
-	Unresolved bool            `json:"unresolved"`
-	Version    int             `json:"version"`
-	CreatedAt  time.Time       `json:"createdAt"`
-	UpdatedAt  time.Time       `json:"updatedAt"`
-	Actor      resource.Actor  `json:"actor"`
-	Request    Request         `json:"request"`
-	Receipt    *Receipt        `json:"receipt"`
-	Reason     string          `json:"reason"`
-	Resolution string          `json:"resolution,omitempty"`
-	ResolvedBy *resource.Actor `json:"resolvedBy,omitempty"`
-	ResolvedAt *time.Time      `json:"resolvedAt,omitempty"`
+	Evidence   *Status        `json:"evidence,omitempty"`
+	ID         string         `json:"id"`
+	ResourceID string         `json:"resourceId"`
+	Action     string         `json:"action"`
+	State      string         `json:"state"`
+	Unresolved bool           `json:"unresolved"`
+	Version    int            `json:"version"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	UpdatedAt  time.Time      `json:"updatedAt"`
+	Actor      resource.Actor `json:"actor"`
+	Request    Request        `json:"request"`
+	Receipt    *Receipt       `json:"receipt"`
+	Reason     string         `json:"reason"`
+	// RequestReason is the operator's reason for the request; Reason
+	// explains the current state.
+	RequestReason string          `json:"requestReason,omitempty"`
+	Resolution    string          `json:"resolution,omitempty"`
+	ResolvedBy    *resource.Actor `json:"resolvedBy,omitempty"`
+	ResolvedAt    *time.Time      `json:"resolvedAt,omitempty"`
 }
 
 // Capability explains whether an operation can be submitted now.
@@ -160,19 +163,26 @@ func (m *Manager) rebootBlocked(ctx context.Context, r Record) (string, error) {
 // operation even when sending failed: the state tells what is known. The
 // same idempotency key with the same version returns the first operation
 // instead of sending again.
-func (m *Manager) Submit(ctx context.Context, ref, action, key string, expected int) (Operation, error) {
+func (m *Manager) Submit(ctx context.Context, ref string, req resource.OperationRequest) (Operation, error) {
 	if err := requireDirect(ctx); err != nil {
 		return Operation{}, err
 	}
+	action, key, expected := req.Action, req.Key, req.Version
 	if action != connection.ActionReboot {
 		return Operation{}, fmt.Errorf("%w: only reboot is supported", ErrUnsupported)
 	}
 	if !idempotencyPattern.MatchString(key) {
 		return Operation{}, precondition("a bounded idempotency key is required")
 	}
+	if !validReason(req.Reason) {
+		return Operation{}, precondition("a reason is required")
+	}
 	r, err := m.Get(ctx, ref)
 	if err != nil {
 		return Operation{}, err
+	}
+	if req.Confirm != r.Name {
+		return Operation{}, precondition("confirm the request with the exact resource name")
 	}
 	locks := m.locksFor(r.ID)
 	locks.control.Lock()
@@ -220,7 +230,7 @@ func (m *Manager) Submit(ctx context.Context, ref, action, key string, expected 
 	baseline, _ := bootAt(r.Status.Snapshot)
 	op := Operation{
 		ID: newID(), ResourceID: r.ID, Action: action, State: statePending, Unresolved: true, Version: expected,
-		CreatedAt: now, UpdatedAt: now, Actor: resource.ActorOf(a),
+		CreatedAt: now, UpdatedAt: now, Actor: resource.ActorOf(a), RequestReason: req.Reason,
 		Request: Request{
 			Action: action, Connection: r.Connection, RequestHash: hash, IssuedAt: now, Deadline: now.Add(rebootDeadline),
 			BaselineObservedAt: r.Status.Snapshot.ObservedAt, BaselineBootAt: baseline,
@@ -262,7 +272,7 @@ func (m *Manager) Submit(ctx context.Context, ref, action, key string, expected 
 	// away: a request that may have reached the router is never repeated,
 	// and one that was not sent must not stay pending.
 	ctx = context.WithoutCancel(ctx)
-	if err := m.record(ctx, "operation.submit", r, op.ID, map[string]any{"operationId": op.ID, "action": action, "connection": r.Connection}); err != nil {
+	if err := m.record(ctx, "operation.submit", r, op.ID, map[string]any{"operationId": op.ID, "action": action, "connection": r.Connection, "reason": req.Reason}); err != nil {
 		m.failUnsent(ctx, &op, "request was not sent: its audit entry could not be stored")
 		return op, err
 	}

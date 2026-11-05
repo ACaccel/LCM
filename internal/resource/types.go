@@ -65,3 +65,17 @@ const (
 	KindOperation = "operation"
 	KindPhase     = "phase"
 )
+
+// OperationRequest is a direct administrator request for a durable
+// operation. Confirm must repeat the resource's name, so that a request
+// typed for one resource cannot act on another; Version is the document
+// version the request was reviewed against (If-Match). The same Key with
+// the same Action and Version returns the stored operation instead of
+// sending a second request.
+type OperationRequest struct {
+	Action  string
+	Key     string
+	Reason  string
+	Confirm string
+	Version int
+}

@@ -190,22 +190,21 @@ func (s *Server) handleEnterMaintenance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req struct {
-		Reason       string `json:"reason"`
-		Acknowledged bool   `json:"acknowledged"`
-		PreviewHash  string `json:"previewHash"`
+		Reason      string `json:"reason"`
+		PreviewHash string `json:"previewHash"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if len(req.PreviewHash) != 64 {
-		writeFieldError(w, "previewHash", "review the current maintenance preview before entering")
+	if req.PreviewHash != "" && len(req.PreviewHash) != 64 {
+		writeFieldError(w, "previewHash", "send the hash of a maintenance preview or leave it out")
 		return
 	}
 	rec, ok := s.maintained(w, r, true)
 	if !ok {
 		return
 	}
-	v, err := s.machines.EnterMaintenance(machine.DirectRequest(r.Context()), refOf(rec), req.Reason, req.Acknowledged, expected, req.PreviewHash)
+	v, err := s.machines.EnterMaintenance(machine.DirectRequest(r.Context()), refOf(rec), req.Reason, expected, req.PreviewHash)
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return
@@ -268,6 +267,8 @@ func (s *Server) handleSubmitOperation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action            string `json:"action"`
 		IdempotencyKey    string `json:"idempotencyKey"`
+		Reason            string `json:"reason"`
+		Confirm           string `json:"confirm"`
 		AcknowledgeImpact bool   `json:"acknowledgeImpact"`
 	}
 	if !decodeJSON(w, r, &req) {
@@ -283,7 +284,9 @@ func (s *Server) handleSubmitOperation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	op, err := ops.Submit(machine.DirectRequest(r.Context()), refOf(rec), req.Action, req.IdempotencyKey, expected)
+	op, err := ops.Submit(machine.DirectRequest(r.Context()), refOf(rec), resource.OperationRequest{
+		Action: req.Action, Key: req.IdempotencyKey, Reason: req.Reason, Confirm: req.Confirm, Version: expected,
+	})
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return

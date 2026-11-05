@@ -353,10 +353,10 @@ func TestArchiveIsReadOnly(t *testing.T) {
 	x.call("POST", v1+"/resources", machineDoc, yamlBody()).want(http.StatusCreated)
 	host := v1 + "/resources/@" + hostID
 	x.call("POST", host+"/observe", nil).wantError(http.StatusConflict, "precondition_failed")
-	x.call("POST", host+"/maintenance", map[string]any{"reason": "x", "acknowledged": true, "previewHash": strings.Repeat("a", 64)}, ifMatch("1")).
+	x.call("POST", host+"/maintenance", map[string]any{"reason": "x", "previewHash": strings.Repeat("a", 64)}, ifMatch("1")).
 		wantError(http.StatusConflict, "precondition_failed")
 	x.call("POST", host+"/maintenance/exit", map[string]any{"reason": "x"}, ifMatch("1")).wantError(http.StatusConflict, "precondition_failed")
-	x.call("POST", host+"/operations", map[string]any{"action": "reboot", "idempotencyKey": "k"}, ifMatch("1")).
+	x.call("POST", host+"/operations", map[string]any{"action": "reboot", "idempotencyKey": "k", "reason": "x", "confirm": "host"}, ifMatch("1")).
 		wantError(http.StatusConflict, "precondition_failed")
 	x.call("POST", host+"/operations/x/resolve", map[string]any{"reason": "x"}, ifMatch("1")).wantError(http.StatusConflict, "precondition_failed")
 	x.call("GET", host+"/history", nil).want(http.StatusOK)

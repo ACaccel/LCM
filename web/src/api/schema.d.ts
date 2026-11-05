@@ -669,7 +669,9 @@ export interface paths {
         put?: never;
         /**
          * Enter maintenance on the local machine
-         * @description Direct administrator requests only; policies are refused.
+         * @description Holds local writes without a power request; a power request enters maintenance
+         *     itself. The request acknowledges partial workload coverage and manual recovery.
+         *     Direct administrator requests only; policies are refused.
          */
         post: operations["enterResourceMaintenance"];
         delete?: never;
@@ -706,7 +708,9 @@ export interface paths {
         put?: never;
         /**
          * Exit maintenance on the local machine
-         * @description Direct administrator requests only; policies are refused.
+         * @description Needs a reason, no open operation and a verified healthy observation newer than
+         *     the entry and any later resolution. Direct administrator requests only; policies
+         *     are refused.
          */
         post: operations["exitResourceMaintenance"];
         delete?: never;
@@ -730,12 +734,17 @@ export interface paths {
         put?: never;
         /**
          * Submit a durable operation such as a reboot
-         * @description The intent is stored before anything is sent; the outcome is observed and an
-         *     unknown one needs `resolve`. Direct administrator requests only; policies are
-         *     refused. A disruptive or destructive operation (reboot, graceful-shutdown) on a
-         *     resource other managed resources depend on or are controlled through needs
-         *     `acknowledgeImpact` (409 `impact_unacknowledged` otherwise); send it again when
-         *     retrying with the same idempotency key.
+         * @description One confirmed request: `reason` and `confirm` (the resource's exact name). A
+         *     machine power request enters maintenance itself, recording the workload
+         *     inventory, unless maintenance is already active; a refused request leaves none
+         *     behind. The intent is stored before anything is sent; the outcome is observed
+         *     and an unknown one needs `resolve`. The same `idempotencyKey` with the same
+         *     action and `If-Match` version returns the stored operation instead of sending
+         *     again. Direct administrator requests only; policies are refused. A disruptive or
+         *     destructive operation (reboot, graceful-shutdown) on a resource other managed
+         *     resources depend on or are controlled through needs `acknowledgeImpact` (409
+         *     `impact_unacknowledged` otherwise); send it again when retrying with the same
+         *     idempotency key.
          */
         post: operations["submitResourceOperation"];
         delete?: never;
@@ -2308,6 +2317,8 @@ export interface components {
             actor: components["schemas"]["Actor"];
             reason: string;
             acknowledged: boolean;
+            /** @description The power action whose request entered maintenance; absent for a manual entry. */
+            action?: string;
             preview: components["schemas"]["MachineMaintenancePreview"];
         };
         MachinePowerRequest: {
@@ -3456,7 +3467,10 @@ export interface components {
             receipt: {
                 [key: string]: unknown;
             } | null;
+            /** @description Explains the current state. */
             reason: string;
+            /** @description The operator's reason for the request. */
+            requestReason?: string;
             resolution?: string;
             resolvedBy?: components["schemas"]["Actor"];
             /** Format: date-time */
@@ -4834,8 +4848,8 @@ export interface operations {
             content: {
                 "application/json": {
                     reason: string;
-                    acknowledged: boolean;
-                    previewHash: string;
+                    /** @description The `hash` of the reviewed preview; entry is refused (409) when the workloads changed since. */
+                    previewHash?: string;
                 };
             };
         };
@@ -4977,7 +4991,12 @@ export interface operations {
                 "application/json": {
                     /** @description For example `reboot` or `graceful-shutdown`; see `GET /resource-types`. */
                     action: string;
+                    /** @description Chosen by the client: 1-128 letters, digits, `_`, `.`, `:` or `-`, starting with a letter or digit. */
                     idempotencyKey: string;
+                    /** @description Why the operation is requested; recorded with the operation and in the audit log. */
+                    reason: string;
+                    /** @description The resource's exact name */
+                    confirm: string;
                     /** @description Accept the impact reported by `GET /resources/{resource}/impact?action=`. */
                     acknowledgeImpact?: boolean;
                 };

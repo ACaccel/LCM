@@ -31,6 +31,11 @@ import (
 
 var epoch = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 
+// rebootReq is a request confirmed with the router's name.
+func rebootReq(name, action, key string, version int) resource.OperationRequest {
+	return resource.OperationRequest{Action: action, Key: key, Reason: "clear stuck WAN", Confirm: name, Version: version}
+}
+
 type secrets map[string]string
 
 func (s secrets) Get(name string) (secret.Value, error) {
@@ -408,19 +413,19 @@ func TestRebootSucceedsOnUptimeReset(t *testing.T) {
 	e.create(t, "router", "home")
 	e.observe(t, "router")
 	e.fake.SetReboot(xiaomitest.RebootAcceptAndDrop, 90*time.Second)
-	op, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.State != "observing" || !op.Unresolved || op.Receipt == nil || op.Receipt.Outcome != "unknown" || op.Request.Connection != "home" || e.fake.Reboots() != 1 {
+	if op.State != "observing" || !op.Unresolved || op.Receipt == nil || op.Receipt.Outcome != "unknown" || op.Request.Connection != "home" || op.RequestReason != "clear stuck WAN" || e.fake.Reboots() != 1 {
 		t.Fatalf("submitted = %+v", op)
 	}
 	// Retrying with the same key returns the operation without sending.
-	again, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	again, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil || again.ID != op.ID || e.fake.Reboots() != 1 {
 		t.Fatalf("retry = %+v, %v", again, err)
 	}
-	if _, err := e.m.Submit(e.direct(), "router", "reboot", "key-2", 1); !errors.Is(err, router.ErrPrecondition) {
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-2", 1)); !errors.Is(err, router.ErrPrecondition) {
 		t.Fatalf("second operation: %v", err)
 	}
 	e.clk.Advance(30 * time.Second)
@@ -443,7 +448,7 @@ func TestRebootSucceedsOnUptimeReset(t *testing.T) {
 		}
 	}
 	var n int
-	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'router.operation.submit'`).Scan(&n); err != nil || n != 1 {
+	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'router.operation.submit' AND json_extract(details, '$.reason') = 'clear stuck WAN'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("audit entries = %d, %v", n, err)
 	}
 }
@@ -453,7 +458,7 @@ func TestRebootIndeterminateWithoutEvidence(t *testing.T) {
 	e.create(t, "router", "home")
 	e.observe(t, "router")
 	e.fake.SetReboot(xiaomitest.RebootAccept, time.Hour)
-	op, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil || op.State != "observing" || op.Receipt.Outcome != "accepted" {
 		t.Fatalf("submit = %+v, %v", op, err)
 	}
@@ -493,20 +498,20 @@ func TestRebootRefusedOrNotSent(t *testing.T) {
 	e.create(t, "router", "home")
 	e.observe(t, "router")
 	e.fake.SetReboot(xiaomitest.RebootRefuse, 0)
-	op, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil || op.State != "failed" || op.Unresolved || op.Receipt.Outcome != "rejected" {
 		t.Fatalf("refused = %+v, %v", op, err)
 	}
 	e.fake.SetReboot(xiaomitest.RebootAccept, 0)
 	e.fake.SetFailure(xiaomitest.Reboot, xiaomitest.FailInvalidToken)
 	e.clk.Advance(time.Second)
-	op, err = e.m.Submit(e.direct(), "router", "reboot", "key-2", 1)
+	op, err = e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-2", 1))
 	if err != nil || op.State != "failed" || op.Unresolved || op.Receipt.Outcome != "rejected" {
 		t.Fatalf("token refused twice = %+v, %v", op, err)
 	}
 	// A request that never left LCM certainly did nothing.
 	e.fake.Close()
-	op, err = e.m.Submit(e.direct(), "router", "reboot", "key-3", 1)
+	op, err = e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-3", 1))
 	if err != nil || op.State != "failed" || op.Unresolved || op.Receipt.Outcome != "not-sent" || op.Reason != "request was not delivered" {
 		t.Fatalf("not sent = %+v, %v", op, err)
 	}
@@ -519,28 +524,41 @@ func TestRebootPreconditions(t *testing.T) {
 	e := newEnv(t)
 	e.create(t, "router", "home")
 	e.create(t, "readonly", "readonly")
-	if _, err := e.m.Submit(e.ctx, "router", "reboot", "k", 1); !errors.Is(err, router.ErrForbidden) {
+	if _, err := e.m.Submit(e.ctx, "router", rebootReq("router", "reboot", "k", 1)); !errors.Is(err, router.ErrForbidden) {
 		t.Fatalf("policy-like request: %v", err)
 	}
 	policy := auth.WithDirect(auth.WithActor(context.Background(), auth.Actor{Kind: auth.KindSystem, ID: "policy:p", Name: "p"}))
-	if _, err := e.m.Submit(policy, "router", "reboot", "k", 1); !errors.Is(err, router.ErrForbidden) {
+	if _, err := e.m.Submit(policy, "router", rebootReq("router", "reboot", "k", 1)); !errors.Is(err, router.ErrForbidden) {
 		t.Fatalf("system actor: %v", err)
 	}
-	if _, err := e.m.Submit(e.direct(), "router", "shutdown", "k", 1); !errors.Is(err, router.ErrUnsupported) {
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "shutdown", "k", 1)); !errors.Is(err, router.ErrUnsupported) {
 		t.Fatalf("shutdown: %v", err)
 	}
-	if _, err := e.m.Submit(e.direct(), "router", "reboot", "bad key", 1); !errors.Is(err, router.ErrPrecondition) {
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "bad key", 1)); !errors.Is(err, router.ErrPrecondition) {
 		t.Fatalf("bad key: %v", err)
 	}
-	if _, err := e.m.Submit(e.direct(), "router", "reboot", "k", 1); err == nil || !strings.Contains(err.Error(), "fresh successful observation") {
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "k", 1)); err == nil || !strings.Contains(err.Error(), "fresh successful observation") {
 		t.Fatalf("unobserved: %v", err)
 	}
 	e.observe(t, "router")
 	e.observe(t, "readonly")
-	if _, err := e.m.Submit(e.direct(), "readonly", "reboot", "k", 1); err == nil || !strings.Contains(err.Error(), "does not allow reboot") {
+	// The typed name and the reason are part of the request.
+	wrong := rebootReq("readonly", "reboot", "k", 1)
+	if _, err := e.m.Submit(e.direct(), "router", wrong); err == nil || !strings.Contains(err.Error(), "exact resource name") {
+		t.Fatalf("wrong name: %v", err)
+	}
+	unexplained := rebootReq("router", "reboot", "k", 1)
+	unexplained.Reason = " "
+	if _, err := e.m.Submit(e.direct(), "router", unexplained); err == nil || !strings.Contains(err.Error(), "reason") {
+		t.Fatalf("no reason: %v", err)
+	}
+	if e.fake.Reboots() != 0 {
+		t.Fatal("unconfirmed request sent")
+	}
+	if _, err := e.m.Submit(e.direct(), "readonly", rebootReq("readonly", "reboot", "k", 1)); err == nil || !strings.Contains(err.Error(), "does not allow reboot") {
 		t.Fatalf("read-only connection: %v", err)
 	}
-	if _, err := e.m.Submit(e.direct(), "router", "reboot", "k", 2); !errors.Is(err, router.ErrConflict) {
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "k", 2)); !errors.Is(err, router.ErrConflict) {
 		t.Fatalf("stale version: %v", err)
 	}
 	// Durable machine maintenance, as the machine type stores it.
@@ -557,7 +575,7 @@ func TestRebootPreconditions(t *testing.T) {
 	if err != nil || caps[0].Available || caps[0].Reason != "local machine maintenance is active" {
 		t.Fatalf("capabilities in maintenance = %+v, %v", caps, err)
 	}
-	if _, err := e.m.Submit(e.direct(), "router", "reboot", "k", 1); !errors.Is(err, router.ErrPrecondition) || e.fake.Reboots() != 0 {
+	if _, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "k", 1)); !errors.Is(err, router.ErrPrecondition) || e.fake.Reboots() != 0 {
 		t.Fatalf("reboot in maintenance: %v", err)
 	}
 	// Observation continues during maintenance.
@@ -726,7 +744,7 @@ func TestRebootVerifiedWithLongInterval(t *testing.T) {
 	}
 	n := nextSample(0)
 	e.fake.SetReboot(xiaomitest.RebootAcceptAndDrop, 90*time.Second)
-	op, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil || op.State != "observing" {
 		t.Fatalf("submit = %+v, %v", op, err)
 	}
@@ -764,7 +782,7 @@ func TestRebootNotSentWhenAuditFails(t *testing.T) {
 	e.create(t, "router", "home")
 	e.observe(t, "router")
 	failSubmitAudit(t, e)
-	op, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err == nil || op.State != "failed" || op.Unresolved || op.Receipt == nil || op.Receipt.Outcome != "not-sent" {
 		t.Fatalf("submit = %+v, %v", op, err)
 	}
@@ -773,7 +791,7 @@ func TestRebootNotSentWhenAuditFails(t *testing.T) {
 		t.Fatalf("stored = %+v", stored)
 	}
 	// A retry with the same key reports the failure without sending.
-	again, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	again, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil || again.ID != op.ID || again.State != "failed" || e.fake.Reboots() != 0 {
 		t.Fatalf("retry = %+v, %v", again, err)
 	}
@@ -804,7 +822,7 @@ func TestAbandonedOperationsAreClosed(t *testing.T) {
 	// A retry finds the pending request of a Submit that stopped before
 	// sending: it is closed as failed and never sent.
 	insertOperation(t, e, r, "op-pending", "key-1", "pending")
-	op, err := e.m.Submit(e.direct(), "router", "reboot", "key-1", 1)
+	op, err := e.m.Submit(e.direct(), "router", rebootReq("router", "reboot", "key-1", 1))
 	if err != nil || op.ID != "op-pending" || op.State != "failed" || op.Unresolved || e.fake.Reboots() != 0 {
 		t.Fatalf("retry of a pending request = %+v, %v", op, err)
 	}

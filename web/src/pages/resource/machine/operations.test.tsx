@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ResourceDetail } from "../../../api/types";
+import type { MachineMaintenance, ResourceDetail } from "../../../api/types";
 import { readAttempt } from "../../../lib/operation";
 import { OperationsList } from "../operations";
 import { freshMachine, jsonResponse, maintenanceFixture, noImpact, operationFixture } from "../test-fixtures";
@@ -64,17 +64,23 @@ function wrap(children: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
-function controls(machine: ResourceDetail = freshMachine()) {
-  return <MachineControls resource={machine} caps={caps} maintenance={maintenanceFixture} />;
+function controls(machine: ResourceDetail = freshMachine(), maintenance: MachineMaintenance | null = maintenanceFixture) {
+  return <MachineControls resource={machine} caps={caps} maintenance={maintenance} />;
 }
-async function confirmReboot() {
+async function fillConfirmation(name = "workstation") {
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "重新開機" }));
   const button = screen.getByRole("button", { name: "確認" }) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
-  for (const checkbox of screen.getAllByRole("checkbox")) await user.click(checkbox);
+  await user.type(screen.getByLabelText("理由"), "Kernel update");
+  expect(button.disabled).toBe(true);
+  await user.type(screen.getByLabelText(/輸入資源名稱/), name);
+  return button;
+}
+async function confirmReboot() {
+  await userEvent.click(screen.getByRole("button", { name: "重新開機" }));
+  const button = await fillConfirmation();
   await waitFor(() => expect(button.disabled).toBe(false));
-  await user.click(button);
+  await userEvent.click(button);
 }
 afterEach(() => {
   localStorage.clear();
@@ -83,12 +89,12 @@ afterEach(() => {
 });
 
 describe("MachineControls", () => {
-  it("keeps power-on, unsupported, stale and unknown identity controls disabled", () => {
+  it("offers no power-on and keeps unsupported, stale and unknown identity controls disabled", () => {
     setupServer();
     const machine = freshMachine();
     machine.machine!.status!.fresh = false;
     const view = render(wrap(controls(machine)));
-    expect((screen.getByRole("button", { name: "開機" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "開機" })).toBeNull();
     expect(screen.getByText(/沒有獨立開機管道/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "重新開機" }) as HTMLButtonElement).disabled).toBe(true);
     view.rerender(
@@ -107,7 +113,42 @@ describe("MachineControls", () => {
     view.rerender(wrap(controls(changed)));
     expect((screen.getByRole("button", { name: "重新開機" }) as HTMLButtonElement).disabled).toBe(true);
   });
-  it("requires all confirmations, retains the same key/version after a lost response and refresh, and queries accepted operations", async () => {
+  it("enters maintenance with the request: one dialog lists the recorded workloads once and needs a reason and the typed name", async () => {
+    const posts = setupServer();
+    const fetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (req: Request) =>
+      new URL(req.url).pathname.endsWith("/maintenance/preview")
+        ? jsonResponse({ ...maintenanceFixture.preview, workloads: [{ name: "cache", version: 2, state: "running", autostart: "unknown" }] })
+        : fetch(req),
+    );
+    render(wrap(controls(freshMachine(), null)));
+    await userEvent.click(screen.getByRole("button", { name: "重新開機" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/自動進入維護/)).toBeTruthy();
+    expect(await within(dialog).findAllByText("cache")).toHaveLength(1);
+    expect(screen.getAllByText(/此操作會讓同機 LCM 與控制台離線/)).toHaveLength(1);
+    expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(0);
+    const button = await fillConfirmation("workstatio");
+    expect(button.disabled).toBe(true);
+    await userEvent.type(screen.getByLabelText(/輸入資源名稱/), "n");
+    await waitFor(() => expect(button.disabled).toBe(false));
+    await userEvent.click(button);
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toMatchObject({
+      path: "/api/v1/resources/workstation/operations",
+      match: "3",
+      body: { action: "reboot", reason: "Kernel update", confirm: "workstation" },
+    });
+    expect(typeof posts[0]?.body.idempotencyKey).toBe("string");
+  });
+  it("keeps an active maintenance instead of listing a new one", async () => {
+    setupServer();
+    render(wrap(controls()));
+    await userEvent.click(screen.getByRole("button", { name: "重新開機" }));
+    expect(screen.getByText(/維護已啟用（Scheduled maintenance）/)).toBeTruthy();
+    expect(screen.queryByText(/自動進入維護/)).toBeNull();
+  });
+  it("retains the same key/version after a lost response and refresh, and queries accepted operations", async () => {
     const posts = setupServer((n) => {
       if (n === 1) throw new TypeError("Simulated connection loss");
       return jsonResponse(operationFixture, 202);
@@ -127,7 +168,7 @@ describe("MachineControls", () => {
     await userEvent.click(screen.getByRole("button", { name: "以原 key 查詢／重試" }));
     expect(await screen.findByText("觀測中")).toBeTruthy();
     expect(posts).toHaveLength(2);
-    expect(posts[1]).toMatchObject({ match: "3", body: { action: "reboot", idempotencyKey: key } });
+    expect(posts[1]).toMatchObject({ match: "3", body: { action: "reboot", idempotencyKey: key, reason: "Kernel update", confirm: "workstation" } });
     expect(posts.every((p) => p.path === "/api/v1/resources/workstation/operations")).toBe(true);
     expect(readAttempt(machine.id)?.operationId).toBe("operation-1");
     await userEvent.click(screen.getByRole("button", { name: "查詢操作" }));
@@ -149,8 +190,9 @@ describe("MachineControls", () => {
     const view = render(wrap(controls(machine)));
     await userEvent.click(screen.getByRole("button", { name: "重新開機" }));
     view.rerender(wrap(controls({ ...machine, version: 4 })));
-    for (const checkbox of screen.getAllByRole("checkbox")) await userEvent.click(checkbox);
-    await userEvent.click(screen.getByRole("button", { name: "確認" }));
+    const button = await fillConfirmation();
+    await waitFor(() => expect(button.disabled).toBe(false));
+    await userEvent.click(button);
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]?.match).toBe("3");
   });
@@ -176,29 +218,30 @@ describe("MachineControls", () => {
 });
 
 describe("maintenance and manual resolution", () => {
-  it("requires a reason and acknowledgements and sends If-Match on entering maintenance", async () => {
+  it("enters maintenance with a reason and the reviewed preview's hash", async () => {
     const posts = setupServer();
     render(wrap(<MaintenanceDialog machine={freshMachine()} exit={false} onClose={() => undefined} />));
     const button = screen.getByRole("button", { name: "確認" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+    expect(await screen.findByText("沒有已知的服務。")).toBeTruthy();
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     await userEvent.type(screen.getByRole("textbox"), "Scheduled inspection");
-    expect(button.disabled).toBe(true);
-    for (const checkbox of screen.getAllByRole("checkbox")) await userEvent.click(checkbox);
     await userEvent.click(button);
     await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]).toMatchObject({
+    expect(posts[0]).toEqual({
       path: "/api/v1/resources/workstation/maintenance",
       match: "3",
-      body: { reason: "Scheduled inspection", acknowledged: true, previewHash: maintenanceFixture.preview.hash },
+      body: { reason: "Scheduled inspection", previewHash: maintenanceFixture.preview.hash },
     });
   });
-  it("exits maintenance explicitly with a reason", async () => {
+  it("exits maintenance with only a reason", async () => {
     const posts = setupServer();
     render(wrap(<MaintenanceDialog machine={freshMachine()} exit onClose={() => undefined} />));
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     await userEvent.type(screen.getByRole("textbox"), "Workloads inspected and recovered");
-    for (const checkbox of screen.getAllByRole("checkbox")) await userEvent.click(checkbox);
     await userEvent.click(screen.getByRole("button", { name: "確認" }));
-    await waitFor(() => expect(posts[0]?.path).toBe("/api/v1/resources/workstation/maintenance/exit"));
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toEqual({ path: "/api/v1/resources/workstation/maintenance/exit", match: "3", body: { reason: "Workloads inspected and recovered" } });
   });
   it("requires explicit manual resolution and shows it as unverified with actor/reason", async () => {
     const posts = setupServer();

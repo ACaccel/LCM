@@ -943,7 +943,10 @@ paths:
       tags: [Resources]
       operationId: enterResourceMaintenance
       summary: Enter maintenance on the local machine
-      description: Direct administrator requests only; policies are refused.
+      description: |
+        Holds local writes without a power request; a power request enters maintenance
+        itself. The request acknowledges partial workload coverage and manual recovery.
+        Direct administrator requests only; policies are refused.
       parameters:
         - name: If-Match
           in: header
@@ -956,11 +959,14 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [reason, acknowledged, previewHash]
+              required: [reason]
               properties:
                 reason: { type: string }
-                acknowledged: { type: boolean }
-                previewHash: { type: string, minLength: 64, maxLength: 64 }
+                previewHash:
+                  type: string
+                  minLength: 64
+                  maxLength: 64
+                  description: The `hash` of the reviewed preview; entry is refused (409) when the workloads changed since.
       responses:
         "200":
           description: The active maintenance.
@@ -1001,7 +1007,10 @@ paths:
       tags: [Resources]
       operationId: exitResourceMaintenance
       summary: Exit maintenance on the local machine
-      description: Direct administrator requests only; policies are refused.
+      description: |
+        Needs a reason, no open operation and a verified healthy observation newer than
+        the entry and any later resolution. Direct administrator requests only; policies
+        are refused.
       parameters:
         - $ref: "#/components/parameters/Resource"
         - name: If-Match
@@ -1060,12 +1069,17 @@ paths:
       operationId: submitResourceOperation
       summary: Submit a durable operation such as a reboot
       description: |
-        The intent is stored before anything is sent; the outcome is observed and an
-        unknown one needs `resolve`. Direct administrator requests only; policies are
-        refused. A disruptive or destructive operation (reboot, graceful-shutdown) on a
-        resource other managed resources depend on or are controlled through needs
-        `acknowledgeImpact` (409 `impact_unacknowledged` otherwise); send it again when
-        retrying with the same idempotency key.
+        One confirmed request: `reason` and `confirm` (the resource's exact name). A
+        machine power request enters maintenance itself, recording the workload
+        inventory, unless maintenance is already active; a refused request leaves none
+        behind. The intent is stored before anything is sent; the outcome is observed
+        and an unknown one needs `resolve`. The same `idempotencyKey` with the same
+        action and `If-Match` version returns the stored operation instead of sending
+        again. Direct administrator requests only; policies are refused. A disruptive or
+        destructive operation (reboot, graceful-shutdown) on a resource other managed
+        resources depend on or are controlled through needs `acknowledgeImpact` (409
+        `impact_unacknowledged` otherwise); send it again when retrying with the same
+        idempotency key.
       parameters:
         - name: If-Match
           in: header
@@ -1078,10 +1092,14 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [action, idempotencyKey]
+              required: [action, idempotencyKey, reason, confirm]
               properties:
                 action: { type: string, description: "For example `reboot` or `graceful-shutdown`; see `GET /resource-types`." }
-                idempotencyKey: { type: string }
+                idempotencyKey:
+                  type: string
+                  description: "Chosen by the client: 1-128 letters, digits, `_`, `.`, `:` or `-`, starting with a letter or digit."
+                reason: { type: string, description: "Why the operation is requested; recorded with the operation and in the audit log." }
+                confirm: { type: string, description: The resource's exact name, as the operator typed it. }
                 acknowledgeImpact:
                   type: boolean
                   description: Accept the impact reported by `GET /resources/{resource}/impact?action=`.
@@ -4138,6 +4156,9 @@ components:
           type: string
         acknowledged:
           type: boolean
+        action:
+          type: string
+          description: The power action whose request entered maintenance; absent for a manual entry.
         preview:
           $ref: '#/components/schemas/MachineMaintenancePreview'
     MachinePowerRequest:
@@ -5640,7 +5661,8 @@ components:
         receipt:
           type: [object, "null"]
           additionalProperties: true
-        reason: { type: string }
+        reason: { type: string, description: Explains the current state. }
+        requestReason: { type: string, description: The operator's reason for the request. }
         resolution: { type: string }
         resolvedBy: { $ref: "#/components/schemas/Actor" }
         resolvedAt: { type: string, format: date-time }

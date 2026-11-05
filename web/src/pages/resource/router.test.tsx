@@ -71,14 +71,14 @@ describe("router monitoring", () => {
 
 describe("router reboot", () => {
   it.each([
-    { name: "without dependents", impact: noImpact("gateway", "reboot"), checks: 1, ack: undefined },
+    { name: "without dependents", impact: noImpact("gateway", "reboot"), checks: 0, ack: undefined },
     {
       name: "with a control dependent",
       impact: { ...noImpact("gateway", "reboot"), controlDependents: [{ name: "nas", type: "service" as const, relation: "controlPath" as const, via: "gateway", depth: 1 }], acknowledgementRequired: true },
-      checks: 2,
+      checks: 1,
       ack: true,
     },
-  ])("submits through the durable operation flow only after acknowledgement ($name)", async ({ impact, checks, ack }) => {
+  ])("submits one request with a reason and the typed name ($name)", async ({ impact, checks, ack }) => {
     const posts: { path: string; match: string | null; body: Record<string, unknown> }[] = [];
     vi.stubGlobal("fetch", async (req: Request) => {
       const path = new URL(req.url).pathname;
@@ -99,17 +99,23 @@ describe("router reboot", () => {
     const dialog = screen.getByRole("dialog");
     const confirm = within(dialog).getByRole("button", { name: "確認" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
-    await waitFor(() => expect(within(dialog).getAllByRole("checkbox")).toHaveLength(checks));
-    for (const box of within(dialog).getAllByRole("checkbox")) {
+    // The consequences are shown once, in the dialog.
+    expect(screen.getAllByText(/重開路由器會中斷網路/)).toHaveLength(1);
+    await user.type(within(dialog).getByLabelText("理由"), "Clear stuck WAN");
+    await user.type(within(dialog).getByLabelText(/輸入資源名稱/), "gateway ");
+    expect(confirm.disabled).toBe(true);
+    await user.type(within(dialog).getByLabelText(/輸入資源名稱/), "{Backspace}");
+    await waitFor(() => expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(checks));
+    for (const box of within(dialog).queryAllByRole("checkbox")) {
       expect(confirm.disabled).toBe(true);
       await user.click(box);
     }
-    expect(confirm.disabled).toBe(false);
+    await waitFor(() => expect(confirm.disabled).toBe(false));
     await user.click(confirm);
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]!.path).toBe("/api/v1/resources/gateway/operations");
     expect(posts[0]!.match).toBe("3");
-    expect(posts[0]!.body).toMatchObject({ action: "reboot" });
+    expect(posts[0]!.body).toMatchObject({ action: "reboot", reason: "Clear stuck WAN", confirm: "gateway" });
     expect(posts[0]!.body["acknowledgeImpact"]).toBe(ack);
   });
 });

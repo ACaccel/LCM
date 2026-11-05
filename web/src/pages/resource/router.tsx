@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { capabilitiesQuery } from "../../api/observations";
 import type { ResourceDetail, ResourceSnapshot, RouterSnapshot, RouterStatus } from "../../api/types";
-import { Dialog } from "../../components/dialog";
 import { ErrorBox, Pill, Tag } from "../../components/ui";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/format";
@@ -10,7 +9,7 @@ import { coverageView, cpuPercent } from "../../lib/machine";
 import { healthView } from "../../lib/status";
 import type { StatusView } from "../../lib/status";
 import { s } from "../../strings";
-import { ImpactAcknowledgement, useImpactAck } from "./impact";
+import { PowerDialog } from "./machine/dialogs";
 import { UsageTrend } from "./machine/trend";
 import { HistoryPanel } from "./observations";
 import { AttemptPanel, OperationsList, useDurableOperation } from "./operations";
@@ -170,13 +169,11 @@ export function RouterMonitoring({ resource, selector }: { resource: ResourceDet
   );
 }
 
-/** Durable router operations (reboot): administrator only, with an explicit acknowledgement. */
+/** Durable router operations (reboot): administrator only, confirmed with a reason and the typed name. */
 export function RouterControls({ resource, selector }: { resource: ResourceDetail; selector: string }) {
   const caps = useQuery(capabilitiesQuery(selector));
   const op = useDurableOperation(resource);
   const [confirm, setConfirm] = useState<{ action: string; version: number } | null>(null);
-  const [ack, setAck] = useState(false);
-  const impact = useImpactAck(resource.name, confirm?.action ?? "", !!confirm);
   const operations = resource.actions.filter((a) => a.kind === "operation");
   const unavailable = (name: string): string => {
     const a = operations.find((x) => x.name === name);
@@ -189,7 +186,6 @@ export function RouterControls({ resource, selector }: { resource: ResourceDetai
   return (
     <section className="panel stack">
       <h2>{s.machine.controls}</h2>
-      <p>{s.router.rebootDisclosure}</p>
       <ErrorBox error={caps.error} onRetry={() => void caps.refetch()} />
       {operations.map((a) => {
         const reason = unavailable(a.name);
@@ -200,11 +196,7 @@ export function RouterControls({ resource, selector }: { resource: ResourceDetai
                 type="button"
                 className="btn danger"
                 disabled={!!reason || !!op.attempt || !!op.storageError || resource.phase !== "managed"}
-                onClick={() => {
-                  setAck(false);
-                  impact.setChecked(false);
-                  setConfirm({ action: a.name, version: resource.version });
-                }}
+                onClick={() => setConfirm({ action: a.name, version: resource.version })}
               >
                 {actionLabel(a.name)}
               </button>
@@ -217,40 +209,18 @@ export function RouterControls({ resource, selector }: { resource: ResourceDetai
       <ErrorBox error={op.mutation.error} />
       <AttemptPanel resource={resource.name} op={op} />
       {confirm && (
-        <Dialog
-          title={actionLabel(confirm.action)}
+        <PowerDialog
+          resource={resource}
+          action={confirm.action}
+          version={confirm.version}
+          disclosure={s.router.rebootDisclosure}
+          unavailable={unavailable(confirm.action)}
           onClose={() => setConfirm(null)}
-          footer={
-            <>
-              <button type="button" className="btn" onClick={() => setConfirm(null)}>
-                {s.common.cancel}
-              </button>
-              <button
-                type="button"
-                className="btn danger solid"
-                disabled={!ack || !impact.ready || !!unavailable(confirm.action)}
-                onClick={() => {
-                  op.start(confirm.action, confirm.version, impact.acknowledged);
-                  setConfirm(null);
-                }}
-              >
-                {s.common.confirm}
-              </button>
-            </>
-          }
-        >
-          <div className="stack">
-            <p>
-              {s.operation.target}: <strong>{resource.name}</strong> / <code>{resource.id}</code> / {s.config.version(confirm.version)}
-            </p>
-            <div className="banner warn">{s.router.rebootDisclosure}</div>
-            <ImpactAcknowledgement state={impact} />
-            <label className="check">
-              <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
-              {s.router.rebootAck}
-            </label>
-          </div>
-        </Dialog>
+          onConfirm={(c) => {
+            op.start(confirm.action, confirm.version, c);
+            setConfirm(null);
+          }}
+        />
       )}
     </section>
   );

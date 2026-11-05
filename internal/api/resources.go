@@ -93,7 +93,7 @@ type Operations interface {
 	Capabilities(ctx context.Context, ref string) ([]Capability, error)
 	List(ctx context.Context, ref string) ([]Operation, error)
 	Get(ctx context.Context, ref, id string) (Operation, error)
-	Submit(ctx context.Context, ref, action, key string, expected int) (Operation, error)
+	Submit(ctx context.Context, ref string, req resource.OperationRequest) (Operation, error)
 	Resolve(ctx context.Context, ref, id, reason string, expected int) (Operation, error)
 }
 

@@ -85,25 +85,36 @@ Default retention is 7 days of raw snapshots, 90 days of minute points and 90 da
 
 Power defaults disabled (`LCM_MACHINE_POWER=false`, `lcm serve --machine-power=false`). Enabling the flag does not install the helper or establish readiness. See [separately authorized installation](operations.md#local-machine-power-helper); low-level paths, protocol and OS checks belong to the [helper contract](../internal/machine/power/README.md).
 
-Only direct authenticated administrator requests from the console, CLI or API can enter/exit maintenance, submit power requests or resolve outcomes. No Machine power node is exposed to policies or triggers, and internal policy actors are rejected. Administrator tokens remain programmatic credentials; this release does not prove human presence or provide a general approval service. `reboot` and `graceful-shutdown` require a managed Linux/systemd host, fresh verified healthy observations, acknowledged maintenance, trusted helper configuration, verified controller autostart and successful systemd/logind checks. The helper rejects every login session and inhibitor and repeats checks at submission; no force override exists. Capability output explains disabled prerequisites but does not reserve or guarantee a later submission.
+Only direct authenticated administrator requests from the console, CLI or API can enter/exit maintenance, submit power requests or resolve outcomes. No Machine power node is exposed to policies or triggers, and internal policy actors are rejected. Administrator tokens remain programmatic credentials; this release does not prove human presence or provide a general approval service.
 
-Maintenance persists a common local write gate across restarts. It blocks service actions, deploy/rollback, backup/jobs, resource document and phase writes, router reboots, config-sync apply, Policy/Module changes, new/resumed policy runs and self-deploy. Observation and read access continue. Entry refuses conflicting in-flight writes rather than interrupting them. Startup restores/reconciles Machine operations and gates before automation and manual writes become available.
+A `reboot` or `graceful-shutdown` is one request (`POST .../operations`) with a reason and `confirm`, the machine's exact name, plus `If-Match` and an idempotency key. The server then checks, in order, before anything changes:
 
-Review `GET /api/v1/resources/{resource}/maintenance/preview` (or `lcm resource maintenance <name> preview`) before entry. The API requires its `previewHash`; the CLI requires `--preview-hash`. Entry rechecks the machine version and the ordered known local service names/versions/states under the write gate, rejects a changed hash and persists the reviewed inventory. Supervisor autostart is explicitly unknown until checked by the operator.
+- a managed Linux/systemd host with fresh verified healthy observations and the required OS evidence;
+- trusted helper configuration, verified controller autostart and successful systemd/logind checks (helper preflight);
+- no unresolved operation and the current document version.
 
-The workload view is partial: registered services do not inventory every process, container or dependency. Maintenance does not automatically stop or orchestrate workloads. Prepare them yourself before entry. Acknowledge controller downtime, unknown workloads and manual recovery. OS/systemd/Docker autostart can start workloads outside LCM's actions; maintenance does not change those settings or guarantee they remain stopped.
+Then, in one transaction under the write gate, it enters maintenance unless maintenance is already active, recording the reason, the power action and the workload inventory, and stores the operation with its audit entries. An active maintenance is reused unchanged. A refused request leaves no maintenance behind. The helper rejects every login session and inhibitor and repeats its checks at submission; no force override exists. Capability output explains disabled prerequisites but does not reserve or guarantee a later submission.
 
-All machine management/control writes in `lcm resource` require `--version <current-version> --reason <text> --confirm <exact-name> --acknowledge`. `observe` is exempt. Current API reasons are recorded for maintenance and resolution; CLI reasons for power and management-phase changes are local checks only. Example sequence for an independently authorized maintenance window, using the current version returned by `get`:
+Maintenance persists a common local write gate across restarts. It blocks service actions, deploy/rollback, backup/jobs, resource document and phase writes, router reboots, config-sync apply, Policy/Module changes, new/resumed policy runs and self-deploy. Observation and read access continue. Entry refuses conflicting in-flight writes (409) rather than interrupting them. Startup restores/reconciles Machine operations and gates before automation and manual writes become available.
+
+To pause local writes without a power request, enter maintenance on its own (`POST .../maintenance` with a reason). `GET .../maintenance/preview` lists the known local services (name, version, state); an entry that sends the preview's `previewHash` is refused if they changed since. The entry stores that inventory. Supervisor autostart is explicitly unknown until checked by the operator.
+
+The workload view is partial: registered services do not inventory every process, container or dependency. Maintenance does not automatically stop or orchestrate workloads; prepare them yourself before a power request. The confirmed request acknowledges controller downtime, unknown workloads and manual recovery. OS/systemd/Docker autostart can start workloads outside LCM's actions; maintenance does not change those settings or guarantee they remain stopped.
+
+The console asks once, in one dialog: it shows the consequences, the workloads the entry records (or the active maintenance it keeps), any [impact](resources.md#relations), and needs a reason and the typed name. The CLI works the same way:
 
 ```sh
-lcm resource maintenance workstation preview
-lcm resource maintenance workstation enter --preview-hash <reviewed-hash> --version 1 --reason 'Scheduled maintenance' --confirm workstation --acknowledge
-lcm resource reboot workstation --version 1 --reason 'Scheduled maintenance' --confirm workstation --acknowledge --idempotency-key workstation-maint-001
+lcm resource reboot workstation --reason 'Kernel update' --confirm workstation
 lcm resource operations workstation
 lcm resource operation workstation <operation-id>
 ```
 
-Use `shutdown` in place of `reboot` for a graceful-shutdown request. When other managed resources depend on or are controlled through the machine, `reboot` and `shutdown` also need `--acknowledge-impact` ([impact](resources.md#relations)). Caller-chosen idempotency keys are 1–128 characters, starting with a letter/digit and otherwise containing letters, digits, `_`, `.`, `:` or `-`. Keep the operation ID, key and original document version. If the response is ambiguous, inspect operations and retry only the same action/key/version; a new key could request a second operation. There is no command that cancels an accepted OS request.
+- Writes in `lcm resource` (maintenance enter/exit, reboot, shutdown, resolve, retire, resume, unmanage) need `--reason` and `--confirm <exact-name>`. The CLI reads the current document version; `--version` overrides it.
+- `reboot`, `shutdown`, `maintenance enter`, `retire` and `unmanage` print what they affect (impact, workloads or the active maintenance) on stderr and ask `Proceed? [y/N]`. When stdin is not a terminal they refuse unless `--yes` is given.
+- Use `shutdown` for a graceful-shutdown request. When other managed resources depend on or are controlled through the machine, `reboot` and `shutdown` also need `--acknowledge-impact`.
+- The CLI generates the idempotency key and prints it with the version before sending. If the response is ambiguous, inspect operations and retry only with the same `--idempotency-key` and `--version`; a new key could request a second operation. Keys are 1–128 characters, starting with a letter/digit and otherwise containing letters, digits, `_`, `.`, `:` or `-`. There is no command that cancels an accepted OS request.
+
+The reason is recorded in the operation (`requestReason`), the audit entries and an automatically entered maintenance.
 
 The controller stores intent before helper prepare/submit. The helper's independent durable receipt is queried after restart or uncertain handoff; recovery never blindly resubmits. States include `pending`, `submitting`, `observing`, `succeeded`, `failed` and `indeterminate`. Acceptance and a successful CLI exit are not proof of completion:
 
@@ -113,11 +124,11 @@ The controller stores intent before helper prepare/submit. The helper's independ
 
 The helper binding's `validUntil` is at most five minutes after request creation and no later than the authorizing health observation becomes stale. Preparation and submission recheck prerequisites; the controller revalidates persisted observations before its submission fence. This authorization window is separate from the ten-minute reboot observation `deadline`. Expiry never revokes an OS request already accepted. Missing uptime or other required evidence cannot establish reboot success.
 
-Maintenance exit requires no unresolved operation and verified healthy observations newer than maintenance entry and any subsequent manual resolution. Collect or wait for a new snapshot after those steps; a still-fresh pre-maintenance or pre-resolution result is insufficient.
+Maintenance, also when a power request entered it, stays until an explicit exit. Exit needs a reason, no unresolved operation and verified healthy observations newer than maintenance entry and any subsequent manual resolution. Collect or wait for a new snapshot after those steps; a still-fresh pre-maintenance or pre-resolution result is insufficient.
 
 ```sh
-lcm resource resolve workstation <operation-id> --version 1 --reason 'Reviewed unverified outcome' --confirm workstation --acknowledge
-lcm resource maintenance workstation exit --version 1 --reason 'Recovery verified' --confirm workstation --acknowledge
+lcm resource resolve workstation <operation-id> --reason 'Reviewed unverified outcome' --confirm workstation
+lcm resource maintenance workstation exit --reason 'Recovery verified' --confirm workstation
 ```
 
 ## Retirement and archives
