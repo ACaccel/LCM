@@ -143,7 +143,7 @@ export function MachineTrendPanel({ resource, selector }: { resource: Observed; 
   const [range, setRange] = useState<RangeKey>("24h");
   const q = useQuery(historyQuery(selector, range));
   const limits = limitsOf(resource);
-  const snapshots = (q.data ?? []).flatMap((x) => (x.machine ? [x.machine] : []));
+  const snapshots = (q.data ?? []).flatMap((x) => (x.type === "machine" ? [x.data] : []));
   return (
     <section className="panel stack">
       <div className="chart-title">

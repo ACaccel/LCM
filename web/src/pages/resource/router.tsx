@@ -120,7 +120,7 @@ function RouterStatusPanel({ status }: { status: RouterStatus }) {
 export function RouterCharts({ selector, resource }: { selector: string; resource: ResourceDetail }) {
   const [range, setRange] = useState<RangeKey>("24h");
   const q = useQuery(historyQuery(selector, range));
-  const rows = (q.data ?? []).flatMap((x) => (x.router ? [{ id: x.id, at: x.observedAt, t: Date.parse(x.observedAt), r: x.router }] : []));
+  const rows = (q.data ?? []).flatMap((x) => (x.type === "router" ? [{ id: x.id, at: x.observedAt, t: Date.parse(x.observedAt), r: x.data }] : []));
   const metric = (read: (r: RouterSnapshot) => number | null | undefined): XY[] => rows.map((x) => ({ t: x.t, v: read(x.r) ?? null }));
   const has = (xy: XY[]) => xy.some((p) => p.v !== null);
   const up = metric((r) => r.wan.upBytesPerSec);

@@ -5564,10 +5564,10 @@ components:
         available: { type: boolean }
         reason:
           type: string
-          description: "Why the action is unavailable now; empty when available. Services use notConfigured, unsupported, invalidState, notManaged or busy."
+          description: "Why the action is unavailable now; empty when available. Services use the codes notConfigured, unsupported, invalidState, notManaged or busy, and the shared text reasons of every type otherwise (`release Git ownership first` when a config source owns a service to unmanage)."
         reasonMessage:
           $ref: "#/components/schemas/Message"
-          description: "`reason` with a code for translation (`action.*`, `capability.*`); services' reason codes have none."
+          description: "`reason` with a code for translation (`action.*`, `capability.*`); the services' own reason codes have none."
         risk: { type: string, enum: [read, reversible, disruptive, destructive] }
         policy: { type: boolean, description: Whether policies may run it. }
         kind:
@@ -5860,17 +5860,35 @@ components:
           items: { $ref: "#/components/schemas/ResourceVersionInfo" }
         nextCursor: { type: [string, "null"] }
     ResourceSnapshot:
+      description: One stored observation; `type` (the resource type) selects the shape of the measurements in `data`.
+      oneOf:
+        - $ref: "#/components/schemas/MachineResourceSnapshot"
+        - $ref: "#/components/schemas/RouterResourceSnapshot"
+      discriminator:
+        propertyName: type
+        mapping:
+          machine: "#/components/schemas/MachineResourceSnapshot"
+          router: "#/components/schemas/RouterResourceSnapshot"
+    MachineResourceSnapshot:
       type: object
       additionalProperties: false
-      required: [id, resourceId, type, observedAt]
-      description: One stored observation; the measurements are under the field named after `type`.
+      required: [id, resourceId, type, observedAt, data]
       properties:
         id: { type: integer, format: int64 }
         resourceId: { type: string }
-        type: { $ref: "#/components/schemas/ResourceTypeName" }
+        type: { type: string, enum: [machine] }
         observedAt: { type: string, format: date-time }
-        machine: { $ref: "#/components/schemas/MachineSnapshot" }
-        router: { $ref: "#/components/schemas/RouterSnapshot" }
+        data: { $ref: "#/components/schemas/MachineSnapshot" }
+    RouterResourceSnapshot:
+      type: object
+      additionalProperties: false
+      required: [id, resourceId, type, observedAt, data]
+      properties:
+        id: { type: integer, format: int64 }
+        resourceId: { type: string }
+        type: { type: string, enum: [router] }
+        observedAt: { type: string, format: date-time }
+        data: { $ref: "#/components/schemas/RouterSnapshot" }
     ResourceEvent:
       type: object
       additionalProperties: false

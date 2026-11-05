@@ -99,11 +99,11 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 	var hist struct {
 		Items []struct {
 			Type, ResourceID string
-			Machine          *machine.Snapshot
+			Data             *machine.Snapshot
 		}
 	}
 	if err = json.Unmarshal(w.Body.Bytes(), &hist); err != nil || len(hist.Items) != 2 || hist.Items[0].Type != "machine" ||
-		hist.Items[0].Machine == nil || hist.Items[0].ResourceID == "" {
+		hist.Items[0].Data == nil || hist.Items[0].ResourceID == "" {
 		t.Fatalf("history = %s (%v)", w.Body.String(), err)
 	}
 	call("GET", "/resources/workstation/history?resolution=minute", "", admin, "", 200)

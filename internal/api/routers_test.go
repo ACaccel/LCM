@@ -206,7 +206,7 @@ func TestRouterObservationAndReboot(t *testing.T) {
 		t.Fatalf("reason messages = %v", status["reasonMessages"])
 	}
 	hist := x.call("GET", v1+"/resources/gateway/history", nil).want(http.StatusOK).items()
-	if len(hist) != 1 || hist[0]["type"] != "router" || hist[0]["router"].(map[string]any)["clients"] != float64(5) {
+	if len(hist) != 1 || hist[0]["type"] != "router" || hist[0]["data"].(map[string]any)["clients"] != float64(5) {
 		t.Fatalf("history = %v", hist)
 	}
 	x.call("GET", v1+"/resources/gateway/history?resolution=minute", nil).want(http.StatusOK)

@@ -75,7 +75,7 @@ describe("machine overview", () => {
       resourceId: "machine-1",
       type: "machine",
       observedAt: at,
-      machine: { ...freshMachine().machine!.status!.snapshot!, id, observedAt: at, cpuPercent: cpu },
+      data: { ...freshMachine().machine!.status!.snapshot!, id, observedAt: at, cpuPercent: cpu },
     });
     const reads = stubHistory([point(2, "2026-11-01T00:01:00Z", 30), point(1, "2026-11-01T00:00:00Z", 10)]);
     render(wrap(<MachineOverview resource={freshMachine()} selector="workstation" />));

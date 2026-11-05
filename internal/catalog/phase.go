@@ -193,6 +193,17 @@ func (t serviceType) Actions(ctx context.Context, rec resource.Record) []resourc
 	}
 	if r.Phase != resource.PhaseRetired || !unmanageable(r.State) {
 		unmanage = ReasonInvalidState
+	} else {
+		// The store refuses to unmanage what Git owns; the shared reason
+		// carries a message code, like that of machines and routers.
+		owned, err := t.m.cat.res.OwnedByConfig(ctx, rec.Name)
+		if err != nil {
+			t.m.log.Warn("read service ownership for actions failed", "resource", rec.Name, "error", err)
+			return nil
+		}
+		if owned {
+			unmanage = resource.ReleaseOwnershipFirst
+		}
 	}
 	phase(PhaseActionRetire, retire)
 	phase(PhaseActionResume, resume)

@@ -60,13 +60,12 @@ func actionImpactDTO(imp resource.Impact, a resource.Action) impactDTO {
 }
 
 // typeAction finds an action of the resource's type by name and kind (any
-// kind when kind is empty). Types without an action catalog offer none.
+// kind when kind is empty). An unregistered type offers none.
 func typeAction(reg ResourceType, name, kind string) (resource.Action, bool) {
-	c, ok := reg.Type.(ActionCatalog)
-	if !ok {
+	if reg.Type == nil {
 		return resource.Action{}, false
 	}
-	for _, a := range c.ActionCatalog() {
+	for _, a := range reg.Type.ActionCatalog() {
 		if a.Name == name && (kind == "" || a.Kind == kind) {
 			return a, true
 		}

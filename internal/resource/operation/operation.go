@@ -146,8 +146,9 @@ func RequireDirect(ctx context.Context, forbidden error) (auth.Actor, error) {
 	return a, nil
 }
 
-// Errors are the domain errors of a resource type, so that the API keeps
-// one mapping per type.
+// Errors are the domain errors of a resource type, so that messages name
+// the type. They wrap the shared resource errors (resource.TypeError),
+// which the API maps for every type.
 type Errors struct {
 	NotFound     error
 	Conflict     error

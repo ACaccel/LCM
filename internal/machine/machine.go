@@ -26,13 +26,14 @@ import (
 	"github.com/ACaccel/lcm/internal/store"
 )
 
-// Domain errors have stable API mappings.
+// Domain errors wrap the shared resource errors, which the API maps; an
+// unsupported capability is a failed precondition.
 var (
-	ErrNotFound     = errors.New("machine: not found")
-	ErrConflict     = errors.New("machine: version conflict")
-	ErrPrecondition = errors.New("machine: precondition failed")
-	ErrUnsupported  = errors.New("machine: capability unsupported or not configured")
-	ErrForbidden    = errors.New("machine: only a direct administrator request is allowed")
+	ErrNotFound     = resource.TypeError("machine: not found", resource.ErrNotFound)
+	ErrConflict     = resource.TypeError("machine: version conflict", resource.ErrConflict)
+	ErrPrecondition = resource.TypeError("machine: precondition failed", resource.ErrPrecondition)
+	ErrUnsupported  = resource.TypeError("machine: capability unsupported or not configured", resource.ErrPrecondition)
+	ErrForbidden    = resource.TypeError("machine: only a direct administrator request is allowed", resource.ErrForbidden)
 )
 
 // Coverage reports source availability separately from machine health.

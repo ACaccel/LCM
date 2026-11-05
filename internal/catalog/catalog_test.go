@@ -316,6 +316,21 @@ func TestServiceType(t *testing.T) {
 	check("unmanage", true, resource.RiskDestructive, resource.KindPhase, false)
 	check("retire", false, resource.RiskDisruptive, resource.KindPhase, false)
 
+	// Git ownership blocks unmanaging, with the reason machines and
+	// routers report.
+	if err := e.db.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO config_ownership (kind, name, source, path, commit_id, applied_version, document, applied_at)
+			VALUES ('Resource', 'app', 'repo', 'app.yaml', 'c1', 1, '{}', 0)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range typ.Actions(context.Background(), rec) {
+		if a.Name == "unmanage" && (a.Available || a.Reason != resource.ReleaseOwnershipFirst) {
+			t.Errorf("unmanage of an owned service = %+v", a)
+		}
+	}
+
 	if err := typ.ChangePhase(e.ctx, resource.Record{Name: "host", Type: model.ResourceMachine}, resource.PhaseRetired, 1, ""); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatalf("change phase of a machine: %v", err)
 	}

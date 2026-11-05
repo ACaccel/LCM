@@ -62,7 +62,7 @@ func TestReasonsCarryCodes(t *testing.T) {
 
 	// A snapshot without a reason carries no message.
 	hist := x.call("GET", v1+"/resources/gateway/history", nil).want(http.StatusOK).items()
-	if snap := hist[0]["router"].(map[string]any); snap["reasonMessage"] != nil {
+	if snap := hist[0]["data"].(map[string]any); snap["reasonMessage"] != nil {
 		t.Errorf("a successful snapshot has a reason message: %v", snap)
 	}
 }

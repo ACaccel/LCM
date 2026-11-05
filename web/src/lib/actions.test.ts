@@ -16,6 +16,11 @@ describe("reasonText", () => {
     expect(reasonText({ reason: text, reasonMessage: message("action.notManaged", text, { type: "router" }) }, "unknown")).toBe("路由器不在納管中");
   });
 
+  it("translates the shared Git ownership reason of every type, services included", () => {
+    const text = "release Git ownership first";
+    expect(reasonText({ reason: text, reasonMessage: message("action.releaseOwnershipFirst", text) }, "stopped")).toBe("請先解除 Git 擁有權");
+  });
+
   it("falls back to the server's text for a code this console does not know", () => {
     const text = "a reason from a newer server";
     expect(reasonText({ reason: text, reasonMessage: message("action.fromTheFuture", text) }, "unknown")).toBe(text);

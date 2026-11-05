@@ -36,13 +36,6 @@ type ResourceType struct {
 	Operations Operations
 }
 
-// ActionCatalog is implemented by resource types that can list the actions
-// they offer without a concrete resource, for GET /resource-types. A type
-// without it is described with an empty action list.
-type ActionCatalog interface {
-	ActionCatalog() []resource.Action
-}
-
 // ObservedItem is one stored snapshot or event. ID orders and pages the
 // items, together with At (Unix milliseconds of the time the event occurred)
 // for events read newest first; Body is what the client receives.
@@ -52,15 +45,14 @@ type ObservedItem struct {
 	Body any
 }
 
-// Snapshot is the wire form of one stored observation of any type: the
-// type-specific measurements are under the field named after the type.
+// Snapshot is the wire form of one stored observation of any type: Data
+// holds the measurements, whose shape Type (the resource type) selects.
 type Snapshot struct {
 	ID         int64     `json:"id"`
 	ResourceID string    `json:"resourceId"`
 	Type       string    `json:"type"`
 	ObservedAt time.Time `json:"observedAt"`
-	Machine    any       `json:"machine,omitempty"`
-	Router     any       `json:"router,omitempty"`
+	Data       any       `json:"data"`
 }
 
 // Observations reads and triggers native observation of resources of one
@@ -169,8 +161,10 @@ func (s *Server) handleResourceTypes(w http.ResponseWriter, _ *http.Request) {
 			Type: info.Type, Adapters: info.Adapters, NeedsConnection: info.NeedsConnection,
 			Description: info.Description, Actions: []resourceActionDTO{},
 		}
-		if c, ok := s.types[info.Type].Type.(ActionCatalog); ok {
-			d.Actions = toActionDTOs(c.ActionCatalog())
+		// A type without a registration (not wired in this process) is
+		// described with an empty action list.
+		if t := s.types[info.Type].Type; t != nil {
+			d.Actions = toActionDTOs(t.ActionCatalog())
 			// The catalog says what exists, not what is possible now.
 			for i := range d.Actions {
 				d.Actions[i].Available, d.Actions[i].Reason = false, ""

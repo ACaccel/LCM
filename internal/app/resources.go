@@ -59,7 +59,7 @@ func (o machineObservations) History(ctx context.Context, ref string, q resource
 	out := make([]api.ObservedItem, 0, len(snaps))
 	for _, s := range snaps {
 		out = append(out, api.ObservedItem{ID: s.ID, Body: api.Snapshot{
-			ID: s.ID, ResourceID: rec.ID, Type: model.ResourceMachine, ObservedAt: s.ObservedAt, Machine: s,
+			ID: s.ID, ResourceID: rec.ID, Type: model.ResourceMachine, ObservedAt: s.ObservedAt, Data: s,
 		}})
 	}
 	return out, nil
@@ -157,7 +157,7 @@ func (o routerObservations) History(ctx context.Context, ref string, q resource.
 	out := make([]api.ObservedItem, 0, len(snaps))
 	for _, s := range snaps {
 		out = append(out, api.ObservedItem{ID: s.ID, Body: api.Snapshot{
-			ID: s.ID, ResourceID: rec.ID, Type: model.ResourceRouter, ObservedAt: s.ObservedAt, Router: router.NewSnapshotView(s),
+			ID: s.ID, ResourceID: rec.ID, Type: model.ResourceRouter, ObservedAt: s.ObservedAt, Data: router.NewSnapshotView(s),
 		}})
 	}
 	return out, nil

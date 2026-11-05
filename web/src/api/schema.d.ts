@@ -3349,9 +3349,9 @@ export interface components {
             /** @description Action, operation or phase change, such as `restart`, `reboot` or `retire`. */
             name: string;
             available: boolean;
-            /** @description Why the action is unavailable now; empty when available. Services use notConfigured, unsupported, invalidState, notManaged or busy. */
+            /** @description Why the action is unavailable now; empty when available. Services use the codes notConfigured, unsupported, invalidState, notManaged or busy, and the shared text reasons of every type otherwise (`release Git ownership first` when a config source owns a service to unmanage). */
             reason: string;
-            /** @description `reason` with a code for translation (`action.*`, `capability.*`); services' reason codes have none. */
+            /** @description `reason` with a code for translation (`action.*`, `capability.*`); the services' own reason codes have none. */
             reasonMessage: components["schemas"]["Message"];
             /** @enum {string} */
             risk: "read" | "reversible" | "disruptive" | "destructive";
@@ -3569,16 +3569,33 @@ export interface components {
             items: components["schemas"]["ResourceVersionInfo"][];
             nextCursor: string | null;
         };
-        /** @description One stored observation; the measurements are under the field named after `type`. */
-        ResourceSnapshot: {
+        /** @description One stored observation; `type` (the resource type) selects the shape of the measurements in `data`. */
+        ResourceSnapshot: components["schemas"]["MachineResourceSnapshot"] | components["schemas"]["RouterResourceSnapshot"];
+        MachineResourceSnapshot: {
             /** Format: int64 */
             id: number;
             resourceId: string;
-            type: components["schemas"]["ResourceTypeName"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "machine";
             /** Format: date-time */
             observedAt: string;
-            machine?: components["schemas"]["MachineSnapshot"];
-            router?: components["schemas"]["RouterSnapshot"];
+            data: components["schemas"]["MachineSnapshot"];
+        };
+        RouterResourceSnapshot: {
+            /** Format: int64 */
+            id: number;
+            resourceId: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "router";
+            /** Format: date-time */
+            observedAt: string;
+            data: components["schemas"]["RouterSnapshot"];
         };
         ResourceEvent: {
             /** Format: int64 */

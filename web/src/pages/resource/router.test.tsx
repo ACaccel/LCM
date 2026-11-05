@@ -70,8 +70,8 @@ describe("router snapshot", () => {
 
 describe("router overview", () => {
   const history: ResourceSnapshot[] = [
-    { id: 2, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:01:00Z", router: { ...snapshot, id: 2, outcome: "unreachable", cpuPercent: null, memoryPercent: null } },
-    { id: 1, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:00:00Z", router: { ...snapshot, id: 1 } },
+    { id: 2, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:01:00Z", data: { ...snapshot, id: 2, outcome: "unreachable", cpuPercent: null, memoryPercent: null } },
+    { id: 1, resourceId: "router-1", type: "router", observedAt: "2026-11-01T00:00:00Z", data: { ...snapshot, id: 1 } },
   ];
 
   function stubHistory() {

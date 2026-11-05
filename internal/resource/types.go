@@ -15,6 +15,10 @@ type Type interface {
 	Status(ctx context.Context, rec Record) (Status, error)
 	// Actions reports what can be done with a resource now.
 	Actions(ctx context.Context, rec Record) []Action
+	// ActionCatalog lists every action and phase change of the type in the
+	// order Actions reports them, without availability, for clients that
+	// describe the type rather than one resource.
+	ActionCatalog() []Action
 	// ChangePhase moves a resource to another phase. It may act first
 	// (retiring a running service stops it) and then calls Store.SetPhase.
 	ChangePhase(ctx context.Context, rec Record, to string, expected int, reason string) error

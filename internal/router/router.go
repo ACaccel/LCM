@@ -58,13 +58,14 @@ import (
 	"github.com/ACaccel/lcm/internal/store"
 )
 
-// Domain errors have stable API mappings.
+// Domain errors wrap the shared resource errors, which the API maps; an
+// unsupported action is a failed precondition.
 var (
-	ErrNotFound     = errors.New("router: not found")
-	ErrConflict     = errors.New("router: version conflict")
-	ErrPrecondition = errors.New("router: precondition failed")
-	ErrUnsupported  = errors.New("router: action unsupported")
-	ErrForbidden    = errors.New("router: only a direct administrator request is allowed")
+	ErrNotFound     = resource.TypeError("router: not found", resource.ErrNotFound)
+	ErrConflict     = resource.TypeError("router: version conflict", resource.ErrConflict)
+	ErrPrecondition = resource.TypeError("router: precondition failed", resource.ErrPrecondition)
+	ErrUnsupported  = resource.TypeError("router: action unsupported", resource.ErrPrecondition)
+	ErrForbidden    = resource.TypeError("router: only a direct administrator request is allowed", resource.ErrForbidden)
 )
 
 const (
