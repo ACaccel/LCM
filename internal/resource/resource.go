@@ -120,6 +120,13 @@ type Filter struct {
 	Labels map[string]string
 	// IncludeRetired adds retired resources to the managed ones.
 	IncludeRetired bool
+	// Phase, when set, limits the result to managed or retired resources
+	// and overrides IncludeRetired.
+	Phase string
+	// After continues a listing: only names after it are returned.
+	After string
+	// Limit bounds the number of records; 0 returns all.
+	Limit int
 }
 
 // TypeHooks lets a resource type take part in saves and phase changes.

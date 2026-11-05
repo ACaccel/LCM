@@ -64,6 +64,9 @@ func TestNativeOnlyHealth(t *testing.T) {
 	if s, _ := h.m.Resource("ws"); !slices.Equal(s.Native.Reasons, []string{"cpu", "memory"}) {
 		t.Fatalf("reasons = %v", s.Native.Reasons)
 	}
+	if got := h.m.Healths([]string{"ws", "ghost"}); len(got) != 1 || got["ws"] != HealthDegraded {
+		t.Fatalf("healths = %v", got)
+	}
 
 	// Sync with no definitions keeps a native-only resource.
 	h.sync()

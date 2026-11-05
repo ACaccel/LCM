@@ -282,6 +282,13 @@ func TestServiceType(t *testing.T) {
 	if err != nil || st.State != string(catalog.StateRunning) || !st.StateSince.Equal(epoch) {
 		t.Fatalf("status = %+v %v", st, err)
 	}
+	if _, ok := typ.(resource.StatusBatch); !ok {
+		t.Fatal("the service type reads statuses one by one")
+	}
+	sts, err := resource.Statuses(context.Background(), typ, []resource.Record{rec, {ID: "missing"}, rec})
+	if err != nil || len(sts) != 3 || sts[0] != st || sts[1] != (resource.Status{}) || sts[2] != st {
+		t.Fatalf("statuses = %+v %v", sts, err)
+	}
 	got := map[string]resource.Action{}
 	for _, a := range typ.Actions(context.Background(), rec) {
 		got[a.Name] = a

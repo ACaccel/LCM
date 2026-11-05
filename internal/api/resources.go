@@ -456,49 +456,16 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, codeBadRequest, "unknown health", map[string]any{"param": "health"})
 		return
 	}
-	recs, err := s.resources.List(r.Context(), resource.Filter{Type: typ, Labels: labels, IncludeRetired: true})
+	f := resource.Filter{Type: typ, Labels: labels, IncludeRetired: true, Phase: wantPhase, After: p.cursor}
+	page, next, err := s.listPage(r.Context(), f, p.limit, monitor.Health(wantHealth), wantState)
 	if err != nil {
 		s.fail(w, r, err, nil)
-		return
-	}
-	health := map[string]monitor.Health{}
-	for _, st := range s.monitor.Resources() {
-		health[st.Resource] = st.Health
-	}
-	type row struct {
-		rec resource.Record
-		st  resource.Status
-	}
-	var matched []row
-	for _, rec := range recs {
-		if wantPhase != "" && rec.Phase != wantPhase {
-			continue
-		}
-		h := health[rec.Name]
-		if h == "" {
-			h = monitor.HealthUnknown
-		}
-		if wantHealth != "" && string(h) != wantHealth {
-			continue
-		}
-		st, err := s.status(r.Context(), rec)
-		if err != nil {
-			s.fail(w, r, err, nil)
-			return
-		}
-		if wantState != "" && st.State != wantState {
-			continue
-		}
-		matched = append(matched, row{rec: rec, st: st})
-	}
-	page, next, ok := pageSlice(w, p, matched)
-	if !ok {
 		return
 	}
 	managed := s.managedIndex(r, model.KindResource)
 	items := make([]resourceSummaryDTO, 0, len(page))
 	for _, it := range page {
-		d := s.summary(it.rec, it.st, health[it.rec.Name], managed[it.rec.Name])
+		d := s.summary(it.rec, it.st, it.health, managed[it.rec.Name])
 		if it.rec.Type == model.ResourceService {
 			deps, err := s.catalog.Deployments(r.Context(), it.rec.Name, 20, 0)
 			if err != nil {
@@ -510,6 +477,127 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		items = append(items, d)
 	}
 	writeList(w, items, next)
+}
+
+// listRow is a resource of a list page with its live state and health.
+type listRow struct {
+	rec    resource.Record
+	st     resource.Status
+	health monitor.Health
+}
+
+// Bounds of the scan behind a list page that filters by health or state;
+// variables so that tests can reach them.
+var (
+	// listChunk is the least number of records read per query.
+	listChunk = 100
+	// listScanBudget bounds the records one page reads.
+	listScanBudget = 2000
+)
+
+// listPage returns up to limit resources that f selects and that have the
+// health and state asked for (when set), and the cursor of the next page,
+// nil when there is none. Cursors are resource names.
+//
+// The store filters type, phase and labels in SQL and pages by name.
+// Health (the monitor's memory) and state (each type's status) are live, so
+// they cannot be part of the query: with such a filter the records are read
+// in chunks and filtered until the page is full. The scan looks for one
+// match beyond the page to tell whether a next page exists. A scan that
+// reads listScanBudget records ends the page early, possibly empty, with the
+// last scanned name as the cursor: every name up to it has been checked, so
+// the next page neither repeats nor skips a resource, and one request stays
+// bounded however few resources match. Without these filters a single query
+// of limit+1 records answers exactly.
+func (s *Server) listPage(ctx context.Context, f resource.Filter, limit int, wantHealth monitor.Health, wantState string) ([]listRow, *string, error) {
+	f.Limit = limit + 1
+	if wantHealth != "" || wantState != "" {
+		f.Limit = max(f.Limit, listChunk)
+	}
+	var page []listRow
+	var next *string
+	for scanned := 0; ; {
+		recs, err := s.resources.List(ctx, f)
+		if err != nil {
+			return nil, nil, err
+		}
+		scanned += len(recs)
+		names := make([]string, len(recs))
+		for i, rec := range recs {
+			names[i] = rec.Name
+		}
+		health := s.monitor.Healths(names)
+		var matched []listRow
+		for _, rec := range recs {
+			h := health[rec.Name]
+			if h == "" {
+				h = monitor.HealthUnknown
+			}
+			if wantHealth == "" || h == wantHealth {
+				matched = append(matched, listRow{rec: rec, health: h})
+			}
+		}
+		if wantState != "" {
+			if err := s.statuses(ctx, matched); err != nil {
+				return nil, nil, err
+			}
+			matched = slices.DeleteFunc(matched, func(x listRow) bool { return x.st.State != wantState })
+		}
+		full := false
+		for _, m := range matched {
+			if len(page) == limit {
+				full = true
+				break
+			}
+			page = append(page, m)
+		}
+		switch {
+		case full:
+			next = encodeCursor(page[limit-1].rec.Name)
+		case len(recs) < f.Limit:
+			// The store has nothing after this chunk.
+		case scanned >= listScanBudget:
+			next = encodeCursor(recs[len(recs)-1].Name)
+		default:
+			f.After = recs[len(recs)-1].Name
+			continue
+		}
+		break
+	}
+	if wantState == "" {
+		if err := s.statuses(ctx, page); err != nil {
+			return nil, nil, err
+		}
+	}
+	return page, next, nil
+}
+
+// statuses fills in the state of each row, asking each resource type once
+// for all its rows. A type that cannot tell (an unregistered type) reports
+// nothing, like status.
+func (s *Server) statuses(ctx context.Context, rows []listRow) error {
+	byType := map[string][]int{}
+	for i, row := range rows {
+		byType[row.rec.Type] = append(byType[row.rec.Type], i)
+	}
+	for typ, idx := range byType {
+		t := s.types[typ].Type
+		if t == nil {
+			continue
+		}
+		recs := make([]resource.Record, len(idx))
+		for j, i := range idx {
+			recs[j] = rows[i].rec
+		}
+		sts, err := resource.Statuses(ctx, t, recs)
+		if err != nil {
+			return err
+		}
+		for j, i := range idx {
+			rows[i].st = sts[j]
+		}
+	}
+	return nil
 }
 
 func (s *Server) summary(rec resource.Record, st resource.Status, h monitor.Health, managed *managedByDTO) resourceSummaryDTO {

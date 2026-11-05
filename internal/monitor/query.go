@@ -69,6 +69,21 @@ func (m *Monitor) Resources() []ResourceStatus {
 	return out
 }
 
+// Healths returns the combined health of the named resources under one
+// lock, for list pages. A resource without checks or native health is
+// absent, as in Resource.
+func (m *Monitor) Healths(names []string) map[string]Health {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]Health, len(names))
+	for _, n := range names {
+		if r := m.resources[n]; r != nil {
+			out[n] = r.combined(true)
+		}
+	}
+	return out
+}
+
 // Resource returns the status of one resource. It is absent when the
 // resource has neither checks nor native health.
 func (m *Monitor) Resource(name string) (ResourceStatus, bool) {

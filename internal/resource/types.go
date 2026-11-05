@@ -24,6 +24,30 @@ type Type interface {
 	ChangePhase(ctx context.Context, rec Record, to string, expected int, reason string) error
 }
 
+// StatusBatch is implemented by types that read the status of many
+// resources in one query, for list pages.
+type StatusBatch interface {
+	// Statuses returns the status of each record, in the order given.
+	Statuses(ctx context.Context, recs []Record) ([]Status, error)
+}
+
+// Statuses returns the status of each record of type t, in order: in one
+// call when t implements StatusBatch, otherwise one Status call per record.
+func Statuses(ctx context.Context, t Type, recs []Record) ([]Status, error) {
+	if b, ok := t.(StatusBatch); ok {
+		return b.Statuses(ctx, recs)
+	}
+	out := make([]Status, len(recs))
+	for i, rec := range recs {
+		st, err := t.Status(ctx, rec)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = st
+	}
+	return out, nil
+}
+
 // Status is the type-specific state of a resource. Machines and routers
 // report StateOnline, StateOffline or StateUnknown; services report their
 // lifecycle state.

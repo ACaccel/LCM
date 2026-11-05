@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
@@ -145,6 +146,50 @@ func (t serviceType) Status(ctx context.Context, rec resource.Record) (resource.
 		return resource.Status{}, fmt.Errorf("catalog: read state: %w", err)
 	}
 	return resource.Status{State: state, StateSince: time.UnixMilli(since).UTC()}, nil
+}
+
+// statusBatch bounds the IDs of one Statuses query.
+const statusBatch = 500
+
+// Statuses reads the lifecycle states of many services in one query per
+// statusBatch records; it implements resource.StatusBatch.
+func (t serviceType) Statuses(ctx context.Context, recs []resource.Record) ([]resource.Status, error) {
+	out := make([]resource.Status, len(recs))
+	for start := 0; start < len(recs); start += statusBatch {
+		chunk := recs[start:min(start+statusBatch, len(recs))]
+		args := make([]any, len(chunk))
+		for i, rec := range chunk {
+			args[i] = rec.ID
+		}
+		rows, err := t.m.cat.db.Reader().QueryContext(ctx,
+			`SELECT resource_id, state, state_since FROM service_states WHERE resource_id IN (?`+strings.Repeat(", ?", len(chunk)-1)+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: read states: %w", err)
+		}
+		found := map[string]resource.Status{}
+		for rows.Next() {
+			var (
+				id, state string
+				since     int64
+			)
+			if err := rows.Scan(&id, &state, &since); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("catalog: read states: %w", err)
+			}
+			found[id] = resource.Status{State: state, StateSince: time.UnixMilli(since).UTC()}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("catalog: read states: %w", err)
+		}
+		// A service without a row (an archive migrated without a lifecycle
+		// state) reports an empty state, as Status does.
+		for i, rec := range chunk {
+			out[start+i] = found[rec.ID]
+		}
+	}
+	return out, nil
 }
 
 // Actions lists the lifecycle actions and the phase changes of a service.

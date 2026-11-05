@@ -239,7 +239,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List managed and retired resources */
+        /**
+         * List managed and retired resources
+         * @description `state` and `health` are live values that one request checks for a
+         *     bounded number of resources, so with either filter a page can hold
+         *     fewer than `limit` items (even none) while `nextCursor` continues the
+         *     list; follow `nextCursor` until it is null.
+         */
         get: operations["listResources"];
         put?: never;
         /** Create a resource */

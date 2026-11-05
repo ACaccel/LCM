@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -217,26 +219,62 @@ func (s *Store) Get(ctx context.Context, ref string) (Record, error) {
 
 // List returns managed resources, and retired ones when f.IncludeRetired is
 // set, ordered by name. Unmanaged resources are listed by Archives.
+//
+// Every filter runs in SQL, so f.After and f.Limit page over the filtered
+// result: names are unique among active resources, which makes the name a
+// keyset cursor.
 func (s *Store) List(ctx context.Context, f Filter) ([]Record, error) {
-	where, args := `r.phase = ?`, []any{PhaseManaged}
-	if f.IncludeRetired {
-		where, args = `r.phase IN (?, ?)`, []any{PhaseManaged, PhaseRetired}
+	where, args, err := listCondition(f)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := query(ctx, s.db.Reader(), where, args...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Record, len(rows))
+	for i, r := range rows {
+		out[i] = r.Record
+	}
+	return out, nil
+}
+
+// listCondition returns the condition, order and limit of List.
+func listCondition(f Filter) (string, []any, error) {
+	// The literal term matches the WHERE clause of the partial index
+	// resources_active_name, so SQLite can walk it in name order and seek
+	// to f.After instead of sorting every row.
+	where, args := `r.phase != 'unmanaged'`, []any{}
+	switch f.Phase {
+	case "":
+		if !f.IncludeRetired {
+			where += ` AND r.phase = ?`
+			args = append(args, PhaseManaged)
+		}
+	case PhaseManaged, PhaseRetired:
+		where += ` AND r.phase = ?`
+		args = append(args, f.Phase)
+	default:
+		return "", nil, precondition("list phase must be %s or %s; archives are listed separately", PhaseManaged, PhaseRetired)
 	}
 	if f.Type != "" {
 		where += ` AND r.type = ?`
 		args = append(args, f.Type)
 	}
-	rows, err := query(ctx, s.db.Reader(), where+` ORDER BY r.name`, args...)
-	if err != nil {
-		return nil, err
+	if f.After != "" {
+		where += ` AND r.name > ?`
+		args = append(args, f.After)
 	}
-	out := make([]Record, 0, len(rows))
-	for _, r := range rows {
-		if matchLabels(r.Document.Metadata.Labels, f.Labels) {
-			out = append(out, r.Record)
-		}
+	for _, k := range slices.Sorted(maps.Keys(f.Labels)) {
+		where += ` AND EXISTS (SELECT 1 FROM json_each(v.document, '$.metadata.labels') l WHERE l.key = ? AND l.value = ?)`
+		args = append(args, k, f.Labels[k])
 	}
-	return out, nil
+	where += ` ORDER BY r.name`
+	if f.Limit > 0 {
+		where += ` LIMIT ?`
+		args = append(args, f.Limit)
+	}
+	return where, args, nil
 }
 
 // Archives returns unmanaged resources, of one type when typ is set,
@@ -326,15 +364,6 @@ func scanVersion(row scanner, extra ...any) (Version, error) {
 	return v, nil
 }
 
-func matchLabels(have, want map[string]string) bool {
-	for k, v := range want {
-		if got, ok := have[k]; !ok || got != v {
-			return false
-		}
-	}
-	return true
-}
-
 // stored is a record with the stored text of its current document.
 type stored struct {
 	Record
@@ -361,11 +390,14 @@ func lookup(ctx context.Context, q querier, ref string) (stored, error) {
 	return rows[0], nil
 }
 
+// selectRecords reads records with their current documents; the caller
+// appends the condition.
+const selectRecords = `SELECT r.id, r.name, r.type, r.adapter, r.phase, r.version, r.created_at, r.updated_at, v.document
+	FROM resources r JOIN resource_versions v ON v.resource_id = r.id AND v.version = r.version
+	WHERE `
+
 func query(ctx context.Context, q querier, where string, args ...any) ([]stored, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT r.id, r.name, r.type, r.adapter, r.phase, r.version, r.created_at, r.updated_at, v.document
-		 FROM resources r JOIN resource_versions v ON v.resource_id = r.id AND v.version = r.version
-		 WHERE `+where, args...)
+	rows, err := q.QueryContext(ctx, selectRecords+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("resource: query: %w", err)
 	}
