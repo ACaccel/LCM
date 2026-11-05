@@ -144,11 +144,21 @@ type fakeLocker struct {
 	acquire int
 	// renewals counts extensions by the holder.
 	renewals int
+	// beforeAcquire, when set, runs once before the next Acquire, as if
+	// another holder finished while the caller waited for the lock.
+	beforeAcquire func()
 }
 
 func newFakeLocker() *fakeLocker { return &fakeLocker{held: map[string]string{}} }
 
 func (l *fakeLocker) Acquire(_ context.Context, name, owner string, ttl time.Duration) (func(context.Context) error, error) {
+	l.mu.Lock()
+	hook := l.beforeAcquire
+	l.beforeAcquire = nil
+	l.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// Like lock.Manager, the holder extends its own lock.

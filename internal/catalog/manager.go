@@ -299,22 +299,18 @@ func (s *session) load(ctx context.Context) error {
 	return nil
 }
 
-// open takes the busy mark and the lock, reloads the service and checks
-// that the action is allowed in its current phase and state.
-func (m *Manager) open(ctx context.Context, name, action string, opts ActionOptions, actor auth.Actor) (*session, error) {
-	s, err := m.lock(ctx, name, action, opts, actor)
-	if err != nil {
-		return nil, err
-	}
+// prepare reloads the locked service and checks that the action is
+// allowed in its current phase and state; on failure it closes the session.
+func (s *session) prepare(ctx context.Context) error {
 	if err := s.load(ctx); err != nil {
 		s.close()
-		return nil, err
+		return err
 	}
-	if err := checkAction(action, s.rec); err != nil {
+	if err := checkAction(s.action, s.rec); err != nil {
 		s.close()
-		return nil, err
+		return err
 	}
-	return s, nil
+	return nil
 }
 
 // checkAction refuses an action the phase, state or runtime does not allow.
@@ -402,24 +398,25 @@ func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOpti
 	if err != nil {
 		return ActionResult{}, err
 	}
-	if raw, ok, err := m.cat.CompletedAction(ctx, name, idemAction(action, opts), opts.IdempotencyKey); err != nil {
-		return ActionResult{}, err
-	} else if ok {
-		var res ActionResult
-		if err := json.Unmarshal(raw, &res); err != nil {
-			return ActionResult{}, fmt.Errorf("catalog: decode stored result: %w", err)
-		}
-		if res.Resource == "" {
-			// Completions stored before resources named the field service.
-			res.Resource = name
-		}
-		res.Replayed = true
-		return res, nil
+	// Checked without the lock first, so that a replay never waits for or
+	// fails on a lock another action holds.
+	if res, ok, err := m.replay(ctx, name, action, opts); err != nil || ok {
+		return res, err
 	}
 
 	start := m.cat.now()
-	s, err := m.open(ctx, name, action, opts, actor)
+	s, err := m.lock(ctx, name, action, opts, actor)
 	if err != nil {
+		m.recordAudit(ctx, action, name, audit.OutcomeError, nil)
+		return ActionResult{Resource: name, Action: action}, err
+	}
+	// The same request may have completed between the first check and the
+	// lock, such as a retry delivered while the original still ran.
+	if res, ok, err := m.replay(ctx, name, action, opts); err != nil || ok {
+		s.close()
+		return res, err
+	}
+	if err := s.prepare(ctx); err != nil {
 		m.recordAudit(ctx, action, name, audit.OutcomeError, nil)
 		return ActionResult{Resource: name, Action: action}, err
 	}
@@ -466,6 +463,25 @@ func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOpti
 		}
 	}
 	return res, nil
+}
+
+// replay returns the stored result of an action completed under the same
+// idempotency key, if there is one.
+func (m *Manager) replay(ctx context.Context, name, action string, opts ActionOptions) (ActionResult, bool, error) {
+	raw, ok, err := m.cat.CompletedAction(ctx, name, idemAction(action, opts), opts.IdempotencyKey)
+	if err != nil || !ok {
+		return ActionResult{}, false, err
+	}
+	var res ActionResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return ActionResult{}, false, fmt.Errorf("catalog: decode stored result: %w", err)
+	}
+	if res.Resource == "" {
+		// Completions stored before resources named the field service.
+		res.Resource = name
+	}
+	res.Replayed = true
+	return res, true, nil
 }
 
 // idemAction distinguishes jobs: two run-job nodes for different jobs of

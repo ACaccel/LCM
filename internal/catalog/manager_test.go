@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -345,6 +346,44 @@ func TestIdempotentActions(t *testing.T) {
 	ad.set(func(a *fakeAdapter) { a.stopErr = nil })
 	if res, err := e.mgr.Stop(e.ctx, "app", key); err != nil || res.Replayed || res.To != catalog.StateStopped {
 		t.Fatalf("retry after failure = %+v %v", res, err)
+	}
+}
+
+// A request whose original completes while the retry waits for the lock is
+// replayed under the lock instead of acting a second time.
+func TestReplayRecheckedUnderLock(t *testing.T) {
+	e := newEnv(t)
+	e.put(svcDoc("app", ""), 0)
+	ad := e.runtime.adapter("app")
+	opts := catalog.ActionOptions{RunID: "r1", IdempotencyKey: "r1/start"}
+	stored, err := json.Marshal(catalog.ActionResult{Resource: "app", Action: catalog.ActionStart, From: catalog.StateRegistered, To: catalog.StateRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first check, made without the lock, finds no completion; the
+	// original records its completion before releasing the lock the retry
+	// waits for.
+	e.locker.beforeAcquire = func() {
+		if err := e.cat.RecordCompletion(context.Background(), "app", catalog.ActionStart, "r1/start", stored); err != nil {
+			t.Error(err)
+		}
+	}
+	res, err := e.mgr.Start(e.ctx, "app", opts)
+	if err != nil || !res.Replayed || res.From != catalog.StateRegistered || res.To != catalog.StateRunning {
+		t.Fatalf("retry = %+v %v", res, err)
+	}
+	if got := ad.Calls(); len(got) != 0 {
+		t.Fatalf("adapter calls = %v", got)
+	}
+	if e.locker.isHeld(catalog.LockName("app")) {
+		t.Fatal("replay kept the lock")
+	}
+	// The busy mark is gone too: a new request acts.
+	if res, err := e.mgr.Start(e.ctx, "app", catalog.ActionOptions{IdempotencyKey: "r2/start"}); err != nil || res.Replayed {
+		t.Fatalf("new request = %+v %v", res, err)
+	}
+	if got := ad.Calls(); len(got) != 1 {
+		t.Fatalf("adapter calls = %v", got)
 	}
 }
 
