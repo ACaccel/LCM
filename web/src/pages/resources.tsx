@@ -6,16 +6,31 @@ import { archivesQuery, qk, resourcesQuery, resourceTypesQuery } from "../api/qu
 import type { Health, ResourceSummary, ResourceType, ResourceTypeName } from "../api/types";
 import { HealthPill, ManagedBadges, PhasePill, StatePill, TypeTag } from "../components/badges";
 import { Dialog } from "../components/dialog";
+import { SortTh, useSort } from "../components/sort-header";
 import { useToast } from "../components/toast";
 import { Async, Empty, ErrorBox, Field, PageHead, Tag } from "../components/ui";
 import { ValidationReport } from "../components/validation";
 import { YamlEditor } from "../components/yaml-editor-lazy";
 import { formatDateTime, shortVersion } from "../lib/format";
+import { nameMatches, sortRows } from "../lib/list";
 import { resourceSkeleton } from "../lib/templates";
 import { s } from "../strings";
 
 const healths: Health[] = ["healthy", "degraded", "down", "unknown"];
 const phases = ["managed", "retired"] as const;
+
+const resourceSortKeys = ["name", "type", "phase", "state", "health", "version"] as const;
+type ResourceSortKey = (typeof resourceSortKeys)[number];
+// Ascending health puts the resources that need attention first.
+const healthRank: Record<Health, number> = { down: 0, degraded: 1, unknown: 2, healthy: 3 };
+const resourceSort: Record<ResourceSortKey, (r: ResourceSummary) => string | number> = {
+  name: (r) => r.name,
+  type: (r) => s.resourceType[r.type],
+  phase: (r) => s.phase[r.phase],
+  state: (r) => (r.state ? (s.state[r.state] ?? r.state) : ""),
+  health: (r) => healthRank[r.health],
+  version: (r) => r.version,
+};
 
 function isType(types: readonly ResourceType[] | undefined, v: string): v is ResourceTypeName {
   return !!types?.some((t) => t.type === v);
@@ -68,7 +83,7 @@ function ArchiveList({ type, search }: { type: ResourceTypeName | undefined; sea
   return (
     <Async q={q}>
       {(items) => {
-        const shown = items.filter((r) => r.name.includes(search));
+        const shown = items.filter((r) => nameMatches(r.name, search));
         return shown.length === 0 ? (
           <Empty>{s.resources.emptyArchives}</Empty>
         ) : (
@@ -147,6 +162,8 @@ function CreateDialog({ types, initialType, onClose }: { types: ResourceType[]; 
       title={s.resources.createTitle}
       wide
       onClose={onClose}
+      dirty={editing || type !== first?.type || adapter !== (first?.adapters[0] ?? "")}
+      pending={create.isPending}
       footer={
         <>
           <button type="button" className="btn" onClick={onClose}>
@@ -230,6 +247,7 @@ export function ResourcesPage() {
   const health = (params.get("health") ?? "") as Health | "";
   const archived = params.get("archived") === "1";
   const creating = params.get("create") === "1";
+  const { sort, toggle: toggleSort } = useSort(resourceSortKeys, { key: "name", dir: "asc" });
 
   const labels = label
     .split(",")
@@ -314,7 +332,12 @@ export function ResourcesPage() {
       ) : (
         <Async q={q}>
           {(items) => {
-            const shown = items.filter((r) => r.name.includes(search));
+            const shown = sortRows(
+              items.filter((r) => nameMatches(r.name, search)),
+              sort,
+              resourceSort,
+            );
+            const th = (key: ResourceSortKey, label: string) => <SortTh sortKey={key} label={label} sort={sort} onSort={toggleSort} />;
             return shown.length === 0 ? (
               <Empty>{s.resources.empty}</Empty>
             ) : (
@@ -322,12 +345,12 @@ export function ResourcesPage() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>{s.resources.columns.name}</th>
-                      <th>{s.resources.columns.type}</th>
-                      <th>{s.resources.columns.phase}</th>
-                      <th>{s.resources.columns.state}</th>
-                      <th>{s.resources.columns.health}</th>
-                      <th>{s.resources.columns.version}</th>
+                      {th("name", s.resources.columns.name)}
+                      {th("type", s.resources.columns.type)}
+                      {th("phase", s.resources.columns.phase)}
+                      {th("state", s.resources.columns.state)}
+                      {th("health", s.resources.columns.health)}
+                      {th("version", s.resources.columns.version)}
                       <th>{s.resources.columns.managed}</th>
                       <th>{s.resources.columns.labels}</th>
                     </tr>

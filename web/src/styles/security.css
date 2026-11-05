@@ -1,5 +1,4 @@
 .security-console { max-width: 1400px; }
-.security-machine { max-width: 700px; }
 .security-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
 .security-metric { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); display: grid; gap: 5px; min-width: 0; }
 .security-metric strong { font-size: 21px; overflow-wrap: anywhere; }

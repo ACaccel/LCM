@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResourceSummary, ResourceType } from "../api/types";
 import { ToastProvider } from "../components/toast";
+import { s } from "../strings";
 import { ResourcesPage } from "./resources";
 import { jsonResponse } from "./resource/test-fixtures";
 
@@ -91,6 +92,24 @@ describe("resource list", () => {
     await userEvent.click(within(group).getByRole("button", { name: "全部型別" }));
     await waitFor(() => expect(rowNames()).toEqual(["web"]));
     expect(lists.at(-1)?.has("type")).toBe(false);
+  });
+
+  it("searches names ignoring case and sorts by a clicked column", async () => {
+    setup();
+    await screen.findByRole("link", { name: "workstation" });
+    await userEvent.type(screen.getByLabelText("搜尋名稱"), "W");
+    expect(rowNames()).toEqual(["gateway", "web", "workstation"]);
+    await userEvent.clear(screen.getByLabelText("搜尋名稱"));
+
+    const name = screen.getByRole("columnheader", { name: s.resources.columns.name });
+    expect(name.getAttribute("aria-sort")).toBe("ascending");
+    await userEvent.click(within(name).getByRole("button"));
+    expect(rowNames()).toEqual(["workstation", "web", "gateway", "api"]);
+    expect(name.getAttribute("aria-sort")).toBe("descending");
+
+    // Ascending health lists the resources that need attention first.
+    await userEvent.click(within(screen.getByRole("columnheader", { name: s.resources.columns.health })).getByRole("button"));
+    expect(rowNames()[0]).toBe("gateway");
   });
 
   it("lists archives read only, linked by immutable ID", async () => {

@@ -30,7 +30,7 @@ export const qk = {
   resourceOperation: (ref: string, id: string) => ["resource", ref, "operations", id] as const,
   resourceCapabilities: (ref: string) => ["resource", ref, "capabilities"] as const,
   resourceMaintenance: (ref: string) => ["resource", ref, "maintenance"] as const,
-  timeline: (f: TimelineFilter = {}) => ["timeline", f.resource ?? "", f.kinds ?? []] as const,
+  timeline: (f: TimelineFilter = {}) => ["timeline", f.resource ?? "", f.kinds ?? [], f.from ?? "", f.to ?? ""] as const,
   timelineAll: () => ["timeline"] as const,
   deploymentsSince: (since: string) => ["deployments-since", since] as const,
   policies: () => ["policies"] as const,
@@ -62,6 +62,9 @@ export interface ResourceFilter {
 export interface TimelineFilter {
   resource?: string;
   kinds?: string[];
+  /** RFC 3339 instants: entries at or after `from` and before `to`. */
+  from?: string;
+  to?: string;
 }
 
 export interface RunFilter {
@@ -180,7 +183,7 @@ export const timelineQuery = (f: TimelineFilter = {}) =>
     queryKey: qk.timeline(f),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => {
-      const query = { limit: TIMELINE_PAGE, cursor: pageParam, kinds: f.kinds?.length ? f.kinds : undefined };
+      const query = { limit: TIMELINE_PAGE, cursor: pageParam, kinds: f.kinds?.length ? f.kinds : undefined, from: f.from || undefined, to: f.to || undefined };
       return f.resource
         ? unwrap(client.GET("/resources/{resource}/timeline", { params: { path: { resource: f.resource }, query } }))
         : unwrap(client.GET("/timeline", { params: { query } }));

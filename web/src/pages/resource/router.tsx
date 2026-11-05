@@ -6,8 +6,7 @@ import { ErrorBox, Pill, Tag } from "../../components/ui";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/format";
 import { coverageView, cpuPercent } from "../../lib/machine";
-import { healthView } from "../../lib/status";
-import type { StatusView } from "../../lib/status";
+import { healthView, reachabilityView, routerOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
 import { PowerDialog } from "./machine/dialogs";
 import { UsageTrend } from "./machine/trend";
@@ -26,14 +25,6 @@ function rate(v: number | null): string {
   return v != null ? `${formatBytes(v)}/s` : s.machine.unknown;
 }
 
-export function outcomeView(outcome: RouterSnapshot["outcome"]): StatusView {
-  return { tone: outcome === "ok" ? "ok" : outcome === "unreachable" || outcome === "auth-failed" ? "bad" : "warn", icon: outcome === "ok" ? "✓" : "!", label: s.router.outcomes[outcome] };
-}
-
-function reachabilityView(r: RouterStatus["reachability"]): StatusView {
-  return { tone: r === "reachable" ? "ok" : r === "unreachable" ? "bad" : "neutral", icon: r === "reachable" ? "✓" : r === "unreachable" ? "!" : "?", label: s.router.reachability[r] };
-}
-
 /** One router observation attempt: outcome, measurements, WAN and the coverage of each status source. */
 export function RouterSnapshotView({ snapshot }: { snapshot: RouterSnapshot }) {
   const wan = snapshot.wan;
@@ -43,7 +34,7 @@ export function RouterSnapshotView({ snapshot }: { snapshot: RouterSnapshot }) {
       <dl className="kv">
         <dt>{s.router.outcome}</dt>
         <dd>
-          <Pill view={outcomeView(snapshot.outcome)} />
+          <Pill view={routerOutcomeView(snapshot.outcome)} />
           {snapshot.reason && <div className="meta">{snapshot.reason}</div>}
         </dd>
         <dt>{s.router.model}</dt>

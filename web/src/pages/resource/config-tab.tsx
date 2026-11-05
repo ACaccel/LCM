@@ -7,6 +7,7 @@ import { ManagedBadges } from "../../components/badges";
 import { ConflictDialog } from "../../components/conflict-dialog";
 import { ConfirmDialog, Dialog } from "../../components/dialog";
 import { DiffView } from "../../components/diff-view";
+import { LeaveGuard } from "../../components/leave-guard";
 import { useToast } from "../../components/toast";
 import { Async, ErrorBox, Spinner } from "../../components/ui";
 import { ValidationReport } from "../../components/validation";
@@ -254,6 +255,8 @@ function Editor({ detail }: { detail: ResourceDetail }) {
   // else's change is detected by the server instead of overwriting it.
   const [draft, setDraft] = useState<{ text: string; version: number } | null>(null);
   const [conflict, setConflict] = useState<{ current: number | undefined; stored: string } | null>(null);
+  // Saving shows the change against the stored text first.
+  const [review, setReview] = useState(false);
 
   const base = yamlQ.data ?? "";
   const text = draft?.text ?? base;
@@ -268,11 +271,13 @@ function Editor({ detail }: { detail: ResourceDetail }) {
       toast.success(s.config.saved);
       setDraft(null);
       setConflict(null);
+      setReview(false);
       void qc.invalidateQueries({ queryKey: qk.resourceAll(name) });
       void qc.invalidateQueries({ queryKey: qk.resourcesAll() });
     },
     onError: async (e) => {
       if (isApiError(e) && e.isConflict) {
+        setReview(false);
         // Fetch the stored text so the dialog can show what changed underneath the edit.
         try {
           setConflict({ current: e.currentVersion, stored: await exportYaml(name) });
@@ -308,12 +313,20 @@ function Editor({ detail }: { detail: ResourceDetail }) {
             <YamlEditor value={text} onChange={(t) => setDraft((d) => ({ text: t, version: d?.version ?? detail.version }))} ariaLabel={s.common.resourceYaml} minHeight={320} />
           )}
           {validate.data && <ValidationReport {...validate.data} />}
-          <ErrorBox error={validate.error ?? (conflict ? null : save.error)} />
+          <ErrorBox error={validate.error ?? (conflict || review ? null : save.error)} />
           <div className="row">
             <button type="button" className="btn" disabled={!dirty || validate.isPending} onClick={() => validate.mutate()}>
               {s.resources.validate}
             </button>
-            <button type="button" className="btn primary" disabled={!dirty || save.isPending} onClick={() => save.mutate(baseVersion)}>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!dirty || save.isPending}
+              onClick={() => {
+                save.reset();
+                setReview(true);
+              }}
+            >
               {s.config.saveVersion}
             </button>
             {dirty && (
@@ -328,6 +341,30 @@ function Editor({ detail }: { detail: ResourceDetail }) {
           <History detail={detail} readOnly={false} onRestored={() => setDraft(null)} />
         </div>
       </div>
+      {review && (
+        <Dialog
+          title={s.config.reviewSave(baseVersion)}
+          wide
+          onClose={() => setReview(false)}
+          pending={save.isPending}
+          footer={
+            <>
+              <button type="button" className="btn" onClick={() => setReview(false)} data-autofocus>
+                {s.common.cancel}
+              </button>
+              <button type="button" className="btn primary" disabled={save.isPending} onClick={() => save.mutate(baseVersion)}>
+                {s.config.saveVersion}
+              </button>
+            </>
+          }
+        >
+          <div className="stack">
+            <DiffView before={base} after={text} />
+            <ErrorBox error={save.error} />
+          </div>
+        </Dialog>
+      )}
+      <LeaveGuard when={dirty} />
       {conflict && (
         <ConflictDialog
           baseVersion={baseVersion}

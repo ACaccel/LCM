@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
 import { trafficSeriesQuery } from "../../api/security";
 import type { Category, TrafficPoint, TrafficSeries } from "../../api/security";
 import { Async, Empty, Field } from "../../components/ui";
-import { Metric, categories, number, showTime } from "./shared";
+import { MachineSelect, Metric, categories, number, showTime } from "./shared";
 import { sec } from "./strings";
 
 const windows = { "1h": { ms: 3_600_000, bucket: 60, label: sec.oneHour }, "24h": { ms: 86_400_000, bucket: 300, label: sec.day }, "7d": { ms: 604_800_000, bucket: 900, label: sec.week } } as const;
@@ -30,13 +29,13 @@ export function SecurityTraffic({ machineId }: { machineId: string }) {
   useEffect(() => { const timer = setInterval(() => setTo(Math.floor(Date.now() / 60_000) * 60_000), 60_000); return () => clearInterval(timer); }, []);
   const range = windows[window];
   const q = useQuery(trafficSeriesQuery({ machineId: machineId || undefined, category: category || undefined, service: service || undefined, from: new Date(to - range.ms).toISOString(), to: new Date(to).toISOString() }, range.bucket));
-  function filter(e: FormEvent<HTMLFormElement>) { e.preventDefault(); const values = new FormData(e.currentTarget); setService(String(values.get("service") || "")); setCategory(String(values.get("category") || "") as Category | ""); setWindow(String(values.get("window")) as Window); setTo(Math.floor(Date.now() / 60_000) * 60_000); }
-  return <div className="stack"><form className="filters" onSubmit={filter}>
-    <Field label={sec.window} htmlFor="traffic-window"><select id="traffic-window" name="window" defaultValue={window}>{Object.entries(windows).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select></Field>
-    <Field label={sec.category} htmlFor="traffic-category"><select id="traffic-category" name="category" defaultValue={category}><option value="">{sec.all}</option>{categories.map((value) => <option key={value}>{value}</option>)}</select></Field>
-    <Field label={sec.service} htmlFor="traffic-service"><input id="traffic-service" name="service" defaultValue={service} placeholder={sec.all} list="traffic-services" /><datalist id="traffic-services"><option value="__unassigned__">{sec.unassigned}</option></datalist></Field>
-    <button type="submit" className="btn">{sec.applyFilters}</button>
-  </form><p className="meta">{sec.gaps}</p><Async q={q}>{(data) => <TrafficDisplay data={data} />}</Async></div>;
+  function pickWindow(value: Window) { setWindow(value); setTo(Math.floor(Date.now() / 60_000) * 60_000); }
+  return <div className="stack"><div className="filters">
+    <MachineSelect />
+    <Field label={sec.window} htmlFor="traffic-window"><select id="traffic-window" value={window} onChange={(e) => pickWindow(e.target.value as Window)}>{Object.entries(windows).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select></Field>
+    <Field label={sec.category} htmlFor="traffic-category"><select id="traffic-category" value={category} onChange={(e) => setCategory(e.target.value as Category | "")}><option value="">{sec.all}</option>{categories.map((value) => <option key={value}>{value}</option>)}</select></Field>
+    <Field label={sec.service} htmlFor="traffic-service"><input id="traffic-service" type="search" value={service} placeholder={sec.all} list="traffic-services" onChange={(e) => setService(e.target.value)} /><datalist id="traffic-services"><option value="__unassigned__">{sec.unassigned}</option></datalist></Field>
+  </div><p className="meta">{sec.gaps}</p><Async q={q}>{(data) => <TrafficDisplay data={data} />}</Async></div>;
 }
 export function TrafficDisplay({ data }: { data: TrafficSeries }) {
   if (!data.items.length) return <Empty>{sec.noTraffic}</Empty>;

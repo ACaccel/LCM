@@ -1,23 +1,54 @@
-import { useEffect, useId, useRef } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { s } from "../strings";
 import { ErrorBox } from "./ui";
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** A modal dialog with a focus trap; Escape and the backdrop close it. */
+interface GuardRegistry {
+  add: (id: symbol) => void;
+  remove: (id: symbol) => void;
+}
+
+const GuardContext = createContext<GuardRegistry | null>(null);
+
+/**
+ * Declares, from inside a dialog's content, that it holds unsaved input or
+ * a request in flight; while `active`, a backdrop click does not close the
+ * enclosing dialog. For content that keeps its state below the Dialog.
+ */
+export function useDialogGuard(active: boolean) {
+  const registry = useContext(GuardContext);
+  useEffect(() => {
+    if (!active || !registry) return;
+    const id = Symbol("dialog-guard");
+    registry.add(id);
+    return () => registry.remove(id);
+  }, [active, registry]);
+}
+
+/**
+ * A modal dialog with a focus trap; Escape and the backdrop close it.
+ * A stray backdrop click must not throw work away: while `dirty` (unsaved
+ * input), `pending` (a request in flight) or a `useDialogGuard` in the
+ * content is active, only Escape and the dialog's own buttons close it.
+ */
 export function Dialog({
   title,
   onClose,
   children,
   footer,
   wide,
+  dirty,
+  pending,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  dirty?: boolean;
+  pending?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -25,6 +56,19 @@ export function Dialog({
   useEffect(() => {
     onCloseRef.current = onClose;
   });
+  const guards = useRef(new Set<symbol>());
+  const registry = useMemo<GuardRegistry>(
+    () => ({
+      add: (id) => guards.current.add(id),
+      remove: (id) => guards.current.delete(id),
+    }),
+    [],
+  );
+
+  function onBackdrop(e: React.MouseEvent) {
+    if (e.target !== e.currentTarget || dirty || pending || guards.current.size > 0) return;
+    onClose();
+  }
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -55,7 +99,7 @@ export function Dialog({
   }
 
   return (
-    <div className="dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="dialog-backdrop" onMouseDown={onBackdrop}>
       <div
         ref={ref}
         className={`dialog${wide ? " wide" : ""}`}
@@ -66,8 +110,10 @@ export function Dialog({
         onKeyDown={onKeyDown}
       >
         <h2 id={titleId}>{title}</h2>
-        {children}
-        {footer && <div className="footer">{footer}</div>}
+        <GuardContext.Provider value={registry}>
+          {children}
+          {footer && <div className="footer">{footer}</div>}
+        </GuardContext.Provider>
       </div>
     </div>
   );
@@ -100,6 +146,7 @@ export function ConfirmDialog({
     <Dialog
       title={title}
       onClose={onClose}
+      pending={busy}
       footer={
         <>
           <button type="button" className="btn" onClick={onClose} data-autofocus>

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useSearchParams } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostStatusQuery } from "../../api/security";
 import type { HostStatus, Incident, SecuritySettings, TrafficPoint } from "../../api/security";
@@ -11,6 +11,7 @@ import { ProfileForm, ScheduleForm, SecurityChecks } from "./controls";
 import { HostActions } from "./host-actions";
 import { NotificationTest, SettingsForm, SettingsHistory } from "./notifications";
 import { trafficSegments, trafficTotals, TrafficDisplay } from "./traffic";
+import { resourceFixture } from "../resource/test-fixtures";
 import { sec } from "./strings";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -24,32 +25,59 @@ function wrap(node: ReactNode, initial = "/security/incidents") {
 afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("security incidents", () => {
+  const machines = { items: [{ ...resourceFixture({ id: "machine-1", name: "nas", type: "machine" }) }, { ...resourceFixture({ id: "machine-2", name: "gateway-host", type: "machine" }) }], nextCursor: null };
+  /** Serves the machine list and hands incident reads to `incidents`, recording their URLs. */
+  function stub(incidents: (url: URL) => Response | Promise<Response>) {
+    const urls: URL[] = [];
+    vi.stubGlobal("fetch", async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/v1/resources") return json(machines);
+      urls.push(url);
+      return incidents(url);
+    });
+    return urls;
+  }
   it("renders loading then a recoverable read error without claiming empty", async () => {
     let finish: ((response: Response) => void) | undefined;
-    vi.stubGlobal("fetch", () => new Promise<Response>((resolve) => { finish = resolve; }));
+    stub(() => new Promise<Response>((resolve) => { finish = resolve; }));
     render(wrap(<SecurityIncidents machineId="machine-1" />));
     expect(screen.getByRole("status")).toBeTruthy();
+    await waitFor(() => expect(finish).toBeDefined());
     finish?.(json({ error: { message: "Read failed" } }, 503));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("Read failed"));
     expect(screen.queryByText(sec.emptyIncidents)).toBeNull();
   });
   it("retains machine/source/severity/time filters on the next cursor page", async () => {
-    const urls: URL[] = [];
-    vi.stubGlobal("fetch", async (request: Request) => { const url = new URL(request.url); urls.push(url); return json({ items: url.searchParams.has("cursor") ? [{ ...incident, id: "incident-2", summary: "Next result" }] : [incident], nextCursor: url.searchParams.has("cursor") ? null : "cursor-1" }); });
+    const urls = stub((url) => json({ items: url.searchParams.has("cursor") ? [{ ...incident, id: "incident-2", summary: "Next result" }] : [incident], nextCursor: url.searchParams.has("cursor") ? null : "cursor-1" }));
     render(wrap(<SecurityIncidents machineId="machine-1" />, "/security/incidents?source=aide&severity=warning&state=firing&from=2026-11-01T00%3A00%3A00Z"));
     await userEvent.click(await screen.findByRole("button", { name: sec.more }));
     expect(await screen.findByText("Next result")).toBeTruthy();
     expect(urls.at(-1)?.searchParams.get("cursor")).toBe("cursor-1");
     for (const url of urls) expect(Object.fromEntries(url.searchParams)).toMatchObject({ machineId: "machine-1", source: "aide", severity: "warning", state: "firing", from: "2026-11-01T00:00:00Z" });
   });
+  it("picks the machine by name, filters by its ID and applies every filter at once", async () => {
+    const urls = stub(() => json({ items: [incident], nextCursor: null }));
+    function Page() { const [params] = useSearchParams(); return <SecurityIncidents machineId={params.get("machineId") || ""} />; }
+    render(wrap(<Page />));
+    const machine = await screen.findByLabelText(sec.machine);
+    await screen.findByRole("option", { name: "gateway-host" });
+    // The incident row names its machine instead of showing the raw ID.
+    expect(await screen.findByTitle("machine-1")).toHaveProperty("textContent", "nas");
+    await userEvent.selectOptions(machine, "gateway-host");
+    await waitFor(() => expect(urls.at(-1)?.searchParams.get("machineId")).toBe("machine-2"));
+    await userEvent.selectOptions(screen.getByLabelText(sec.severity), "critical");
+    await waitFor(() => expect(Object.fromEntries(urls.at(-1)!.searchParams)).toMatchObject({ machineId: "machine-2", severity: "critical" }));
+  });
   it("rejects reversed time filters before another read", async () => {
-    const fetch = vi.fn(async () => json({ items: [], nextCursor: null })); vi.stubGlobal("fetch", fetch);
+    const urls = stub(() => json({ items: [], nextCursor: null }));
     render(wrap(<SecurityIncidents machineId="" />));
     await screen.findByText(sec.emptyIncidents);
-    const from = screen.getByLabelText(sec.from); const to = screen.getByLabelText(sec.to);
-    fireEvent.change(from, { target: { value: "2026-11-03T10:00" } }); fireEvent.change(to, { target: { value: "2026-11-02T10:00" } });
-    await userEvent.click(screen.getByRole("button", { name: sec.applyFilters }));
-    expect(await screen.findByText(sec.filterInvalid)).toBeTruthy(); expect(fetch).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText(sec.from), { target: { value: "2026-11-03T10:00" } });
+    await waitFor(() => expect(urls).toHaveLength(2));
+    expect(urls[1]?.searchParams.has("from")).toBe(true);
+    fireEvent.change(screen.getByLabelText(sec.to), { target: { value: "2026-11-02T10:00" } });
+    expect(await screen.findByText(sec.filterInvalid)).toBeTruthy();
+    expect(urls).toHaveLength(2);
   });
   it("requires a reason and acknowledges with quoted version without resolving detection", async () => {
     const seen: { body: unknown; match: string | null }[] = [];

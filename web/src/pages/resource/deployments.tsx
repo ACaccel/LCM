@@ -4,10 +4,9 @@ import { deploymentsQuery } from "../../api/queries";
 import type { Deployment } from "../../api/types";
 import { Async, Empty, Pill, Tag } from "../../components/ui";
 import { formatDateTime, formatDuration, formatTime, shortVersion, spanMs } from "../../lib/format";
+import { deploymentOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
 
-const outcomeTone = { running: "info", succeeded: "ok", failed: "bad", interrupted: "bad" } as const;
-const outcomeIcon = { running: "↻", succeeded: "✓", failed: "✕", interrupted: "✕" } as const;
 
 /** Deployment history of a service, with rollback to an earlier successful commit. */
 export function DeploymentsTab({ resource, deployedVersion, hasSource, onDeploy }: { resource: string; deployedVersion: string; hasSource: boolean; onDeploy: (version: string) => void }) {
@@ -55,7 +54,7 @@ export function DeploymentsTab({ resource, deployedVersion, hasSource, onDeploy 
                         <td title={formatDateTime(d.startedAt)}>{formatTime(d.startedAt)}</td>
                         <td>{formatDuration(spanMs(d.startedAt, d.finishedAt))}</td>
                         <td>
-                          <Pill view={{ tone: outcomeTone[d.outcome], icon: outcomeIcon[d.outcome], label: s.deployments.outcomes[d.outcome] ?? d.outcome }} />
+                          <Pill view={deploymentOutcomeView(d.outcome)} />
                           {d.error && <div className="meta">{d.error}</div>}
                           {d.logExcerpt && (
                             <details>

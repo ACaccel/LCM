@@ -131,8 +131,8 @@ export interface GraphProps {
   /** Edit handlers; the graph is read-only without them. */
   onMove?: (positions: Record<string, Position>) => void;
   onConnect?: (from: string, port: string, to: string) => void;
-  onDeleteEdge?: (edge: ModelEdge) => void;
-  onDeleteNode?: (id: string) => void;
+  /** One deletion gesture: the removed nodes and the removed edges (including those of removed nodes). */
+  onDelete?: (nodes: string[], edges: ModelEdge[]) => void;
   onDropType?: (type: string, at: Position) => void;
 }
 
@@ -249,12 +249,11 @@ function GraphInner(props: GraphProps) {
         onConnect={onConnect}
         onNodeClick={(_, n) => onSelect?.(n.id)}
         onPaneClick={() => onSelect?.(null)}
-        onNodesDelete={(ns) => ns.forEach((n) => props.onDeleteNode?.(n.id))}
-        onEdgesDelete={(es) =>
-          es.forEach((e) => {
-            const edge = edgeById.get(e.id);
-            if (edge) props.onDeleteEdge?.(edge);
-          })
+        onDelete={({ nodes: ns, edges: es }) =>
+          props.onDelete?.(
+            ns.map((n) => n.id),
+            es.flatMap((e) => edgeById.get(e.id) ?? []),
+          )
         }
         deleteKeyCode={editable ? ["Backspace", "Delete"] : null}
         nodesDraggable={editable}

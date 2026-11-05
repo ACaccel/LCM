@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { Link, useBlocker, useParams, useSearchParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { ApiError, client, isApiError, unwrap, yamlBody } from "../api/client";
 import { modulesQuery, nodeTypesQuery, policyQuery, qk } from "../api/queries";
 import type { Issue, PolicyDetail, ValidationResult } from "../api/types";
@@ -10,15 +10,18 @@ import { ConfirmDialog } from "../components/dialog";
 import { PolicyGraph } from "../components/graph";
 import { useToast } from "../components/toast";
 import { ErrorBox, PageHead, Pill, Spinner, Tag } from "../components/ui";
+import { LeaveGuard } from "../components/leave-guard";
 import { IssueList } from "../components/validation";
 import { YamlEditor } from "../components/yaml-editor-lazy";
+import { policyStateView } from "../lib/status";
 import { docToYaml } from "../lib/yamldoc";
 import { policyTemplate } from "../lib/templates";
 import { addNode, connect, disconnect, removeNode, setLayout, uniqueNodeId } from "../policy/edit";
 import { autoLayout, mapIssues, nextPosition } from "../policy/issues";
-import type { Position } from "../policy/model";
+import type { ModelEdge, Position } from "../policy/model";
 import { s } from "../strings";
 import { useEditorText } from "./policy/editor-state";
+import { DeployReview } from "./policy/deploy-review";
 import { HistoryDialog } from "./policy/history-dialog";
 import { NodePanel, PolicySettings } from "./policy/node-panel";
 import { Palette } from "./policy/palette";
@@ -88,16 +91,7 @@ function StatusPills({ name, detail, version }: { name: string; detail: PolicyDe
     <div className="pills">
       <Tag>{name}</Tag>
       {version !== null ? <Tag>{s.config.version(version)}</Tag> : <Tag>{s.editor.newPolicy}</Tag>}
-      {detail &&
-        (detail.deployed ? (
-          detail.paused ? (
-            <Pill view={{ tone: "warn", icon: "‖", label: s.editor.statePaused }} />
-          ) : (
-            <Pill view={{ tone: "ok", icon: "●", label: s.editor.stateDeployed }} />
-          )
-        ) : (
-          <Pill view={{ tone: "neutral", icon: "○", label: s.editor.stateNotDeployed }} />
-        ))}
+      {detail && <Pill view={policyStateView(detail)} />}
       {detail && <ManagedBadges managedBy={detail.managedBy} />}
     </div>
   );
@@ -111,13 +105,13 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
   useQuery(modulesQuery());
   const detail = useQuery({ ...policyQuery(name), retry: false });
 
-  const { state, setText, apply } = useEditorText(init.text);
+  const { state, setText, apply, undo, canUndo } = useEditorText(init.text);
   const [baseline, setBaseline] = useState(init.text);
   const [baseVersion, setBaseVersion] = useState<number | null>(init.version);
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<"props" | "yaml">("props");
   const [result, setResult] = useState<{ issues: Issue[]; warnings: Issue[]; valid?: boolean; sig: string } | null>(null);
-  const [dialog, setDialog] = useState<"run" | "history" | "undeploy" | null>(null);
+  const [dialog, setDialog] = useState<"run" | "history" | "undeploy" | "review" | null>(null);
   const [conflict, setConflict] = useState<{ current: number | undefined; stored: string } | null>(null);
   const [loadVersion, setLoadVersion] = useState<{ text: string; version: number } | null>(null);
 
@@ -133,15 +127,6 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
   const compileWarnings = detail.data?.warnings ?? NO_ISSUES;
   const issueMap = useMemo(() => mapIssues(shown?.issues ?? [], model), [shown, model]);
   const warningMap = useMemo(() => mapIssues([...(shown?.warnings ?? []), ...compileWarnings], model), [shown, compileWarnings, model]);
-
-  // Leaving with unsaved changes asks first, both inside the app and on tab close.
-  const blocker = useBlocker(dirty);
-  useEffect(() => {
-    if (!dirty) return;
-    const h = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener("beforeunload", h);
-    return () => window.removeEventListener("beforeunload", h);
-  }, [dirty]);
 
   const validate = useMutation({
     mutationFn: (): Promise<ValidationResult> => unwrap(client.POST("/validate", { body: state.text as never, ...yamlBody })),
@@ -162,12 +147,14 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
       setBaseline(state.text);
       setBaseVersion(res.version);
       setConflict(null);
+      setDialog((d) => (d === "review" ? null : d));
       setResult({ issues: [], warnings: res.warnings, valid: true, sig });
       void qc.invalidateQueries({ queryKey: qk.policies() });
       void qc.invalidateQueries({ queryKey: qk.policy(name) });
       void qc.invalidateQueries({ queryKey: qk.policyVersions(name) });
     },
     onError: async (e) => {
+      if (isApiError(e) && (e.isConflict || e.issues.length > 0)) setDialog((d) => (d === "review" ? null : d));
       if (isApiError(e) && e.isConflict) {
         try {
           setConflict({ current: e.currentVersion, stored: await fetchPolicyYaml(name) });
@@ -206,6 +193,33 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
     save.reset();
   }
 
+  /** One deletion gesture is one undo step: edges between kept nodes are disconnected, removed nodes take their edges along. */
+  function deleteElements(ids: string[], edges: ModelEdge[]) {
+    apply(
+      (t) => {
+        let out = t;
+        for (const e of edges) if (!ids.includes(e.from) && !ids.includes(e.to)) out = disconnect(out, e.from, e.port, e.to);
+        for (const id of ids) out = removeNode(out, id);
+        return out;
+      },
+      { undoable: true },
+    );
+    setSelected((cur) => (cur !== null && ids.includes(cur) ? null : cur));
+  }
+
+  // Ctrl+Z on the canvas takes back the last deletion; text fields keep their own undo.
+  useEffect(() => {
+    if (!canUndo) return;
+    const h = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== "z") return;
+      if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
+      e.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [canUndo, undo]);
+
   function addNodeOf(type: string, at?: Position) {
     if (!model) return;
     const id = uniqueNodeId(type, model.nodes.map((n) => n.id));
@@ -222,14 +236,33 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
   const current = state.parsed.ok ? docToYaml(state.parsed.doc.toJS()) : "";
 
   const saveError = save.error && !(isApiError(save.error) && (save.error.isConflict || save.error.issues.length > 0)) ? save.error : null;
+  // Saving deploys: over a running version, the change is reviewed first.
+  const deployedVersion = detail.data?.deployed ? detail.data.deployedVersion : null;
 
   return (
     <div className="page">
       <PageHead title={name} meta={<StatusPills name={name} detail={detail.data} version={baseVersion} />}>
+        {canUndo && (
+          <button type="button" className="btn" title={s.editor.undoHint} onClick={undo}>
+            {s.editor.undoDelete}
+          </button>
+        )}
         <button type="button" className="btn" disabled={validate.isPending || !state.parsed.ok} onClick={() => validate.mutate()}>
           {validate.isPending ? s.editor.validating : s.editor.validate}
         </button>
-        <button type="button" className="btn primary" disabled={save.isPending || !state.parsed.ok || (!dirty && baseVersion !== null && !!detail.data?.deployed)} onClick={() => save.mutate(baseVersion)}>
+        <button
+          type="button"
+          className="btn primary"
+          disabled={save.isPending || !state.parsed.ok || (!dirty && baseVersion !== null && !!detail.data?.deployed)}
+          onClick={() => {
+            if (deployedVersion === null) {
+              save.mutate(baseVersion);
+              return;
+            }
+            save.reset();
+            setDialog("review");
+          }}
+        >
           {save.isPending ? s.editor.saving : s.editor.save}
         </button>
         {baseVersion !== null && (
@@ -279,11 +312,7 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
               issuesByNode={issueMap.byNode}
               onMove={(moved) => apply((t) => setLayout(t, { ...positions, ...moved }))}
               onConnect={(from, port, to) => apply((t) => connect(t, from, port, to))}
-              onDeleteEdge={(e) => apply((t) => disconnect(t, e.from, e.port, e.to))}
-              onDeleteNode={(id) => {
-                apply((t) => removeNode(t, id));
-                setSelected((cur) => (cur === id ? null : cur));
-              }}
+              onDelete={deleteElements}
               onDropType={(type, at) => addNodeOf(type, at)}
             />
           ) : (
@@ -310,10 +339,7 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
                 allIds={model?.nodes.map((n) => n.id) ?? []}
                 apply={apply}
                 onRename={(from, to) => setSelected((cur) => (cur === from ? to : cur))}
-                onDelete={() => {
-                  apply((t) => removeNode(t, selectedNode.id));
-                  setSelected(null);
-                }}
+                onDelete={() => deleteElements([selectedNode.id], [])}
               />
             ) : model ? (
               <PolicySettings model={model} spec={spec} apply={apply} issues={issueMap.document} />
@@ -366,6 +392,17 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
           }}
         />
       )}
+      {dialog === "review" && deployedVersion !== null && (
+        <DeployReview
+          name={name}
+          deployedVersion={deployedVersion}
+          current={current}
+          busy={save.isPending}
+          error={saveError}
+          onConfirm={() => save.mutate(baseVersion)}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {dialog === "undeploy" && (
         <ConfirmDialog title={s.editor.undeploy} confirmLabel={s.editor.undeploy} body={s.editor.confirmUndeploy} danger busy={undeploy.isPending} error={undeploy.error} onClose={() => setDialog(null)} onConfirm={() => undeploy.mutate()} />
       )}
@@ -396,9 +433,7 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
           onClose={() => setConflict(null)}
         />
       )}
-      {blocker.state === "blocked" && (
-        <ConfirmDialog title={s.editor.unsaved} confirmLabel={s.editor.leave} body={s.editor.unsavedLeave} danger onClose={() => blocker.reset()} onConfirm={() => blocker.proceed()} />
-      )}
+      <LeaveGuard when={dirty} />
     </div>
   );
 }

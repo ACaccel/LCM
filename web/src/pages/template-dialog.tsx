@@ -5,7 +5,7 @@ import { useNavigate } from "react-router";
 import { client, unwrap } from "../api/client";
 import { qk, resourcesQuery, templatesQuery } from "../api/queries";
 import type { Template, TemplateInstance, TemplateParam } from "../api/types";
-import { Dialog } from "../components/dialog";
+import { Dialog, useDialogGuard } from "../components/dialog";
 import { ErrorBox, Field, Spinner } from "../components/ui";
 import { buildParams, initialValues, isRequired, suggestName } from "../lib/template-form";
 import type { FormValues } from "../lib/template-form";
@@ -122,6 +122,9 @@ function Form({ templates, services, resource, onClose }: { templates: Template[
       void navigate(`/policies/${encodeURIComponent(r.name)}`);
     },
   });
+
+  const [initial] = useState(() => JSON.stringify([templateId, values]));
+  useDialogGuard(typedName !== null || JSON.stringify([templateId, values]) !== initial || previewM.isPending || deployM.isPending);
 
   const fresh = preview?.key === key;
   function submit(e: FormEvent) {

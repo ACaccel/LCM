@@ -103,7 +103,7 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     for (const [key] of qc.getQueriesData<InfiniteData<TimelineList>>({ queryKey: qk.timelineAll() })) {
       const resource = String(key[1] ?? "");
       const kinds = (key[2] ?? []) as string[];
-      if (!matchesFilter(entry, resource, kinds)) continue;
+      if (!matchesFilter(entry, resource, kinds, String(key[3] ?? ""), String(key[4] ?? ""))) continue;
       qc.setQueryData<InfiniteData<TimelineList>>(key, (d) => (d ? { ...d, pages: insertLive(d.pages, entry) } : d));
     }
     if (entry.kind === "deployment") {

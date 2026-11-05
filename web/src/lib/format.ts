@@ -16,6 +16,21 @@ const full = new Intl.DateTimeFormat("zh-TW", {
   hour12: false,
 });
 
+const dayFmt = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" });
+
+/** A calendar date with its weekday, such as 2026/11/05 (週四). */
+export function formatDay(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "-" : dayFmt.format(d);
+}
+
+/** The value of a datetime-local input for an instant, in local time; "" when not a valid instant. */
+export function toLocalInput(iso: string | null | undefined): string {
+  if (!iso || !Number.isFinite(Date.parse(iso))) return "";
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }

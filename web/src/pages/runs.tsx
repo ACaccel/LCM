@@ -1,23 +1,54 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { policiesQuery, runsQuery } from "../api/queries";
-import type { RunStatus } from "../api/types";
+import type { RunStatus, RunSummary } from "../api/types";
+import { SortTh, useSort } from "../components/sort-header";
 import { Empty, ErrorBox, PageHead, Pill, Spinner, Tag } from "../components/ui";
 import { formatDateTime, formatDuration, formatTime, spanMs } from "../lib/format";
+import { sortRows } from "../lib/list";
+import type { SortValue } from "../lib/list";
 import { runStatusView } from "../lib/status";
 import { s } from "../strings";
 
 const STATUSES: RunStatus[] = ["queued", "running", "suspended", "succeeded", "failed", "cancelled", "interrupted", "dropped"];
 
+const runSortKeys = ["policy", "version", "status", "created", "duration"] as const;
+type RunSortKey = (typeof runSortKeys)[number];
+const runSort: Record<RunSortKey, (r: RunSummary) => SortValue> = {
+  policy: (r) => r.policy,
+  version: (r) => r.version,
+  status: (r) => s.runStatus[r.status],
+  created: (r) => Date.parse(r.createdAt),
+  duration: (r) => (r.startedAt ? spanMs(r.startedAt, r.finishedAt) : null),
+};
+
+/**
+ * Runs filtered by policy and status, both kept in the URL (`policy`, and
+ * `status` once per selected status) so a filtered list can be linked.
+ * Sorting applies to the pages loaded so far; the server pages newest first.
+ */
 export function RunsPage() {
-  const [policy, setPolicy] = useState("");
-  const [status, setStatus] = useState<RunStatus[]>([]);
+  const [params, setParams] = useSearchParams();
+  const policy = params.get("policy") ?? "";
+  const status = STATUSES.filter((st) => params.getAll("status").includes(st));
+  const { sort, toggle: toggleSort } = useSort(runSortKeys, { key: "created", dir: "desc" });
   const policies = useQuery(policiesQuery());
   const q = useInfiniteQuery(runsQuery({ policy: policy || undefined, status }));
-  const rows = q.data?.pages.flatMap((p) => p.items) ?? [];
+  const rows = sortRows(q.data?.pages.flatMap((p) => p.items) ?? [], sort, runSort);
 
-  const toggle = (st: RunStatus) => setStatus((cur) => (cur.includes(st) ? cur.filter((x) => x !== st) : [...cur, st]));
+  function setPolicy(value: string) {
+    const next = new URLSearchParams(params);
+    if (value) next.set("policy", value);
+    else next.delete("policy");
+    setParams(next, { replace: true });
+  }
+  function toggle(st: RunStatus) {
+    const next = new URLSearchParams(params);
+    next.delete("status");
+    for (const x of STATUSES) if (x === st ? !status.includes(x) : status.includes(x)) next.append("status", x);
+    setParams(next, { replace: true });
+  }
+  const th = (key: RunSortKey, label: string, num?: boolean) => <SortTh sortKey={key} label={label} sort={sort} onSort={toggleSort} num={num} />;
 
   return (
     <div className="page">
@@ -27,6 +58,7 @@ export function RunsPage() {
           <label htmlFor="r-policy">{s.runs.filterPolicy}</label>
           <select id="r-policy" value={policy} onChange={(e) => setPolicy(e.target.value)}>
             <option value="">{s.common.all}</option>
+            {policy && !(policies.data ?? []).some((p) => p.name === policy) && <option value={policy}>{policy}</option>}
             {(policies.data ?? []).map((p) => (
               <option key={p.name} value={p.name}>
                 {p.name}
@@ -57,13 +89,14 @@ export function RunsPage() {
             <thead>
               <tr>
                 <th>{s.runs.columns.id}</th>
-                <th>{s.runs.columns.policy}</th>
-                <th className="num">{s.runs.columns.version}</th>
-                <th>{s.runs.columns.status}</th>
+                {th("policy", s.runs.columns.policy)}
+                {th("version", s.runs.columns.version, true)}
+                {th("status", s.runs.columns.status)}
                 <th>{s.runs.columns.mode}</th>
                 <th>{s.runs.columns.trigger}</th>
-                <th>{s.runs.columns.created}</th>
-                <th>{s.runs.columns.duration}</th>
+                {th("created", s.runs.columns.created)}
+                {th("duration", s.runs.columns.duration)}
+                <th>{s.runs.columns.error}</th>
               </tr>
             </thead>
             <tbody>
@@ -79,7 +112,7 @@ export function RunsPage() {
                   </td>
                   <td className="num">{r.version}</td>
                   <td>
-                    <Pill view={runStatusView(r.status)} title={r.error} />
+                    <Pill view={runStatusView(r.status)} />
                   </td>
                   <td>{r.mode === "dry" ? <Tag>{s.runMode["dry"]}</Tag> : s.runMode["live"]}</td>
                   <td>
@@ -87,6 +120,9 @@ export function RunsPage() {
                   </td>
                   <td title={formatDateTime(r.createdAt)}>{formatTime(r.createdAt)}</td>
                   <td>{r.startedAt ? formatDuration(spanMs(r.startedAt, r.finishedAt)) : "-"}</td>
+                  <td className="clip" title={r.error || undefined}>
+                    {r.error || ""}
+                  </td>
                 </tr>
               ))}
             </tbody>

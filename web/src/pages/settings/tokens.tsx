@@ -10,9 +10,12 @@ import { Async, Empty, ErrorBox, Field, Pill, Tag } from "../../components/ui";
 import { formatDateTime } from "../../lib/format";
 import { s } from "../../strings";
 
+// The least privileged scope is the default; admin is an explicit choice.
+const DEFAULT_SCOPE: TokenScope = "ingest";
+
 function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (t: TokenCreated) => void }) {
   const [name, setName] = useState("");
-  const [scope, setScope] = useState<TokenScope>("admin");
+  const [scope, setScope] = useState<TokenScope>(DEFAULT_SCOPE);
   const m = useMutation({
     mutationFn: () => unwrap(client.POST("/tokens", { body: { name: name.trim(), scope } })),
     onSuccess: onCreated,
@@ -22,7 +25,7 @@ function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: 
     m.mutate();
   }
   return (
-    <Dialog title={s.settings.tokens.create} onClose={onClose}>
+    <Dialog title={s.settings.tokens.create} onClose={onClose} dirty={name !== "" || scope !== DEFAULT_SCOPE} pending={m.isPending}>
       <form className="stack" onSubmit={submit}>
         <Field label={s.settings.tokens.name} htmlFor="tok-name">
           <input id="tok-name" type="text" value={name} maxLength={64} onChange={(e) => setName(e.target.value)} required data-autofocus />

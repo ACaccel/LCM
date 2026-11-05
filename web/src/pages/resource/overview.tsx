@@ -2,10 +2,9 @@ import type { ResourceDetail } from "../../api/types";
 import { HealthPill, ManagedBadges, PhasePill, StatePill, TypeTag } from "../../components/badges";
 import { Pill, Tag } from "../../components/ui";
 import { formatDateTime, formatTime, shortVersion } from "../../lib/format";
+import { checkView } from "../../lib/status";
 import { s } from "../../strings";
 import { OperationCard } from "./operations";
-
-const checkTone = { up: { tone: "ok", icon: "✓" }, down: { tone: "bad", icon: "✕" }, unknown: { tone: "neutral", icon: "?" } } as const;
 
 /** What every resource has: identity, the four status dimensions, checks, alerts and type extras. */
 export function OverviewTab({ detail, selector }: { detail: ResourceDetail; selector: string }) {
@@ -91,7 +90,7 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
               </dd>
               <dt>{s.resource.lastDeployment}</dt>
               <dd>
-                {last ? `${s.deployments.outcomes[last.outcome] ?? last.outcome} · ${formatTime(last.finishedAt ?? last.startedAt)}` : s.overview.noDeploy}
+                {last ? `${s.deployments.outcomes[last.outcome]} · ${formatTime(last.finishedAt ?? last.startedAt)}` : s.overview.noDeploy}
               </dd>
             </>
           )}
@@ -110,15 +109,12 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
             <p className="meta">{s.checks.none}</p>
           ) : (
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-              {detail.checks.map((c) => {
-                const st = c.stale ? "unknown" : c.status;
-                return (
-                  <li key={c.name} className="row between" style={{ padding: "4px 0" }}>
-                    <span>{c.name}</span>
-                    <Pill view={{ ...checkTone[st], label: c.stale ? s.checks.stale : s.checks[st] }} title={c.message} />
-                  </li>
-                );
-              })}
+              {detail.checks.map((c) => (
+                <li key={c.name} className="row between" style={{ padding: "4px 0" }}>
+                  <span>{c.name}</span>
+                  <Pill view={checkView(c)} title={c.message} />
+                </li>
+              ))}
             </ul>
           )}
         </section>

@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { hostStatusQuery, incidentsQuery, securityStatusQuery } from "../../api/security";
 import { Async, ErrorBox, Tag } from "../../components/ui";
-import { HostNotConfigured, Metric, UnknownReport, auditEnabled, number, showTime, stale } from "./shared";
+import { HostNotConfigured, MachineSelect, Metric, UnknownReport, auditEnabled, number, showTime, stale } from "./shared";
 import { sec } from "./strings";
 
 export function SecurityOverview({ machineId }: { machineId: string }) {
@@ -12,7 +12,8 @@ export function SecurityOverview({ machineId }: { machineId: string }) {
   const items = incidents.data?.pages.flatMap((page) => page.items) ?? [];
   const query = machineId ? `?machineId=${encodeURIComponent(machineId)}` : "";
   return <div className="stack">
-    <section className="panel stack"><h2>{sec.status}</h2><Async q={status}>{(value) => <>
+    <div className="filters"><MachineSelect /></div>
+    <section className="panel stack"><h2>{sec.status}</h2><p className="meta">{sec.statusHelp}</p><Async q={status}>{(value) => <>
       <div className="security-metrics"><Metric label={sec.status} value={value.enabled ? sec.enabled : sec.disabled} /><Metric label={sec.notifications} value={value.notificationsEnabled ? sec.enabled : sec.disabled} /><Metric label={sec.pending} value={number(value.pending)} /><Metric label={sec.failed} value={number(value.failed)} /><Metric label={sec.overflow} value={number(value.overflow)} /><Metric label={sec.expired} value={number(value.expired)} /></div>
       <p className="meta">{sec.lastPoll}：{showTime(value.lastPollAt)}</p>{value.enabled && stale(value.lastPollAt) && <p className="banner warn">{sec.stale}</p>}{value.lastError && <p className="banner error">{value.lastError}</p>}
     </>}</Async></section>

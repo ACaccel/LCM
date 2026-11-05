@@ -6,15 +6,11 @@ import { ChartLegend, LatencyChart, UptimeBars } from "../../components/charts";
 import { Async, Empty, ErrorBox, Pill, Spinner } from "../../components/ui";
 import { formatDuration, formatTime, formatUptime } from "../../lib/format";
 import { bucketUptime, latencyStats, overallUptime } from "../../lib/series";
+import { checkView } from "../../lib/status";
 import { s } from "../../strings";
 
 type WindowKey = "24h" | "7d" | "30d";
 const WINDOWS: Record<WindowKey, number> = { "24h": 86_400_000, "7d": 7 * 86_400_000, "30d": 30 * 86_400_000 };
-
-function checkView(c: CheckStatus) {
-  if (c.stale || c.status === "unknown") return { tone: "neutral" as const, icon: "?", label: c.stale ? s.checks.stale : s.checks.unknown };
-  return c.status === "up" ? { tone: "ok" as const, icon: "✓", label: s.checks.up } : { tone: "bad" as const, icon: "✕", label: s.checks.down };
-}
 
 const BARS = 48;
 

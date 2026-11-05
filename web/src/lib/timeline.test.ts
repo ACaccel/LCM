@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineEntry, TimelineList } from "../api/types";
-import { entryKey, flattenTimeline, insertLive, matchesFilter } from "./timeline";
+import { entryKey, flattenTimeline, groupByDay, insertLive, localDay, matchesFilter } from "./timeline";
 
 const e = (n: number, over: Partial<TimelineEntry> = {}): TimelineEntry => ({
   id: n,
@@ -44,6 +44,23 @@ describe("timeline merge", () => {
     expect(matchesFilter(e(1), "web", ["action"])).toBe(true);
     expect(matchesFilter(e(1), "api", [])).toBe(false);
     expect(matchesFilter(e(1), "", ["alert"])).toBe(false);
+  });
+
+  it("matches entries against a time range, from inclusive and to exclusive", () => {
+    const at = { ...e(1), time: "2026-10-28T10:00:00Z" };
+    expect(matchesFilter(at, "", [], "2026-10-28T10:00:00Z", "")).toBe(true);
+    expect(matchesFilter(at, "", [], "2026-10-28T10:00:01Z", "")).toBe(false);
+    expect(matchesFilter(at, "", [], "", "2026-10-28T10:00:00Z")).toBe(false);
+    expect(matchesFilter(at, "", [], "2026-10-28T09:00:00Z", "2026-10-28T11:00:00Z")).toBe(true);
+  });
+
+  it("groups a newest-first list by local day", () => {
+    const at = (iso: string, n: number) => ({ ...e(n), time: new Date(iso).toISOString() });
+    const list = [at("2026-10-29T08:00:00", 4), at("2026-10-29T01:00:00", 3), at("2026-10-28T23:00:00", 2), at("2026-10-27T12:00:00", 1)];
+    const groups = groupByDay(list);
+    expect(groups.map((g) => g.day)).toEqual(["2026-10-29", "2026-10-28", "2026-10-27"]);
+    expect(groups.map((g) => g.entries.map((x) => x.id))).toEqual([[4, 3], [2], [1]]);
+    expect(localDay(list[0]!.time)).toBe("2026-10-29");
   });
 
   it("gives different entries different keys", () => {

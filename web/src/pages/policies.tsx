@@ -1,13 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { policiesQuery } from "../api/queries";
+import type { PolicySummary } from "../api/types";
 import { ManagedBadges } from "../components/badges";
 import { Dialog } from "../components/dialog";
+import { SortTh, useSort } from "../components/sort-header";
 import { Async, Empty, Field, PageHead, Pill, Tag } from "../components/ui";
 import { formatTime } from "../lib/format";
-import { runStatusView } from "../lib/status";
+import { nameMatches, sortRows } from "../lib/list";
+import type { SortValue } from "../lib/list";
+import { policyStateView, runStatusView } from "../lib/status";
 import { s } from "../strings";
 import { TemplateDialog } from "./template-dialog";
 
@@ -24,7 +28,7 @@ function CreateDialog({ existing, onClose }: { existing: Set<string>; onClose: (
     void navigate(`/policies/${encodeURIComponent(name)}?new=1`);
   }
   return (
-    <Dialog title={s.policies.create} onClose={onClose}>
+    <Dialog title={s.policies.create} onClose={onClose} dirty={name !== ""}>
       <form className="stack" onSubmit={submit}>
         <Field label={s.policies.newName} htmlFor="p-name" hint={s.policies.newNameHelp}>
           <input id="p-name" type="text" value={name} onChange={(e) => setName(e.target.value)} data-autofocus required maxLength={63} />
@@ -43,10 +47,30 @@ function CreateDialog({ existing, onClose }: { existing: Set<string>; onClose: (
   );
 }
 
+const policySortKeys = ["name", "version", "state", "lastRun"] as const;
+type PolicySortKey = (typeof policySortKeys)[number];
+const policySort: Record<PolicySortKey, (p: PolicySummary) => SortValue> = {
+  name: (p) => p.name,
+  version: (p) => p.deployedVersion,
+  // Running policies first, then paused, then those not deployed.
+  state: (p) => (!p.deployed ? 2 : p.paused ? 1 : 0),
+  lastRun: (p) => (p.lastRun ? Date.parse(p.lastRun.createdAt) : null),
+};
+
 export function PoliciesPage() {
   const q = useQuery(policiesQuery());
+  const [params, setParams] = useSearchParams();
+  const search = params.get("q") ?? "";
+  const { sort, toggle } = useSort(policySortKeys, { key: "name", dir: "asc" });
   const [creating, setCreating] = useState(false);
   const [fromTemplate, setFromTemplate] = useState(false);
+  function setSearch(value: string) {
+    const next = new URLSearchParams(params);
+    if (value) next.set("q", value);
+    else next.delete("q");
+    setParams(next, { replace: true });
+  }
+  const th = (key: PolicySortKey, label: string, num?: boolean) => <SortTh sortKey={key} label={label} sort={sort} onSort={toggle} num={num} />;
   return (
     <div className="page">
       <PageHead title={s.policies.title}>
@@ -57,20 +81,33 @@ export function PoliciesPage() {
           {s.policies.create}
         </button>
       </PageHead>
+      <div className="filters">
+        <div className="field">
+          <label htmlFor="p-search">{s.policies.search}</label>
+          <input id="p-search" type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+      </div>
       <Async q={q}>
-        {(items) =>
-          items.length === 0 ? (
+        {(all) => {
+          const items = sortRows(
+            all.filter((p) => nameMatches(p.name, search)),
+            sort,
+            policySort,
+          );
+          return all.length === 0 ? (
             <Empty>{s.policies.empty}</Empty>
+          ) : items.length === 0 ? (
+            <Empty>{s.policies.noMatch}</Empty>
           ) : (
             <div className="table-wrap">
               <table className="table">
                 <thead>
                   <tr>
-                    <th>{s.policies.columns.name}</th>
-                    <th className="num">{s.policies.columns.version}</th>
-                    <th>{s.policies.columns.state}</th>
+                    {th("name", s.policies.columns.name)}
+                    {th("version", s.policies.columns.version, true)}
+                    {th("state", s.policies.columns.state)}
                     <th>{s.policies.columns.triggers}</th>
-                    <th>{s.policies.columns.lastRun}</th>
+                    {th("lastRun", s.policies.columns.lastRun)}
                     <th>{s.policies.columns.managed}</th>
                   </tr>
                 </thead>
@@ -85,13 +122,7 @@ export function PoliciesPage() {
                         {p.deployedVersion !== p.latestVersion && <span className="meta"> / {p.latestVersion}</span>}
                       </td>
                       <td>
-                        {!p.deployed ? (
-                          <Pill view={{ tone: "neutral", icon: "○", label: s.policies.notDeployed }} />
-                        ) : p.paused ? (
-                          <Pill view={{ tone: "warn", icon: "‖", label: s.policies.paused }} />
-                        ) : (
-                          <Pill view={{ tone: "ok", icon: "●", label: s.policies.deployed }} />
-                        )}
+                        <Pill view={policyStateView(p)} />
                       </td>
                       <td>
                         <div className="row" style={{ gap: 4 }}>
@@ -122,8 +153,8 @@ export function PoliciesPage() {
                 </tbody>
               </table>
             </div>
-          )
-        }
+          );
+        }}
       </Async>
       {fromTemplate && <TemplateDialog onClose={() => setFromTemplate(false)} />}
       {creating && <CreateDialog existing={new Set((q.data ?? []).map((p) => p.name))} onClose={() => setCreating(false)} />}

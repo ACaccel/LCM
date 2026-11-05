@@ -7,6 +7,7 @@ import type { Action, ActionName, ActionPlan } from "../../api/types";
 import { Dialog } from "../../components/dialog";
 import { ErrorBox, Field, Pill, Spinner } from "../../components/ui";
 import { formatDuration, shortVersion } from "../../lib/format";
+import { actionStatusView } from "../../lib/status";
 import { useLiveState } from "../../live";
 import { s } from "../../strings";
 import { ImpactAcknowledgement, useAck } from "./impact";
@@ -37,11 +38,7 @@ function ActionProgress({ id, onClose }: { id: string; onClose: () => void }) {
   if (q.isError) return <ErrorBox error={q.error} onRetry={() => void q.refetch()} />;
   if (!a) return <Spinner label={s.action.running} />;
   const running = a.status === "running";
-  const view = running
-    ? { tone: "info" as const, icon: "↻", label: s.action.running }
-    : a.status === "succeeded"
-      ? { tone: "ok" as const, icon: "✓", label: s.action.succeeded }
-      : { tone: "bad" as const, icon: "✕", label: s.action.failed };
+  const view = actionStatusView(a.status);
   return (
     <div className="stack" aria-live="polite">
       <div className="row">
@@ -148,6 +145,7 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
     <Dialog
       title={s.action.confirmTitle(verb, resource)}
       onClose={onClose}
+      pending={run.isPending}
       footer={
         actionId ? (
           <button type="button" className="btn" onClick={onClose}>

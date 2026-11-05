@@ -3,6 +3,8 @@
  * Traditional Chinese (Taiwan); technical terms such as policy, run, deploy
  * and commit stay in English.
  */
+import type { Deployment, NodeStatus, RunStatus } from "./api/types";
+
 export const s = {
   appName: "LCM",
   nav: {
@@ -104,7 +106,7 @@ export const s = {
     cancelled: "已取消",
     interrupted: "已中斷",
     dropped: "已捨棄",
-  } as Record<string, string>,
+  } satisfies Record<RunStatus, string>,
   nodeStatus: {
     pending: "尚未執行",
     ready: "就緒",
@@ -114,7 +116,7 @@ export const s = {
     completed: "完成",
     failed: "失敗",
     dead: "終止",
-  } as Record<string, string>,
+  } satisfies Record<NodeStatus, string>,
   runMode: { live: "實際執行", dry: "模擬 (dry-run)" } as Record<string, string>,
   overview: {
     title: "總覽",
@@ -301,6 +303,11 @@ export const s = {
       "health.changed": "健康",
       alert: "告警",
     } as Record<string, string>,
+    from: "開始時間",
+    to: "結束時間",
+    rangeInvalid: "請輸入有效且由早到晚的時間區間。",
+    today: "今天",
+    yesterday: "昨天",
   },
   checks: {
     title: "健康檢查",
@@ -337,7 +344,7 @@ export const s = {
     commit: "版本",
     started: "開始",
     outcome: "結果",
-    outcomes: { running: "進行中", succeeded: "成功", failed: "失敗", interrupted: "已中斷" } as Record<string, string>,
+    outcomes: { running: "進行中", succeeded: "成功", failed: "失敗", interrupted: "已中斷" } satisfies Record<Deployment["outcome"], string>,
     rollbackTo: "回復到此版",
     rollbackDisabled: "目前狀態無法回復",
     empty: "尚無部署紀錄。",
@@ -468,6 +475,7 @@ export const s = {
     confirmCurrent: "保留目前內容並接受 git 的新 commit 為基準？資源會持續標示為偏離 git。",
     confirmRelease: "解除後，這個資源只由網頁與 API 管理。",
     readOnly: "封存紀錄只能檢視。",
+    reviewSave: (v: number) => `確認變更：與版本 ${v} 的差異`,
   },
   policies: {
     title: "Policy",
@@ -482,6 +490,8 @@ export const s = {
     newNameHelp: "小寫英文字母、數字與連字號，以字母開頭。",
     exists: "這個名稱已經存在。",
     createFromTemplate: "建立並開啟編輯器",
+    search: "搜尋名稱",
+    noMatch: "沒有符合搜尋的 policy。",
   },
   editor: {
     newPolicy: "新 policy",
@@ -568,8 +578,6 @@ export const s = {
     newBanner: "這是新的 policy，尚未儲存。",
     newerVersion: (v: number) => `伺服器上已有版本 ${v}，與你開始編輯時的版本不同。`,
     stateDeployed: "已部署",
-    stateNotDeployed: "未部署",
-    statePaused: "已暫停",
     notFound: "找不到這個 policy。",
     deleteHint: "按 Delete 或 Backspace 可刪除選取的節點或連線。",
     runAuto: "（自動選擇）",
@@ -582,12 +590,16 @@ export const s = {
     unsavedLeave: "有尚未儲存的修改，確定要離開？",
     leave: "離開不儲存",
     schemaLoading: "載入節點類型…",
+    reviewDeploy: (v: number) => `確認部署：與執行中的版本 ${v} 的差異`,
+    reviewDeployNote: "儲存後會立即取代執行中的版本，新事件改由這份內容處理。",
+    undoDelete: "復原刪除",
+    undoHint: "Ctrl+Z 可復原上一次刪除的節點或連線",
   },
   runs: {
     title: "Run",
     filterPolicy: "Policy",
     filterStatus: "狀態",
-    columns: { id: "Run", policy: "Policy", version: "版本", status: "狀態", mode: "模式", created: "建立時間", duration: "耗時", trigger: "Trigger" },
+    columns: { id: "Run", policy: "Policy", version: "版本", status: "狀態", mode: "模式", created: "建立時間", duration: "耗時", trigger: "Trigger", error: "錯誤" },
     empty: "沒有符合條件的 run。",
   },
   run: {

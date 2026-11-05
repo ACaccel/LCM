@@ -1,9 +1,51 @@
+import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useSearchParams } from "react-router";
 import { isApiError } from "../../api/client";
+import { resourcesQuery } from "../../api/queries";
 import type { HostAction, HostStatus } from "../../api/security";
-import { ErrorBox } from "../../components/ui";
+import { ErrorBox, Field } from "../../components/ui";
 import { formatDateTime } from "../../lib/format";
 import { sec } from "./strings";
+
+/**
+ * Machine filter shared by the overview, incidents and traffic tabs. Machines
+ * are picked by name; the URL keeps the immutable ID the API filters on.
+ */
+export function MachineSelect() {
+  const [params, setParams] = useSearchParams();
+  const machines = useQuery(resourcesQuery({ type: "machine" }));
+  const value = params.get("machineId") || "";
+  const items = machines.data ?? [];
+  function pick(id: string) {
+    const next = new URLSearchParams(params);
+    if (id) next.set("machineId", id);
+    else next.delete("machineId");
+    next.delete("incident");
+    setParams(next, { replace: true });
+  }
+  return (
+    <Field label={sec.machine} htmlFor="security-machine">
+      <select id="security-machine" value={value} onChange={(e) => pick(e.target.value)}>
+        <option value="">{sec.all}</option>
+        {value && !items.some((m) => m.id === value) && <option value={value}>{value}</option>}
+        {items.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </select>
+      <ErrorBox error={machines.error} onRetry={() => void machines.refetch()} />
+    </Field>
+  );
+}
+
+/** Machine names by ID, for showing incidents by name; unknown IDs stay as they are. */
+export function useMachineName(): (id: string) => string | undefined {
+  const machines = useQuery(resourcesQuery({ type: "machine" }));
+  const names = new Map((machines.data ?? []).map((m) => [m.id, m.name]));
+  return (id) => names.get(id);
+}
 
 export const sources = ["machine", "service", "nginx", "auditd", "aide", "collector"] as const;
 export const severities = ["info", "warning", "critical"] as const;
