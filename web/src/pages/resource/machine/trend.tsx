@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type { MachineSnapshot } from "../../../api/types";
-import { formatDateTime } from "../../../lib/format";
+import { RANGE_MS, RangeSwitch, TimeSeriesChart, fmtPercent, windowSeries } from "../../../components/chart";
+import type { RangeKey, XY } from "../../../components/chart";
 import { s } from "../../../strings";
 
 /** One plotted sample; a null value is missing data and is left empty. */
@@ -10,61 +12,66 @@ export interface UsagePoint {
   memory: number | null;
 }
 
-/** Independent points preserve missing data and gaps without inventing interpolation. */
-export function UsageTrend({ points: all }: { points: UsagePoint[] }) {
-  const points = all.slice(-100);
-  const first = points.at(0);
-  const last = points.at(-1);
-  if (!first || !last) return null;
-  const from = Date.parse(first.observedAt);
-  const to = Date.parse(last.observedAt);
-  const valid = (v: number | null): v is number => v !== null && Number.isFinite(v) && v >= 0 && v <= 100;
+/** Limits drawn as dashed lines; the server default is 90 for both. */
+export interface UsageThresholds {
+  cpu?: number;
+  memory?: number;
+}
+
+const valid = (v: number | null): v is number => v !== null && Number.isFinite(v) && v >= 0 && v <= 100;
+
+/** Dashed limit lines; equal limits are one line with a joint label. */
+export function thresholdLines(t: UsageThresholds | undefined): { value: number; label: string }[] {
+  if (!t) return [];
+  const { cpu, memory } = t;
+  if (cpu !== undefined && memory !== undefined && cpu === memory) return [{ value: cpu, label: `${s.machine.cpu}／${s.machine.memory} ${s.chart.thresholdAt(cpu)}` }];
+  return [
+    ...(cpu === undefined ? [] : [{ value: cpu, label: `${s.machine.cpu} ${s.chart.thresholdAt(cpu)}` }]),
+    ...(memory === undefined ? [] : [{ value: memory, label: `${s.machine.memory} ${s.chart.thresholdAt(memory)}` }]),
+  ];
+}
+
+/**
+ * CPU and memory over time. Out-of-range values stay empty instead of being
+ * plotted as zero, and gaps in observation break the lines. The range ends at
+ * the newest loaded sample; with `range` given the switch is the caller's.
+ */
+export function UsageTrend({ points, thresholds, range: controlled }: { points: UsagePoint[]; thresholds?: UsageThresholds; range?: RangeKey }) {
+  const [own, setOwn] = useState<RangeKey>("24h");
+  const range = controlled ?? own;
+  const at = (key: "cpu" | "memory"): XY[] => points.map((p) => ({ t: Date.parse(p.observedAt), v: valid(p[key]) ? p[key] : null }));
+  const win = windowSeries([at("cpu"), at("memory")], RANGE_MS[range]);
+  const cpu = win?.series[0];
+  const memory = win?.series[1];
+  if (!win || !cpu || !memory) return null;
   return (
     <figure className="stack">
-      <figcaption>{s.machine.trendNote}</figcaption>
-      <svg viewBox="0 0 600 150" role="img" aria-label={s.machine.trend} style={{ width: "100%", maxHeight: 220 }}>
-        <title>{s.machine.trend}</title>
-        <path d="M35 10V130H585" fill="none" stroke="var(--muted-foreground)" />
-        <text x="0" y="18" fill="currentColor" fontSize="12">
-          100%
-        </text>
-        <text x="10" y="130" fill="currentColor" fontSize="12">
-          0%
-        </text>
-        {points.map((p) => {
-          const at = Date.parse(p.observedAt);
-          if (!Number.isFinite(at)) return null;
-          const x = to > from ? 40 + ((at - from) / (to - from)) * 535 : 300;
-          return (
-            <g key={p.id}>
-              {valid(p.cpu) && (
-                <circle cx={x} cy={125 - p.cpu * 1.1} r="3" fill="var(--primary)">
-                  <title>
-                    {formatDateTime(p.observedAt)} — {s.machine.cpu}: {p.cpu.toFixed(1)}%
-                  </title>
-                </circle>
-              )}
-              {valid(p.memory) && (
-                <path d={`M${x - 3},${125 - p.memory * 1.1 - 3}l6,6m0,-6l-6,6`} fill="none" stroke="var(--warning)" strokeWidth="2">
-                  <title>
-                    {formatDateTime(p.observedAt)} — {s.machine.memory}: {p.memory.toFixed(1)}%
-                  </title>
-                </path>
-              )}
-            </g>
-          );
-        })}
-      </svg>
-      <p className="meta">
-        ● {s.machine.cpu} / × {s.machine.memory} — {formatDateTime(first.observedAt)} – {formatDateTime(last.observedAt)}
-      </p>
+      <div className="chart-title">
+        <figcaption>{s.machine.trendNote}</figcaption>
+        {controlled === undefined && <RangeSwitch value={range} onChange={setOwn} />}
+      </div>
+      <TimeSeriesChart
+        name={s.machine.trend}
+        from={win.from}
+        to={win.to}
+        format={fmtPercent}
+        fixedMax={100}
+        gapMs={win.gapMs}
+        thresholds={thresholdLines(thresholds)}
+        series={[
+          { name: s.machine.cpu, color: "var(--chart-1)", points: cpu },
+          { name: s.machine.memory, color: "var(--chart-3)", dashed: true, points: memory },
+        ]}
+      />
     </figure>
   );
 }
 
-export function MachineTrend({ snapshots }: { snapshots: MachineSnapshot[] }) {
+export function MachineTrend({ snapshots, thresholds, range }: { snapshots: MachineSnapshot[]; thresholds?: UsageThresholds; range?: RangeKey }) {
   return (
     <UsageTrend
+      thresholds={thresholds}
+      range={range}
       points={snapshots.map((p) => ({
         id: p.id,
         observedAt: p.observedAt,

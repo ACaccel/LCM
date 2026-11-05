@@ -2,9 +2,6 @@
 .security-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
 .security-metric { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); display: grid; gap: 5px; min-width: 0; }
 .security-metric strong { font-size: 21px; overflow-wrap: anywhere; }
-.security-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 350px), 1fr)); gap: 12px; }
-.security-chart svg { width: 100%; height: 150px; display: block; overflow: visible; }
-.security-chart p { min-height: 40px; }
 .security-report { max-height: 360px; overflow: auto; }
 .security-history { margin: 0; padding-left: 22px; display: grid; gap: 12px; }
 .security-history p { margin: 3px 0; overflow-wrap: anywhere; }

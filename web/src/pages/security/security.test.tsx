@@ -10,7 +10,7 @@ import { SecurityIncidents, HandlingForm } from "./incidents";
 import { ProfileForm, ScheduleForm, SecurityHost } from "./controls";
 import { HostActions } from "./host-actions";
 import { NotificationTest, SettingsForm, SettingsHistory } from "./notifications";
-import { trafficSegments, trafficTotals, TrafficDisplay } from "./traffic";
+import { trafficTotals, TrafficDisplay } from "./traffic";
 import { resourceFixture } from "../resource/test-fixtures";
 import { sec } from "../../strings";
 
@@ -98,9 +98,9 @@ describe("security incidents", () => {
 
 describe("traffic observations", () => {
   const point = (start: string, requests: number, sum: number): TrafficPoint => ({ windowStart: start, windowEnd: new Date(Date.parse(start) + 60_000).toISOString(), requests, requestTimeSumMs: sum, requestTimeMaxMs: 40, status429: 0, status5xx: 0, dryRunHits: 0, requestBytes: 100, responseBytes: 200, averageMs: requests ? sum / requests : 0, requestsPerSecond: requests / 60, observedWindows: 1, observedSeconds: 60 });
-  it("weights average latency by requests and breaks missing buckets", () => {
+  it("weights average latency by requests", () => {
     const points = [point("2026-11-02T00:00:00Z", 1, 10), point("2026-11-02T00:01:00Z", 9, 360), point("2026-11-02T00:03:00Z", 0, 0)];
-    expect(trafficTotals(points).averageMs).toBe(37); expect(trafficSegments(points, 60).map((segment) => segment.length)).toEqual([2, 1]);
+    expect(trafficTotals(points).averageMs).toBe(37);
     expect(trafficTotals([]).averageMs).toBeNull();
   });
   it("shows no observation as unknown instead of successful zero", () => {

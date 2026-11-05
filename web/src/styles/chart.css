@@ -1,0 +1,489 @@
+/* Shared chart components (src/components/chart). Colours come from the theme variables only. */
+
+.chart-frame svg.chart {
+  display: block;
+  overflow: visible;
+  max-width: 100%;
+}
+
+.chart-tick {
+  font-size: 11px;
+  fill: var(--muted-foreground);
+}
+
+.chart-grid {
+  stroke: var(--border);
+  stroke-dasharray: 2 4;
+}
+
+.chart-baseline,
+.chart-tick-mark {
+  stroke: var(--muted-foreground);
+  opacity: 0.7;
+}
+
+.chart-cursor {
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+}
+
+.chart-path {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-path.dashed {
+  stroke-dasharray: 6 4;
+}
+
+.chart-dot {
+  fill: var(--series);
+}
+
+.chart-active {
+  fill: var(--series);
+  stroke: var(--card);
+  stroke-width: 2;
+}
+
+.chart-threshold line {
+  stroke: var(--series);
+  stroke-width: 1.2;
+  stroke-dasharray: 5 4;
+}
+
+.chart-threshold text {
+  fill: var(--series);
+  font-size: 11px;
+}
+
+.chart-marks line {
+  stroke: var(--series);
+  stroke-width: 1.2;
+  stroke-dasharray: 3 3;
+}
+
+.chart-bar.stacked {
+  stroke: var(--card);
+  stroke-width: 1;
+}
+
+.chart-legend .key.series {
+  border-top: 2px solid var(--key);
+}
+
+.chart-legend .key.series-dashed {
+  border-top: 2px dashed var(--key);
+}
+
+.tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tip-row strong {
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.tip-key {
+  display: inline-block;
+  width: 12px;
+  border-top: 2px solid var(--key);
+}
+
+.tip-key.dashed {
+  border-top-style: dashed;
+}
+
+.chart-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 4px;
+}
+
+.chart-title h3 {
+  margin: 0;
+}
+
+.chart-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+  gap: 12px;
+}
+
+.range-switch {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.range-switch .btn[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--accent-surface);
+  color: var(--accent-surface-foreground);
+}
+
+/* Usage bar */
+
+.usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  max-width: 260px;
+}
+
+.usage-track {
+  position: relative;
+  flex: 1;
+  min-width: 60px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--muted);
+  overflow: visible;
+}
+
+.usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--muted-foreground);
+}
+
+.usage-fill.ok {
+  background: var(--success);
+}
+
+.usage-fill.warn {
+  background: var(--warning);
+}
+
+.usage-fill.bad {
+  background: var(--destructive);
+}
+
+.usage-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--foreground);
+  border-radius: 1px;
+}
+
+.usage-text {
+  flex: none;
+  min-width: 4.5em;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+
+.usage-unknown {
+  color: var(--muted-foreground);
+}
+
+/* Uptime strip: one cell per bucket, aligned with the plot of the chart above it. */
+
+.uptime-strip {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin: 4px 12px 0 var(--plot-left, 34px);
+}
+
+.uptime-strip i {
+  flex: 1;
+  min-width: 1px;
+  border-radius: 2px;
+  background: var(--success);
+}
+
+.uptime-strip i.warn {
+  background: var(--warning);
+}
+
+.uptime-strip i.bad {
+  background: var(--destructive);
+}
+
+.uptime-strip i.none {
+  background: var(--muted);
+  border: 1px dashed var(--border);
+}
+
+/* Run Gantt */
+
+.gantt {
+  display: grid;
+  gap: 3px;
+}
+
+.gantt-cols {
+  display: grid;
+  grid-template-columns: minmax(70px, 190px) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.gantt-row {
+  width: 100%;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gantt-row:hover {
+  background: var(--muted);
+}
+
+.gantt-row[aria-pressed="true"] {
+  border-color: var(--ring);
+  background: var(--accent-surface);
+}
+
+.gantt-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gantt-track {
+  position: relative;
+  height: 14px;
+  background: var(--muted);
+  border-radius: 3px;
+}
+
+.gantt-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 3px;
+  border-radius: 3px;
+  background: var(--muted-foreground);
+}
+
+.gantt-bar.ok {
+  background: var(--success);
+}
+
+.gantt-bar.bad {
+  background: var(--destructive);
+}
+
+.gantt-bar.info {
+  background: var(--info);
+}
+
+.gantt-bar.warn {
+  background: var(--warning);
+}
+
+.gantt-head {
+  padding: 0 5px;
+}
+
+.gantt-axis {
+  position: relative;
+  height: 16px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.gantt-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.gantt-axis span:first-child {
+  transform: none;
+}
+
+.gantt-axis span:last-child {
+  transform: translateX(-100%);
+}
+
+.gantt-dur {
+  position: absolute;
+  top: 0;
+  margin: 0 4px;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+
+.gantt-bar.open {
+  background-image: repeating-linear-gradient(135deg, transparent 0 5px, rgb(255 255 255 / 0.35) 5px 8px);
+}
+
+/* Run page layout: graph and node pane side by side, stacked on narrow screens. */
+
+.run-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 12px;
+  height: calc(100vh - 260px);
+  min-height: 420px;
+}
+
+.run-grid > * {
+  min-height: 0;
+  min-width: 0;
+}
+
+.run-grid + .panel {
+  margin-top: 12px;
+}
+
+@media (max-width: 1100px) {
+  .run-grid {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+}
+
+/* Topology and relation graphs */
+
+.topo-wrap {
+  height: calc(100vh - 230px);
+  min-height: 420px;
+}
+
+.topo-wrap.small {
+  height: 280px;
+  min-height: 220px;
+}
+
+.topo-node {
+  width: 168px;
+  padding: 6px 8px;
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1.5px solid var(--border);
+  border-left-width: 5px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.topo-node.ok {
+  border-left-color: var(--success);
+}
+
+.topo-node.warn {
+  border-left-color: var(--warning);
+}
+
+.topo-node.bad {
+  border-left-color: var(--destructive);
+}
+
+.topo-node.neutral {
+  border-left-color: var(--muted-foreground);
+}
+
+.topo-node.focus {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.topo-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.topo-open:disabled {
+  cursor: default;
+}
+
+.topo-open:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.topo-node .tn-name {
+  display: block;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topo-node .tn-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted-foreground);
+}
+
+.topo-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.topo-legend .edge-key {
+  display: inline-block;
+  width: 22px;
+  vertical-align: middle;
+  margin-right: 6px;
+  border-top: 2px solid var(--muted-foreground);
+}
+
+.topo-legend .edge-key.runsOn {
+  border-top-style: dotted;
+}
+
+.topo-legend .edge-key.controlPath {
+  border-top-style: dashed;
+  border-top-color: var(--info);
+}
+
+.chart-legend .key.bar.strip-ok {
+  background: var(--success);
+}
+
+.chart-legend .key.bar.strip-warn {
+  background: var(--warning);
+}
+
+.chart-legend .key.bar.strip-bad {
+  background: var(--destructive);
+}
+
+.chart-legend .key.bar.strip-none {
+  background: var(--muted);
+  border: 1px dashed var(--border);
+}
+
+/* Deployment chart */
+
+.deploy-chart {
+  margin-bottom: 8px;
+}

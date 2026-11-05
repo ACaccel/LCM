@@ -24,6 +24,17 @@ describe("machine monitoring", () => {
     expect(screen.getByText("journal permission denied")).toBeTruthy();
     expect(screen.getByText(/CPU 首樣本/)).toBeTruthy();
   });
+  it("shows CPU, memory, disk and inode usage as bars marked with the configured limit", () => {
+    const machine = freshMachine();
+    machine.document.spec.config = { ...machine.document.spec.config, thresholds: { diskPercent: 80 } };
+    render(<MachineOverview resource={machine} />);
+    const meters = screen.getAllByRole("meter");
+    expect(meters.length).toBeGreaterThanOrEqual(3);
+    const disk = screen.getByRole("meter", { name: /^磁碟/ });
+    expect(disk.getAttribute("aria-valuetext")).toContain("閾值 80%");
+    // Memory keeps the default limit of 90%.
+    expect(screen.getByRole("meter", { name: "記憶體使用率" }).getAttribute("aria-valuetext")).toContain("閾值 90%");
+  });
   it("pages durable journal/derived events and distinguishes gaps, source/received time and historical/live events", async () => {
     const cursors: (string | null)[] = [];
     vi.stubGlobal("fetch", async (req: Request) => {

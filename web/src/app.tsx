@@ -40,6 +40,7 @@ const router = createBrowserRouter([
       { index: true, ...lazyPage(() => import("./pages/overview"), "OverviewPage") },
       { path: "resources", ...lazyPage(() => import("./pages/resources"), "ResourcesPage") },
       { path: "resources/:name/:tab?", ...lazyPage(() => import("./pages/resource-detail"), "ResourceDetailPage") },
+      { path: "topology", ...lazyPage(() => import("./pages/topology"), "TopologyPage") },
       { path: "security/:tab?", ...lazyPage(() => import("./pages/security"), "SecurityPage") },
       { path: "timeline", ...lazyPage(() => import("./pages/timeline"), "TimelinePage") },
       { path: "policies", ...lazyPage(() => import("./pages/policies"), "PoliciesPage") },

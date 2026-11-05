@@ -23,6 +23,9 @@ import { s } from "../strings";
 
 export const NODE_TYPE_MIME = "application/x-lcm-node-type";
 
+// Opening a large graph never zooms out past this, so node text stays legible; the user pans to the rest.
+const FIT_MIN_ZOOM = 0.6;
+
 const HEAD = 30;
 const SUMMARY = 24;
 const PORT_H = 20;
@@ -261,8 +264,9 @@ function GraphInner(props: GraphProps) {
         elementsSelectable
         onlyRenderVisibleElements={many}
         fitView
-        fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
-        minZoom={0.1}
+        fitViewOptions={{ padding: 0.15, minZoom: FIT_MIN_ZOOM, maxZoom: 1 }}
+        minZoom={0.25}
+        maxZoom={2}
         colorMode="system"
         aria-label={s.run.graph}
       >

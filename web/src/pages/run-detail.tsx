@@ -10,11 +10,13 @@ import { useToast } from "../components/toast";
 import { ErrorBox, PageHead, Pill, Spinner, Tag } from "../components/ui";
 import { formatDateTime, formatDuration, spanMs } from "../lib/format";
 import { useNow } from "../hooks";
+import { firstFailedNode } from "../lib/gantt";
 import { nodeStatusView, RUN_ACTIVE, runStatusView } from "../lib/status";
 import { autoLayout } from "../policy/issues";
 import { buildModel } from "../policy/model";
 import { statusByTopLevelNode, takenEdgeIds } from "../policy/runview";
 import { s } from "../strings";
+import { RunGantt } from "./run-gantt";
 
 function Json({ value }: { value: unknown }) {
   return <pre className="block">{JSON.stringify(value, null, 2)}</pre>;
@@ -167,7 +169,9 @@ export function RunDetailPage() {
   const now = useNow(!!run && RUN_ACTIVE.has(run.status));
   const version = useQuery({ ...policyVersionQuery(run?.policy ?? "", run?.version ?? 1), enabled: !!run });
   const types = useQuery(nodeTypesQuery());
-  const [selected, setSelected] = useState<string | null>(null);
+  // undefined until the user picks: the first failed node is then shown, so a failure is visible without searching.
+  const [picked, setSelected] = useState<string | null | undefined>(undefined);
+  const selected = picked !== undefined ? picked : run ? firstFailedNode(run.nodes) : null;
   const [cancelling, setCancelling] = useState(false);
   const [resuming, setResuming] = useState(false);
   const qc = useQueryClient();
@@ -237,7 +241,7 @@ export function RunDetailPage() {
       </PageHead>
       {run.error && <ErrorBox error={new Error(run.error)} />}
 
-      <div className="editor-grid" style={{ gridTemplateColumns: "minmax(0, 1fr) 380px", height: "calc(100vh - 260px)" }}>
+      <div className="run-grid">
         <div style={{ minWidth: 0 }}>
           {version.isError ? (
             <ErrorBox error={version.error} onRetry={() => void version.refetch()} />
@@ -297,6 +301,12 @@ export function RunDetailPage() {
           </div>
         </div>
       </div>
+
+      <section className="panel stack">
+        <h2>{s.chart.gantt.title}</h2>
+        <p className="meta">{s.chart.gantt.help}</p>
+        <RunGantt nodes={run.nodes} selected={selected} onSelect={setSelected} now={now} />
+      </section>
 
       {cancelling && (
         <ConfirmDialog

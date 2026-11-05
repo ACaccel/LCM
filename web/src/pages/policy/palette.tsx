@@ -34,6 +34,7 @@ export function Palette({ types, onAdd }: { types: readonly NodeType[]; onAdd: (
               onClick={() => onAdd(t.type)}
             >
               {t.type}
+              {t.description && <span className="desc">{t.description}</span>}
             </button>
           ))}
         </details>

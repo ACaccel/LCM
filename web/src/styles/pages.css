@@ -198,6 +198,20 @@ textarea[aria-invalid="true"] {
   background: var(--muted);
 }
 
+/* The server's one-line description under the node type. */
+.palette .item .desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  margin-top: 1px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+
 .side-pane {
   display: flex;
   flex-direction: column;

@@ -184,18 +184,6 @@ svg.spark {
   outline-offset: 2px;
 }
 
-.chart-axis {
-  position: absolute;
-  top: 0;
-  left: 0;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--muted-foreground);
-  background: var(--card);
-  padding-right: 4px;
-  pointer-events: none;
-}
-
 .chart-tip {
   position: absolute;
   top: 4px;
@@ -260,7 +248,7 @@ svg.spark {
   width: 8px;
   height: 10px;
   border-radius: 1px;
-  background: var(--success);
+  background: var(--key, var(--success));
 }
 
 .two {

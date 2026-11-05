@@ -2,10 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { capabilitiesQuery } from "../../api/observations";
 import type { ResourceDetail, ResourceSnapshot, RouterSnapshot, RouterStatus } from "../../api/types";
+import { RANGE_MS, RangeSwitch, TimeSeriesChart, fmtCelsius, fmtCount, fmtRate, windowSeries } from "../../components/chart";
+import type { RangeKey, XY } from "../../components/chart";
 import { ErrorBox, Pill, Tag } from "../../components/ui";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/format";
-import { capabilityReason, coverageView, cpuPercent } from "../../lib/machine";
+import { capabilityReason, coverageView, cpuPercent, thresholdOf } from "../../lib/machine";
 import { translate, translateAll } from "../../lib/messages";
 import { healthView, reachabilityView, routerOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
@@ -135,6 +137,54 @@ function snapshotSummary(snap: ResourceSnapshot): string {
   return `${s.router.cpu} ${cpuPercent(r.cpuPercent)} · ${s.router.memory} ${cpuPercent(r.memoryPercent)}`;
 }
 
+/**
+ * Stored router observations as charts: CPU and memory with their limits,
+ * WAN rates, connected clients and temperature. A metric the router never
+ * reported is not drawn; unreachable attempts leave gaps.
+ */
+export function RouterCharts({ snapshots, resource }: { snapshots: ResourceSnapshot[]; resource: ResourceDetail }) {
+  const [range, setRange] = useState<RangeKey>("24h");
+  const rows = snapshots.flatMap((x) => (x.router ? [{ id: x.id, at: x.observedAt, t: Date.parse(x.observedAt), r: x.router }] : []));
+  const metric = (read: (r: RouterSnapshot) => number | null | undefined): XY[] => rows.map((x) => ({ t: x.t, v: read(x.r) ?? null }));
+  const has = (xy: XY[]) => xy.some((p) => p.v !== null);
+  const up = metric((r) => r.wan.upBytesPerSec);
+  const down = metric((r) => r.wan.downBytesPerSec);
+  const clients = metric((r) => r.clients);
+  const temperature = metric((r) => r.temperatureC);
+  const win = windowSeries([up, down, clients, temperature], RANGE_MS[range]);
+  const panels = [
+    { key: "wan", title: s.chart.wanTitle, show: has(up) || has(down), format: fmtRate, binary: true, series: [
+      { name: s.chart.wanUp, color: "var(--chart-1)", points: win?.series[0] ?? [] },
+      { name: s.chart.wanDown, color: "var(--chart-2)", dashed: true, points: win?.series[1] ?? [] },
+    ] },
+    { key: "clients", title: s.chart.clientsTitle, show: has(clients), format: fmtCount, binary: false, series: [{ name: s.router.clients, color: "var(--chart-4)", points: win?.series[2] ?? [] }] },
+    { key: "temperature", title: s.chart.temperatureTitle, show: has(temperature), format: fmtCelsius, binary: false, series: [{ name: s.router.temperature, color: "var(--chart-3)", points: win?.series[3] ?? [] }] },
+  ].filter((p) => p.show);
+  return (
+    <div className="stack">
+      <div className="chart-title">
+        <h3>{s.chart.usageTitle}</h3>
+        <RangeSwitch value={range} onChange={setRange} />
+      </div>
+      <UsageTrend
+        range={range}
+        thresholds={{ cpu: thresholdOf(resource, "cpuPercent"), memory: thresholdOf(resource, "memoryPercent") }}
+        points={rows.map((x) => ({ id: x.id, observedAt: x.at, cpu: x.r.cpuPercent, memory: x.r.memoryPercent }))}
+      />
+      {win && panels.length > 0 && (
+        <div className="chart-grid-2">
+          {panels.map((p) => (
+            <section key={p.key} className="stack">
+              <h3>{p.title}</h3>
+              <TimeSeriesChart name={p.title} from={win.from} to={win.to} format={p.format} binary={p.binary} gapMs={win.gapMs} series={p.series} height={140} />
+            </section>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The router's monitoring tab: the latest status and stored history. */
 export function RouterMonitoring({ resource, selector }: { resource: ResourceDetail; selector: string }) {
   const status = resource.router?.status;
@@ -153,9 +203,7 @@ export function RouterMonitoring({ resource, selector }: { resource: ResourceDet
         resource={selector}
         summary={snapshotSummary}
         render={(snap) => (snap.router ? <RouterSnapshotView snapshot={snap.router} /> : <p>{s.machine.unknown}</p>)}
-        trend={(snaps) => (
-          <UsageTrend points={snaps.flatMap((x) => (x.router ? [{ id: x.id, observedAt: x.observedAt, cpu: x.router.cpuPercent, memory: x.router.memoryPercent }] : []))} />
-        )}
+        trend={(snaps) => <RouterCharts snapshots={snaps} resource={resource} />}
       />
     </div>
   );

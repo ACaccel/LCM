@@ -1,9 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router";
+import { useCallback, useMemo } from "react";
+import { Link, useNavigate } from "react-router";
 import { impactQuery, resourcesQuery } from "../../api/queries";
 import type { ImpactEntry, ResourceDetail } from "../../api/types";
 import { TypeTag } from "../../components/badges";
+import { ResourceGraph, TopologyLegend } from "../../components/resource-graph";
 import { Async, Empty, ErrorBox, Pill } from "../../components/ui";
+import { buildNeighbourhood } from "../../lib/topology";
 import { s } from "../../strings";
 
 function ResourceLink({ name }: { name: string }) {
@@ -50,13 +53,23 @@ function AffectedTable({ entries, empty }: { entries: ImpactEntry[]; empty: stri
  */
 export function RelationsTab({ detail }: { detail: ResourceDetail }) {
   const relations = detail.document.spec.relations ?? [];
-  const resources = useQuery({ ...resourcesQuery(), enabled: relations.length > 0 });
+  const resources = useQuery(resourcesQuery());
   const impact = useQuery({ ...impactQuery(detail.name), enabled: detail.phase !== "unmanaged" });
   const byName = new Map((resources.data ?? []).map((r) => [r.name, r]));
   // The server says which targets exist; the list only adds links and types.
   const unresolved = new Set(detail.unresolvedRelations);
+  const navigate = useNavigate();
+  const open = useCallback((name: string) => void navigate(`/resources/${encodeURIComponent(name)}`), [navigate]);
+  const topology = useMemo(() => buildNeighbourhood(detail, impact.data, resources.data ?? []), [detail, impact.data, resources.data]);
   return (
     <div className="stack">
+      {topology.edges.length > 0 && (
+        <section className="panel stack">
+          <h2>{s.relations.graph}</h2>
+          <TopologyLegend />
+          <ResourceGraph topology={topology} focus={detail.name} onOpen={open} small />
+        </section>
+      )}
       <section className="panel stack">
         <h2>{s.relations.outgoing}</h2>
         <p className="meta">{s.relations.help}</p>

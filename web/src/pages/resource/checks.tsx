@@ -2,17 +2,16 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { checksQuery, seriesQuery, summaryQuery } from "../../api/queries";
 import type { CheckStatus, SeriesPoint } from "../../api/types";
-import { ChartLegend, LatencyChart, UptimeBars } from "../../components/charts";
+import { RANGE_MS, RangeSwitch } from "../../components/chart";
+import type { RangeKey } from "../../components/chart";
+import { ChartLegend, LatencyChart, STRIP_CELLS } from "../../components/charts";
 import { Async, Empty, ErrorBox, Pill, Spinner } from "../../components/ui";
 import { formatDuration, formatTime, formatUptime } from "../../lib/format";
-import { bucketUptime, latencyStats, overallUptime } from "../../lib/series";
+import { latencyStats, overallUptime } from "../../lib/series";
 import { checkView } from "../../lib/status";
 import { s } from "../../strings";
 
-type WindowKey = "24h" | "7d" | "30d";
-const WINDOWS: Record<WindowKey, number> = { "24h": 86_400_000, "7d": 7 * 86_400_000, "30d": 30 * 86_400_000 };
-
-const BARS = 48;
+type WindowKey = RangeKey;
 
 function panelStats(points: readonly SeriesPoint[]): string {
   const uptime = `${s.checks.uptime} ${formatUptime(overallUptime(points), points.reduce((n, p) => n + p.count, 0))}`;
@@ -23,7 +22,7 @@ function panelStats(points: readonly SeriesPoint[]): string {
 
 function CheckPanel({ resource, check, windowKey }: { resource: string; check: CheckStatus; windowKey: WindowKey }) {
   const points = windowKey === "24h" ? 96 : 120;
-  const q = useQuery(seriesQuery(resource, check.name, WINDOWS[windowKey], points));
+  const q = useQuery(seriesQuery(resource, check.name, RANGE_MS[windowKey], points));
   const from = q.data ? Date.parse(q.data.from) : 0;
   const to = q.data ? Date.parse(q.data.to) : 0;
   return (
@@ -38,9 +37,8 @@ function CheckPanel({ resource, check, windowKey }: { resource: string; check: C
         <ErrorBox error={q.error} onRetry={() => void q.refetch()} />
       ) : (
         <>
-          <LatencyChart points={q.data.points} from={from} to={to} stepMs={q.data.stepMs} />
-          <UptimeBars buckets={bucketUptime(q.data.points, from, to, BARS)} from={from} to={to} />
-          <ChartLegend bucketMs={(to - from) / BARS} />
+          <LatencyChart name={check.name} points={q.data.points} from={from} to={to} stepMs={q.data.stepMs} />
+          <ChartLegend bucketMs={(to - from) / STRIP_CELLS} />
         </>
       )}
     </div>
@@ -106,13 +104,9 @@ export function ChecksTab({ resource }: { resource: string }) {
             </div>
             <div className="row">
               <span className="meta">{s.checks.latency}</span>
-              {(["24h", "7d", "30d"] as const).map((w) => (
-                <button key={w} type="button" className="btn small" aria-pressed={win === w} style={win === w ? { borderColor: "var(--primary)" } : undefined} onClick={() => setWin(w)}>
-                  {s.checks.window[w]}
-                </button>
-              ))}
+              <RangeSwitch value={win} onChange={setWin} />
             </div>
-            <div className="cards" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
+            <div className="cards" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 340px), 1fr))" }}>
               {data.checks.map((c) => (
                 <CheckPanel key={`${c.name}-${win}`} resource={resource} check={c} windowKey={win} />
               ))}

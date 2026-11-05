@@ -77,9 +77,9 @@ describe("router monitoring", () => {
     const { container } = render(wrap(<RouterMonitoring resource={routerFixture} selector="gateway" />));
     expect(screen.getByText("可連線")).toBeTruthy();
     expect(screen.getByText("推估開機時間")).toBeTruthy();
-    expect(await screen.findByRole("img", { name: "CPU 與記憶體使用率趨勢" })).toBeTruthy();
+    expect(await screen.findByRole("group", { name: /CPU 與記憶體使用率趨勢，CPU 使用率 12.5%，記憶體使用率 40%/ })).toBeTruthy();
     // The unreachable attempt has no measurements and is not plotted as zero.
-    expect(container.querySelectorAll("figure circle")).toHaveLength(1);
+    expect(container.querySelectorAll("figure circle.chart-dot")).toHaveLength(2);
     expect([...container.querySelectorAll("summary")].map((x) => x.textContent?.split(" — ")[1])).toEqual(["CPU 使用率 12.5% · 記憶體使用率 40.0%", "無法連線"]);
   });
 });

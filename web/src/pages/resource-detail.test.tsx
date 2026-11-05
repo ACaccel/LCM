@@ -2,9 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResourceDetail, ResourceImpact } from "../api/types";
 import { ToastProvider } from "../components/toast";
+import { stubGraphEnvironment } from "../test-graph-env";
 import { ResourceDetailPage, tabsFor } from "./resource-detail";
 import { freshMachine, jsonResponse, noImpact, resourceFixture, routerFixture } from "./resource/test-fixtures";
 
@@ -136,6 +137,8 @@ const dependentImpact: ResourceImpact = {
 };
 
 describe("relations and impact", () => {
+  beforeEach(stubGraphEnvironment);
+
   it("lists declared relations, dependents and control dependents", async () => {
     const detail = resourceFixture({
       document: { ...resourceFixture().document, spec: { ...resourceFixture().document.spec, relations: [{ type: "dependsOn", target: "db" }] } },
@@ -145,7 +148,8 @@ describe("relations and impact", () => {
     expect(await screen.findByRole("heading", { name: "依賴此資源的資源" })).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "api" })[0]!.getAttribute("href")).toBe("/resources/api");
     expect(screen.getByRole("link", { name: "nas" })).toBeTruthy();
-    expect(screen.getByText("db")).toBeTruthy();
+    // The name is in the graph and in the table.
+    expect(screen.getAllByText("db")).toHaveLength(2);
     expect(await screen.findByText("目標資源不存在")).toBeTruthy();
   });
 

@@ -1,16 +1,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
-import { NavLink, useNavigate } from "react-router";
+import { NavLink, useLocation, useNavigate } from "react-router";
 import { client, unwrap } from "../api/client";
 import { EventStream } from "../api/events";
 import type { Actor } from "../api/types";
 import { LiveContext } from "../live";
 import { s } from "../strings";
 
-const items = [
+const items: { to: string; label: string; end?: boolean; also?: string[] }[] = [
   { to: "/", label: s.nav.overview, end: true },
-  { to: "/resources", label: s.nav.resources },
+  // The topology view belongs to resources, so it keeps that entry active.
+  { to: "/resources", label: s.nav.resources, also: ["/topology"] },
   { to: "/security", label: s.nav.security },
   { to: "/timeline", label: s.nav.timeline },
   { to: "/policies", label: s.nav.policies },
@@ -35,6 +36,7 @@ export function Shell({ actor, children }: { actor: Actor; children: ReactNode }
   const live = useEventStream();
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const logout = useMutation({
     mutationFn: () => unwrap(client.POST("/auth/logout")),
     onSettled: () => {
@@ -48,7 +50,7 @@ export function Shell({ actor, children }: { actor: Actor; children: ReactNode }
       <nav aria-label={s.nav.main}>
         <div className="brand">{s.appName}</div>
         {items.map((i) => (
-          <NavLink key={i.to} to={i.to} end={i.end} className={({ isActive }) => `navlink${isActive ? " active" : ""}`}>
+          <NavLink key={i.to} to={i.to} end={i.end} className={({ isActive }) => `navlink${isActive || i.also?.some((p) => pathname.startsWith(p)) ? " active" : ""}`}>
             {i.label}
           </NavLink>
         ))}

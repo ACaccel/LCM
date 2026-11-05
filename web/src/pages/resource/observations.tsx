@@ -82,10 +82,10 @@ export function ResourceEvents({ resource, note }: { resource: string; note?: st
 
 interface HistoryProps {
   resource: string;
-  /** One-line summary of a snapshot, shown while it is collapsed. */
-  summary: (snapshot: ResourceSnapshot) => ReactNode;
+  /** One-line summary of a snapshot, shown while it is collapsed. Without summary and render the panel lists no samples. */
+  summary?: (snapshot: ResourceSnapshot) => ReactNode;
   /** The full snapshot. */
-  render: (snapshot: ResourceSnapshot) => ReactNode;
+  render?: (snapshot: ResourceSnapshot) => ReactNode;
   /** Optional chart over the loaded snapshots. */
   trend?: (snapshots: ResourceSnapshot[]) => ReactNode;
   note?: string;
@@ -110,14 +110,16 @@ export function HistoryPanel({ resource, summary, render, trend, note }: History
       {trend?.(snapshots)}
       <ErrorBox error={q.error} onRetry={() => void q.refetch()} />
       {q.isPending && <Spinner />}
-      {snapshots.map((snapshot) => (
-        <details className="panel" key={snapshot.id}>
-          <summary>
-            {formatDateTime(snapshot.observedAt)} — {summary(snapshot)}
-          </summary>
-          {render(snapshot)}
-        </details>
-      ))}
+      {summary &&
+        render &&
+        snapshots.map((snapshot) => (
+          <details className="panel" key={snapshot.id}>
+            <summary>
+              {formatDateTime(snapshot.observedAt)} — {summary(snapshot)}
+            </summary>
+            {render(snapshot)}
+          </details>
+        ))}
       {q.data && !snapshots.length && <p>{s.common.empty}</p>}
       {q.hasNextPage && (
         <button type="button" className="btn" disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>

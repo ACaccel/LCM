@@ -371,6 +371,9 @@ export function ResourcesPage() {
   return (
     <div className="page">
       <PageHead title={s.resources.title}>
+        <Link to="/topology" className="btn">
+          {s.resources.topologyView}
+        </Link>
         <button type="button" className="btn primary" disabled={!types.isSuccess} onClick={() => set("create", "1")}>
           {s.resources.create}
         </button>

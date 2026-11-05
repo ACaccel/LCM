@@ -1,8 +1,9 @@
 import type { MachineSnapshot, ResourceDetail } from "../../../api/types";
+import { UsageBar } from "../../../components/chart";
 import { Pill, Tag } from "../../../components/ui";
 import { useNow } from "../../../hooks";
 import { formatDateTime, formatDuration } from "../../../lib/format";
-import { coverageView, cpuPercent, machineFresh, machineHealth, percentUsed } from "../../../lib/machine";
+import { coverageView, machineFresh, machineHealth, thresholdOf, usedPercent } from "../../../lib/machine";
 import type { Observed } from "../../../lib/machine";
 import { translateAll } from "../../../lib/messages";
 import { coverageSource, s } from "../../../strings";
@@ -15,7 +16,18 @@ export function MachineHealth({ resource }: { resource: Observed }) {
   return <Pill view={machineHealth(resource, now)} />;
 }
 
-export function SnapshotView({ snapshot }: { snapshot: MachineSnapshot }) {
+export interface UsageLimits {
+  cpu: number;
+  memory: number;
+  disk: number;
+}
+
+/** Limits of the machine document, which the usage bars mark. */
+export function limitsOf(resource: Observed): UsageLimits {
+  return { cpu: thresholdOf(resource, "cpuPercent"), memory: thresholdOf(resource, "memoryPercent"), disk: thresholdOf(resource, "diskPercent") };
+}
+
+export function SnapshotView({ snapshot, limits }: { snapshot: MachineSnapshot; limits: UsageLimits }) {
   const available = (source: string) => snapshot.coverage[source]?.state === "available";
   return (
     <div className="stack">
@@ -33,13 +45,13 @@ export function SnapshotView({ snapshot }: { snapshot: MachineSnapshot }) {
         <dt>{s.machine.uptime}</dt>
         <dd>{formatDuration(snapshot.uptimeSeconds * 1000)}</dd>
         <dt>{s.machine.cpu}</dt>
-        <dd>{available("cpu") ? cpuPercent(snapshot.cpuPercent) : s.machine.unknown}</dd>
+        <dd>{available("cpu") ? <UsageBar value={snapshot.cpuPercent} label={s.machine.cpu} threshold={limits.cpu} /> : s.machine.unknown}</dd>
         <dt>{s.machine.load}</dt>
         <dd>{available("cpu") ? `${snapshot.load?.join(" / ") ?? s.machine.unknown} / ${snapshot.cpuCount}` : s.machine.unknown}</dd>
         <dt>{s.machine.memory}</dt>
-        <dd>{available("memory") ? percentUsed(snapshot.memoryTotal, snapshot.memoryAvailable) : s.machine.unknown}</dd>
+        <dd>{available("memory") ? <UsageBar value={usedPercent(snapshot.memoryTotal, snapshot.memoryAvailable)} label={s.machine.memory} threshold={limits.memory} /> : s.machine.unknown}</dd>
         <dt>{s.machine.swap}</dt>
-        <dd>{available("memory") ? percentUsed(snapshot.swapTotal, snapshot.swapFree) : s.machine.unknown}</dd>
+        <dd>{available("memory") ? <UsageBar value={usedPercent(snapshot.swapTotal, snapshot.swapFree)} label={s.machine.swap} /> : s.machine.unknown}</dd>
       </dl>
       <div className="table-wrap">
         <table className="table">
@@ -56,8 +68,8 @@ export function SnapshotView({ snapshot }: { snapshot: MachineSnapshot }) {
                 <td>
                   <code>{fs.path}</code>
                 </td>
-                <td>{available("filesystems") ? percentUsed(fs.total, fs.available) : s.machine.unknown}</td>
-                <td>{available("filesystems") ? percentUsed(fs.inodes, fs.freeInodes) : s.machine.unknown}</td>
+                <td>{available("filesystems") ? <UsageBar value={usedPercent(fs.total, fs.available)} label={`${s.machine.disk} ${fs.path}`} threshold={limits.disk} /> : s.machine.unknown}</td>
+                <td>{available("filesystems") ? <UsageBar value={usedPercent(fs.inodes, fs.freeInodes)} label={`${s.machine.inodes} ${fs.path}`} threshold={limits.disk} /> : s.machine.unknown}</td>
               </tr>
             ))}
           </tbody>
@@ -133,7 +145,7 @@ export function MachineOverview({ resource }: { resource: Observed }) {
       </section>
       <section className="panel stack">
         <h2>{s.machine.resources}</h2>
-        {status.snapshot ? <SnapshotView snapshot={status.snapshot} /> : <p>{s.machine.unknown}</p>}
+        {status.snapshot ? <SnapshotView snapshot={status.snapshot} limits={limitsOf(resource)} /> : <p>{s.machine.unknown}</p>}
         <p className="meta">{s.machine.firstCpu}</p>
       </section>
       <section className="panel stack">
@@ -177,9 +189,10 @@ export function MachineMonitoring({ resource, selector }: { resource: ResourceDe
       <HistoryPanel
         resource={selector}
         note={s.machine.firstCpu}
-        summary={(snap) => `${s.machine.cpu} ${cpuPercent(snap.machine?.cpuPercent)}`}
-        render={(snap) => (snap.machine ? <SnapshotView snapshot={snap.machine} /> : <p>{s.machine.unknown}</p>)}
-        trend={(snaps) => <MachineTrend snapshots={snaps.flatMap((x) => (x.machine ? [x.machine] : []))} />}
+        trend={(snaps) => {
+          const limits = limitsOf(resource);
+          return <MachineTrend thresholds={{ cpu: limits.cpu, memory: limits.memory }} snapshots={snaps.flatMap((x) => (x.machine ? [x.machine] : []))} />;
+        }}
       />
     </div>
   );

@@ -61,6 +61,18 @@ export function powerUnavailable(action: string, caps: ResourceCapability[] | un
   return cap?.available ? "" : capabilityReason(cap);
 }
 
+/** A percent limit of `spec.config.thresholds` (cpuPercent, memoryPercent, diskPercent); the server default is 90. */
+export function thresholdOf(r: Pick<ResourceDetail, "document">, key: "cpuPercent" | "memoryPercent" | "diskPercent"): number {
+  const thresholds = r.document.spec.config?.["thresholds"];
+  const v = typeof thresholds === "object" && thresholds !== null ? (thresholds as Record<string, unknown>)[key] : undefined;
+  return typeof v === "number" && v > 0 && v <= 100 ? v : 90;
+}
+
+/** Used share in percent, or null when the figures are missing or inconsistent. */
+export function usedPercent(total: number, available: number): number | null {
+  return total > 0 && available >= 0 && available <= total ? (1 - available / total) * 100 : null;
+}
+
 export function percentUsed(total: number, available: number): string {
   return total > 0 && available >= 0 && available <= total ? `${((1 - available / total) * 100).toFixed(1)}%` : s.machine.unknown;
 }
