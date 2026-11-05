@@ -59,8 +59,10 @@ type planKey struct {
 	version int
 }
 
-// group tracks the runs of one policy for its concurrency mode.
+// group tracks the runs of one policy for its concurrency mode. Its maps
+// are guarded by Engine.mu; admit serializes the starts of the policy.
 type group struct {
+	admit  sync.Mutex
 	active map[string]*run
 	queue  []*run
 }
@@ -261,6 +263,10 @@ func (e *Engine) record(ctx context.Context, action, target string, err error, d
 // the update of the deployed plan, the window concurrent deploys race in.
 var afterStore func()
 
+// beforeRunInsert, when set by a test, runs in Start between the
+// concurrency decision and the write of the run row.
+var beforeRunInsert func()
+
 // AnyVersion makes Deploy replace whatever version is stored.
 const AnyVersion = -1
 
@@ -377,6 +383,12 @@ func (e *Engine) undeploy(ctx context.Context, name string) error {
 		queued := g.queue
 		g.queue = nil
 		for _, r := range queued {
+			if r.admitting {
+				// Its row may not be stored yet; the start cancels it
+				// once it is.
+				r.cancelReason = "policy undeployed"
+				continue
+			}
 			r.mu.Lock()
 			r.finalizeLocked(RunCancelled, "policy undeployed")
 			r.mu.Unlock()
@@ -524,84 +536,164 @@ func (e *Engine) start(ctx context.Context, policy, triggerNode string, event an
 	}
 
 	e.mu.Lock()
-	d := e.deployed[policy]
-	if d == nil {
+	if e.deployed[policy] == nil {
 		e.mu.Unlock()
 		return "", ErrPolicyNotDeployed
 	}
-	if d.paused {
-		e.mu.Unlock()
-		return "", ErrPolicyPaused
-	}
-	plan := d.plan
-	ti, ok := plan.index[triggerNode]
-	if !ok || !plan.nodes[ti].trigger {
-		e.mu.Unlock()
-		return "", fmt.Errorf("%w: %q", ErrUnknownTrigger, triggerNode)
-	}
-	now := e.clock.Now()
-	id := e.ids.next(now)
 	g := e.groupLocked(policy)
-	row := runRow{id: id, policy: policy, version: plan.version, status: RunQueued, triggerNode: triggerNode,
-		event: evJSON, mode: mode, createdAt: now}
+	e.mu.Unlock()
+	// Starts of one policy are admitted one at a time, from the concurrency
+	// decision until the run is stored, so every decision sees all earlier
+	// starts of the policy as the stored rows do. e.mu is held only for the
+	// in-memory decision and bookkeeping, never across the write.
+	g.admit.Lock()
+	defer g.admit.Unlock()
 
-	startNow := false
-	var replaced []*run
-	switch plan.mode {
-	case model.ConcurrencyDrop:
-		if len(g.active)+len(g.queue) > 0 {
-			row.status, row.finishedAt, row.err = RunDropped, now, "dropped: a run of this policy is active"
-		} else {
-			startNow = true
-		}
-	case model.ConcurrencyReplace:
-		for _, r := range g.active {
-			replaced = append(replaced, r)
-		}
-		startNow = len(g.active) == 0
-	default:
-		startNow = len(g.queue) == 0 && len(g.active) < e.limitLocked(policy, plan)
-	}
-	if err := insertRun(ctx, e.db, row); err != nil {
-		e.mu.Unlock()
+	e.mu.Lock()
+	adm, err := e.reserveLocked(g, policy, triggerNode, ev, evJSON, mode)
+	e.mu.Unlock()
+	if err != nil {
 		return "", err
 	}
-	if row.status == RunDropped {
-		e.mu.Unlock()
-		e.obs.emit(Event{Kind: EventRunFinished, Time: now, Policy: policy, Version: plan.version, RunID: id,
-			Mode: mode, Status: string(RunDropped), Error: row.err})
-		return id, ErrDropped
+	if beforeRunInsert != nil {
+		beforeRunInsert()
 	}
-	r := newRun(e, plan, id, ti, ev, evJSON, mode, now)
-	e.runs[id] = r
-	if plan.mode == model.ConcurrencyReplace {
-		// The newest event wins: older queued events are replaced too.
-		for _, q := range g.queue {
-			q.mu.Lock()
-			q.finalizeLocked(RunCancelled, "replaced by run "+id)
-			q.mu.Unlock()
+	werr := insertRun(ctx, e.db, adm.row)
+
+	r := adm.run
+	if r == nil {
+		if werr != nil {
+			return "", werr
 		}
-		g.queue = nil
+		e.obs.emit(Event{Kind: EventRunFinished, Time: adm.row.createdAt, Policy: policy, Version: adm.row.version,
+			RunID: adm.row.id, Mode: mode, Status: string(RunDropped), Error: adm.row.err})
+		return adm.row.id, ErrDropped
 	}
-	if startNow {
-		g.active[id] = r
-	} else {
-		g.queue = append(g.queue, r)
+	e.mu.Lock()
+	if werr != nil {
+		next := e.releaseLocked(g, r)
+		e.mu.Unlock()
+		for _, n := range next {
+			n.begin()
+		}
+		return "", werr
 	}
-	for _, old := range replaced {
-		old.mu.Lock()
-		old.failLocked(RunCancelled, "replaced by run "+id)
-		old.checkDoneLocked()
-		old.mu.Unlock()
-	}
-	r.mu.Lock()
-	r.emitLocked(EventRunQueued, -1, nil)
-	r.mu.Unlock()
+	startNow := e.admitLocked(g, r)
 	e.mu.Unlock()
 	if startNow {
 		r.begin()
 	}
-	return id, nil
+	return r.id, nil
+}
+
+// admission is a start decided under e.mu whose run row is not yet stored.
+type admission struct {
+	row runRow
+	// run is the reserved run, nil when the event is dropped.
+	run *run
+}
+
+// reserveLocked checks that the policy accepts the start and applies its
+// concurrency mode: a dropped event only gets its row, any other run
+// reserves its place in the group as admitting. Replacement of older runs
+// waits for admitLocked, so a failed write leaves them untouched.
+func (e *Engine) reserveLocked(g *group, policy, triggerNode string, ev any, evJSON []byte, mode Mode) (admission, error) {
+	d := e.deployed[policy]
+	if d == nil {
+		return admission{}, ErrPolicyNotDeployed
+	}
+	if d.paused {
+		return admission{}, ErrPolicyPaused
+	}
+	plan := d.plan
+	ti, ok := plan.index[triggerNode]
+	if !ok || !plan.nodes[ti].trigger {
+		return admission{}, fmt.Errorf("%w: %q", ErrUnknownTrigger, triggerNode)
+	}
+	now := e.clock.Now()
+	id := e.ids.next(now)
+	row := runRow{id: id, policy: policy, version: plan.version, status: RunQueued, triggerNode: triggerNode,
+		event: evJSON, mode: mode, createdAt: now}
+
+	var startNow bool
+	switch plan.mode {
+	case model.ConcurrencyDrop:
+		if len(g.active)+len(g.queue) > 0 {
+			row.status, row.finishedAt, row.err = RunDropped, now, "dropped: a run of this policy is active"
+			return admission{row: row}, nil
+		}
+		startNow = true
+	case model.ConcurrencyReplace:
+		startNow = len(g.active) == 0
+	default:
+		startNow = len(g.queue) == 0 && len(g.active) < e.limitLocked(policy, plan)
+	}
+	r := newRun(e, plan, id, ti, ev, evJSON, mode, now)
+	r.admitting = true
+	switch {
+	case startNow:
+		g.active[id] = r
+	case plan.mode == model.ConcurrencyReplace:
+		// The newest event goes first: the queued runs ahead of it are
+		// replaced once it is stored.
+		g.queue = append([]*run{r}, g.queue...)
+	default:
+		g.queue = append(g.queue, r)
+	}
+	return admission{row: row, run: r}, nil
+}
+
+// releaseLocked removes a reservation whose row could not be stored and
+// returns the queued runs its place lets start.
+func (e *Engine) releaseLocked(g *group, r *run) []*run {
+	delete(g.active, r.id)
+	if i := slices.Index(g.queue, r); i >= 0 {
+		g.queue = slices.Delete(g.queue, i, i+1)
+	}
+	return e.fillLocked(g, r.plan)
+}
+
+// admitLocked turns a stored reservation into a run: it applies the
+// replacement of older runs, the cancellation an undeploy left while the
+// run was being stored, and reports whether the run holds an active place
+// and must begin. A run that was queued during the write may have been
+// moved to active meanwhile; fillLocked leaves beginning it to this call.
+func (e *Engine) admitLocked(g *group, r *run) bool {
+	r.admitting = false
+	e.runs[r.id] = r
+	if r.plan.mode == model.ConcurrencyReplace {
+		// Admission is serialized per policy, so every other run of the
+		// group is older: queued ones are replaced, active ones cancelled.
+		var kept []*run
+		for _, q := range g.queue {
+			if q == r {
+				kept = append(kept, q)
+				continue
+			}
+			q.mu.Lock()
+			q.finalizeLocked(RunCancelled, "replaced by run "+r.id)
+			q.mu.Unlock()
+		}
+		g.queue = kept
+		for _, old := range g.active {
+			if old == r {
+				continue
+			}
+			old.mu.Lock()
+			old.failLocked(RunCancelled, "replaced by run "+r.id)
+			old.checkDoneLocked()
+			old.mu.Unlock()
+		}
+	}
+	_, active := g.active[r.id]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.emitLocked(EventRunQueued, -1, nil)
+	if r.cancelReason != "" {
+		r.finalizeLocked(RunCancelled, r.cancelReason)
+		return false
+	}
+	return active
 }
 
 // runFinished is called once a run's final status is stored.
@@ -621,7 +713,9 @@ func (e *Engine) runFinished(r *run) {
 	}
 }
 
-// fillLocked moves queued runs to active while the limit allows.
+// fillLocked moves queued runs to active while the limit allows and
+// returns those the caller must begin. An admitting run keeps its active
+// place but is begun by its start once its row is stored.
 func (e *Engine) fillLocked(g *group, fallback *Plan) []*run {
 	if e.closing.Load() {
 		return nil
@@ -631,7 +725,9 @@ func (e *Engine) fillLocked(g *group, fallback *Plan) []*run {
 		r := g.queue[0]
 		g.queue = g.queue[1:]
 		g.active[r.id] = r
-		next = append(next, r)
+		if !r.admitting {
+			next = append(next, r)
+		}
 	}
 	return next
 }

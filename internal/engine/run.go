@@ -82,6 +82,12 @@ type run struct {
 	sq      []int
 	inSched bool
 
+	// admitting marks a run reserved by Start whose row is not yet stored;
+	// cancelReason is set when an undeploy cancels it meanwhile. Both are
+	// guarded by Engine.mu.
+	admitting    bool
+	cancelReason string
+
 	mu         sync.Mutex
 	status     RunStatus
 	nodes      []nodeState
