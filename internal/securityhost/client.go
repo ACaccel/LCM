@@ -45,7 +45,7 @@ func New(cfg Config) (*Client, error) {
 		cfg.Clock = clock.Real()
 	}
 	if cfg.Runner == nil {
-		cfg.Runner = systemRunner{}
+		cfg.Runner = systemRunner()
 	}
 	return &Client{cfg: cfg}, nil
 }
