@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,7 +69,21 @@ type selfEnv struct {
 	token             string
 	sha               map[string]string
 	httpc             *http.Client
+
+	// relay stands in for the konata notification relay that the committed
+	// policy notifies, so that the test neither needs the secret of a real
+	// relay nor sends anything to whatever listens on the default port.
+	relay    *httptest.Server
+	relayMu  sync.Mutex
+	relayGot []relayPut
 }
+
+// relayKey is the dummy bearer key stored under the secret name that
+// deploy/lcm-auto-deploy.yaml reads.
+const relayKey = "self-deploy-test-relay-key"
+
+// relayPut is one notification the stub relay received.
+type relayPut struct{ path, auth, status string }
 
 func newSelfEnv(t *testing.T) *selfEnv {
 	t.Helper()
@@ -87,6 +103,7 @@ func newSelfEnv(t *testing.T) *selfEnv {
 			t.Fatal(err)
 		}
 	}
+	e.startRelay()
 	e.buildBinaries()
 	e.write(filepath.Join(e.root, "usr/local/libexec/lcm/self-install"), readDeploy(t, "self-install"), 0o700)
 	e.initRepos()
@@ -96,6 +113,45 @@ func newSelfEnv(t *testing.T) *selfEnv {
 	e.waitHealthy("vA", time.Minute)
 	e.createToken()
 	return e
+}
+
+// startRelay starts the stub relay and stores its bearer key as the secret
+// "konata-notify-key" in the secrets directory of the data directory.
+func (e *selfEnv) startRelay() {
+	e.t.Helper()
+	e.relay = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Status string `json:"status"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		e.relayMu.Lock()
+		e.relayGot = append(e.relayGot, relayPut{path: r.URL.Path, auth: r.Header.Get("Authorization"), status: body.Status})
+		e.relayMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"created":true,"messageId":"stub"}`)
+	}))
+	e.t.Cleanup(e.relay.Close)
+	secrets := filepath.Join(e.root, "var/lib/lcm/secrets")
+	if err := os.MkdirAll(secrets, 0o700); err != nil {
+		e.t.Fatal(err)
+	}
+	e.write(filepath.Join(secrets, "konata-notify-key"), []byte(relayKey+"\n"), 0o600)
+}
+
+// relayStatuses returns the statuses of the notifications received so far,
+// after checking that each carried the stored key.
+func (e *selfEnv) relayStatuses() []string {
+	e.t.Helper()
+	e.relayMu.Lock()
+	defer e.relayMu.Unlock()
+	var out []string
+	for _, p := range e.relayGot {
+		if p.auth != "Bearer "+relayKey || !strings.HasPrefix(p.path, "/notifications/lcm-deploy/") {
+			e.t.Errorf("relay received %+v, want the stored bearer key on the lcm-deploy route", p)
+		}
+		out = append(out, p.status)
+	}
+	return out
 }
 
 func (e *selfEnv) write(path string, data []byte, mode os.FileMode) {
@@ -145,7 +201,11 @@ func (e *selfEnv) buildBinaries() {
 		e.bins[v] = out
 	}
 	e.bins["bad"] = filepath.Join(bins, "lcm-bad")
-	e.write(e.bins["bad"], []byte("#!/bin/sh\nif [ \"${1:-}\" = version ]; then echo 'lcm vbad (bad) now'; exit 0; fi\necho 'this build is broken' >&2\nexit 1\n"), 0o700)
+	// self-install refuses a binary whose storage schema differs from the
+	// installed one, so the broken build reports the real schema and only
+	// fails to serve.
+	schema := strings.TrimSpace(e.cmd(bins, e.bins["A"], "storage-schema"))
+	e.write(e.bins["bad"], []byte("#!/bin/sh\nif [ \"${1:-}\" = version ]; then echo 'lcm vbad (bad) now'; exit 0; fi\nif [ \"${1:-}\" = storage-schema ]; then echo "+schema+"; exit 0; fi\necho 'this build is broken' >&2\nexit 1\n"), 0o700)
 }
 
 // commit makes the next commit select a prebuilt binary and pushes it.
@@ -418,6 +478,7 @@ func (e *selfEnv) firstDeploy() {
 	policy := e.replace("deploy/lcm-auto-deploy.yaml", string(readDeploy(e.t, "lcm-auto-deploy.yaml")),
 		"repo: https://github.com/ACaccel/LCM.git", "repo: "+e.origin,
 		"requireCI: true", "requireCI: false",
+		"notifyUrl: http://127.0.0.1:4100/notifications/lcm-deploy", "notifyUrl: "+e.relay.URL+"/notifications/lcm-deploy",
 		"healthTimeout: 3m", "healthTimeout: 90s")
 	e.lcm("apply", "-f", e.writeDoc("policy.yaml", policy))
 	// The git trigger records the first head it sees without starting a run.
@@ -519,6 +580,9 @@ func (e *selfEnv) goodUpdate(t *testing.T) {
 	e.eventually("the verification to finish", time.Minute, e.pendingGone)
 	if v, ok := e.service(); !ok || v.DeployedVersion != e.sha["B"] {
 		t.Errorf("service = %+v, want deployed %s", v, e.sha["B"])
+	}
+	if got := e.relayStatuses(); len(got) == 0 || got[len(got)-1] != "succeeded" {
+		t.Errorf("relay statuses = %v, want the last to be succeeded", got)
 	}
 }
 
