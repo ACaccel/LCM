@@ -389,8 +389,14 @@ func (m *Manager) Submit(ctx context.Context, name, action, key string, expected
 		}
 		return Operation{}, err
 	}
+	// From here on the outcome must be recorded even if the caller goes
+	// away: an operation left pending blocks every power action until an
+	// operator resolves it. The helper calls are bounded by their own
+	// timeouts.
+	ctx = context.WithoutCancel(ctx)
 	if err = m.record(ctx, "operation.submit", name, map[string]any{"operationId": op.ID, "action": action}); err != nil {
-		return op, err
+		op.State, op.Unresolved, op.Reason = "failed", false, "request was not sent: its audit entry could not be stored"
+		return op, errors.Join(err, m.saveOperation(ctx, &op))
 	}
 	receipt, err := m.power.Prepare(ctx, op.Request)
 	if err != nil {

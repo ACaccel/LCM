@@ -264,8 +264,9 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.docMu.Lock()
-	defer s.docMu.Unlock()
+	// The check here picks the status of a request that cannot succeed;
+	// Deploy repeats it atomically with the write, so a concurrent change
+	// (from the API or a config source) is refused rather than overwritten.
 	current := 0
 	switch vs, err := s.engine.PolicyVersions(r.Context(), name); {
 	case err == nil:
@@ -277,7 +278,7 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	if !checkIfMatch(w, im, current) {
 		return
 	}
-	version, err := s.engine.Deploy(r.Context(), body)
+	version, err := s.engine.Deploy(r.Context(), body, current)
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return

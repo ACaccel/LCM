@@ -307,7 +307,7 @@ spec:
     - { id: t, type: trigger.manual, next: { out: [m] } }
     - { id: m, type: module, props: { module: pass-through } }
 `
-	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy)); err == nil {
+	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy), engine.AnyVersion); err == nil {
 		t.Fatal("deploy succeeded without the module")
 	}
 	if _, err := h.app.Modules.Put(h.ctx, []byte(`
@@ -321,7 +321,7 @@ spec:
 `), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy)); err != nil {
+	if _, err := h.app.Engine.Deploy(h.ctx, []byte(policy), engine.AnyVersion); err != nil {
 		t.Fatalf("deploy with module: %v", err)
 	}
 }

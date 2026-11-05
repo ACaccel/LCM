@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"sync"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
@@ -149,9 +148,6 @@ type Server struct {
 	githubSecret   string
 	actions        *actionTracker
 	groups         *groupTracker
-	// docMu serializes policy and module writes so that the If-Match check
-	// and the save form one step.
-	docMu sync.Mutex
 	// patterns lists the registered route patterns, for the OpenAPI
 	// coverage test.
 	patterns []string

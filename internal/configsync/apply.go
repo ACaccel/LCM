@@ -170,7 +170,7 @@ func (s *Syncer) write(ctx context.Context, it *item, expected int) (int, error)
 		res, err := s.mods.Put(ctx, it.doc.Data, expected)
 		return res.Version, err
 	case model.KindPolicy:
-		return s.eng.Deploy(ctx, it.doc.Data)
+		return s.eng.Deploy(ctx, it.doc.Data, expected)
 	}
 	return 0, fmt.Errorf("configsync: unsupported kind %q", it.Kind)
 }

@@ -75,7 +75,7 @@ func TestNotificationTestExpiryReleasesActiveCapacity(t *testing.T) {
 	}
 }
 
-func TestSettingsAuditFailureRetainsTransactionalHistory(t *testing.T) {
+func TestSettingsAuditFailureRollsBackTheChange(t *testing.T) {
 	f := setup(t)
 	if err := f.cfg.DB.Write(f.ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(f.ctx, `CREATE TRIGGER reject_settings_audit BEFORE INSERT ON audit_log WHEN NEW.action='security.settings' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`)
@@ -91,16 +91,12 @@ func TestSettingsAuditFailureRetainsTransactionalHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Version != 1 || settings.NotificationsEnabled {
-		t.Fatalf("expected committed settings with transactional history: %+v", settings)
+	if settings.Version != 0 || !settings.NotificationsEnabled {
+		t.Fatalf("settings changed without an audit entry: %+v", settings)
 	}
-	var actor, reason, severity string
-	var at int64
-	var enabled bool
-	var cooldown int
-	err = f.cfg.DB.Reader().QueryRowContext(f.ctx, `SELECT actor,at,reason,notifications_enabled,cooldown_seconds,minimum_severity FROM security_settings_history WHERE version=?`, settings.Version).Scan(&actor, &at, &reason, &enabled, &cooldown, &severity)
-	if err != nil || actor != "system:cli" || at != f.clk.Now().UnixMilli() || reason != "Pause delivery" || enabled || cooldown != 3600 || severity != "critical" {
-		t.Fatalf("settings committed without matching durable history: actor=%q at=%d reason=%q enabled=%v cooldown=%d severity=%q err=%v", actor, at, reason, enabled, cooldown, severity, err)
+	var n int
+	if err = f.cfg.DB.Reader().QueryRowContext(f.ctx, `SELECT COUNT(*) FROM security_settings_history`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("history rows = %d, %v", n, err)
 	}
 }
 

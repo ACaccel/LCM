@@ -52,12 +52,12 @@ func TestPolicyMaintenanceGuard(t *testing.T) {
 					t.Fatalf("%s without gate: %v", action, err)
 				}
 			}
-			v, err := e.Deploy(h.Ctx, []byte(strings.Replace(doc, "timeout: 2h", "timeout: 3h", 1)))
+			v, err := e.Deploy(h.Ctx, []byte(strings.Replace(doc, "timeout: 2h", "timeout: 3h", 1)), engine.AnyVersion)
 			check("deploy update", err)
 			if guarded && v != 0 || !guarded && v != 2 {
 				t.Fatalf("updated version = %d", v)
 			}
-			_, err = e.Deploy(h.Ctx, []byte(policy("new", "  nodes: [{ id: start, type: trigger.manual }]\n")))
+			_, err = e.Deploy(h.Ctx, []byte(policy("new", "  nodes: [{ id: start, type: trigger.manual }]\n")), engine.AnyVersion)
 			check("deploy create", err)
 			check("undeploy", e.Undeploy(h.Ctx, "remove"))
 			check("unpause", e.SetPaused(h.Ctx, "maint", false))
@@ -165,7 +165,7 @@ func TestDeployMaintenanceLease(t *testing.T) {
     - { id: start, type: trigger.manual, next: { out: [m] } }
     - { id: m, type: module, props: { module: m } }
 `))
-	if _, err := e.Deploy(h.Ctx, doc); err != nil {
+	if _, err := e.Deploy(h.Ctx, doc, engine.AnyVersion); err != nil {
 		t.Fatal(err)
 	}
 	ctx, release, err := gate.Acquire(h.Ctx)
@@ -174,7 +174,7 @@ func TestDeployMaintenanceLease(t *testing.T) {
 	}
 	defer release()
 	wantCtx = ctx
-	if _, err := e.Deploy(ctx, doc); err != nil {
+	if _, err := e.Deploy(ctx, doc, engine.AnyVersion); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.SetPaused(ctx, "nested", false); err != nil {

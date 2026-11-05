@@ -130,3 +130,19 @@ func TestListAndResolve(t *testing.T) {
 		t.Fatalf("resolve unknown: %v", err)
 	}
 }
+
+func TestPutRollsBackWithoutAudit(t *testing.T) {
+	db := storetest.Open(t)
+	s, err := modules.New(db, audit.New(db), clock.NewFake(epoch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := auth.WithActor(context.Background(), auth.Actor{Kind: auth.KindUser, ID: "1", Name: "admin"})
+	storetest.FailInserts(t, db, "audit_log")
+	if _, err := s.Put(ctx, doc("a-mod", "x"), 0); err == nil {
+		t.Fatal("put succeeded without its audit entry")
+	}
+	if _, err := s.Get(ctx, "a-mod"); !errors.Is(err, modules.ErrNotFound) {
+		t.Fatalf("module stored without an audit entry: %v", err)
+	}
+}

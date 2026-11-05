@@ -19,9 +19,13 @@ type fakePower struct {
 }
 
 func (f *fakePower) Preflight(context.Context) error { return nil }
-func (f *fakePower) Prepare(_ context.Context, r PowerRequest) (Receipt, error) {
+func (f *fakePower) Prepare(ctx context.Context, r PowerRequest) (Receipt, error) {
 	if f.prepareHook != nil {
 		f.prepareHook()
+	}
+	// Like the helper client, a cancelled request fails.
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, err
 	}
 	return Receipt{State: "prepared", BootID: r.BootID}, f.prepareErr
 }
@@ -94,6 +98,24 @@ func TestOperationIntentIdempotencyAndRebootEvidence(t *testing.T) {
 	}
 	if err = e.m.ExitMaintenance(ctx, "workstation", "verified recovery", 1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A caller that goes away after the intent is stored must not leave a
+// pending operation behind, which would block every later power action.
+func TestCancelledSubmitDoesNotStayPending(t *testing.T) {
+	e, p := readyPower(t)
+	enter(t, e)
+	ctx, cancel := context.WithCancel(DirectRequest(e.ctx))
+	defer cancel()
+	p.prepareHook = cancel
+	op, err := e.m.Submit(ctx, "workstation", "reboot", "cancelled", 1)
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	stored, err := e.m.Operation(DirectRequest(e.ctx), "workstation", op.ID)
+	if err != nil || stored.State == "pending" || p.submits != 1 {
+		t.Fatalf("stored = %+v, %v, submits = %d", stored, err, p.submits)
 	}
 }
 

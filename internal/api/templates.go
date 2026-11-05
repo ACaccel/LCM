@@ -70,8 +70,6 @@ func (s *Server) handleInstantiateTemplate(w http.ResponseWriter, r *http.Reques
 	}
 
 	out := instantiateDTO{Template: id, Name: req.Name, YAML: string(doc), Warnings: []issueBody{}}
-	s.docMu.Lock()
-	defer s.docMu.Unlock()
 	switch _, err := s.engine.PolicyVersions(r.Context(), req.Name); {
 	case err == nil:
 		writeError(w, http.StatusConflict, codeAlreadyExists, "a policy with this name already exists", map[string]any{"name": req.Name})
@@ -90,7 +88,8 @@ func (s *Server) handleInstantiateTemplate(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	version, err := s.engine.Deploy(r.Context(), doc)
+	// Expecting version 0 refuses a policy created since the check above.
+	version, err := s.engine.Deploy(r.Context(), doc, 0)
 	if err != nil {
 		s.fail(w, r, err, nil)
 		return

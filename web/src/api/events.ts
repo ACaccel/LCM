@@ -147,14 +147,18 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     if (!id) return;
     const status = ev.status as RunStatus | undefined;
     if (status) {
-      qc.setQueryData<Run>(qk.run(id), (r) => (r ? { ...r, status } : r));
-      qc.setQueriesData<InfiniteData<{ items: { id: string; status: RunStatus }[]; nextCursor: string | null }>>(
+      const patch = ev.kind === "run.finished" ? { status, finishedAt: ev.time } : { status };
+      qc.setQueryData<Run>(qk.run(id), (r) => (r ? { ...r, ...patch } : r));
+      qc.setQueriesData<InfiniteData<{ items: { id: string; status: RunStatus; finishedAt?: string }[]; nextCursor: string | null }>>(
         { queryKey: qk.runsAll() },
-        (d) => (d ? { ...d, pages: d.pages.map((p) => ({ ...p, items: p.items.map((x) => (x.id === id ? { ...x, status } : x)) })) } : d),
+        (d) => (d ? { ...d, pages: d.pages.map((p) => ({ ...p, items: p.items.map((x) => (x.id === id ? { ...x, ...patch } : x)) })) } : d),
       );
     }
     if (ev.kind === "run.queued") invalidate(qk.runsAll());
     if (ev.kind === "run.finished") {
+      // A finished run leaves lists filtered by status, such as the active
+      // runs on the overview; patching its status alone would keep it there.
+      invalidate(qk.runsAll());
       invalidate(qk.run(id));
       invalidate(qk.policies());
       invalidate(qk.policy(ev.policy));

@@ -2,8 +2,10 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ACaccel/lcm/internal/engine"
@@ -114,6 +116,45 @@ func TestPolicyDeploymentAndVersions(t *testing.T) {
 	x.call("PUT", v1+"/policies/echo", next, yamlBody(), ifMatch("2")).want(http.StatusOK)
 	if x.call("GET", v1+"/policies/echo", nil).obj()["deployed"] != true {
 		t.Fatal("policy not deployed again")
+	}
+}
+
+// Writers that all start from version 1 race; exactly one of them wins and
+// the others get a version conflict instead of overwriting it.
+func TestConcurrentDocumentUpdates(t *testing.T) {
+	x := newSite(t)
+	x.putPolicy("echo", manualPolicyNodes)
+	x.call("PUT", v1+"/modules/pass", moduleDoc("pass", "target"), yamlBody()).want(http.StatusCreated)
+	docs := map[string]func(i int) string{
+		"policies/echo": func(i int) string {
+			return policyDoc("echo", manualPolicyNodes+fmt.Sprintf("    - { id: x%d, type: data.set, props: { values: { a: 1 } } }\n", i))
+		},
+		"modules/pass": func(i int) string { return moduleDoc("pass", fmt.Sprintf("t%d", i)) },
+	}
+	for path, doc := range docs {
+		const writers = 6
+		codes := make([]int, writers)
+		var wg sync.WaitGroup
+		for i := range writers {
+			wg.Go(func() { codes[i] = x.call("PUT", v1+"/"+path, doc(i), yamlBody(), ifMatch("1")).Code })
+		}
+		wg.Wait()
+		won := 0
+		for _, c := range codes {
+			switch c {
+			case http.StatusOK:
+				won++
+			case http.StatusConflict:
+			default:
+				t.Fatalf("%s: status %d", path, c)
+			}
+		}
+		if won != 1 {
+			t.Fatalf("%s: %d writers won: %v", path, won, codes)
+		}
+		if etag := x.call("GET", v1+"/"+path, nil).want(http.StatusOK).Head.Get("ETag"); etag != `"2"` {
+			t.Fatalf("%s: ETag = %s", path, etag)
+		}
 	}
 }
 

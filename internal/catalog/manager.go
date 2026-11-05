@@ -12,6 +12,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/resource"
@@ -54,6 +55,8 @@ var (
 // wait: it returns an error wrapping ErrLockHeld when the lock is taken.
 // ttl bounds how long a lock outlives a crashed holder. release is called
 // once, with a context that is not cancelled with the action.
+// Acquire by the owner that already holds a lock extends it for ttl; the
+// manager renews the lock of a running action that way.
 type Locker interface {
 	Acquire(ctx context.Context, name, owner string, ttl time.Duration) (release func(context.Context) error, err error)
 }
@@ -73,8 +76,9 @@ type ManagerConfig struct {
 	Runner   execx.Runner
 	Locker   Locker
 	Log      *slog.Logger
-	// LockTTL bounds a lock held by a crashed process; default 1h. It must
-	// exceed the longest action.
+	// LockTTL bounds a lock held by a crashed process; default 1h. A
+	// running action renews its lock every third of the TTL, so actions
+	// may take longer than the TTL.
 	LockTTL time.Duration
 	// Git is the git binary; default "git".
 	Git string
@@ -164,6 +168,12 @@ type session struct {
 	adapter rt.Adapter
 	release func(context.Context) error
 	cur     State
+
+	// renewMu guards renewal against close: once closed is set no renewal
+	// runs or is scheduled.
+	renewMu sync.Mutex
+	renewal clock.Timer
+	closed  bool
 }
 
 func (m *Manager) markBusy(name string) bool {
@@ -206,7 +216,37 @@ func (m *Manager) lock(ctx context.Context, name, action string, opts ActionOpti
 		return nil, fmt.Errorf("lock service %s: %w", name, err)
 	}
 	s.release = release
+	s.renewLater(owner)
 	return s, nil
+}
+
+// renewLater schedules the next renewal of the session's lock, a third of
+// the TTL from now, so that a lock expires only when its process is gone.
+func (s *session) renewLater(owner string) {
+	s.renewMu.Lock()
+	defer s.renewMu.Unlock()
+	if s.closed {
+		return
+	}
+	s.renewal = s.m.cat.clk.AfterFunc(s.m.lockTTL/3, func() { s.renew(owner) })
+}
+
+func (s *session) renew(owner string) {
+	s.renewMu.Lock()
+	if s.closed {
+		s.renewMu.Unlock()
+		return
+	}
+	ctx, cancel := detached(context.Background())
+	_, err := s.m.locker.Acquire(ctx, LockName(s.name), owner, s.m.lockTTL)
+	cancel()
+	s.renewMu.Unlock()
+	if err != nil {
+		// The action goes on; it already runs, and stopping it halfway
+		// would be worse than an overlap the operator can see.
+		s.m.log.Error("renew service lock failed", "service", s.name, "action", s.action, "error", err)
+	}
+	s.renewLater(owner)
 }
 
 // load reads the service after the lock is held (it may have changed
@@ -261,6 +301,12 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 }
 
 func (s *session) close() {
+	s.renewMu.Lock()
+	s.closed = true
+	if s.renewal != nil {
+		s.renewal.Stop()
+	}
+	s.renewMu.Unlock()
 	ctx, cancel := detached(context.Background())
 	defer cancel()
 	if s.release != nil {
@@ -278,6 +324,15 @@ func (s *session) move(ctx context.Context, to State) error {
 	}
 	s.cur = to
 	return nil
+}
+
+// moveDone records the state an action the runtime completed leads to. It
+// outlives a cancelled action: the change has happened, and leaving it
+// unrecorded would let reconciliation report a working service as failed.
+func (s *session) moveDone(ctx context.Context, to State) error {
+	ctx, cancel := detached(ctx)
+	defer cancel()
+	return s.move(ctx, to)
 }
 
 // settle leaves the service in the state a failed action warrants: running

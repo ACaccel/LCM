@@ -324,3 +324,15 @@ func TestExternal(t *testing.T) {
 		t.Fatal("external adapter must not run commands")
 	}
 }
+
+// The shell reports a status command it cannot find (127) or execute (126)
+// with an exit code; that says nothing about the service.
+func TestCommandStatusThatCannotRun(t *testing.T) {
+	s := svc(t, "type: command\n    start: ./start.sh\n    stop: ./stop.sh\n    status: ./status.sh")
+	for _, code := range []int{126, 127} {
+		f := (&execx.Fake{}).Reply("status.sh", "./status.sh: not found", code)
+		if st, err := adapter(t, f, s).Status(context.Background(), s); err == nil || st.State != rt.StateUnknown {
+			t.Fatalf("exit %d: %+v %v", code, st, err)
+		}
+	}
+}

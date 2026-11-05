@@ -2,8 +2,10 @@ package lock_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -245,6 +247,68 @@ func TestForceReleaseIsAudited(t *testing.T) {
 	}
 	if err := f.m.ForceRelease(ctx, "stuck"); !errors.Is(err, lock.ErrNotHeld) {
 		t.Fatalf("force release of a free lock: %v", err)
+	}
+}
+
+// A lock that changes hands while ForceRelease waits to write is released
+// and audited as the new holder's, never deleted under the old holder's
+// name. The takeover is a write held open until ForceRelease had time to
+// read the old holder outside the write.
+func TestForceReleaseAuditsTheHolderItDeletes(t *testing.T) {
+	ctx := auth.WithActor(context.Background(), auth.Actor{Kind: auth.KindUser, ID: "u1", Name: "admin"})
+	db := storetest.Open(t)
+	clk := clock.NewFake(epoch)
+	al := audit.New(db, audit.WithClock(clk.Now))
+	m := lock.New(db, lock.WithClock(clk), lock.WithAudit(al))
+	if _, err := m.TryAcquire(ctx, "deploy", "old", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, commit := make(chan struct{}), make(chan struct{})
+	takeover := make(chan error, 1)
+	go func() {
+		takeover <- db.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE locks SET owner = 'new' WHERE name = 'deploy'`)
+			close(ready)
+			<-commit
+			return err
+		})
+	}()
+	<-ready
+	released := make(chan error, 1)
+	go func() { released <- m.ForceRelease(ctx, "deploy") }()
+	for range 200000 {
+		runtime.Gosched()
+	}
+	close(commit)
+	if err := <-takeover; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-released; err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := m.Holder(ctx, "deploy"); found {
+		t.Fatal("lock still held")
+	}
+	entries, err := al.List(ctx, 10, 0)
+	if err != nil || len(entries) != 1 || entries[0].Details["owner"] != "new" {
+		t.Fatalf("audit = %+v, %v", entries, err)
+	}
+}
+
+func TestForceReleaseRollsBackWithoutAudit(t *testing.T) {
+	ctx := auth.WithActor(context.Background(), auth.Actor{Kind: auth.KindUser, ID: "u1", Name: "admin"})
+	db := storetest.Open(t)
+	m := lock.New(db, lock.WithClock(clock.NewFake(epoch)), lock.WithAudit(audit.New(db)))
+	if _, err := m.TryAcquire(ctx, "stuck", "run-9", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	storetest.FailInserts(t, db, "audit_log")
+	if err := m.ForceRelease(ctx, "stuck"); err == nil {
+		t.Fatal("force release succeeded without its audit entry")
+	}
+	if _, found, _ := m.Holder(ctx, "stuck"); !found {
+		t.Fatal("lock released without an audit entry")
 	}
 }
 

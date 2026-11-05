@@ -19,6 +19,7 @@ import (
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/modules"
 	"github.com/ACaccel/lcm/internal/node"
 	"github.com/ACaccel/lcm/internal/nodes/core"
@@ -46,6 +47,10 @@ type env struct {
 	eng   *engine.Engine
 	audit *audit.Log
 	sync  *configsync.Syncer
+	// beforeDeploy, when set, runs once the next time the engine resolves a
+	// module, which a deploy does before it writes: a test uses it to
+	// change a policy concurrently with the sync.
+	beforeDeploy func()
 	// ctx carries a human operator; syncCtx is what a manual caller uses.
 	ctx context.Context
 }
@@ -71,7 +76,7 @@ func newEnv(t *testing.T) *env {
 	}
 	reg := node.NewRegistry()
 	core.Register(reg)
-	if e.eng, err = engine.New(engine.Config{DB: e.db, Registry: reg, Modules: e.mods, Workers: 2, Clock: e.clk, Audit: e.audit}); err != nil {
+	if e.eng, err = engine.New(engine.Config{DB: e.db, Registry: reg, Modules: hookedModules{e}, Workers: 2, Clock: e.clk, Audit: e.audit}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -89,6 +94,18 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	return e
+}
+
+// hookedModules is the engine's module resolver: the module store, after
+// the env's beforeDeploy hook.
+type hookedModules struct{ e *env }
+
+func (h hookedModules) ResolveModule(ctx context.Context, name string) (*model.Module, error) {
+	if f := h.e.beforeDeploy; f != nil {
+		h.e.beforeDeploy = nil
+		f()
+	}
+	return h.e.mods.ResolveModule(ctx, name)
 }
 
 func serviceYAML(name, extra string) string {

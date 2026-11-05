@@ -11,9 +11,11 @@ import (
 
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/configsync"
+	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/signal"
+	"github.com/ACaccel/lcm/internal/store/storetest"
 )
 
 const (
@@ -323,13 +325,35 @@ func TestResolveUseGit(t *testing.T) {
 	}
 }
 
+func TestOwnershipChangesRollBackWithoutAudit(t *testing.T) {
+	e := newEnv(t)
+	r, _ := baseRepo(t)
+	e.addSource("infra", r, "deploy")
+	e.syncNow("infra")
+	e.editService("web", serviceYAML("web", "  relations: [{ type: dependsOn, target: local }]\n"))
+
+	storetest.FailInserts(t, e.db, "audit_log")
+	if _, err := e.sync.Resolve(e.ctx, model.KindResource, "web", false); err == nil {
+		t.Fatal("resolve succeeded without its audit entry")
+	}
+	if o := e.owner("resource", "web"); o == nil || o.Acknowledged {
+		t.Fatalf("resolve took effect without an audit entry: %+v", o)
+	}
+	if err := e.sync.Release(e.ctx, model.KindResource, "web"); err == nil {
+		t.Fatal("release succeeded without its audit entry")
+	}
+	if e.owner("resource", "web") == nil {
+		t.Fatal("release took effect without an audit entry")
+	}
+}
+
 func TestPolicyDrift(t *testing.T) {
 	e := newEnv(t)
 	r, _ := baseRepo(t)
 	e.addSource("infra", r, "deploy")
 	e.syncNow("infra")
 
-	if _, err := e.eng.Deploy(e.ctx, []byte(policyYAML("echo", echoNodes+"    - { id: x, type: data.set, props: { values: { a: 1 } } }\n"))); err != nil {
+	if _, err := e.eng.Deploy(e.ctx, []byte(policyYAML("echo", echoNodes+"    - { id: x, type: data.set, props: { values: { a: 1 } } }\n")), engine.AnyVersion); err != nil {
 		t.Fatal(err)
 	}
 	if o := e.owner("policy", "echo"); !o.Drifted {

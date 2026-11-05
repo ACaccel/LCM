@@ -102,9 +102,9 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		errors.Is(err, trigger.ErrNoListener), errors.Is(err, configsync.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeNotFound, publicMessage(err), details(nil))
 
-	case errors.Is(err, modules.ErrExists), errors.Is(err, configsync.ErrExists):
+	case errors.Is(err, modules.ErrExists), errors.Is(err, configsync.ErrExists), errors.Is(err, engine.ErrPolicyExists):
 		writeError(w, http.StatusConflict, codeAlreadyExists, publicMessage(err), details(nil))
-	case errors.Is(err, modules.ErrConflict):
+	case errors.Is(err, modules.ErrConflict), errors.Is(err, engine.ErrVersionConflict):
 		writeError(w, http.StatusConflict, codeVersionConflict, publicMessage(err), details(nil))
 
 	case errors.As(err, &stErr):

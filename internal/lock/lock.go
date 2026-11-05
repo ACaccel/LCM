@@ -245,7 +245,9 @@ func (m *Manager) ReleaseOwner(ctx context.Context, owner string) ([]string, err
 
 // ForceRelease frees a lock regardless of its owner, for operators dealing
 // with a stuck holder. The action is audited with the actor in ctx; it
-// fails when there is no audit log or no actor.
+// fails when there is no audit log or no actor. The holder is read, deleted
+// and audited in one transaction, so a lock taken over by a new holder in
+// the meantime is never deleted under the name of the old one.
 func (m *Manager) ForceRelease(ctx context.Context, name string) error {
 	if m.audit == nil {
 		return errors.New("lock: force release requires an audit log")
@@ -253,29 +255,41 @@ func (m *Manager) ForceRelease(ctx context.Context, name string) error {
 	if _, ok := auth.ActorFrom(ctx); !ok {
 		return audit.ErrNoActor
 	}
-	holder, found, err := m.Holder(ctx, name)
-	if err != nil {
-		return err
-	}
-	if !found {
+	var holder Info
+	found := false
+	err := m.db.Write(ctx, func(tx *sql.Tx) error {
+		var a, e int64
+		err := tx.QueryRowContext(ctx, `SELECT owner, acquired_at, expires_at FROM locks WHERE name = ? AND expires_at > ?`,
+			name, m.clock.Now().UnixMilli()).Scan(&holder.Owner, &a, &e)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found = true
+		holder.Name, holder.AcquiredAt, holder.ExpiresAt = name, time.UnixMilli(a).UTC(), time.UnixMilli(e).UTC()
+		if _, err := tx.ExecContext(ctx, `DELETE FROM locks WHERE name = ? AND owner = ?`, name, holder.Owner); err != nil {
+			return err
+		}
+		return m.audit.RecordTx(ctx, tx, "lock.force_release", "lock:"+name, audit.OutcomeOK, holderDetails(holder))
+	})
+	if err == nil && !found {
 		return fmt.Errorf("%w: %q", ErrNotHeld, name)
 	}
-	err = m.db.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM locks WHERE name = ?`, name)
-		return err
-	})
-	outcome := audit.OutcomeOK
 	if err != nil {
-		outcome = audit.OutcomeError
-	}
-	details := map[string]any{"owner": holder.Owner, "expiresAt": holder.ExpiresAt.Format(time.RFC3339)}
-	if aerr := m.audit.Record(ctx, "lock.force_release", "lock:"+name, outcome, details); aerr != nil {
-		err = errors.Join(err, aerr)
-	}
-	if err != nil {
+		if found {
+			if aerr := m.audit.Record(ctx, "lock.force_release", "lock:"+name, audit.OutcomeError, holderDetails(holder)); aerr != nil {
+				err = errors.Join(err, aerr)
+			}
+		}
 		return fmt.Errorf("lock: force release %q: %w", name, err)
 	}
 	return nil
+}
+
+func holderDetails(i Info) map[string]any {
+	return map[string]any{"owner": i.Owner, "expiresAt": i.ExpiresAt.Format(time.RFC3339)}
 }
 
 // Holder returns the current, unexpired holder of name.

@@ -19,7 +19,9 @@ import (
 )
 
 // openStore opens the database for a CLI command, validating the same
-// configuration as serve. The returned context carries the CLI actor.
+// configuration as serve. It never migrates an existing database: that is
+// the server's job, and a CLI of another version refuses to run instead.
+// The returned context carries the CLI actor.
 func (a *app) openStore(ctx context.Context, fs *flag.FlagSet, cfg *config.Config, args []string) (context.Context, *store.DB, error) {
 	cfg.RegisterDataDirFlag(fs)
 	if err := fs.Parse(args); err != nil {
@@ -31,7 +33,7 @@ func (a *app) openStore(ctx context.Context, fs *flag.FlagSet, cfg *config.Confi
 	if err := cfg.EnsureDataDir(); err != nil {
 		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	db, err := store.Open(ctx, cfg.DBPath())
+	db, err := store.OpenExisting(ctx, cfg.DBPath())
 	if err != nil {
 		return nil, nil, err
 	}

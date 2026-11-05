@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -103,5 +104,37 @@ func TestContextDetails(t *testing.T) {
 	imp, ok := d["acknowledgedImpact"].(map[string]any)
 	if !ok || len(imp["dependents"].([]any)) != 1 {
 		t.Errorf("context detail missing: %v", d)
+	}
+}
+
+func TestRecordTxCommitsWithTheChange(t *testing.T) {
+	db := storetest.Open(t)
+	l := audit.New(db)
+	ctx := auth.WithActor(context.Background(), auth.CLI)
+	change := errors.New("change failed")
+	err := db.Write(ctx, func(tx *sql.Tx) error {
+		if err := l.RecordTx(ctx, tx, "x.y", "a", audit.OutcomeOK, nil); err != nil {
+			return err
+		}
+		return change
+	})
+	if !errors.Is(err, change) {
+		t.Fatalf("err = %v", err)
+	}
+	if got, _ := l.List(ctx, 10, 0); len(got) != 0 {
+		t.Fatalf("entry of a rolled back change survived: %+v", got)
+	}
+	if err := db.Write(ctx, func(tx *sql.Tx) error {
+		return l.RecordTx(ctx, tx, "x.y", "b", audit.OutcomeOK, map[string]any{"n": 1})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := l.List(ctx, 10, 0); len(got) != 1 || got[0].Target != "b" {
+		t.Fatalf("entries = %+v", got)
+	}
+	if err := db.Write(ctx, func(tx *sql.Tx) error {
+		return l.RecordTx(context.Background(), tx, "x.y", "c", audit.OutcomeOK, nil)
+	}); !errors.Is(err, audit.ErrNoActor) {
+		t.Fatalf("missing actor: err = %v", err)
 	}
 }

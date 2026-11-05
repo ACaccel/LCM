@@ -158,6 +158,23 @@ describe("run and node events", () => {
     const list = qc.getQueryData<InfiniteData<{ items: { status: string }[] }>>(qk.runs({}));
     expect(list?.pages[0]?.items[0]?.status).toBe("succeeded");
   });
+
+  it("refetches run lists filtered by status when a run finishes", async () => {
+    qc.setQueryData(qk.run("r1"), run());
+    qc.setQueryData(qk.runs({ status: ["queued", "running", "suspended"] }), {
+      pages: [{ items: [{ id: "r1", status: "running" }], nextCursor: null }],
+      pageParams: [undefined],
+    });
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const a = createEventApplier(qc);
+    a.apply(env("run", { kind: "run.finished", time: "2026-10-28T10:05:00Z", policy: "p", runId: "r1", status: "succeeded" }));
+    expect(qc.getQueryData<Run>(qk.run("r1"))?.finishedAt).toBe("2026-10-28T10:05:00Z");
+    const list = qc.getQueryData<InfiniteData<{ items: { finishedAt?: string }[] }>>(qk.runs({ status: ["queued", "running", "suspended"] }));
+    expect(list?.pages[0]?.items[0]?.finishedAt).toBe("2026-10-28T10:05:00Z");
+    await vi.advanceTimersByTimeAsync(300);
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(qk.runsAll()));
+  });
 });
 
 describe("resource and observation events", () => {

@@ -35,7 +35,7 @@ func TestEveryTemplateDeploys(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tpl.ID, err)
 		}
-		if _, err := h.app.Engine.Deploy(h.ctx, doc); err != nil {
+		if _, err := h.app.Engine.Deploy(h.ctx, doc, engine.AnyVersion); err != nil {
 			t.Errorf("%s does not deploy: %v\n%s", tpl.ID, err, doc)
 		}
 		// The raw template document is for reading, not for deploying: its

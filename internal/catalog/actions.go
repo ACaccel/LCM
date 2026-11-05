@@ -16,7 +16,7 @@ func (m *Manager) Start(ctx context.Context, name string, opts ActionOptions) (A
 			s.settle(ctx, false)
 			return err
 		}
-		return s.move(ctx, StateRunning)
+		return s.moveDone(ctx, StateRunning)
 	})
 }
 
@@ -27,7 +27,7 @@ func (m *Manager) Stop(ctx context.Context, name string, opts ActionOptions) (Ac
 			s.settle(ctx, false)
 			return err
 		}
-		return s.move(ctx, StateStopped)
+		return s.moveDone(ctx, StateStopped)
 	})
 }
 
@@ -38,7 +38,7 @@ func (m *Manager) Restart(ctx context.Context, name string, opts ActionOptions) 
 			s.settle(ctx, false)
 			return err
 		}
-		return s.move(ctx, StateRunning)
+		return s.moveDone(ctx, StateRunning)
 	})
 }
 

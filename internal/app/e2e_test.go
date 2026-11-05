@@ -35,7 +35,7 @@ func (h *harness) putService(doc string) {
 
 func (h *harness) deploy(doc string) {
 	h.t.Helper()
-	if _, err := h.app.Engine.Deploy(h.ctx, []byte(doc)); err != nil {
+	if _, err := h.app.Engine.Deploy(h.ctx, []byte(doc), engine.AnyVersion); err != nil {
 		h.t.Fatalf("deploy policy: %v", err)
 	}
 }

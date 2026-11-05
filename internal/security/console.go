@@ -106,14 +106,15 @@ func (m *Manager) UpdateSettings(ctx context.Context, version int64, u SettingsU
 				return err
 			}
 		}
-		out, err = m.settings(ctx, tx)
-		return err
+		if out, err = m.settings(ctx, tx); err != nil {
+			return err
+		}
+		return m.cfg.Audit.RecordTx(ctx, tx, "security.settings", "", audit.OutcomeOK, map[string]any{"version": out.Version, "reason": u.Reason})
 	})
 	if err != nil {
 		return Settings{}, err
 	}
-	err = m.cfg.Audit.Record(ctx, "security.settings", "", audit.OutcomeOK, map[string]any{"version": out.Version, "reason": u.Reason})
-	return out, err
+	return out, nil
 }
 func cancelQueue(ctx context.Context, tx *sql.Tx, now time.Time) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE security_incidents SET state='retired',summary='[TEST] Security notification test cancelled',revision=revision+1,updated_at=? WHERE state='firing' AND id IN (SELECT incident_id FROM security_notification_tests)`, now.UnixMilli()); err != nil {
@@ -257,13 +258,12 @@ func (m *Manager) UpdateHandling(ctx context.Context, id string, version int64, 
 		if _, err = tx.ExecContext(ctx, `INSERT INTO security_handling_history(incident_id,action,reason,actor,at,silence_until) VALUES(?,?,?,?,?,?)`, id, u.Action, u.Reason, actor, now.UnixMilli(), until); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM security_handling_history WHERE id IN (SELECT id FROM security_handling_history WHERE incident_id=? ORDER BY id DESC LIMIT -1 OFFSET 100)`, id)
-		return err
+		if _, err = tx.ExecContext(ctx, `DELETE FROM security_handling_history WHERE id IN (SELECT id FROM security_handling_history WHERE incident_id=? ORDER BY id DESC LIMIT -1 OFFSET 100)`, id); err != nil {
+			return err
+		}
+		return m.cfg.Audit.RecordTx(ctx, tx, "security.handling."+u.Action, id, audit.OutcomeOK, map[string]any{"version": version + 1})
 	})
 	if err != nil {
-		return Handling{}, err
-	}
-	if err = m.cfg.Audit.Record(ctx, "security.handling."+u.Action, id, audit.OutcomeOK, map[string]any{"version": version + 1}); err != nil {
 		return Handling{}, err
 	}
 	return m.Handling(ctx, id)

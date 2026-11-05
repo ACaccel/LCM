@@ -567,3 +567,31 @@ func TestCheckImpactGuard(t *testing.T) {
 		t.Errorf("audit details = %v", entries[0].Details)
 	}
 }
+
+func TestWritesRollBackWithoutAudit(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.store.Put(h.ctx, service("web", "command", "  config: { start: a, stop: b, restart: c, status: d }\n"), 0); err != nil {
+		t.Fatal(err)
+	}
+	restore := storetest.FailInserts(t, h.db, "audit_log")
+	if _, err := h.store.Put(h.ctx, service("api", "command", "  config: { start: a, stop: b, restart: c, status: d }\n"), 0); err == nil {
+		t.Fatal("create succeeded without its audit entry")
+	}
+	if _, err := h.store.Get(h.ctx, "api"); !errors.Is(err, resource.ErrNotFound) {
+		t.Fatalf("resource created without an audit entry: %v", err)
+	}
+	if _, err := h.store.Put(h.ctx, service("web", "command", "  config: { start: x, stop: b, restart: c, status: d }\n"), 1); err == nil {
+		t.Fatal("update succeeded without its audit entry")
+	}
+	if err := h.store.SetPhase(h.ctx, "web", resource.PhaseRetired, 1, "gone"); err == nil {
+		t.Fatal("phase change succeeded without its audit entry")
+	}
+	restore()
+	rec, err := h.store.Get(h.ctx, "web")
+	if err != nil || rec.Version != 1 || rec.Phase != resource.PhaseManaged {
+		t.Fatalf("web = v%d %s, %v", rec.Version, rec.Phase, err)
+	}
+	if len(h.changes) != 1 {
+		t.Fatalf("changes published for rolled back writes: %+v", h.changes)
+	}
+}

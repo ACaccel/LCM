@@ -296,9 +296,12 @@ func loadDeployments(ctx context.Context, db *store.DB) ([]deploymentRow, error)
 }
 
 // storeVersion stores plan as a new version unless it equals the latest
-// version, and marks it deployed. It returns the deployed version, whether
-// it already existed, and the paused flag.
-func storeVersion(ctx context.Context, db *store.DB, plan *Plan, actor auth.Actor, now time.Time) (version int, unchanged, paused bool, err error) {
+// version, and marks it deployed. expected is checked against the latest
+// version as Deploy describes; record writes the audit entry in the same
+// transaction. It returns the deployed version, whether it already existed,
+// and the paused flag.
+func storeVersion(ctx context.Context, db *store.DB, plan *Plan, actor auth.Actor, now time.Time, expected int,
+	record func(tx *sql.Tx, version int) error) (version int, unchanged, paused bool, err error) {
 	mods, err := json.Marshal(rawModules(plan.modules))
 	if err != nil {
 		return 0, false, false, fmt.Errorf("engine: encode modules: %w", err)
@@ -310,6 +313,15 @@ func storeVersion(ctx context.Context, db *store.DB, plan *Plan, actor auth.Acto
 			WHERE name = ? ORDER BY version DESC LIMIT 1`, plan.name).Scan(&latest, &doc, &latestMods)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		switch {
+		case expected == AnyVersion:
+		case expected == 0 && latest.Valid:
+			return fmt.Errorf("%w: %s", ErrPolicyExists, plan.name)
+		case expected > 0 && !latest.Valid:
+			return fmt.Errorf("%w: %s", ErrPolicyNotFound, plan.name)
+		case expected > 0 && int(latest.Int64) != expected:
+			return fmt.Errorf("%w: %s is at version %d, expected %d", ErrVersionConflict, plan.name, latest.Int64, expected)
 		}
 		if latest.Valid && doc.String == string(plan.document) && latestMods.String == string(mods) {
 			version, unchanged = int(latest.Int64), true
@@ -328,7 +340,10 @@ func storeVersion(ctx context.Context, db *store.DB, plan *Plan, actor auth.Acto
 			plan.name, version, now.UnixMilli()); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT paused FROM policy_deployments WHERE name = ?`, plan.name).Scan(&paused)
+		if err := tx.QueryRowContext(ctx, `SELECT paused FROM policy_deployments WHERE name = ?`, plan.name).Scan(&paused); err != nil {
+			return err
+		}
+		return record(tx, version)
 	})
 	if err != nil {
 		return 0, false, false, fmt.Errorf("engine: store policy version: %w", err)

@@ -24,9 +24,72 @@ type DB struct {
 	r *sql.DB
 }
 
+// ErrSchemaMismatch means an existing database was migrated by another
+// version of LCM than this binary; OpenExisting leaves it untouched.
+var ErrSchemaMismatch = errors.New("store: database schema does not match this binary")
+
 // Open opens (creating if necessary) the database at path with mode 0600 and
 // applies pending migrations.
 func Open(ctx context.Context, path string) (*DB, error) {
+	db, err := open(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := migrate(ctx, db.w); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// OpenExisting opens the database for a command that runs beside the
+// server, which owns migrations. A database without any table, including a
+// file that does not exist yet, is a fresh install and is created and
+// migrated as Open does. Any other database must carry exactly the
+// migrations of this binary; otherwise OpenExisting returns an error
+// matching ErrSchemaMismatch and changes nothing.
+func OpenExisting(ctx context.Context, path string) (*DB, error) {
+	db, err := open(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.checkSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func (d *DB) checkSchema(ctx context.Context) error {
+	var tables int
+	if err := d.r.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&tables); err != nil {
+		return fmt.Errorf("store: read schema: %w", err)
+	}
+	if tables == 0 {
+		return migrate(ctx, d.w)
+	}
+	ms, err := loadMigrations()
+	if err != nil {
+		return err
+	}
+	want := ms[len(ms)-1].version
+	var applied, newest int
+	err = d.r.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&applied, &newest)
+	if err != nil {
+		return fmt.Errorf("%w: no LCM schema found: %w", ErrSchemaMismatch, err)
+	}
+	switch {
+	case newest > want:
+		return fmt.Errorf("%w: the database is at schema %d and this lcm binary supports %d; use the lcm binary of the server that runs on it",
+			ErrSchemaMismatch, newest, want)
+	case newest < want || applied != len(ms):
+		return fmt.Errorf("%w: the database is at schema %d and this lcm binary expects %d; upgrade the server first (lcm serve migrates at startup), then run this command again",
+			ErrSchemaMismatch, newest, want)
+	}
+	return nil
+}
+
+func open(ctx context.Context, path string) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: resolve path: %w", err)
@@ -49,23 +112,20 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	r.SetMaxOpenConns(max(2, min(runtime.NumCPU(), 8)))
 
 	db := &DB{w: w, r: r}
-	if err := db.init(ctx); err != nil {
+	if err := db.connect(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 	return db, nil
 }
 
-func (d *DB) init(ctx context.Context) error {
+func (d *DB) connect(ctx context.Context) error {
 	// Switching to WAL needs the writer; do it before readers connect.
 	if err := d.w.PingContext(ctx); err != nil {
 		return fmt.Errorf("store: connect: %w", err)
 	}
 	if err := d.r.PingContext(ctx); err != nil {
 		return fmt.Errorf("store: connect reader: %w", err)
-	}
-	if err := migrate(ctx, d.w); err != nil {
-		return err
 	}
 	return nil
 }

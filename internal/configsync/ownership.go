@@ -113,21 +113,37 @@ func (s *Syncer) listOwn(ctx context.Context, where string, args ...any) ([]ownR
 }
 
 func (s *Syncer) saveOwn(ctx context.Context, r ownRow) error {
+	return s.saveOwnAnd(ctx, r, nil)
+}
+
+// saveOwnAnd saves r and, when then is not nil, runs then in the same
+// transaction, typically to write the audit entry of the change.
+func (s *Syncer) saveOwnAnd(ctx context.Context, r ownRow, then func(tx *sql.Tx) error) error {
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO config_ownership (`+ownCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (kind, name) DO UPDATE SET source = excluded.source, path = excluded.path,
-			   commit_id = excluded.commit_id, applied_version = excluded.applied_version, document = excluded.document,
-			   pending = excluded.pending, pending_path = excluded.pending_path, conflict_commit = excluded.conflict_commit,
-			   acknowledged = excluded.acknowledged, orphaned = excluded.orphaned, applied_at = excluded.applied_at`,
-			string(r.Kind), r.Name, r.Source, r.Path, r.Commit, r.AppliedVersion, r.Document, r.Pending, r.PendingPath,
-			r.ConflictCommit, b2i(r.Acknowledged), b2i(r.Orphaned), r.AppliedAt.UnixMilli())
-		return err
+		if err := saveOwnTx(ctx, tx, r); err != nil {
+			return err
+		}
+		if then == nil {
+			return nil
+		}
+		return then(tx)
 	})
 	if err != nil {
 		return fmt.Errorf("configsync: save ownership: %w", err)
 	}
 	return nil
+}
+
+func saveOwnTx(ctx context.Context, tx *sql.Tx, r ownRow) error {
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO config_ownership (`+ownCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (kind, name) DO UPDATE SET source = excluded.source, path = excluded.path,
+		   commit_id = excluded.commit_id, applied_version = excluded.applied_version, document = excluded.document,
+		   pending = excluded.pending, pending_path = excluded.pending_path, conflict_commit = excluded.conflict_commit,
+		   acknowledged = excluded.acknowledged, orphaned = excluded.orphaned, applied_at = excluded.applied_at`,
+		string(r.Kind), r.Name, r.Source, r.Path, r.Commit, r.AppliedVersion, r.Document, r.Pending, r.PendingPath,
+		r.ConflictCommit, b2i(r.Acknowledged), b2i(r.Orphaned), r.AppliedAt.UnixMilli())
+	return err
 }
 
 // current is a resource as it stands now.
@@ -270,7 +286,16 @@ func (s *Syncer) Resolve(ctx context.Context, kind model.Kind, name string, useG
 	use := "current"
 	if useGit {
 		use = "git"
-		if err := s.resolveGit(ctx, row); err != nil {
+	}
+	// The audit entry commits with the ownership row it describes.
+	recordTx := func(r ownRow) func(tx *sql.Tx) error {
+		return func(tx *sql.Tx) error {
+			return s.audit.RecordTx(ctx, tx, "config.resolve", ref.String(), audit.OutcomeOK,
+				map[string]any{"use": use, "source": r.Source, "commit": r.Commit})
+		}
+	}
+	if useGit {
+		if err := s.resolveGit(ctx, row, recordTx); err != nil {
 			s.record(ctx, "config.resolve", ref.String(), audit.OutcomeError, map[string]any{"use": use, "source": row.Source})
 			return Ownership{}, err
 		}
@@ -280,19 +305,19 @@ func (s *Syncer) Resolve(ctx context.Context, kind model.Kind, name string, useG
 			row.Document, row.Pending, row.PendingPath, row.ConflictCommit = row.Pending, "", "", ""
 		}
 		row.Acknowledged = true
-		if err := s.saveOwn(ctx, *row); err != nil {
+		if err := s.saveOwnAnd(ctx, *row, recordTx(*row)); err != nil {
 			return Ownership{}, err
 		}
 	}
-	s.record(ctx, "config.resolve", ref.String(), audit.OutcomeOK, map[string]any{"use": use, "source": row.Source, "commit": row.Commit})
 	if hadConflict {
 		s.notifyResolved(ctx, ref, row.Source, "conflict resolved by "+use)
 	}
 	return s.view(ctx, *row)
 }
 
-// resolveGit writes the repository document and updates the row.
-func (s *Syncer) resolveGit(ctx context.Context, row *ownRow) error {
+// resolveGit writes the repository document and updates the row; the
+// function then returns runs in the transaction that saves the row.
+func (s *Syncer) resolveGit(ctx context.Context, row *ownRow, then func(ownRow) func(tx *sql.Tx) error) error {
 	doc, path, commit := row.Document, row.Path, row.Commit
 	if row.Pending != "" {
 		doc, path, commit = row.Pending, row.PendingPath, row.ConflictCommit
@@ -324,7 +349,7 @@ func (s *Syncer) resolveGit(ctx context.Context, row *ownRow) error {
 		Ref: row.Ref, Source: row.Source, Path: path, Commit: commit, AppliedVersion: version,
 		Document: doc, Orphaned: row.Orphaned, AppliedAt: s.now(),
 	}
-	return s.saveOwn(ctx, *row)
+	return s.saveOwnAnd(ctx, *row, then(*row))
 }
 
 // Release ends the ownership of a resource: it becomes managed through the
@@ -350,12 +375,13 @@ func (s *Syncer) Release(ctx context.Context, kind model.Kind, name string) erro
 		return fmt.Errorf("%w: %s is not managed by a config source", ErrNotFound, ref)
 	}
 	if err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM config_ownership WHERE kind = ? AND name = ?`, string(kind), name)
-		return err
+		if _, err := tx.ExecContext(ctx, `DELETE FROM config_ownership WHERE kind = ? AND name = ?`, string(kind), name); err != nil {
+			return err
+		}
+		return s.audit.RecordTx(ctx, tx, "config.release", ref.String(), audit.OutcomeOK, map[string]any{"source": row.Source})
 	}); err != nil {
 		return fmt.Errorf("configsync: release: %w", err)
 	}
-	s.record(ctx, "config.release", ref.String(), audit.OutcomeOK, map[string]any{"source": row.Source})
 	if row.ConflictCommit != "" {
 		s.notifyResolved(ctx, ref, row.Source, "ownership released")
 	}

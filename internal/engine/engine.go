@@ -91,6 +91,9 @@ type Engine struct {
 	closeOnce  sync.Once
 	recovered  atomic.Bool
 
+	// deployMu orders deployment writes (deploy, undeploy, pause) so that
+	// the deployed map is updated in the order the transactions commit.
+	deployMu sync.Mutex
 	mu       sync.Mutex
 	deployed map[string]*deployment
 	plans    map[planKey]*Plan
@@ -224,8 +227,15 @@ func actorFrom(ctx context.Context) (auth.Actor, error) {
 	return a, nil
 }
 
-// record writes an audit entry; a failure is logged because the action has
-// already happened.
+// recordTx writes the audit entry of a successful change in the transaction
+// of the change.
+func (e *Engine) recordTx(ctx context.Context, tx *sql.Tx, action, target string, details map[string]any) error {
+	return e.audit.RecordTx(ctx, tx, action, target, audit.OutcomeOK, details)
+}
+
+// record writes an audit entry on its own: for a failed change, which has no
+// transaction to join, and for run actions. A failure is logged because the
+// action has already happened or failed.
 func (e *Engine) record(ctx context.Context, action, target string, err error, details map[string]any) {
 	outcome := audit.OutcomeOK
 	if err != nil {
@@ -247,29 +257,45 @@ func (e *Engine) record(ctx context.Context, action, target string, err error, d
 	}
 }
 
+// afterStore, when set by a test, runs between the commit of a deploy and
+// the update of the deployed plan, the window concurrent deploys race in.
+var afterStore func()
+
+// AnyVersion makes Deploy replace whatever version is stored.
+const AnyVersion = -1
+
 // Deploy validates, compiles and stores a policy document and makes it the
 // deployed version. Deploying a document identical to the latest version
-// (including the modules it uses) creates no new version. The actor comes
-// from ctx.
-func (e *Engine) Deploy(ctx context.Context, doc []byte) (int, error) {
+// (including the modules it uses) creates no new version. expected is the
+// latest stored version the change is based on, checked in the transaction
+// that stores the new one: 0 creates the policy (ErrPolicyExists if it has
+// versions), a positive value must equal the latest version
+// (ErrVersionConflict, or ErrPolicyNotFound if there is none), and
+// AnyVersion skips the check. The actor comes from ctx.
+func (e *Engine) Deploy(ctx context.Context, doc []byte, expected int) (int, error) {
 	if _, err := actorFrom(ctx); err != nil {
 		return 0, err
+	}
+	if expected < AnyVersion {
+		return 0, fmt.Errorf("engine: expected version %d: must not be negative", expected)
 	}
 	ctx, release, err := e.gate.Acquire(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer release()
-	version, name, err := e.deploy(ctx, doc)
-	target := "policy:" + name
-	if name == "" {
-		target = "policy"
+	version, name, err := e.deploy(ctx, doc, expected)
+	if err != nil {
+		target := "policy:" + name
+		if name == "" {
+			target = "policy"
+		}
+		e.record(ctx, "policy.deploy", target, err, map[string]any{"version": version})
 	}
-	e.record(ctx, "policy.deploy", target, err, map[string]any{"version": version})
 	return version, err
 }
 
-func (e *Engine) deploy(ctx context.Context, doc []byte) (int, string, error) {
+func (e *Engine) deploy(ctx context.Context, doc []byte, expected int) (int, string, error) {
 	if e.closing.Load() {
 		return 0, "", ErrClosed
 	}
@@ -282,9 +308,19 @@ func (e *Engine) deploy(ctx context.Context, doc []byte) (int, string, error) {
 	if err != nil {
 		return 0, p.Metadata.Name, err
 	}
-	version, _, paused, err := storeVersion(ctx, e.db, plan, actor, e.clock.Now())
+	// Holding deployMu from the write to the map update keeps the deployed
+	// plan in memory equal to the one the last commit stored.
+	e.deployMu.Lock()
+	defer e.deployMu.Unlock()
+	version, _, paused, err := storeVersion(ctx, e.db, plan, actor, e.clock.Now(), expected,
+		func(tx *sql.Tx, version int) error {
+			return e.recordTx(ctx, tx, "policy.deploy", "policy:"+plan.name, map[string]any{"version": version})
+		})
 	if err != nil {
 		return 0, plan.name, err
+	}
+	if afterStore != nil {
+		afterStore()
 	}
 	plan.version = version
 	e.mu.Lock()
@@ -306,8 +342,9 @@ func (e *Engine) Undeploy(ctx context.Context, name string) error {
 		return err
 	}
 	defer release()
-	err = e.undeploy(ctx, name)
-	e.record(ctx, "policy.undeploy", "policy:"+name, err, nil)
+	if err = e.undeploy(ctx, name); err != nil {
+		e.record(ctx, "policy.undeploy", "policy:"+name, err, nil)
+	}
 	return err
 }
 
@@ -315,14 +352,18 @@ func (e *Engine) undeploy(ctx context.Context, name string) error {
 	if e.closing.Load() {
 		return ErrClosed
 	}
+	e.deployMu.Lock()
+	defer e.deployMu.Unlock()
 	var n int64
 	err := e.db.Write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM policy_deployments WHERE name = ?`, name)
 		if err != nil {
 			return err
 		}
-		n, err = res.RowsAffected()
-		return err
+		if n, err = res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		return e.recordTx(ctx, tx, "policy.undeploy", "policy:"+name, nil)
 	})
 	if err != nil {
 		return fmt.Errorf("engine: undeploy: %w", err)
@@ -365,20 +406,26 @@ func (e *Engine) SetPaused(ctx context.Context, name string, paused bool) error 
 	if paused {
 		action = "policy.pause"
 	}
-	err := e.setPaused(ctx, name, paused)
-	e.record(ctx, action, "policy:"+name, err, nil)
-	return err
+	if err := e.setPaused(ctx, name, paused, action); err != nil {
+		e.record(ctx, action, "policy:"+name, err, nil)
+		return err
+	}
+	return nil
 }
 
-func (e *Engine) setPaused(ctx context.Context, name string, paused bool) error {
+func (e *Engine) setPaused(ctx context.Context, name string, paused bool, action string) error {
+	e.deployMu.Lock()
+	defer e.deployMu.Unlock()
 	var n int64
 	err := e.db.Write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `UPDATE policy_deployments SET paused = ? WHERE name = ?`, paused, name)
 		if err != nil {
 			return err
 		}
-		n, err = res.RowsAffected()
-		return err
+		if n, err = res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		return e.recordTx(ctx, tx, action, "policy:"+name, nil)
 	})
 	if err != nil {
 		return fmt.Errorf("engine: set paused: %w", err)

@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ACaccel/lcm/internal/store/storetest"
 )
 
 func TestHandlingVersionAndSilenceSurviveRestart(t *testing.T) {
@@ -201,5 +203,16 @@ func TestNotificationTestDurableTwoRevisionFlow(t *testing.T) {
 	}
 	if len(sent) != 2 {
 		t.Fatal("collector spoofed trusted test")
+	}
+}
+func TestHandlingRollsBackWithoutAudit(t *testing.T) {
+	f := setup(t)
+	id := f.ingest(t, f.event("event")).IncidentID
+	storetest.FailInserts(t, f.cfg.DB, "audit_log")
+	if _, err := f.m.UpdateHandling(f.ctx, id, 0, HandlingUpdate{Action: "acknowledge", Reason: "Read"}); err == nil {
+		t.Fatal("handling changed without an audit entry")
+	}
+	if h, err := f.m.Handling(f.ctx, id); err != nil || h.Version != 0 || h.Acknowledged {
+		t.Fatalf("handling = %+v, %v", h, err)
 	}
 }

@@ -152,6 +152,29 @@ func TestApplyPolicyPicksUpChangedModule(t *testing.T) {
 	}
 }
 
+// A policy changed through the API after the sync read it must not be
+// overwritten by the sync's older view.
+func TestApplyDoesNotOverwriteAConcurrentPolicyChange(t *testing.T) {
+	e := newEnv(t)
+	uses := func(id string) string {
+		return policyYAML("caller", "    - { id: start, type: trigger.manual, next: { out: ["+id+"] } }\n    - { id: "+id+", type: module, props: { module: greet } }\n")
+	}
+	e.apply(configsync.Options{}, moduleYAML("greet", "1"), uses("a"))
+	e.beforeDeploy = func() {
+		if _, err := e.eng.Deploy(e.ctx, []byte(uses("b")), 1); err != nil {
+			t.Errorf("concurrent deploy: %v", err)
+		}
+	}
+	r := wantAction(t, e.apply(configsync.Options{}, uses("c")), "Policy/caller", configsync.ActionFailed)
+	if !strings.Contains(r.Reason, "version conflict") {
+		t.Fatalf("reason = %q", r.Reason)
+	}
+	pv, err := e.eng.PolicyVersion(e.ctx, "caller", 0)
+	if err != nil || pv.Version != 2 || !strings.Contains(string(pv.Document), `"id":"b"`) {
+		t.Fatalf("latest = v%d %s, %v", pv.Version, pv.Document, err)
+	}
+}
+
 func TestApplyAuditsTheCaller(t *testing.T) {
 	e := newEnv(t)
 	e.apply(configsync.Options{}, serviceYAML("web", ""), serviceYAML("bad", "  relations: [{ type: dependsOn, target: bad }]\n"))

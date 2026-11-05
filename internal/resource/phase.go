@@ -65,8 +65,14 @@ func (s *Store) SetPhase(ctx context.Context, ref, phase string, expected int, r
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE resources SET phase = ?, updated_at = ? WHERE id = ?`, phase, s.clk.Now().UnixMilli(), rec.ID)
-		return err
+		if _, err = tx.ExecContext(ctx, `UPDATE resources SET phase = ?, updated_at = ? WHERE id = ?`, phase, s.clk.Now().UnixMilli(), rec.ID); err != nil {
+			return err
+		}
+		details := map[string]any{"id": rec.ID, "type": rec.Type, "from": rec.Phase, "to": phase}
+		if reason != "" {
+			details["reason"] = reason
+		}
+		return s.audit.RecordTx(ctx, tx, "resource.phase", rec.Name, audit.OutcomeOK, details)
 	})
 	if err != nil {
 		return err
@@ -76,11 +82,7 @@ func (s *Store) SetPhase(ctx context.Context, ref, phase string, expected int, r
 		change = ChangeUnmanaged
 	}
 	s.changed(Change{ID: rec.ID, Name: rec.Name, Type: rec.Type, Change: change})
-	details := map[string]any{"id": rec.ID, "type": rec.Type, "from": rec.Phase, "to": phase}
-	if reason != "" {
-		details["reason"] = reason
-	}
-	return s.audit.Record(ctx, "resource.phase", rec.Name, audit.OutcomeOK, details)
+	return nil
 }
 
 func allowed(from, to string) bool {

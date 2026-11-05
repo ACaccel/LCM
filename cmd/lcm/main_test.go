@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -184,6 +186,64 @@ func TestTokenCreateScope(t *testing.T) {
 	if r := runCLI(t, a, out, errb, "token", "create", "--name", "x", "--scope", "root"); r.code != 2 {
 		t.Errorf("invalid scope exit code = %d, want 2: %+v", r.code, r)
 	}
+}
+
+// The CLI runs beside a server of possibly another version; it must not
+// migrate the server's database, and refuses one of another schema.
+func TestCommandsRefuseAnotherSchema(t *testing.T) {
+	ctx := context.Background()
+	for name, change := range map[string]string{
+		"older": `DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)`,
+		"newer": `INSERT INTO schema_migrations (version, name, applied_at) VALUES (100000, '100000_future', 1)`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, out, errb, dir := newApp(t, "a very long password\n")
+			if r := runCLI(t, a, out, errb, "admin", "set-password"); r.code != 0 {
+				t.Fatalf("fresh install: %+v", r)
+			}
+			path := filepath.Join(dir, "lcm.db")
+			db, err := store.OpenExisting(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Write(ctx, func(tx *sql.Tx) error { _, err := tx.Exec(change); return err }); err != nil {
+				t.Fatal(err)
+			}
+			_ = db.Close()
+			before := dbState(t, path)
+
+			a.stdin = strings.NewReader("another long password\n")
+			for _, args := range [][]string{{"admin", "set-password", "--username", "root"}, {"token", "create", "--name", "ci"}, {"token", "list"}} {
+				r := runCLI(t, a, out, errb, args...)
+				if r.code != 1 || !strings.Contains(r.stderr, "schema") {
+					t.Fatalf("%v: %+v", args, r)
+				}
+			}
+			if after := dbState(t, path); after != before {
+				t.Fatalf("database changed:\n%s\n->\n%s", before, after)
+			}
+		})
+	}
+}
+
+// dbState summarizes the rows the refused commands would have changed,
+// read without store so that reading cannot migrate.
+func dbState(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var migrations, users, tokens, entries int
+	var newest int
+	err = raw.QueryRow(`SELECT (SELECT COUNT(*) FROM schema_migrations), (SELECT MAX(version) FROM schema_migrations),
+		(SELECT COUNT(*) FROM users), (SELECT COUNT(*) FROM api_tokens), (SELECT COUNT(*) FROM audit_log)`).
+		Scan(&migrations, &newest, &users, &tokens, &entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("migrations=%d newest=%d users=%d tokens=%d audit=%d", migrations, newest, users, tokens, entries)
 }
 
 func TestInvalidConfigFailsFast(t *testing.T) {

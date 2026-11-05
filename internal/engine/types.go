@@ -72,6 +72,12 @@ var (
 	ErrValueTooLarge     = errors.New("engine: value too large")
 	ErrAlreadyRecovered  = errors.New("engine: recover already ran")
 	ErrNotPolicy         = errors.New("engine: only Policy documents can be deployed")
+	// ErrVersionConflict means the latest stored version of a policy
+	// differs from the version a deploy expected.
+	ErrVersionConflict = errors.New("engine: policy version conflict")
+	// ErrPolicyExists means a deploy that expected to create a policy found
+	// stored versions of it.
+	ErrPolicyExists = errors.New("engine: policy already exists")
 	// ErrRecoveryDeferred means recovery made no changes and can be retried.
 	ErrRecoveryDeferred = errors.New("engine: recovery deferred")
 )

@@ -84,15 +84,48 @@ func WithDetail(ctx context.Context, key string, value any) context.Context {
 	return context.WithValue(ctx, detailsKey{}, next)
 }
 
-// Record appends an entry. The actor comes from ctx; details must never
-// contain secrets.
+// Record appends an entry in its own transaction. Use it when nothing else
+// is written; a component that changes state records the entry with
+// RecordTx inside the transaction of the change. The actor comes from ctx;
+// details must never contain secrets.
 func (l *Log) Record(ctx context.Context, action, target string, outcome Outcome, details map[string]any) error {
+	e, err := l.entry(ctx, details)
+	if err != nil {
+		return err
+	}
+	if err := l.db.Write(ctx, func(tx *sql.Tx) error { return e.insert(ctx, tx, action, target, outcome) }); err != nil {
+		return fmt.Errorf("audit: record %s: %w", action, err)
+	}
+	return nil
+}
+
+// RecordTx appends an entry within tx, so that the entry and the change it
+// describes commit or roll back together. An error must abort tx.
+func (l *Log) RecordTx(ctx context.Context, tx *sql.Tx, action, target string, outcome Outcome, details map[string]any) error {
+	e, err := l.entry(ctx, details)
+	if err != nil {
+		return err
+	}
+	if err := e.insert(ctx, tx, action, target, outcome); err != nil {
+		return fmt.Errorf("audit: record %s: %w", action, err)
+	}
+	return nil
+}
+
+// pending is an entry validated and encoded before it is written.
+type pending struct {
+	at      int64
+	actor   auth.Actor
+	details string
+}
+
+func (l *Log) entry(ctx context.Context, details map[string]any) (pending, error) {
 	actor, ok := auth.ActorFrom(ctx)
 	if !ok {
-		return ErrNoActor
+		return pending{}, ErrNoActor
 	}
 	if !actor.Kind.Valid() {
-		return fmt.Errorf("audit: invalid actor kind %q", actor.Kind)
+		return pending{}, fmt.Errorf("audit: invalid actor kind %q", actor.Kind)
 	}
 	merged := map[string]any{}
 	if extra, _ := ctx.Value(detailsKey{}).(map[string]any); extra != nil {
@@ -105,19 +138,17 @@ func (l *Log) Record(ctx context.Context, action, target string, outcome Outcome
 	}
 	blob, err := json.Marshal(merged)
 	if err != nil {
-		return fmt.Errorf("audit: encode details: %w", err)
+		return pending{}, fmt.Errorf("audit: encode details: %w", err)
 	}
-	err = l.db.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO audit_log (time, actor_kind, actor_id, actor_name, action, target, details, outcome)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			l.now().UnixMilli(), string(actor.Kind), actor.ID, actor.Name, action, target, string(blob), string(outcome))
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("audit: record %s: %w", action, err)
-	}
-	return nil
+	return pending{at: l.now().UnixMilli(), actor: actor, details: string(blob)}, nil
+}
+
+func (p pending) insert(ctx context.Context, tx *sql.Tx, action, target string, outcome Outcome) error {
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO audit_log (time, actor_kind, actor_id, actor_name, action, target, details, outcome)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.at, string(p.actor.Kind), p.actor.ID, p.actor.Name, action, target, p.details, string(outcome))
+	return err
 }
 
 // List returns entries newest first. before, when positive, restricts the

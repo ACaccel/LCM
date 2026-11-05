@@ -148,24 +148,31 @@ func (s *Store) put(ctx context.Context, doc *model.Resource, expected, restored
 			return err
 		}
 		res = PutResult{Version: next.Version, Created: !found, Changed: true, Unresolved: unresolved}
-		return nil
+		action := "resource.save"
+		if restoredFrom > 0 {
+			action = "resource.restore"
+		}
+		details := map[string]any{"id": next.ID, "type": next.Type, "version": res.Version, "created": res.Created}
+		if restoredFrom > 0 {
+			details["restoredFrom"] = restoredFrom
+		}
+		return s.audit.RecordTx(ctx, tx, action, name, audit.OutcomeOK, details)
 	})
-	if err != nil || !res.Changed {
-		return res, err
+	if err != nil {
+		return PutResult{}, err
 	}
-	action, change := "resource.save", ChangeUpdated
+	if !res.Changed {
+		return res, nil
+	}
+	change := ChangeUpdated
 	switch {
 	case restoredFrom > 0:
-		action, change = "resource.restore", ChangeRestored
+		change = ChangeRestored
 	case res.Created:
 		change = ChangeCreated
 	}
 	s.changed(Change{ID: next.ID, Name: name, Type: next.Type, Change: change})
-	details := map[string]any{"id": next.ID, "type": next.Type, "version": res.Version, "created": res.Created}
-	if restoredFrom > 0 {
-		details["restoredFrom"] = restoredFrom
-	}
-	return res, s.audit.Record(ctx, action, name, audit.OutcomeOK, details)
+	return res, nil
 }
 
 // checkSingleton refuses a second active local machine before the unique

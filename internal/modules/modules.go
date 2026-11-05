@@ -153,19 +153,14 @@ func (s *Store) Put(ctx context.Context, data []byte, expected int) (PutResult, 
 			return err
 		}
 		res = PutResult{Version: next, Created: !found, Changed: true}
-		return nil
-	})
-	if err != nil {
-		return PutResult{}, err
-	}
-	if res.Changed {
 		action := "module.update"
 		if res.Created {
 			action = "module.create"
 		}
-		if err := s.audit.Record(ctx, action, "module:"+name, audit.OutcomeOK, map[string]any{"version": res.Version}); err != nil {
-			return res, err
-		}
+		return s.audit.RecordTx(ctx, tx, action, "module:"+name, audit.OutcomeOK, map[string]any{"version": res.Version})
+	})
+	if err != nil {
+		return PutResult{}, err
 	}
 	return res, nil
 }

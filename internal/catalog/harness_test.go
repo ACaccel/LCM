@@ -141,6 +141,8 @@ type fakeLocker struct {
 	owners  []string
 	ttls    []time.Duration
 	acquire int
+	// renewals counts extensions by the holder.
+	renewals int
 }
 
 func newFakeLocker() *fakeLocker { return &fakeLocker{held: map[string]string{}} }
@@ -148,6 +150,11 @@ func newFakeLocker() *fakeLocker { return &fakeLocker{held: map[string]string{}}
 func (l *fakeLocker) Acquire(_ context.Context, name, owner string, ttl time.Duration) (func(context.Context) error, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Like lock.Manager, the holder extends its own lock.
+	if by, ok := l.held[name]; ok && by == owner {
+		l.renewals++
+		return func(context.Context) error { return nil }, nil
+	}
 	if by, ok := l.held[name]; ok {
 		return nil, fmt.Errorf("%w: %s held by %s", catalog.ErrLockHeld, name, by)
 	}

@@ -150,8 +150,8 @@ type Config struct {
 	SystemctlPrivilege   string
 	RuntimeStatusTimeout time.Duration
 	RuntimeActionTimeout time.Duration
-	// LockTTL bounds a service lock held by a crashed process. It must
-	// exceed the longest lifecycle action.
+	// LockTTL bounds a service lock held by a crashed process. Running
+	// actions renew their lock, so it need not exceed the longest action.
 	LockTTL time.Duration
 
 	MonitorConcurrency     int

@@ -7,10 +7,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
@@ -195,6 +197,50 @@ func TestLockOwnerIsRunIDOrActor(t *testing.T) {
 	}
 }
 
+// An action that outlasts the lock TTL keeps its lock: nobody else can take
+// the service while it runs, and the lock is released when it ends.
+func TestLongActionKeepsItsLock(t *testing.T) {
+	var locks *lock.Manager
+	e := newEnv(t, func(e *env, cfg *catalog.ManagerConfig) {
+		locks = lock.New(e.db, lock.WithClock(e.clk))
+		cfg.Locker, cfg.LockTTL = locks, time.Hour
+	})
+	e.put(svcDoc("app", ""), 0)
+	e.setState("app", catalog.StateRunning)
+	ad := e.runtime.adapter("app")
+	entered, release := make(chan struct{}), make(chan struct{})
+	ad.set(func(a *fakeAdapter) {
+		a.state = rt.StateActive
+		a.onRestart = func() {
+			close(entered)
+			<-release
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.mgr.Restart(e.ctx, "app", catalog.ActionOptions{RunID: "run1"})
+		done <- err
+	}()
+	<-entered
+	for range 9 {
+		e.clk.Advance(10 * time.Minute)
+	}
+	if _, err := locks.TryAcquire(e.ctx, catalog.LockName("app"), "intruder", time.Hour); !errors.Is(err, lock.ErrHeld) {
+		t.Fatalf("lock of a running action after 90 minutes: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, found, _ := locks.Holder(e.ctx, catalog.LockName("app")); found {
+		t.Fatal("lock still held after the action")
+	}
+	e.clk.Advance(time.Hour)
+	if _, found, _ := locks.Holder(e.ctx, catalog.LockName("app")); found {
+		t.Fatal("a renewal after the action took the lock again")
+	}
+}
+
 // TestConcurrentActionsOnOneService holds an action open and checks that a
 // second action and Reconcile leave the service alone.
 func TestConcurrentActionsOnOneService(t *testing.T) {
@@ -239,6 +285,28 @@ func TestConcurrentActionsOnOneService(t *testing.T) {
 	wg.Wait()
 	if firstErr != nil || e.state("app") != catalog.StateRunning {
 		t.Fatalf("first action: %v, state %s", firstErr, e.state("app"))
+	}
+}
+
+// An action whose caller goes away after the runtime succeeded still
+// records the new state.
+func TestCancelledActionRecordsCompletedChange(t *testing.T) {
+	e := newEnv(t)
+	e.put(svcDoc("app", ""), 0)
+	e.setState("app", catalog.StateFailed)
+	ad := e.runtime.adapter("app")
+	ctx, cancel := context.WithCancel(e.ctx)
+	defer cancel()
+	ad.set(func(a *fakeAdapter) {
+		a.state = rt.StateActive
+		a.onRestart = cancel
+	})
+	res, err := e.mgr.Restart(ctx, "app", catalog.ActionOptions{})
+	if err != nil || res.To != catalog.StateRunning {
+		t.Fatalf("restart = %+v, %v", res, err)
+	}
+	if got := e.state("app"); got != catalog.StateRunning {
+		t.Fatalf("state = %s", got)
 	}
 }
 

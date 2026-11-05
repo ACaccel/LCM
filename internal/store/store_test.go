@@ -150,3 +150,109 @@ func TestPing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// rawMigrations reads the applied versions without going through store, so
+// that reading cannot migrate.
+func rawMigrations(t *testing.T, path string) []int {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	rows, err := raw.Query(`SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var vs []int
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		vs = append(vs, v)
+	}
+	return vs
+}
+
+func TestOpenExistingRefusesAnotherSchema(t *testing.T) {
+	ctx := context.Background()
+	want, err := store.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]string{
+		"older": `DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)`,
+		"newer": `INSERT INTO schema_migrations (version, name, applied_at) VALUES (100000, '100000_future', 1)`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "lcm.db")
+			db, err := store.Open(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Write(ctx, func(tx *sql.Tx) error { _, err := tx.Exec(change); return err }); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before := rawMigrations(t, path)
+
+			if db, err := store.OpenExisting(ctx, path); !errors.Is(err, store.ErrSchemaMismatch) {
+				if db != nil {
+					_ = db.Close()
+				}
+				t.Fatalf("err = %v", err)
+			}
+			if after := rawMigrations(t, path); len(after) != len(before) || after[len(after)-1] != before[len(before)-1] {
+				t.Fatalf("migrations changed: %v -> %v", before, after)
+			}
+		})
+	}
+
+	t.Run("current", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "lcm.db")
+		db, err := store.Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = db.Close()
+		db, err = store.OpenExisting(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = db.Close()
+	})
+
+	t.Run("fresh", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "lcm.db")
+		db, err := store.OpenExisting(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = db.Close()
+		if got := rawMigrations(t, path); len(got) == 0 || got[len(got)-1] != want {
+			t.Fatalf("fresh database migrations = %v, want up to %d", got, want)
+		}
+	})
+
+	t.Run("foreign", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "other.db")
+		raw, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := raw.Exec(`CREATE TABLE notes (body TEXT)`); err != nil {
+			t.Fatal(err)
+		}
+		_ = raw.Close()
+		if db, err := store.OpenExisting(ctx, path); !errors.Is(err, store.ErrSchemaMismatch) {
+			if db != nil {
+				_ = db.Close()
+			}
+			t.Fatalf("database without an LCM schema: %v", err)
+		}
+	})
+}

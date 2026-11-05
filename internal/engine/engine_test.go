@@ -150,7 +150,7 @@ func TestDeployVersionsAndAudit(t *testing.T) {
     - { id: start, type: trigger.manual, next: { out: [a] } }
     - { id: a, type: test.echo }
 `)
-	if _, err := e.Deploy(context.Background(), []byte(doc)); !errors.Is(err, audit.ErrNoActor) {
+	if _, err := e.Deploy(context.Background(), []byte(doc), engine.AnyVersion); !errors.Is(err, audit.ErrNoActor) {
 		t.Fatalf("deploy without actor: %v", err)
 	}
 	if v := h.Deploy(e, doc); v != 1 {
@@ -165,10 +165,10 @@ func TestDeployVersionsAndAudit(t *testing.T) {
 	if p, ok := e.Plan("versions"); !ok || p.Version() != 2 || len(e.Plans()) != 1 {
 		t.Fatal("deployed plan")
 	}
-	if _, err := e.Deploy(h.Ctx, []byte("kind: nope")); err == nil {
+	if _, err := e.Deploy(h.Ctx, []byte("kind: nope"), engine.AnyVersion); err == nil {
 		t.Fatal("invalid document deployed")
 	}
-	if _, err := e.Deploy(h.Ctx, []byte(module("m", "  nodes:\n    - { id: in, type: module.input }\n    - { id: o, type: module.output, props: { port: ok } }\n"))); !errors.Is(err, engine.ErrNotPolicy) {
+	if _, err := e.Deploy(h.Ctx, []byte(module("m", "  nodes:\n    - { id: in, type: module.input }\n    - { id: o, type: module.output, props: { port: ok } }\n")), engine.AnyVersion); !errors.Is(err, engine.ErrNotPolicy) {
 		t.Fatalf("module deploy: %v", err)
 	}
 	user := auth.WithActor(context.Background(), auth.Actor{Kind: auth.KindUser, ID: "1", Name: "admin"})

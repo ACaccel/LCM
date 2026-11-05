@@ -296,7 +296,7 @@ func (s *session) stopForRetire(ctx context.Context) error {
 	case err != nil:
 		s.settle(ctx, false)
 	default:
-		err = s.move(ctx, StateStopped)
+		err = s.moveDone(ctx, StateStopped)
 	}
 	fctx, cancel := detached(ctx)
 	defer cancel()

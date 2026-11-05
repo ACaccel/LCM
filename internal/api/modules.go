@@ -95,8 +95,7 @@ func (s *Server) handlePutModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.docMu.Lock()
-	defer s.docMu.Unlock()
+	// Put repeats the version check atomically with the write.
 	current := 0
 	switch cur, err := s.modules.Get(r.Context(), name); {
 	case err == nil:

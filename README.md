@@ -52,7 +52,7 @@ The console (Traditional Chinese, light and dark themes) shows resources of ever
 | `lcm resource group-action --label k=v [...] <action> [--dry-run] [--wait] [--acknowledge-impact]` | Run one service action on matching services in dependency order; [rules](docs/resources.md#group-actions) |
 | `lcm run <policy> [--trigger id] [--event json] [--dry-run] [--wait]` | Start a policy run |
 
-Admin and token commands open the database directly, so local filesystem access is administrator access. They are recorded in the audit log as actor `system` / `cli`.
+Admin and token commands open the database directly, so local filesystem access is administrator access. They are recorded in the audit log as actor `system` / `cli`. They never migrate an existing database: when its schema differs from the binary's (`lcm storage-schema`), they refuse and change nothing; upgrade and start the server first, which migrates at startup, or use the binary of the running server. On a fresh install, where the data directory has no database yet, `lcm admin set-password` creates and migrates it.
 
 The other commands talk to a running server over the API:
 
@@ -84,7 +84,7 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_SYSTEMCTL_PRIVILEGE` | `--systemctl-privilege` | `sudo -n` | Prefix for system-scope `systemctl` start, stop and restart; `none` (or an empty flag value) runs it directly |
 | `LCM_RUNTIME_STATUS_TIMEOUT` | `--runtime-status-timeout` | `15s` | Timeout of runtime status queries |
 | `LCM_RUNTIME_ACTION_TIMEOUT` | `--runtime-action-timeout` | `5m` | Timeout of runtime start, stop and restart |
-| `LCM_LOCK_TTL` | `--lock-ttl` | `1h` | Expiry of a resource lock whose holder crashed; must exceed the longest lifecycle action (max `168h`) |
+| `LCM_LOCK_TTL` | `--lock-ttl` | `1h` | Expiry of a resource lock whose holder crashed; running actions renew their lock, so it may be shorter than an action (max `168h`) |
 | `LCM_MONITOR_CONCURRENCY` | `--monitor-concurrency` | `8` | Health probes running at the same time |
 | `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw check results and machine/router snapshots are kept |
 | `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long check rollups and machine/router minute points are kept; must not be shorter than raw retention |

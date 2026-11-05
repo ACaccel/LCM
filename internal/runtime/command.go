@@ -11,12 +11,19 @@ import (
 
 // command runs the operator's shell commands. The status command reports
 // through its exit code: 0 is active, any other code is inactive; a command
-// that cannot be run at all yields unknown. An action without a command is
+// that cannot be run at all, including the shell's 126 (not executable) and
+// 127 (not found), yields unknown. An action without a command is
 // unsupported (see CapabilitiesOf).
 type command struct {
 	run  execx.Runner
 	opts Options
 }
+
+// Exit codes sh uses when it cannot run the command it was given.
+const (
+	shellCannotExecute = 126
+	shellNotFound      = 127
+)
 
 func (c *command) Status(ctx context.Context, rt model.Runtime) (Status, error) {
 	if rt.Status == "" {
@@ -28,7 +35,7 @@ func (c *command) Status(ctx context.Context, rt model.Runtime) (Status, error) 
 		return Status{State: StateActive, Detail: detail}, nil
 	}
 	var ee *execx.ExitError
-	if errors.As(err, &ee) {
+	if errors.As(err, &ee) && ee.Code != shellCannotExecute && ee.Code != shellNotFound {
 		return Status{State: StateInactive, Detail: detail}, nil
 	}
 	return Status{State: StateUnknown}, fmt.Errorf("status command: %w", err)

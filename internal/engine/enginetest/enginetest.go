@@ -97,7 +97,7 @@ func (h *Harness) AddModule(doc string) {
 // Deploy deploys doc and fails the test on error.
 func (h *Harness) Deploy(e *engine.Engine, doc string) int {
 	h.T.Helper()
-	v, err := e.Deploy(h.Ctx, []byte(doc))
+	v, err := e.Deploy(h.Ctx, []byte(doc), engine.AnyVersion)
 	if err != nil {
 		h.T.Fatalf("deploy: %v", err)
 	}

@@ -329,7 +329,7 @@ func (e *realEnv) autoDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.app.Engine.Deploy(e.ctx, doc); err != nil {
+	if _, err := e.app.Engine.Deploy(e.ctx, doc, engine.AnyVersion); err != nil {
 		t.Fatalf("deploy policy: %v\n%s", err, doc)
 	}
 	// The trigger only records the first head it sees; show it the baseline
@@ -443,7 +443,7 @@ spec:
 		t.Fatal(err)
 	}
 	notifications := len(e.discord.all())
-	if _, err := e.app.Engine.Deploy(e.ctx, body); err != nil {
+	if _, err := e.app.Engine.Deploy(e.ctx, body, engine.AnyVersion); err != nil {
 		t.Fatalf("deploy policy: %v\n%s", err, body)
 	}
 

@@ -3,6 +3,7 @@ package storetest
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -23,4 +24,26 @@ func Open(t testing.TB) *store.DB {
 		}
 	})
 	return db
+}
+
+// FailInserts makes every INSERT into table fail, to show that a change
+// written in the same transaction rolls back with it. The returned function
+// makes inserts succeed again.
+func FailInserts(t testing.TB, db *store.DB, table string) (restore func()) {
+	t.Helper()
+	trigger := "storetest_fail_" + table
+	exec := func(q string) error {
+		ctx := context.Background()
+		return db.Write(ctx, func(tx *sql.Tx) error { _, err := tx.ExecContext(ctx, q); return err })
+	}
+	if err := exec(`CREATE TRIGGER ` + trigger + ` BEFORE INSERT ON ` + table +
+		` BEGIN SELECT RAISE(ABORT, 'storetest: inserts into ` + table + ` fail'); END`); err != nil {
+		t.Fatalf("storetest: fail inserts into %s: %v", table, err)
+	}
+	return func() {
+		t.Helper()
+		if err := exec(`DROP TRIGGER ` + trigger); err != nil {
+			t.Fatalf("storetest: restore inserts into %s: %v", table, err)
+		}
+	}
 }
