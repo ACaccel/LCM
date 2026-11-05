@@ -59,7 +59,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, expires, user, err := s.auth.Login(r.Context(), req.Username, req.Password)
+	token, expires, user, err := s.auth.Login(r.Context(), req.Username, req.Password, map[string]any{"ip": ip})
 	if errors.Is(err, auth.ErrInvalidCredentials) {
 		s.limiter.fail(ip)
 		name := req.Username
@@ -82,8 +82,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.limiter.reset(ip)
-	ctx := auth.WithActor(r.Context(), user.Actor())
-	s.record(ctx, "auth.login", "", audit.OutcomeOK, map[string]any{"ip": ip})
 	http.SetCookie(w, s.newSessionCookie(token, expires, int(expires.Sub(s.now()).Seconds())))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"actor":     toActorDTO(user.Actor()),
@@ -107,13 +105,15 @@ func (s *Server) newSessionCookie(value string, expires time.Time, maxAge int) *
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Logout audits the deleted session; without a cookie there is none.
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if err := s.auth.Logout(r.Context(), c.Value); err != nil {
 			s.internalError(w, r, err)
 			return
 		}
+	} else {
+		s.record(r.Context(), "auth.logout", "", audit.OutcomeOK, nil)
 	}
-	s.record(r.Context(), "auth.logout", "", audit.OutcomeOK, nil)
 	http.SetCookie(w, s.newSessionCookie("", time.Time{}, -1))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -170,8 +170,6 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	s.record(r.Context(), "token.create", "token:"+strconv.FormatInt(tok.ID, 10), audit.OutcomeOK,
-		map[string]any{"name": tok.Name, "scope": string(tok.Scope)})
 	resp := struct {
 		tokenDTO
 		Token string `json:"token"`
@@ -194,7 +192,6 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	s.record(r.Context(), "token.revoke", "token:"+strconv.FormatInt(id, 10), audit.OutcomeOK, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

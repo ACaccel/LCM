@@ -36,11 +36,10 @@ func (a *app) token(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
-	svc, err := auth.NewService(db, cfg.SessionTTL)
+	svc, err := auth.NewService(db, audit.New(db), cfg.SessionTTL)
 	if err != nil {
 		return err
 	}
-	log := audit.New(db)
 
 	switch sub {
 	case "create":
@@ -55,10 +54,6 @@ func (a *app) token(ctx context.Context, args []string) error {
 			return usagef("token create: --scope must be admin or ingest")
 		}
 		if err != nil {
-			return err
-		}
-		if err := log.Record(ctx, "token.create", "token:"+strconv.FormatInt(tok.ID, 10), audit.OutcomeOK,
-			map[string]any{"name": tok.Name, "scope": string(tok.Scope)}); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintf(a.stderr, "Token %d (%s) created. Store it now; it cannot be shown again.\n", tok.ID, tok.Name)
@@ -98,9 +93,6 @@ func (a *app) token(ctx context.Context, args []string) error {
 				return fmt.Errorf("token %d not found", id)
 			}
 			recordCLI(ctx, db, "token.revoke", target, audit.OutcomeError, nil)
-			return err
-		}
-		if err := log.Record(ctx, "token.revoke", target, audit.OutcomeOK, nil); err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(a.stdout, "Token %d revoked.\n", id)

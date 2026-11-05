@@ -98,12 +98,9 @@ func TestSetPassword(t *testing.T) {
 
 	// The password must be usable and every change audited as the CLI.
 	db := openDB(t, dir)
-	svc, err := auth.NewService(db, time.Hour)
+	svc, err := auth.NewService(db, audit.New(db), time.Hour)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, _, _, err := svc.Login(context.Background(), "admin", "a very long password"); err != nil {
-		t.Fatalf("login with CLI-set password: %v", err)
 	}
 	entries, err := audit.New(db).List(context.Background(), 100, 0)
 	if err != nil {
@@ -116,6 +113,9 @@ func TestSetPassword(t *testing.T) {
 		if e.Actor != auth.CLI || e.Action != "admin.set_password" || e.Outcome != audit.OutcomeOK {
 			t.Errorf("entry = %+v", e)
 		}
+	}
+	if _, _, _, err := svc.Login(context.Background(), "admin", "a very long password", nil); err != nil {
+		t.Fatalf("login with CLI-set password: %v", err)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestTokenCommands(t *testing.T) {
 	}
 
 	db := openDB(t, dir)
-	svc, err := auth.NewService(db, time.Hour)
+	svc, err := auth.NewService(db, audit.New(db), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

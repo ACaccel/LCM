@@ -261,7 +261,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	}
 	ready("store", "path", cfg.DBPath())
 	a.Audit = audit.New(a.DB, audit.WithClock(clk.Now))
-	if a.Auth, err = auth.NewService(a.DB, cfg.SessionTTL, auth.WithClock(clk.Now)); err != nil {
+	if a.Auth, err = auth.NewService(a.DB, a.Audit, cfg.SessionTTL, auth.WithClock(clk.Now)); err != nil {
 		return nil, err
 	}
 	a.Bus = signal.NewBus(log.With("component", "signal"), clk.Now)

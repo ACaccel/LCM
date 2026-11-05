@@ -65,9 +65,16 @@ func TestAuditFilters(t *testing.T) {
 			t.Errorf("action filter returned %v", e)
 		}
 	}
+	// The harness's tokens were created, and audited, by the CLI.
 	actor := web[0]["actor"].(map[string]any)["name"].(string)
-	if got := list("?actor=" + actor); len(got) != len(all) {
-		t.Errorf("actor filter returned %d of %d entries", len(got), len(all))
+	byActor := 0
+	for _, e := range all {
+		if e["actor"].(map[string]any)["name"] == actor {
+			byActor++
+		}
+	}
+	if got := list("?actor=" + actor); byActor == 0 || len(got) != byActor {
+		t.Errorf("actor filter returned %d entries, want %d", len(got), byActor)
 	}
 	if got := list("?actor=nobody"); len(got) != 0 {
 		t.Errorf("unknown actor returned %v", got)

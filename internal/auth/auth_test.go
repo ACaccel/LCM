@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/store/storetest"
 )
@@ -34,11 +35,118 @@ func (c *fakeClock) Advance(d time.Duration) {
 func newService(t *testing.T) (*auth.Service, *fakeClock) {
 	t.Helper()
 	clock := &fakeClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
-	svc, err := auth.NewService(storetest.Open(t), time.Hour, auth.WithClock(clock.Now))
+	db := storetest.Open(t)
+	svc, err := auth.NewService(db, audit.New(db), time.Hour, auth.WithClock(clock.Now))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return svc, clock
+}
+
+// Every change and its audit entry commit together: when the entry cannot
+// be written, the change does not happen either.
+func TestChangesCommitWithTheirAuditEntry(t *testing.T) {
+	db := storetest.Open(t)
+	log := audit.New(db)
+	svc, err := auth.NewService(db, log, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := auth.WithActor(context.Background(), auth.CLI)
+	if _, err := svc.SetPassword(ctx, "admin", testPassword); err != nil {
+		t.Fatal(err)
+	}
+	token, _, _, err := svc.Login(ctx, "admin", testPassword, map[string]any{"ip": "192.0.2.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, err := svc.CreateToken(ctx, "ci", auth.ScopeIngest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RevokeToken(ctx, tok.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Logout(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := log.List(ctx, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Action+"/"+e.Actor.Name+"/"+e.Target)
+	}
+	want := "auth.logout/cli/,token.revoke/cli/token:1,token.create/cli/token:1,auth.login/admin/,admin.set_password/cli/user:admin"
+	if strings.Join(got, ",") != want {
+		t.Fatalf("entries = %v", got)
+	}
+	if entries[3].Details["ip"] != "192.0.2.1" || entries[2].Details["scope"] != "ingest" || entries[4].Details["created"] != true {
+		t.Fatalf("details = %+v", entries)
+	}
+
+	// From here on no audit entry can be written.
+	session, _, _, err := svc.Login(ctx, "admin", testPassword, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keep, keepSecret, err := svc.CreateToken(ctx, "keep", auth.ScopeAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storetest.FailInserts(t, db, "audit_log")
+	if _, err := svc.SetPassword(ctx, "admin", "a different password"); err == nil {
+		t.Fatal("password changed without its audit entry")
+	}
+	if _, err := svc.SetPassword(ctx, "other", testPassword); err == nil {
+		t.Fatal("user created without its audit entry")
+	}
+	if _, _, _, err := svc.Login(ctx, "admin", testPassword, nil); err == nil {
+		t.Fatal("session opened without its audit entry")
+	}
+	if _, _, err := svc.CreateToken(ctx, "lost", auth.ScopeAdmin); err == nil {
+		t.Fatal("token created without its audit entry")
+	}
+	if err := svc.RevokeToken(ctx, keep.ID); err == nil {
+		t.Fatal("token revoked without its audit entry")
+	}
+	if err := svc.Logout(ctx, session); err == nil {
+		t.Fatal("session ended without its audit entry")
+	}
+	if _, err := svc.Session(ctx, session); err != nil {
+		t.Fatalf("session after failed changes: %v", err)
+	}
+	if _, err := svc.VerifyToken(ctx, keepSecret); err != nil {
+		t.Fatalf("token after failed revoke: %v", err)
+	}
+	if tokens, _ := svc.ListTokens(ctx); len(tokens) != 2 {
+		t.Fatalf("tokens = %+v", tokens)
+	}
+}
+
+// Token management is refused to API tokens even if a route forgot to
+// require a session; changes without any actor are refused as unaudited.
+func TestTokenActorCannotManageTokens(t *testing.T) {
+	svc, _ := newService(t)
+	ctx := auth.WithActor(context.Background(), auth.CLI)
+	tok, _, err := svc.CreateToken(ctx, "ci", auth.ScopeAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asToken := auth.WithActor(context.Background(), auth.Actor{Kind: auth.KindToken, ID: "1", Name: "ci"})
+	if _, _, err := svc.CreateToken(asToken, "more", auth.ScopeAdmin); !errors.Is(err, auth.ErrTokenActor) {
+		t.Fatalf("token minted a token: %v", err)
+	}
+	if err := svc.RevokeToken(asToken, tok.ID); !errors.Is(err, auth.ErrTokenActor) {
+		t.Fatalf("token revoked a token: %v", err)
+	}
+	if _, _, err := svc.CreateToken(context.Background(), "anonymous", auth.ScopeAdmin); !errors.Is(err, audit.ErrNoActor) {
+		t.Fatalf("token created without an actor: %v", err)
+	}
+	if tokens, _ := svc.ListTokens(ctx); len(tokens) != 1 || tokens[0].RevokedAt != nil {
+		t.Fatalf("tokens = %+v", tokens)
+	}
 }
 
 func TestHashAndVerify(t *testing.T) {
@@ -84,7 +192,7 @@ func TestVerifyMalformedHash(t *testing.T) {
 
 func TestSetPasswordValidation(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	if _, err := svc.SetPassword(ctx, "admin", "seven77"); !errors.Is(err, auth.ErrWeakPassword) {
 		t.Errorf("7-character password: %v", err)
 	}
@@ -98,13 +206,13 @@ func TestSetPasswordValidation(t *testing.T) {
 
 func TestLogin(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	created, err := svc.SetPassword(ctx, "admin", testPassword)
 	if err != nil || !created {
 		t.Fatalf("SetPassword: created=%v err=%v", created, err)
 	}
 
-	token, _, user, err := svc.Login(ctx, "admin", testPassword)
+	token, _, user, err := svc.Login(ctx, "admin", testPassword, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,21 +220,21 @@ func TestLogin(t *testing.T) {
 		t.Fatalf("user=%+v token=%q", user, token)
 	}
 
-	if _, _, _, err := svc.Login(ctx, "admin", "wrong password!!"); !errors.Is(err, auth.ErrInvalidCredentials) {
+	if _, _, _, err := svc.Login(ctx, "admin", "wrong password!!", nil); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Errorf("wrong password: %v", err)
 	}
-	if _, _, _, err := svc.Login(ctx, "nobody", testPassword); !errors.Is(err, auth.ErrInvalidCredentials) {
+	if _, _, _, err := svc.Login(ctx, "nobody", testPassword, nil); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Errorf("unknown user: %v", err)
 	}
 }
 
 func TestSessionExpiryWithInjectedClock(t *testing.T) {
 	svc, clock := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	if _, err := svc.SetPassword(ctx, "admin", testPassword); err != nil {
 		t.Fatal(err)
 	}
-	token, expires, _, err := svc.Login(ctx, "admin", testPassword)
+	token, expires, _, err := svc.Login(ctx, "admin", testPassword, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,11 +257,11 @@ func TestSessionExpiryWithInjectedClock(t *testing.T) {
 
 func TestLogoutEndsSession(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	if _, err := svc.SetPassword(ctx, "admin", testPassword); err != nil {
 		t.Fatal(err)
 	}
-	token, _, _, err := svc.Login(ctx, "admin", testPassword)
+	token, _, _, err := svc.Login(ctx, "admin", testPassword, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,11 +275,11 @@ func TestLogoutEndsSession(t *testing.T) {
 
 func TestPasswordChangeEndsSessions(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	if _, err := svc.SetPassword(ctx, "admin", testPassword); err != nil {
 		t.Fatal(err)
 	}
-	token, _, _, err := svc.Login(ctx, "admin", testPassword)
+	token, _, _, err := svc.Login(ctx, "admin", testPassword, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,17 +290,17 @@ func TestPasswordChangeEndsSessions(t *testing.T) {
 	if _, err := svc.Session(ctx, token); !errors.Is(err, auth.ErrUnauthenticated) {
 		t.Fatalf("old session survived password change: %v", err)
 	}
-	if _, _, _, err := svc.Login(ctx, "admin", testPassword); !errors.Is(err, auth.ErrInvalidCredentials) {
+	if _, _, _, err := svc.Login(ctx, "admin", testPassword, nil); !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("old password still works: %v", err)
 	}
-	if _, _, _, err := svc.Login(ctx, "admin", "another long password"); err != nil {
+	if _, _, _, err := svc.Login(ctx, "admin", "another long password", nil); err != nil {
 		t.Fatalf("new password: %v", err)
 	}
 }
 
 func TestTokenLifecycle(t *testing.T) {
 	svc, clock := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 
 	tok, secret, err := svc.CreateToken(ctx, "  ci  ", "")
 	if err != nil {
@@ -263,7 +371,7 @@ func TestTokenLifecycle(t *testing.T) {
 
 func TestTokenScope(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 
 	def, defSecret, err := svc.CreateToken(ctx, "default", "")
 	if err != nil || def.Scope != auth.ScopeAdmin {
@@ -290,7 +398,7 @@ func TestTokenScope(t *testing.T) {
 
 func TestVerifyTokenRejectsGarbage(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	for _, s := range []string{"", "nope", "lcm_", "lcm_AAAAAAAA"} {
 		if _, err := svc.VerifyToken(ctx, s); !errors.Is(err, auth.ErrUnauthenticated) {
 			t.Errorf("VerifyToken(%q) = %v", s, err)
@@ -300,7 +408,7 @@ func TestVerifyTokenRejectsGarbage(t *testing.T) {
 
 func TestCreateTokenNameValidation(t *testing.T) {
 	svc, _ := newService(t)
-	ctx := context.Background()
+	ctx := auth.WithActor(context.Background(), auth.CLI)
 	for _, n := range []string{"", "   ", strings.Repeat("x", 65)} {
 		if _, _, err := svc.CreateToken(ctx, n, ""); !errors.Is(err, auth.ErrInvalidName) {
 			t.Errorf("CreateToken(%q) = %v", n, err)

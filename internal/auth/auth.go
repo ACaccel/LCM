@@ -25,6 +25,9 @@ var (
 	ErrInvalidName        = errors.New("auth: name must be 1-64 characters")
 	ErrInvalidScope       = errors.New("auth: scope must be admin or ingest")
 	ErrInvalidUsername    = errors.New("auth: username must be 1-64 characters")
+	// ErrTokenActor refuses token management by an API token: a leaked
+	// token must never be able to mint or revoke tokens.
+	ErrTokenActor = errors.New("auth: API tokens cannot manage tokens")
 )
 
 const (
@@ -45,9 +48,19 @@ func WithClock(now func() time.Time) Option {
 	return func(s *Service) { s.now = now }
 }
 
-// Service manages the user account, sessions and API tokens.
+// Auditor records the audit entry of a successful change inside the
+// transaction of the change, so that both commit or roll back together.
+// The actor comes from ctx; details never contain secrets. *audit.Log
+// implements it.
+type Auditor interface {
+	RecordChange(ctx context.Context, tx *sql.Tx, action, target string, details map[string]any) error
+}
+
+// Service manages the user account, sessions and API tokens. Every change
+// is audited in its own transaction.
 type Service struct {
 	db         *store.DB
+	audit      Auditor
 	now        func() time.Time
 	sessionTTL time.Duration
 	// dummyHash is verified when the username is unknown so that the response
@@ -64,8 +77,11 @@ func (s *Service) dummy() (string, error) {
 }
 
 // NewService returns a Service whose sessions live for sessionTTL.
-func NewService(db *store.DB, sessionTTL time.Duration, opts ...Option) (*Service, error) {
-	s := &Service{db: db, now: time.Now, sessionTTL: sessionTTL}
+func NewService(db *store.DB, audit Auditor, sessionTTL time.Duration, opts ...Option) (*Service, error) {
+	if db == nil || audit == nil {
+		return nil, errors.New("auth: DB and Auditor are required")
+	}
+	s := &Service{db: db, audit: audit, now: time.Now, sessionTTL: sessionTTL}
 	for _, o := range opts {
 		o(s)
 	}
@@ -86,7 +102,8 @@ func (u User) actor() Actor {
 func (u User) Actor() Actor { return u.actor() }
 
 // SetPassword creates the user or replaces its password, and ends all of the
-// user's sessions. It reports whether the user was created.
+// user's sessions. It reports whether the user was created. The change is
+// audited as admin.set_password.
 func (s *Service) SetPassword(ctx context.Context, username, password string) (created bool, err error) {
 	if l := len(username); l == 0 || l > maxNameLen {
 		return false, ErrInvalidUsername
@@ -104,19 +121,23 @@ func (s *Service) SetPassword(ctx context.Context, username, password string) (c
 		switch err := tx.QueryRowContext(ctx, `SELECT id FROM users WHERE username = ?`, username).Scan(&id); {
 		case errors.Is(err, sql.ErrNoRows):
 			created = true
-			_, err = tx.ExecContext(ctx,
+			if _, err = tx.ExecContext(ctx,
 				`INSERT INTO users (username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`,
-				username, hash, now, now)
-			return err
+				username, hash, now, now); err != nil {
+				return err
+			}
 		case err != nil:
 			return err
+		default:
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, now, id); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, id); err != nil {
+				return err
+			}
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?`, hash, now, id); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, id)
-		return err
+		return s.audit.RecordChange(ctx, tx, "admin.set_password", "user:"+username, map[string]any{"created": created})
 	})
 	if err != nil {
 		return false, fmt.Errorf("auth: set password: %w", err)
@@ -125,8 +146,10 @@ func (s *Service) SetPassword(ctx context.Context, username, password string) (c
 }
 
 // Login verifies the credentials and opens a session. It returns the opaque
-// session token (shown once) and its expiry.
-func (s *Service) Login(ctx context.Context, username, password string) (token string, expires time.Time, user User, err error) {
+// session token (shown once) and its expiry. The session is audited as
+// auth.login by the user, with details added to the entry; a refused login
+// changes nothing and is left to the caller to audit.
+func (s *Service) Login(ctx context.Context, username, password string, details map[string]any) (token string, expires time.Time, user User, err error) {
 	var hash string
 	user.Username = username
 	qerr := s.db.Reader().QueryRowContext(ctx,
@@ -160,10 +183,12 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= ?`, now.UnixMilli()); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)`,
-			hashToken(token), user.ID, now.UnixMilli(), expires.UnixMilli())
-		return err
+			hashToken(token), user.ID, now.UnixMilli(), expires.UnixMilli()); err != nil {
+			return err
+		}
+		return s.audit.RecordChange(WithActor(ctx, user.actor()), tx, "auth.login", "", details)
 	})
 	if err != nil {
 		return "", time.Time{}, User{}, fmt.Errorf("auth: create session: %w", err)
@@ -204,11 +229,14 @@ func (s *Service) SessionExpiry(ctx context.Context, token string) (User, time.T
 	return u, until, nil
 }
 
-// Logout deletes the session. Unknown tokens are ignored.
+// Logout deletes the session, audited as auth.logout by the actor in ctx.
+// Unknown tokens are ignored.
 func (s *Service) Logout(ctx context.Context, token string) error {
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token))
-		return err
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, hashToken(token)); err != nil {
+			return err
+		}
+		return s.audit.RecordChange(ctx, tx, "auth.logout", "", nil)
 	})
 	if err != nil {
 		return fmt.Errorf("auth: logout: %w", err)
@@ -241,9 +269,20 @@ type Token struct {
 	RevokedAt  *time.Time
 }
 
-// CreateToken issues a new API token. The secret is returned only here. An
-// empty scope selects ScopeAdmin.
+// manager refuses token management by an API token.
+func manager(ctx context.Context) error {
+	if a, ok := ActorFrom(ctx); ok && a.Kind == KindToken {
+		return ErrTokenActor
+	}
+	return nil
+}
+
+// CreateToken issues a new API token, audited as token.create. The secret
+// is returned only here. An empty scope selects ScopeAdmin.
 func (s *Service) CreateToken(ctx context.Context, name string, scope Scope) (Token, string, error) {
+	if err := manager(ctx); err != nil {
+		return Token{}, "", err
+	}
 	name = strings.TrimSpace(name)
 	if l := len(name); l == 0 || l > maxNameLen {
 		return Token{}, "", ErrInvalidName
@@ -268,8 +307,11 @@ func (s *Service) CreateToken(ctx context.Context, name string, scope Scope) (To
 		if err != nil {
 			return err
 		}
-		t.ID, err = res.LastInsertId()
-		return err
+		if t.ID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		return s.audit.RecordChange(ctx, tx, "token.create", "token:"+strconv.FormatInt(t.ID, 10),
+			map[string]any{"name": name, "scope": string(scope)})
 	})
 	if err != nil {
 		return Token{}, "", fmt.Errorf("auth: create token: %w", err)
@@ -308,9 +350,13 @@ func (s *Service) ListTokens(ctx context.Context) ([]Token, error) {
 	return tokens, nil
 }
 
-// RevokeToken revokes a token. Revoking an already revoked token succeeds
-// and keeps the original revocation time.
+// RevokeToken revokes a token, audited as token.revoke. Revoking an
+// already revoked token succeeds, is audited again and keeps the original
+// revocation time.
 func (s *Service) RevokeToken(ctx context.Context, id int64) error {
+	if err := manager(ctx); err != nil {
+		return err
+	}
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx,
 			`UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`,
@@ -318,19 +364,23 @@ func (s *Service) RevokeToken(ctx context.Context, id int64) error {
 		if err != nil {
 			return err
 		}
-		if n, err := res.RowsAffected(); err != nil {
+		n, err := res.RowsAffected()
+		if err != nil {
 			return err
-		} else if n > 0 {
-			return nil
 		}
-		var one int
-		err = tx.QueryRowContext(ctx, `SELECT 1 FROM api_tokens WHERE id = ?`, id).Scan(&one)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+		if n == 0 {
+			var one int
+			err = tx.QueryRowContext(ctx, `SELECT 1 FROM api_tokens WHERE id = ?`, id).Scan(&one)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			if err != nil {
+				return err
+			}
 		}
-		return err
+		return s.audit.RecordChange(ctx, tx, "token.revoke", "token:"+strconv.FormatInt(id, 10), nil)
 	})
-	if errors.Is(err, ErrNotFound) {
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrTokenActor) {
 		return err
 	}
 	if err != nil {

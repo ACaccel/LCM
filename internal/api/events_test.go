@@ -112,7 +112,7 @@ func newStreamEnv(t *testing.T) (*env, *events.Hub, *httptest.Server, http.Heade
 
 func TestEventStreamFiltersHeartbeatsAndEnds(t *testing.T) {
 	e, hub, srv, h, handlerDone := newStreamEnv(t)
-	_, ingest, err := e.auth.CreateToken(t.Context(), "hook", "ingest")
+	_, ingest, err := e.auth.CreateToken(auth.WithActor(t.Context(), auth.CLI), "hook", "ingest")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,15 +178,16 @@ func clockStreamEnv(t *testing.T, heartbeat time.Duration) (*env, *clock.Fake, *
 	hub := events.NewHub(nil, nil)
 	t.Cleanup(hub.Close)
 	db := storetest.Open(t)
-	svc, err := auth.NewService(db, time.Hour, auth.WithClock(clk.Now))
+	al := audit.New(db)
+	svc, err := auth.NewService(db, al, time.Hour, auth.WithClock(clk.Now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SetPassword(context.Background(), "admin", testPassword); err != nil {
+	if _, err := svc.SetPassword(auth.WithActor(context.Background(), auth.CLI), "admin", testPassword); err != nil {
 		t.Fatal(err)
 	}
 	d := Deps{
-		DB: db, Auth: svc, Audit: audit.New(db), Version: "test", Logger: slog.New(slog.DiscardHandler),
+		DB: db, Auth: svc, Audit: al, Version: "test", Logger: slog.New(slog.DiscardHandler),
 		LoginFailDelay: time.Nanosecond, Clock: clk, Events: hub, EventHeartbeat: heartbeat,
 	}
 	srv := New(d)
@@ -213,7 +214,7 @@ func (c *sseClient) waitEnd() {
 
 func TestEventStreamEndsWhenTokenIsRevoked(t *testing.T) {
 	e, clk, hs := clockStreamEnv(t, time.Minute)
-	tok, secret, err := e.auth.CreateToken(t.Context(), "console", "admin")
+	tok, secret, err := e.auth.CreateToken(auth.WithActor(t.Context(), auth.CLI), "console", "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +240,7 @@ func TestEventStreamEndsWhenTokenIsRevoked(t *testing.T) {
 	if err := clk.WaitForTimers(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.auth.RevokeToken(t.Context(), tok.ID); err != nil {
+	if err := e.auth.RevokeToken(auth.WithActor(t.Context(), auth.CLI), tok.ID); err != nil {
 		t.Fatal(err)
 	}
 	clk.Advance(time.Minute)

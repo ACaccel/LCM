@@ -76,7 +76,7 @@ func (a *app) admin(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	svc, err := auth.NewService(db, cfg.SessionTTL)
+	svc, err := auth.NewService(db, audit.New(db), cfg.SessionTTL)
 	if err != nil {
 		return err
 	}
@@ -86,10 +86,6 @@ func (a *app) admin(ctx context.Context, args []string) error {
 		return err
 	case err != nil:
 		recordCLI(ctx, db, "admin.set_password", "user:"+*username, audit.OutcomeError, nil)
-		return err
-	}
-	if err := audit.New(db).Record(ctx, "admin.set_password", "user:"+*username, audit.OutcomeOK,
-		map[string]any{"created": created}); err != nil {
 		return err
 	}
 	verb := "updated"

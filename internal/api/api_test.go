@@ -34,20 +34,21 @@ type env struct {
 func newEnv(t *testing.T, mutate ...func(*Deps)) *env {
 	t.Helper()
 	db := storetest.Open(t)
-	svc, err := auth.NewService(db, time.Hour)
+	al := audit.New(db)
+	svc, err := auth.NewService(db, al, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
 	d := Deps{
-		DB: db, Auth: svc, Audit: audit.New(db), Version: "test",
+		DB: db, Auth: svc, Audit: al, Version: "test",
 		Logger:         slog.New(slog.NewTextHandler(logs, nil)),
 		LoginFailDelay: time.Nanosecond,
 	}
 	for _, m := range mutate {
 		m(&d)
 	}
-	if _, err := svc.SetPassword(context.Background(), "admin", testPassword); err != nil {
+	if _, err := svc.SetPassword(auth.WithActor(context.Background(), auth.CLI), "admin", testPassword); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(d)

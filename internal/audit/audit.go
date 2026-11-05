@@ -114,6 +114,12 @@ func (l *Log) RecordTx(ctx context.Context, tx *sql.Tx, action, target string, o
 	return nil
 }
 
+// RecordChange records the successful change committed by tx; it
+// implements auth.Auditor, which cannot name Outcome.
+func (l *Log) RecordChange(ctx context.Context, tx *sql.Tx, action, target string, details map[string]any) error {
+	return l.RecordTx(ctx, tx, action, target, OutcomeOK, details)
+}
+
 // pending is an entry validated and encoded before it is written.
 type pending struct {
 	at      int64
