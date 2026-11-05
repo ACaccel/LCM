@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -111,6 +113,38 @@ func TestRunnerStopsHelperWhenContextEnds(t *testing.T) {
 	}
 }
 
+// The timeout kills only the command LCM started (sudo); a helper it left
+// behind may still hold stdout. The call must still return.
+func TestRunnerReturnsWhenKilledCommandLeavesOutputOpen(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	// The background sleep stands in for the root helper: it inherits
+	// stdout and outlives the killed shell.
+	runner := shellRunner(`sleep 60 & echo $! > "$1"; wait`, pidFile)
+	runner.waitDelay = 100 * time.Millisecond
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(pidFile); err == nil { //nolint:gosec // path inside the test temp dir
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(ctx, Request{Command: "status"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("runner waited for output held open by a process it cannot kill")
+	}
+}
+
 func TestDefaultRunnerIsFixedHelper(t *testing.T) {
 	db := storetest.Open(t)
 	c, err := New(Config{DB: db, Audit: audit.New(db), MachineID: "machine-a"})
@@ -119,7 +153,7 @@ func TestDefaultRunnerIsFixedHelper(t *testing.T) {
 	}
 	r, ok := c.cfg.Runner.(commandRunner)
 	want := "/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/libexec/lcm/security-host/helper.py"
-	if !ok || strings.Join(r.argv, " ") != want {
+	if !ok || strings.Join(r.argv, " ") != want || r.waitDelay != helperWaitDelay {
 		t.Fatalf("default runner = %#v", c.cfg.Runner)
 	}
 }

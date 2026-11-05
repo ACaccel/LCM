@@ -14,17 +14,30 @@ import (
 var helperCommand = []string{"/usr/bin/sudo", "-n", "/usr/bin/python3", "-I", "/usr/local/libexec/lcm/security-host/helper.py"}
 
 // systemRunner returns the runner of the installed helper.
-func systemRunner() commandRunner { return commandRunner{argv: helperCommand} }
+func systemRunner() commandRunner {
+	return commandRunner{argv: helperCommand, waitDelay: helperWaitDelay}
+}
 
 // commandRunner passes a bounded JSON message to a fixed command. No helper
 // output or stderr is returned as an error; it may contain local data.
-type commandRunner struct{ argv []string }
+type commandRunner struct {
+	argv []string
+	// waitDelay bounds the wait for the output after the command was
+	// killed; zero selects helperWaitDelay.
+	waitDelay time.Duration
+}
 
 const (
 	// helperTimeout exceeds the helper's own work and rollback budgets
 	// (WORK_SECONDS + ROLLBACK_SECONDS in helper.py), so a request normally
 	// ends with the helper's recorded outcome rather than with LCM giving up.
 	helperTimeout = 45 * time.Second
+	// helperWaitDelay bounds how long a timed-out call waits for the
+	// helper's output to close. The timeout kills only sudo; the helper
+	// runs as root, out of LCM's reach, and may hold stdout open until it
+	// finishes. The call then fails and the operation's outcome is
+	// recovered by a later query.
+	helperWaitDelay = 5 * time.Second
 	// maxRequestBytes and maxResponseBytes bound the messages exchanged
 	// with the helper.
 	maxRequestBytes  = 16384
@@ -45,6 +58,10 @@ func (r commandRunner) Run(ctx context.Context, request Request) (Response, erro
 	var output boundedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = io.Discard
+	cmd.WaitDelay = r.waitDelay
+	if cmd.WaitDelay <= 0 {
+		cmd.WaitDelay = helperWaitDelay
+	}
 	if err = cmd.Run(); err != nil {
 		return Response{}, ErrUnavailable
 	}
