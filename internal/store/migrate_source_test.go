@@ -118,8 +118,17 @@ func sourceOf(t *testing.T, doc string) *model.Source {
 	return cfg.Source
 }
 
+func latestSchema(t *testing.T) int {
+	t.Helper()
+	v, err := SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
 func TestSourceMigration(t *testing.T) {
-	if v, err := SchemaVersion(); err != nil || v != sourceMigration {
+	if v, err := SchemaVersion(); err != nil || v < sourceMigration {
 		t.Fatalf("schema version = %d %v", v, err)
 	}
 	e := newSourceEnv(t)
@@ -141,7 +150,7 @@ func TestSourceMigration(t *testing.T) {
 	if err := migrate(context.Background(), db, e.env); err != nil {
 		t.Fatal(err)
 	}
-	if v := schemaOf(t, db); v != sourceMigration {
+	if v, want := schemaOf(t, db), latestSchema(t); v != want {
 		t.Fatalf("schema = %d", v)
 	}
 	docs := documents(t, db)

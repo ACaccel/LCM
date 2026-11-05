@@ -149,7 +149,9 @@ The event store retains at most 10,000 envelopes and thirty days of history;
 incidents/condition keys are capped at 2,000. Finished incidents without pending
 delivery make room first. Fully active capacity refuses new conditions with 503
 instead of silently deleting an ongoing episode. Resolved history expires after
-thirty days. Queue overflow and expiry are counted and recorded on incidents;
+thirty days. Finished notification test episodes are also deleted after
+`LCM_OPERATION_RETENTION` (default 90 days), even while security is disabled, and
+finished host operations likewise. Queue overflow and expiry are counted and recorded on incidents;
 they are not treated as successful notifications. Collectors need their own
 bounded retry queue for LCM outages and should expose rejected intake.
 

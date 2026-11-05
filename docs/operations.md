@@ -208,6 +208,19 @@ Storage schema 15 replaces `source.repo` and `source.remote` of services with `s
 
 **After the upgrade.** `lcm export resource/<name>` shows `source.url`. Git documents that still use `source.repo` or `source.remote` fail to sync with an issue naming the field and the resource keeps its migrated configuration; replace the fields with the exported `source.url` and commit. The migration rewrote the recorded repository documents too, so a repository updated to the same content shows no drift. `lcm convert` does not convert a v1 `source` ([rules](policies.md#policy-as-code)).
 
+### Upgrade to bounded retention (schema 16)
+
+Storage schema 16 only adds indexes (timeline reads, audit filters and the retention jobs); no row changes. The schema changes, so self-install refuses it (`storage schema unknown or changed`): pause self-deploy before the commit reaches `main` and follow the manual procedure in [Upgrade](#upgrade). Building the indexes at the first start takes time proportional to `resource_events` and `audit_log`; older binaries refuse the migrated database.
+
+**Behavior changes.** The first retention pass after the start deletes what the new limits no longer keep, in bounded batches:
+
+- Document versions beyond the newest 50 per Resource, Policy and Module, except versions still in use. Reading, diffing or restoring a deleted version returns 404.
+- Machine/router operations, security host operations and notification test episodes finished more than 90 days ago, including their receipts and completion evidence.
+- Failed-login audit entries beyond the newest 10,000.
+- Snapshot, point and event ceilings now apply per resource (200,000 rows each) instead of to all resources together.
+
+Set the [retention settings](../README.md#configuration) before the start to keep more. The security host helper purges its own finished operations only after it is reinstalled ([host controls](#security-console-host-controls)).
+
 ### Upgrade checks for stricter host configuration
 
 This release keeps the storage schema, so self-install applies it automatically. It refuses host configuration that earlier versions accepted; check the host before it reaches `main`, or pause self-deploy until you have:
@@ -225,7 +238,7 @@ To manage a [router](resources.md#routers), store its web password as a secret (
 
 ## Resource use
 
-The target is under 50 MB resident. `LCM_MEMORY_LIMIT` (default `40MiB`, `off` disables) sets a soft limit for the Go runtime so that garbage is collected early instead of letting the heap grow; it is not a cap. Retention settings bound the database: raw check results, rollups, timeline, finished runs, deployment records and idempotency records are pruned by the hourly retention job (`LCM_PRUNE_INTERVAL`). Machine snapshots, minute points and events also use bounded pruning; [retention and evidence exceptions](machines.md#events-gaps-and-history) are documented with their API semantics. The privileged helper ledger has its own permanent capacity limits above. To investigate memory or CPU, set `LCM_PPROF_LISTEN=127.0.0.1:6060`, which serves `net/http/pprof` on its own loopback listener; it is off by default and must stay off in normal operation.
+The target is under 50 MB resident. `LCM_MEMORY_LIMIT` (default `40MiB`, `off` disables) sets a soft limit for the Go runtime so that garbage is collected early instead of letting the heap grow; it is not a cap. Retention settings bound the database: raw check results, rollups, timeline, finished runs, deployment records, idempotency records, document versions (`LCM_VERSION_RETENTION_KEEP`), finished operations (`LCM_OPERATION_RETENTION`) and failed-login audit entries (`LCM_FAILED_LOGIN_RETENTION_KEEP`) are pruned by the hourly retention job (`LCM_PRUNE_INTERVAL`) in bounded batches. The rest of the audit log is kept forever. Machine and router snapshots, minute points and events have age limits and per-resource row ceilings; [retention and evidence exceptions](machines.md#events-gaps-and-history) are documented with their API semantics. Pruning frees pages for reuse; it does not shrink `lcm.db`. The privileged helper ledger has its own permanent capacity limits above. To investigate memory or CPU, set `LCM_PPROF_LISTEN=127.0.0.1:6060`, which serves `net/http/pprof` on its own loopback listener; it is off by default and must stay off in normal operation.
 
 ## Remote access
 
@@ -245,6 +258,12 @@ LCM-context `GET /api/v1/security/host` availability after installation, rather 
 relying on a root-only status probe. Preserve existing timer jitter, required audit
 coverage, Nginx dry-run and locally reviewed AIDE baseline. The web baseline action
 records a review request only. No optional profiles are enabled by default.
+
+A helper installed before schema 16 refuses every preview once its operation journal
+holds 2,000 entries, permanently. The current helper first purges old finished entries
+([journal capacity](../deploy/security-host/README.md#recovery-and-local-approval));
+reinstall the reviewed `helper.py` with its matching `install.py` and SHA-256 to get the
+fix. LCM keeps its own record of finished host operations for `LCM_OPERATION_RETENTION`.
 
 Schema 11→13 needs an explicit upgrade with maintenance, paused automation and a
 matching DB/binary/health-artifact snapshot. Preserve notification environment and

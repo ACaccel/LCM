@@ -28,12 +28,9 @@ type Event struct {
 	OperationID string    `json:"operationId,omitempty"`
 }
 
-// maxEvents bounds resource_events independently of time-based retention.
-const maxEvents = 200000
-
 // InsertEvent stores e unless an event with the same resource, source and
 // key exists, in which case it sets e.ID to 0. It sets e.ID of a new event
-// and trims the table after control events.
+// and trims the resource's events after control events.
 func InsertEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
 	body, err := json.Marshal(e)
 	if err != nil {
@@ -50,14 +47,30 @@ func InsertEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
 	}
 	e.ID, err = res.LastInsertId()
 	if err == nil && e.Source == "control" {
-		err = TrimEvents(ctx, tx)
+		err = TrimEvents(ctx, tx, e.ResourceID)
 	}
 	return err
 }
 
-// TrimEvents keeps the newest maxEvents events.
-func TrimEvents(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `DELETE FROM resource_events WHERE id <= (SELECT MAX(id)-? FROM resource_events)`, maxEvents)
+// TrimEvents keeps the newest events of one resource up to the per-resource
+// ceiling, so that a burst of one resource never evicts the events of
+// another. It runs in the writer's transaction after every ingestion, so it
+// first checks cheaply whether the ceiling can have been reached and
+// removes at most one batch; PruneObservations enforces the rest.
+func TrimEvents(ctx context.Context, tx *sql.Tx, resourceID string) error {
+	var lo, hi sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT (SELECT MIN(id) FROM resource_events WHERE resource_id=?),(SELECT MAX(id) FROM resource_events WHERE resource_id=?)`,
+		resourceID, resourceID).Scan(&lo, &hi); err != nil {
+		return err
+	}
+	// IDs are unique, so IDs spanning fewer than maxEvents values belong to
+	// fewer than maxEvents events.
+	if !hi.Valid || hi.Int64-lo.Int64 < maxEvents {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM resource_events WHERE id IN (SELECT id FROM resource_events WHERE resource_id=?
+		AND id < (SELECT id FROM resource_events WHERE resource_id=? ORDER BY id DESC LIMIT 1 OFFSET ?) ORDER BY id LIMIT ?)`,
+		resourceID, resourceID, maxEvents-1, pruneBatch)
 	return err
 }
 

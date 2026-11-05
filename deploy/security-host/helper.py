@@ -38,6 +38,14 @@ ACTIONS = ('aide.check', 'aide.schedule', 'nginx.configure', 'audit.profile', 'a
 CATEGORIES = ('auth', 'api', 'upload', 'socket')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'}
 MAX_JSON = 65536
+# The operation journal holds at most OPERATION_CAP entries. When it is full,
+# finished entries last updated more than FINISHED_RETENTION ago are removed
+# first, so that old history cannot block new previews forever. Running,
+# indeterminate and awaiting entries are never removed; a prepared entry is
+# finished once its preview has expired.
+OPERATION_CAP = 2000
+FINISHED_RETENTION = dt.timedelta(days=90)
+FINISHED_STATES = ('succeeded', 'failed', 'prepared')
 # Time budget: one fixed command may take STEP_SECONDS, the request
 # WORK_SECONDS, and a rollback gets a fresh ROLLBACK_SECONDS. The longest
 # step sequences (four for nginx.configure, two for its rollback) fit inside
@@ -158,6 +166,42 @@ def run(argv, timeout=STEP_SECONDS, account=None):
 
 def valid_id(value):
     return isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,99}', value) is not None
+
+
+def parse_time(value):
+    return dt.datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def purge_finished(directory):
+    """Remove finished journals last updated before FINISHED_RETENTION.
+
+    Every update rewrites a journal, so a recent modification time skips it
+    without reading. Unreadable journals stay for local review."""
+    cutoff = dt.datetime.now(dt.timezone.utc) - FINISHED_RETENTION
+    removed = False
+    for path in sorted(directory.iterdir()):
+        if path.suffix != '.json' or not valid_id(path.stem):
+            continue
+        try:
+            if path.lstat().st_mtime >= cutoff.timestamp():
+                continue
+            journal = read_json(path)
+            operation = journal['operation']
+            finished = (operation['state'] in FINISHED_STATES and parse_time(operation['updatedAt']) < cutoff
+                        and parse_time(journal['preview']['expiresAt']) < cutoff)
+        except Deadline:
+            raise
+        except (Failure, OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if finished:
+            path.unlink()
+            removed = True
+    if removed:
+        handle = os.open(directory, os.O_DIRECTORY | os.O_RDONLY)
+        try:
+            os.fsync(handle)
+        finally:
+            os.close(handle)
 
 
 def printable(value):
@@ -461,8 +505,11 @@ class Controls:
         capability = next(value for value in self.status()['capabilities'] if value['action'] == request['action'])
         if not capability['enabled']:
             raise Failure()
-        if len(list((BASE / 'operations').iterdir())) >= 2000:
-            raise Failure()
+        operations = BASE / 'operations'
+        if len(list(operations.iterdir())) >= OPERATION_CAP:
+            purge_finished(operations)
+            if len(list(operations.iterdir())) >= OPERATION_CAP:
+                raise Failure()
         now = stamp()
         preview = {'requestId': request['requestId'], 'action': request['action'],
                    'previewHash': intent_digest,

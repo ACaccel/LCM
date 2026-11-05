@@ -55,6 +55,9 @@ const (
 	EnvRunRetentionKeep          = "LCM_RUN_RETENTION_KEEP"
 	EnvRunRetentionAge           = "LCM_RUN_RETENTION_AGE"
 	EnvDeploymentKeep            = "LCM_DEPLOYMENT_RETENTION_KEEP"
+	EnvVersionKeep               = "LCM_VERSION_RETENTION_KEEP"
+	EnvOperationRetention        = "LCM_OPERATION_RETENTION"
+	EnvFailedLoginKeep           = "LCM_FAILED_LOGIN_RETENTION_KEEP"
 	EnvMemoryLimit               = "LCM_MEMORY_LIMIT"
 	EnvPprofListen               = "LCM_PPROF_LISTEN"
 	EnvPruneInterval             = "LCM_PRUNE_INTERVAL"
@@ -105,6 +108,9 @@ const (
 	DefaultRunRetentionKeep       = 200
 	DefaultRunRetentionAge        = 30 * 24 * time.Hour
 	DefaultDeploymentKeep         = 100
+	DefaultVersionKeep            = 50
+	DefaultOperationRetention     = 90 * 24 * time.Hour
+	DefaultFailedLoginKeep        = 10000
 	// DefaultMemoryLimit is the soft limit of the Go runtime, below the 50 MB
 	// resident-memory target of the design.
 	DefaultMemoryLimit   = "40MiB"
@@ -171,6 +177,15 @@ type Config struct {
 	RunRetentionAge  time.Duration
 	// DeploymentKeep is how many deployment records are kept per service.
 	DeploymentKeep int
+	// VersionKeep is how many versions of each Resource, Policy and Module
+	// document are kept; versions still in use are kept beyond it.
+	VersionKeep int
+	// OperationRetention is how long finished resource operations, security
+	// host operations and notification test episodes are kept.
+	OperationRetention time.Duration
+	// FailedLoginKeep is how many failed-login audit entries are kept; the
+	// rest of the audit log is kept forever.
+	FailedLoginKeep int
 	// MemoryLimit is the soft memory limit of the Go runtime as a size such
 	// as 40MiB; "0" or "off" disables it. It makes the garbage collector work
 	// harder near the limit instead of letting the heap grow.
@@ -220,12 +235,15 @@ func Default() Config {
 		MonitorRollupRetention: DefaultMonitorRollupRetention,
 		AlertResourceLabels:    slices.Clone(DefaultAlertResourceLabels),
 
-		TimelineRetention: DefaultTimelineRetention,
-		RunRetentionKeep:  DefaultRunRetentionKeep,
-		RunRetentionAge:   DefaultRunRetentionAge,
-		DeploymentKeep:    DefaultDeploymentKeep,
-		MemoryLimit:       DefaultMemoryLimit,
-		PruneInterval:     DefaultPruneInterval,
+		TimelineRetention:  DefaultTimelineRetention,
+		RunRetentionKeep:   DefaultRunRetentionKeep,
+		RunRetentionAge:    DefaultRunRetentionAge,
+		DeploymentKeep:     DefaultDeploymentKeep,
+		VersionKeep:        DefaultVersionKeep,
+		OperationRetention: DefaultOperationRetention,
+		FailedLoginKeep:    DefaultFailedLoginKeep,
+		MemoryLimit:        DefaultMemoryLimit,
+		PruneInterval:      DefaultPruneInterval,
 	}
 }
 
@@ -345,6 +363,9 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	num(&c.RunRetentionKeep, EnvRunRetentionKeep)
 	dur(&c.RunRetentionAge, EnvRunRetentionAge)
 	num(&c.DeploymentKeep, EnvDeploymentKeep)
+	num(&c.VersionKeep, EnvVersionKeep)
+	dur(&c.OperationRetention, EnvOperationRetention)
+	num(&c.FailedLoginKeep, EnvFailedLoginKeep)
 	dur(&c.PruneInterval, EnvPruneInterval)
 	str(&c.GitHubWebhookSecret, EnvGitHubWebhookSecret)
 	str(&c.MemoryLimit, EnvMemoryLimit)
@@ -414,6 +435,9 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.RunRetentionKeep, "run-retention-keep", c.RunRetentionKeep, "finished runs kept per policy regardless of age ("+EnvRunRetentionKeep+")")
 	fs.IntVar(&c.DeploymentKeep, "deployment-retention-keep", c.DeploymentKeep, "deployment records kept per service ("+EnvDeploymentKeep+")")
 	fs.DurationVar(&c.RunRetentionAge, "run-retention-age", c.RunRetentionAge, "finished runs younger than this are kept ("+EnvRunRetentionAge+")")
+	fs.IntVar(&c.VersionKeep, "version-retention-keep", c.VersionKeep, "versions kept per Resource, Policy and Module document ("+EnvVersionKeep+")")
+	fs.DurationVar(&c.OperationRetention, "operation-retention", c.OperationRetention, "how long finished operations are kept ("+EnvOperationRetention+")")
+	fs.IntVar(&c.FailedLoginKeep, "failed-login-retention-keep", c.FailedLoginKeep, "failed-login audit entries kept ("+EnvFailedLoginKeep+")")
 	fs.DurationVar(&c.PruneInterval, "prune-interval", c.PruneInterval, "how often retention jobs run ("+EnvPruneInterval+")")
 	fs.StringVar(&c.MemoryLimit, "memory-limit", c.MemoryLimit, "soft memory limit such as 40MiB, 0 or off to disable ("+EnvMemoryLimit+")")
 	fs.StringVar(&c.PprofListen, "pprof-listen", c.PprofListen, "serve pprof on this loopback address, off when empty ("+EnvPprofListen+")")
@@ -496,6 +520,13 @@ func (c Config) validateComponents() []error {
 	positive("run retention age", c.RunRetentionAge)
 	if c.DeploymentKeep < 1 {
 		errs = append(errs, fmt.Errorf("deployment retention keep %d: must be at least 1", c.DeploymentKeep))
+	}
+	if c.VersionKeep < 1 {
+		errs = append(errs, fmt.Errorf("version retention keep %d: must be at least 1", c.VersionKeep))
+	}
+	positive("operation retention", c.OperationRetention)
+	if c.FailedLoginKeep < 1 {
+		errs = append(errs, fmt.Errorf("failed login retention keep %d: must be at least 1", c.FailedLoginKeep))
 	}
 	positive("prune interval", c.PruneInterval)
 	if _, err := c.MemoryLimitBytes(); err != nil {

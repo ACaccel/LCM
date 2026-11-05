@@ -64,6 +64,12 @@ Snapshots and candidate hashes remain in the protected operation journal for loc
 review. Verified command failures restore only unchanged candidate files. A failed
 rollback remains indeterminate and requires administrator review.
 
+The journal holds at most 2,000 operations. When it is full, a preview first removes
+finished operations (succeeded, failed, or prepared with an expired preview) last
+updated more than 90 days ago, so old history cannot block new previews forever.
+Running, indeterminate and awaiting-local-approval operations are never removed. While
+the journal is still full, previews are refused. Approval receipts are not removed.
+
 Each fixed command may take 5 seconds and a request 25 seconds; when that deadline
 passes, the change unwinds through the same rollback, which has its own 12 second
 budget. Both stay below LCM's 45 second limit, so the outcome is in the protected

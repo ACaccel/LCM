@@ -98,9 +98,7 @@ func TestRetentionKeepsBaselineAndIndependentOperationEvidence(t *testing.T) {
 		t.Fatalf("proof %+v %v", op, err)
 	}
 	e.clk.Advance(100 * 24 * time.Hour)
-	if err = e.m.Prune(e.ctx); err != nil {
-		t.Fatal(err)
-	}
+	e.prune(t)
 	raw, err := e.m.History(e.ctx, "workstation", 0, 200)
 	if err != nil || len(raw) != 1 {
 		t.Fatalf("baseline %d %v", len(raw), err)
@@ -119,33 +117,6 @@ func TestRetentionKeepsBaselineAndIndependentOperationEvidence(t *testing.T) {
 	}
 }
 
-func TestControlEventsEnforceCapacityWithoutPolling(t *testing.T) {
-	e := newEnv(t)
-	e.put(t, testDoc, 0)
-	r, err := e.m.Get(e.ctx, "workstation")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := encode(Event{ResourceID: r.ID, Source: "poll", Kind: "machine.synthetic", Severity: "info", OccurredAt: e.clk.Now(), IngestedAt: e.clk.Now()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = e.db.Write(e.ctx, func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO resource_events(id,resource_id,source,source_key,occurred_at,ingested_at,kind,body) VALUES(200002,?,'poll','synthetic',0,0,'machine.synthetic',?)`, r.ID, body)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	e.setPhase(t, "workstation", resource.PhaseRetired, 1)
-	var count int
-	if err = e.db.Reader().QueryRow(`SELECT COUNT(*) FROM resource_events WHERE id<=3`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("old events retained without a poll: %d %v", count, err)
-	}
-	events, err := e.m.Events(e.ctx, "workstation", 0, 200)
-	if err != nil || len(events) != 2 || events[1].Kind != "machine.retired" || events[1].ResourceID != r.ID {
-		t.Fatalf("retained events %+v %v", events, err)
-	}
-}
 func (f *fakeObserver) ReadJournal(context.Context, model.MachineConfig, string, time.Time) (JournalBatch, error) {
 	return f.batch, nil
 }
@@ -201,6 +172,14 @@ func (e *testEnv) put(t testing.TB, doc string, expected int) resource.PutResult
 		t.Fatal(err)
 	}
 	return res
+}
+
+// prune runs the observation retention with the default settings.
+func (e *testEnv) prune(t testing.TB) {
+	t.Helper()
+	if _, err := e.store.PruneObservations(e.ctx, resource.ObservationRetention{Snapshots: 7 * 24 * time.Hour, Points: 90 * 24 * time.Hour, Events: 90 * 24 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (e *testEnv) setPhase(t testing.TB, name, phase string, expected int) {

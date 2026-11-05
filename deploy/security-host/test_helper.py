@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import stat
@@ -124,6 +125,32 @@ class HelperTests(unittest.TestCase):
         with self.assertRaises(H.Failure) as error:
             H.Controls().dispatch(request)
         self.assertEqual(error.exception.code, 'conflict')
+
+    def age_journal(self, identity, state, days):
+        path = H.BASE / 'operations' / (identity + '.json')
+        journal = json.loads(path.read_bytes())
+        then = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        journal['operation'].update(state=state, updatedAt=then.isoformat().replace('+00:00', 'Z'))
+        journal['preview']['expiresAt'] = (then + dt.timedelta(minutes=10)).isoformat().replace('+00:00', 'Z')
+        path.write_bytes(H.canonical(journal))
+        os.utime(path, (then.timestamp(), then.timestamp()))
+
+    def test_full_journal_purges_only_old_finished_operations(self):
+        kept = {'indeterminate': 200, 'running': 200, 'awaiting-local-approval': 200, 'succeeded': 30}
+        purged = {'succeeded': 91, 'failed': 120, 'prepared': 100}
+        names = []
+        for prefix, states in (('kept-', kept), ('purged-', purged)):
+            for state, days in states.items():
+                identity = prefix + state
+                self.preview(identity=identity)
+                self.age_journal(identity, state, days)
+                names.append(identity)
+        with patch.object(H, 'OPERATION_CAP', len(names)):
+            self.preview(identity='request-new')
+            remaining = sorted(path.stem for path in (H.BASE / 'operations').iterdir())
+            self.assertEqual(remaining, sorted(['kept-' + s for s in kept] + ['request-new']))
+        with patch.object(H, 'OPERATION_CAP', len(remaining)), self.assertRaises(H.Failure):
+            self.preview(identity='request-blocked')
 
     def test_preview_requires_current_digest(self):
         request, _ = self.preview()

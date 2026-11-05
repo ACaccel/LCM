@@ -181,49 +181,7 @@ func (l *Log) List(ctx context.Context, limit int, before int64) ([]Entry, error
 
 // Search returns the entries matching q, newest first.
 func (l *Log) Search(ctx context.Context, q Query) ([]Entry, error) {
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = DefaultLimit
-	case limit > MaxLimit:
-		limit = MaxLimit
-	}
-	var (
-		where []string
-		args  []any
-	)
-	if q.Before > 0 {
-		where = append(where, `id < ?`)
-		args = append(args, q.Before)
-	}
-	if !q.From.IsZero() {
-		where = append(where, `time >= ?`)
-		args = append(args, q.From.UnixMilli())
-	}
-	if !q.To.IsZero() {
-		where = append(where, `time < ?`)
-		args = append(args, q.To.UnixMilli())
-	}
-	if q.Actor != "" {
-		where = append(where, `actor_name = ?`)
-		args = append(args, q.Actor)
-	}
-	if q.Action != "" {
-		prefix := q.Action + "."
-		where = append(where, `(action = ? OR substr(action, 1, ?) = ?)`)
-		args = append(args, q.Action, utf8.RuneCountInString(prefix), prefix)
-	}
-	if q.Target != "" {
-		where = append(where, `target = ?`)
-		args = append(args, q.Target)
-	}
-	query := `SELECT id, time, actor_kind, actor_id, actor_name, action, target, details, outcome FROM audit_log`
-	if len(where) > 0 {
-		query += ` WHERE ` + strings.Join(where, ` AND `)
-	}
-	query += ` ORDER BY id DESC LIMIT ?`
-	args = append(args, limit)
-
+	query, args := q.sql()
 	rows, err := l.db.Reader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("audit: list: %w", err)
@@ -254,4 +212,54 @@ func (l *Log) Search(ctx context.Context, q Query) ([]Entry, error) {
 		return nil, fmt.Errorf("audit: list: %w", err)
 	}
 	return entries, nil
+}
+
+// sql returns the statement and arguments of the search.
+func (q Query) sql() (string, []any) {
+	limit := q.Limit
+	switch {
+	case limit <= 0:
+		limit = DefaultLimit
+	case limit > MaxLimit:
+		limit = MaxLimit
+	}
+	var (
+		where []string
+		args  []any
+	)
+	if q.Before > 0 {
+		where = append(where, `id < ?`)
+		args = append(args, q.Before)
+	}
+	if !q.From.IsZero() {
+		where = append(where, `time >= ?`)
+		args = append(args, q.From.UnixMilli())
+	}
+	if !q.To.IsZero() {
+		where = append(where, `time < ?`)
+		args = append(args, q.To.UnixMilli())
+	}
+	if q.Actor != "" {
+		where = append(where, `actor_name = ?`)
+		args = append(args, q.Actor)
+	}
+	if q.Action != "" {
+		// The range [action, action + "/") holds the action and every
+		// "action." child ('/' follows '.' in byte order), so it can use
+		// the action index; the exact test drops siblings such as
+		// "action-x" that also fall in it.
+		prefix := q.Action + "."
+		where = append(where, `action >= ? AND action < ? AND (action = ? OR substr(action, 1, ?) = ?)`)
+		args = append(args, q.Action, q.Action+"/", q.Action, utf8.RuneCountInString(prefix), prefix)
+	}
+	if q.Target != "" {
+		where = append(where, `target = ?`)
+		args = append(args, q.Target)
+	}
+	query := `SELECT id, time, actor_kind, actor_id, actor_name, action, target, details, outcome FROM audit_log`
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	return query, append(args, limit)
 }

@@ -30,7 +30,7 @@ spec:
 - `GET /api/v1/resource-types` lists types, adapters, `needsConnection` and each type's actions; the console builds its forms from it. Validation is the server's (`lcm validate`, `POST /api/v1/validate`).
 - `type` and `adapter` never change. Unmanage the resource and create a new one instead.
 - Policies and Modules are also `lcm/v2`. `lcm/v1` documents are refused with a pointer to `lcm convert`.
-- Documents are versioned like other documents: `PUT` needs `If-Match`, restoring creates a new version, apply/validate/export and Git ownership follow [policy-as-code](policies.md#policy-as-code). The console shows the diff against the stored version before it saves, and asks before leaving an unsaved draft.
+- Documents are versioned like other documents: `PUT` needs `If-Match`, restoring creates a new version, apply/validate/export and Git ownership follow [policy-as-code](policies.md#policy-as-code). The console shows the diff against the stored version before it saves, and asks before leaving an unsaved draft. The newest `LCM_VERSION_RETENTION_KEEP` versions (default 50) of each incarnation are kept, plus the current one and the one config sync last applied; older versions are deleted and can no longer be read or restored.
 
 ## Identity, phases and archives
 

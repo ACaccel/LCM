@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/audit"
+	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/engine"
@@ -175,6 +177,8 @@ func TestRetentionJobsPruneOldData(t *testing.T) {
 			c.RunRetentionKeep = 1
 			c.RunRetentionAge = 24 * time.Hour
 			c.TimelineRetention = 90 * 24 * time.Hour
+			c.VersionKeep = 1
+			c.FailedLoginKeep = 1
 		}
 	})
 	h.deploy(`
@@ -206,6 +210,25 @@ spec:
 	if _, err := h.app.Locks.TryAcquire(h.ctx, "short", "someone", time.Second); err != nil {
 		t.Fatal(err)
 	}
+	for version, port := range []string{"a", "b", "c"} {
+		if _, err := h.app.Modules.Put(h.ctx, []byte(`
+apiVersion: lcm/v2
+kind: Module
+metadata: { name: kept }
+spec:
+  nodes:
+    - { id: in, type: module.input, next: { out: [o] } }
+    - { id: o, type: module.output, props: { port: `+port+` } }
+`), version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"mallory", "eve"} {
+		attempt := auth.WithActor(h.ctx, auth.Actor{Kind: auth.KindUser, Name: name})
+		if err := h.app.Audit.Record(attempt, "auth.login", "", audit.OutcomeDenied, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	h.advance(48 * time.Hour)
 	base := h.clk.Pending()
@@ -221,16 +244,18 @@ spec:
 	}
 	// Other loops can register their timers before the retention pass has
 	// finished, so wait for its effects rather than for a timer count alone.
-	counts := func() (runs, timeline, locks int) {
+	counts := func() (runs, timeline, locks, modules, logins int) {
 		return count(`SELECT COUNT(*) FROM runs`),
 			count(`SELECT COUNT(*) FROM timeline WHERE resource = 'ghost'`),
-			count(`SELECT COUNT(*) FROM locks`)
+			count(`SELECT COUNT(*) FROM locks`),
+			count(`SELECT COUNT(*) FROM module_versions WHERE name = 'kept'`),
+			count(`SELECT COUNT(*) FROM audit_log WHERE action = 'auth.login' AND outcome = 'denied'`)
 	}
 	deadline := time.Now().Add(waitTimeout)
-	runs, timeline, locks := counts()
-	for (runs != 1 || timeline != 1 || locks != 0) && time.Now().Before(deadline) {
+	runs, timeline, locks, modules, logins := counts()
+	for (runs != 1 || timeline != 1 || locks != 0 || modules != 1 || logins != 1) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
-		runs, timeline, locks = counts()
+		runs, timeline, locks, modules, logins = counts()
 	}
 	if runs != 1 {
 		t.Errorf("runs left = %d, want 1", runs)
@@ -240,6 +265,12 @@ spec:
 	}
 	if locks != 0 {
 		t.Errorf("expired locks left = %d", locks)
+	}
+	if modules != 1 {
+		t.Errorf("module versions left = %d, want 1", modules)
+	}
+	if logins != 1 {
+		t.Errorf("failed logins left = %d, want 1", logins)
 	}
 }
 

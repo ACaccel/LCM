@@ -184,7 +184,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 			}
 		}
 		// Receipts and completion evidence live in operations, independently of event retention.
-		if err = trimEvents(ctx, tx); err != nil {
+		if err = trimEvents(ctx, tx, r.ID); err != nil {
 			return err
 		}
 		return saveStatus(ctx, tx, r.ID, next, identity, snap.ObservedAt)
@@ -418,40 +418,4 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ready:
 		}
 	}
-}
-
-// Prune bounds storage while retaining the current baseline and operation evidence.
-func (m *Manager) Prune(ctx context.Context) error {
-	now := m.clk.Now()
-	jobs := []struct {
-		query string
-		args  []any
-	}{
-		{`DELETE FROM resource_snapshots WHERE id IN (SELECT id FROM resource_snapshots WHERE observed_at<? AND id NOT IN (SELECT MAX(id) FROM resource_snapshots GROUP BY resource_id) LIMIT 5000)`, []any{now.Add(-m.rawRetention).UnixMilli()}},
-		{`DELETE FROM resource_points WHERE id IN (SELECT id FROM resource_points WHERE bucket_at<? LIMIT 5000)`, []any{now.Add(-m.rollupRetention).UnixMilli()}},
-		{`DELETE FROM resource_events WHERE id IN (SELECT id FROM resource_events WHERE ingested_at<? LIMIT 5000)`, []any{now.Add(-m.eventRetention).UnixMilli()}},
-		{`DELETE FROM resource_snapshots WHERE id IN (SELECT id FROM resource_snapshots WHERE id < (SELECT id FROM resource_snapshots ORDER BY id DESC LIMIT 1 OFFSET 199999) AND id NOT IN (SELECT MAX(id) FROM resource_snapshots GROUP BY resource_id) LIMIT 5000)`, nil},
-		{`DELETE FROM resource_points WHERE id IN (SELECT id FROM resource_points WHERE id < (SELECT id FROM resource_points ORDER BY id DESC LIMIT 1 OFFSET 199999) LIMIT 5000)`, nil},
-		{`DELETE FROM resource_events WHERE id IN (SELECT id FROM resource_events WHERE id <= (SELECT MAX(id)-200000 FROM resource_events) LIMIT 5000)`, nil},
-	}
-	for _, job := range jobs {
-		for {
-			var n int64
-			err := m.db.Write(ctx, func(tx *sql.Tx) error {
-				result, err := tx.ExecContext(ctx, job.query, job.args...)
-				if err != nil {
-					return err
-				}
-				n, err = result.RowsAffected()
-				return err
-			})
-			if err != nil {
-				return err
-			}
-			if n < 5000 {
-				break
-			}
-		}
-	}
-	return nil
 }

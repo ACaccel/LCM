@@ -58,9 +58,7 @@ func BenchmarkJournalBurst(b *testing.B) {
 		b.Fatalf("event capacity exceeded: %d", count)
 	}
 	e.clk.Advance(100 * 24 * time.Hour)
-	if err := e.m.Prune(e.ctx); err != nil {
-		b.Fatal(err)
-	}
+	e.prune(b)
 	if err := e.db.Reader().QueryRow(`SELECT COUNT(*) FROM resource_events`).Scan(&count); err != nil {
 		b.Fatal(err)
 	}

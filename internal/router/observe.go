@@ -226,7 +226,7 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot) ([]
 			}
 			published = append(published, *e)
 		}
-		if err := resource.TrimEvents(ctx, tx); err != nil {
+		if err := resource.TrimEvents(ctx, tx, r.ID); err != nil {
 			return err
 		}
 		return saveStatus(ctx, tx, r.ID, next, snap.ObservedAt)

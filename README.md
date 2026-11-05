@@ -96,6 +96,9 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |
 | `LCM_RUN_RETENTION_AGE` | `--run-retention-age` | `720h` | Finished runs younger than this are kept; older ones beyond the newest N are deleted |
 | `LCM_DEPLOYMENT_RETENTION_KEEP` | `--deployment-retention-keep` | `100` | Deployment records kept per service; the idempotency records of finished actions follow the run retention age |
+| `LCM_VERSION_RETENTION_KEEP` | `--version-retention-keep` | `50` | Versions kept per Resource, Policy and Module document; older versions are deleted unless still in use (the current or deployed version, a version a stored run uses, the version config sync last applied) |
+| `LCM_OPERATION_RETENTION` | `--operation-retention` | `2160h` | How long finished machine/router operations, security host operations and notification test episodes are kept after their last update; unresolved, running and indeterminate ones are kept until they finish |
+| `LCM_FAILED_LOGIN_RETENTION_KEEP` | `--failed-login-retention-keep` | `10000` | Failed-login audit entries kept, oldest removed first; every other audit entry is kept forever |
 | `LCM_MEMORY_LIMIT` | `--memory-limit` | `40MiB` | Soft memory limit of the Go runtime (a size such as `40MiB` or `64M`; `0` or `off` disables it). A `GOMEMLIMIT` in the environment is respected unless this is set explicitly |
 | `LCM_PPROF_LISTEN` | `--pprof-listen` | empty | Serve `net/http/pprof` on this loopback address for diagnosis; off when empty |
 | `LCM_PRUNE_INTERVAL` | `--prune-interval` | `1h` | How often the retention jobs run |

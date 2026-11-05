@@ -47,3 +47,28 @@ func FailInserts(t testing.TB, db *store.DB, table string) (restore func()) {
 		}
 	}
 }
+
+// QueryPlan returns the detail column of EXPLAIN QUERY PLAN for query, one
+// entry per plan step, so that a test can show which index a statement
+// uses.
+func QueryPlan(t testing.TB, db *store.DB, query string, args ...any) []string {
+	t.Helper()
+	rows, err := db.Reader().Query(`EXPLAIN QUERY PLAN `+query, args...)
+	if err != nil {
+		t.Fatalf("storetest: explain: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("storetest: explain: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("storetest: explain: %v", err)
+	}
+	return plan
+}

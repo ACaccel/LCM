@@ -44,6 +44,7 @@ import (
 	"github.com/ACaccel/lcm/internal/nodes/notify"
 	"github.com/ACaccel/lcm/internal/nodes/stateful"
 	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/retention"
 	"github.com/ACaccel/lcm/internal/router"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 	"github.com/ACaccel/lcm/internal/secret"
@@ -152,7 +153,10 @@ type App struct {
 	Triggers       *trigger.Manager
 	// ConfigSync applies documents and syncs config sources (policy-as-code).
 	ConfigSync *configsync.Syncer
-	Clock      clock.Clock
+	// Retention bounds document versions, finished operations and
+	// failed-login audit entries across components.
+	Retention *retention.Pruner
+	Clock     clock.Clock
 
 	log      *slog.Logger
 	listener net.Listener
@@ -275,6 +279,11 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	a.State = state.New(a.DB, state.WithClock(clk.Now))
+	if a.Retention, err = retention.New(retention.Config{
+		DB: a.DB, Clock: clk, VersionKeep: cfg.VersionKeep, OperationAge: cfg.OperationRetention, FailedLoginKeep: cfg.FailedLoginKeep,
+	}); err != nil {
+		return nil, err
+	}
 	a.Locks = lock.New(a.DB, lock.WithClock(clk), lock.WithAudit(a.Audit))
 	a.Maintenance = maintenance.New(a.DB)
 	// The monitor comes first: the resource store validates every saved
@@ -335,7 +344,6 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Machines, err = machine.New(machine.Config{
 		DB: a.DB, Resources: a.Resources, Native: a.Monitor, Audit: a.Audit, Clock: clk, Gate: a.Maintenance,
 		Observer: observer, Power: backend, MaintenancePreflight: controllerUpdatePending, Log: log.With("component", "machine"),
-		RawRetention: cfg.MonitorRawRetention, RollupRetention: cfg.MonitorRollupRetention, EventRetention: cfg.TimelineRetention,
 		OnEvent: func(e machine.Event) { publishObservation(a.Events, a.Resources, e) },
 	})
 	if err != nil {

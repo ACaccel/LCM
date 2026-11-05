@@ -164,17 +164,14 @@ type Config struct {
 	// Resources holds machine identities, documents and phases.
 	Resources *resource.Store
 	// Native, when set, receives every native health evaluation.
-	Native          NativeHealth
-	Audit           *audit.Log
-	Clock           clock.Clock
-	Gate            *maintenance.Gate
-	Observer        Observer
-	Power           PowerBackend
-	Log             *slog.Logger
-	OnEvent         func(Event)
-	RawRetention    time.Duration
-	RollupRetention time.Duration
-	EventRetention  time.Duration
+	Native   NativeHealth
+	Audit    *audit.Log
+	Clock    clock.Clock
+	Gate     *maintenance.Gate
+	Observer Observer
+	Power    PowerBackend
+	Log      *slog.Logger
+	OnEvent  func(Event)
 }
 
 // Manager owns machine state, but starts no goroutines until Run is called.
@@ -190,9 +187,6 @@ type Manager struct {
 	onEvent              func(Event)
 	resources            *resource.Store
 	native               NativeHealth
-	rawRetention         time.Duration
-	rollupRetention      time.Duration
-	eventRetention       time.Duration
 	pollMu               sync.Mutex
 	controlMu            sync.Mutex
 
@@ -218,19 +212,7 @@ func New(c Config) (*Manager, error) {
 	if c.Log == nil {
 		c.Log = slog.New(slog.DiscardHandler)
 	}
-	if c.RawRetention == 0 {
-		c.RawRetention = 7 * 24 * time.Hour
-	}
-	if c.EventRetention == 0 {
-		c.EventRetention = 90 * 24 * time.Hour
-	}
-	if c.RollupRetention == 0 {
-		c.RollupRetention = 90 * 24 * time.Hour
-	}
-	if c.RawRetention <= 0 || c.EventRetention <= 0 || c.RollupRetention < c.RawRetention {
-		return nil, errors.New("machine: invalid retention")
-	}
-	return &Manager{db: c.DB, audit: c.Audit, clk: c.Clock, gate: c.Gate, observer: c.Observer, power: c.Power, log: c.Log, onEvent: c.OnEvent, resources: c.Resources, native: c.Native, rawRetention: c.RawRetention, eventRetention: c.EventRetention, rollupRetention: c.RollupRetention, maintenancePreflight: c.MaintenancePreflight}, nil
+	return &Manager{db: c.DB, audit: c.Audit, clk: c.Clock, gate: c.Gate, observer: c.Observer, power: c.Power, log: c.Log, onEvent: c.OnEvent, resources: c.Resources, native: c.Native, maintenancePreflight: c.MaintenancePreflight}, nil
 }
 
 func newID() string {
@@ -306,4 +288,6 @@ func insertEvent(ctx context.Context, tx *sql.Tx, e *Event) error {
 	return resource.InsertEvent(ctx, tx, e)
 }
 
-func trimEvents(ctx context.Context, tx *sql.Tx) error { return resource.TrimEvents(ctx, tx) }
+func trimEvents(ctx context.Context, tx *sql.Tx, id string) error {
+	return resource.TrimEvents(ctx, tx, id)
+}

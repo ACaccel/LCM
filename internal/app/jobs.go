@@ -9,6 +9,7 @@ import (
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
+	"github.com/ACaccel/lcm/internal/resource"
 )
 
 // reconcileInterval is how often lifecycle states are compared with what
@@ -65,15 +66,20 @@ func (a *App) retentionJobs(ctx context.Context) {
 	if err := a.Security.Prune(actorCtx); err != nil && ctx.Err() == nil {
 		a.log.Warn("security retention failed", "error", err)
 	}
-	if err := a.Machines.Prune(ctx); err != nil && ctx.Err() == nil {
-		a.log.Warn("machine retention failed", "error", err)
-	}
 	jobs := []struct {
 		name string
 		run  func(context.Context) (int64, error)
 	}{
 		{"engine runs", func(ctx context.Context) (int64, error) {
 			return a.Engine.Prune(ctx, a.Config.RunRetentionKeep, a.Config.RunRetentionAge)
+		}},
+		{"document versions", a.Retention.Versions},
+		{"finished operations", a.Retention.Operations},
+		{"failed logins", a.Retention.FailedLogins},
+		{"observations", func(ctx context.Context) (int64, error) {
+			return a.Resources.PruneObservations(ctx, resource.ObservationRetention{
+				Snapshots: a.Config.MonitorRawRetention, Points: a.Config.MonitorRollupRetention, Events: a.Config.TimelineRetention,
+			})
 		}},
 		{"timeline", func(ctx context.Context) (int64, error) {
 			return a.Catalog.PruneTimeline(ctx, a.Config.TimelineRetention)
