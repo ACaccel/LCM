@@ -2,6 +2,7 @@ import type { ResourceDetail } from "../../api/types";
 import { HealthPill, ManagedBadges, PhasePill, StatePill, TypeTag } from "../../components/badges";
 import { Pill, Tag } from "../../components/ui";
 import { formatDateTime, formatTime, shortVersion } from "../../lib/format";
+import { translate } from "../../lib/messages";
 import { checkView } from "../../lib/status";
 import { s } from "../../strings";
 import { OperationCard } from "./operations";
@@ -53,10 +54,10 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
                 {s.resource.since} {formatTime(detail.health.since)}
               </span>
             )}
-            {detail.health.reasons.length > 0 && (
+            {detail.health.reasonMessages.length > 0 && (
               <ul aria-label={s.resource.healthReasons}>
-                {detail.health.reasons.map((r, i) => (
-                  <li key={i}>{r}</li>
+                {detail.health.reasonMessages.map((m, i) => (
+                  <li key={i}>{translate(m)}</li>
                 ))}
               </ul>
             )}

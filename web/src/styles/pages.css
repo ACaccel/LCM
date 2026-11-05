@@ -255,13 +255,22 @@ a.stat:hover {
 }
 
 .cards.compact {
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 6px;
 }
 
 .svc-card.compact {
   padding: 6px 10px;
   gap: 3px;
+}
+
+/* Compact cards are narrow: keep the name on one line (the full name is in
+   its title) instead of breaking it mid-word. */
+.svc-card.compact .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .svc-card.attention {
