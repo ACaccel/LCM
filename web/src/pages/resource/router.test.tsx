@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResourceSnapshot, RouterSnapshot } from "../../api/types";
 import { formatBytes } from "../../lib/format";
-import { RouterControls, RouterOverview, RouterSnapshotView } from "./router";
+import { RouterControls, RouterOverview, RouterPowerHost, RouterSnapshotView } from "./router";
 import { jsonResponse, noImpact, operationFixture, routerFixture } from "./test-fixtures";
 
 const snapshot: RouterSnapshot = routerFixture.router!.status!.snapshot!;
@@ -139,7 +139,13 @@ describe("router reboot", () => {
       return jsonResponse({ error: { message: "Unexpected fixture request" } }, 404);
     });
     const user = userEvent.setup();
-    render(wrap(<RouterControls resource={routerFixture} selector="gateway" />));
+    render(
+      wrap(
+        <RouterPowerHost resource={routerFixture} selector="gateway">
+          {(power) => <RouterControls resource={routerFixture} selector="gateway" power={power} />}
+        </RouterPowerHost>,
+      ),
+    );
     const reboot = await screen.findByRole("button", { name: "重新開機" });
     await waitFor(() => expect((reboot as HTMLButtonElement).disabled).toBe(false));
     await user.click(reboot);

@@ -2592,6 +2592,12 @@ export interface components {
             /** @description `steps` with codes (`step.*`), in the same order. */
             stepMessages: components["schemas"]["Message"][];
         };
+        /** @description A started action, answered with 202; the dry run answers an `ActionPlan` instead. */
+        ActionStarted: {
+            actionId: string;
+            /** @enum {string} */
+            status: "running";
+        };
         ActionPlan: components["schemas"]["ActionSteps"] & {
             impact: components["schemas"]["ResourceImpact"];
         };
@@ -2897,6 +2903,17 @@ export interface components {
             targets: components["schemas"]["PolicyTarget"][];
             lastRun: components["schemas"]["LastRun"] | null;
             managedBy: components["schemas"]["ManagedBy"];
+            /** @description How the policy concerns the resource of the `resource` filter; null when the list is not filtered. */
+            relation: components["schemas"]["PolicyRelation"] | null;
+        };
+        PolicyRelation: {
+            /**
+             * @description acts - nodes of the policy act on the resource; dynamic - a trigger listens to the resource and some node picks its resource at run time; watches - a trigger listens to the resource and no node acts on it.
+             * @enum {string}
+             */
+            kind: "acts" | "dynamic" | "watches";
+            /** @description Node types acting on the resource (kind acts), else empty. */
+            types: string[];
         };
         PolicyTarget: {
             /** @description Scoped node id such as deploy or mod/restart. */
@@ -4533,11 +4550,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        actionId: string;
-                        /** @enum {string} */
-                        status: "running";
-                    };
+                    "application/json": components["schemas"]["ActionStarted"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -5335,6 +5348,8 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
+                /** @description Keep only deployed policies that concern this resource (by name or `@id`) and report how in `relation`. */
+                resource?: string;
             };
             header?: never;
             path?: never;
@@ -5354,6 +5369,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     getPolicy: {

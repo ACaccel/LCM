@@ -42,9 +42,9 @@ function ChecksPanel({ detail, selector, strip }: { detail: ResourceDetail; sele
               </span>
             )}
           </p>
-          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <ul className="plain-list">
             {checks.map((c) => (
-              <li key={c.name} className="row between" style={{ padding: "4px 0" }}>
+              <li key={c.name} className="row between list-item">
                 <span>{c.name}</span>
                 <Pill view={checkView(c)} title={c.message} />
               </li>
@@ -117,7 +117,7 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
             )}
             <dt>{s.resource.labels}</dt>
             <dd>
-              <div className="row" style={{ gap: 4 }}>
+              <div className="row tight">
                 {Object.entries(detail.labels).map(([k, v]) => (
                   <Tag key={k}>{`${k}=${v}`}</Tag>
                 ))}
@@ -132,7 +132,7 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
             <dd>{formatDateTime(detail.createdAt)}</dd>
             <dt>{s.resources.columns.managed}</dt>
             <dd>
-              <div className="row" style={{ gap: 4 }}>
+              <div className="row tight">
                 <ManagedBadges managedBy={detail.managedBy} />
               </div>
             </dd>

@@ -705,3 +705,86 @@ dl.kv dd {
   flex: 1;
   margin: 0;
 }
+
+/* Layout helpers used where a one-off style would otherwise be inline. */
+
+.row.tight {
+  gap: 4px;
+}
+
+.row.snug {
+  gap: 6px;
+}
+
+.row.top {
+  align-items: flex-start;
+}
+
+.row.nowrap {
+  flex-wrap: nowrap;
+}
+
+.stack.tight {
+  gap: 4px;
+}
+
+.stack.snug {
+  gap: 6px;
+}
+
+.fill {
+  flex: 1;
+  min-width: 0;
+}
+
+.min-w-0 {
+  min-width: 0;
+}
+
+.flat {
+  margin: 0;
+}
+
+.flat-top {
+  margin-top: 0;
+}
+
+.break-anywhere {
+  overflow-wrap: anywhere;
+}
+
+.plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.list-item {
+  padding: 4px 0;
+}
+
+.list-item.divided {
+  border-bottom: 1px solid var(--border);
+}
+
+.plain-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+
+.plain-fieldset > legend {
+  margin-bottom: 4px;
+}
+
+.input-mono {
+  font-family: var(--font-mono);
+}
+
+.retry-row {
+  margin-top: 6px;
+}
+
+.required-mark {
+  color: var(--destructive);
+}

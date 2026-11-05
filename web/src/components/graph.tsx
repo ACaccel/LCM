@@ -75,7 +75,7 @@ const PolicyNodeView = memo(
       <div className={cls} style={{ ["--cat" as string]: data.color }} data-node-id={data.id}>
         {data.hasInput && <Handle type="target" position={HandlePosition.Left} id="in" isConnectable={data.editable} style={{ top: HEAD / 2 + 2 }} />}
         <div className="gh">
-          <div style={{ minWidth: 0 }}>
+          <div className="min-w-0">
             <div className="gid" title={data.id}>
               {data.id}
             </div>

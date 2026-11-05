@@ -1,17 +1,27 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { capabilitiesQuery, maintenanceQuery } from "../../../api/observations";
 import type { MachineMaintenance, ResourceCapability, ResourceDetail } from "../../../api/types";
 import { ErrorBox, Spinner } from "../../../components/ui";
-import { useNow } from "../../../hooks";
+import { useTick } from "../../../hooks";
 import { actionLabel } from "../../../lib/actions";
 import { formatDateTime } from "../../../lib/format";
 import { machineFresh, powerUnavailable } from "../../../lib/machine";
 import { s } from "../../../strings";
-import { AttemptPanel, OperationsList, useDurableOperation } from "../operations";
-import { MaintenanceDialog, PowerDialog, PowerMaintenance } from "./dialogs";
+import { AttemptPanel, OperationsList } from "../operations";
+import { usePowerRequest } from "../power";
+import type { PowerControl } from "../power";
+import { MaintenanceDialog, PowerMaintenance } from "./dialogs";
 
 const POWER = ["reboot", "graceful-shutdown"] as const;
+
+interface MachinePowerInput {
+  caps?: ResourceCapability[];
+  maintenance?: MachineMaintenance | null;
+  /** The capabilities or the maintenance could not be read. */
+  unavailable?: boolean;
+}
 
 /**
  * Reboot and shutdown of the local machine. They need fresh verified
@@ -19,36 +29,59 @@ const POWER = ["reboot", "graceful-shutdown"] as const;
  * maintenance (or keeps the active one) and submits. Power-on is not
  * offered: there is no independent channel.
  */
-export function MachineControls({
+export function useMachinePower(resource: ResourceDetail, { caps, maintenance, unavailable }: MachinePowerInput): PowerControl {
+  // Freshness is measured against the clock, so it is re-evaluated on a slow tick.
+  const now = useTick(5000);
+  const status = resource.machine?.status;
+  const notReady =
+    !!unavailable || !machineFresh(resource, now) || status?.identity !== "verified" || status.health !== "healthy" || resource.phase !== "managed";
+  return usePowerRequest(resource, {
+    offered: POWER,
+    reason: (action) => powerUnavailable(action, caps),
+    blocked: () => notReady,
+    unavailable: (action) => (notReady ? s.machine.notReady : powerUnavailable(action, caps)),
+    disclosure: s.machine.powerDisclosure,
+    extra: <PowerMaintenance machine={resource.name} active={maintenance?.state === "active" ? maintenance : null} />,
+  });
+}
+
+/** Reads what the machine power requests depend on and hands the control to a page. */
+export function MachinePowerHost({
   resource,
-  caps,
-  maintenance,
-  unavailable,
+  selector,
+  children,
 }: {
   resource: ResourceDetail;
-  caps?: ResourceCapability[];
-  maintenance?: MachineMaintenance | null;
-  unavailable?: boolean;
+  selector: string;
+  children: (power: PowerControl) => ReactNode;
 }) {
-  const [confirm, setConfirm] = useState<{ action: string; version: number } | null>(null);
-  const now = useNow(true);
-  const op = useDurableOperation(resource);
-  const status = resource.machine?.status;
-  const readiness = unavailable || !machineFresh(resource, now) || status?.identity !== "verified" || status.health !== "healthy" || resource.phase !== "managed";
+  const caps = useQuery(capabilitiesQuery(selector));
+  const maintenance = useQuery(maintenanceQuery(selector));
+  const power = useMachinePower(resource, {
+    caps: caps.isSuccess ? caps.data.items : undefined,
+    maintenance: maintenance.data?.maintenance,
+    unavailable: caps.isError || maintenance.isError || maintenance.isPending,
+  });
+  return (
+    <>
+      {children(power)}
+      {power.dialog}
+    </>
+  );
+}
+
+/** The power requests of a machine with their kept attempt. */
+export function MachineControls({ resource, power }: { resource: ResourceDetail; power: PowerControl }) {
+  const { op } = power;
   return (
     <section className="panel stack">
       <h2>{s.machine.controls}</h2>
-      {POWER.map((action) => {
-        const reason = powerUnavailable(action, caps);
+      {power.offered.map((action) => {
+        const reason = power.reason(action);
         return (
           <div className="stack" key={action}>
             <div>
-              <button
-                type="button"
-                className="btn danger"
-                disabled={!!reason || !!op.attempt || !!op.storageError || readiness}
-                onClick={() => setConfirm({ action, version: resource.version })}
-              >
+              <button type="button" className="btn danger" disabled={power.disabled(action)} onClick={() => power.request(action)}>
                 {actionLabel(action)}
               </button>
             </div>
@@ -60,28 +93,12 @@ export function MachineControls({
       <ErrorBox error={op.storageError} />
       <ErrorBox error={op.mutation.error} />
       <AttemptPanel resource={resource.name} op={op} />
-      {confirm && (
-        <PowerDialog
-          resource={resource}
-          action={confirm.action}
-          version={confirm.version}
-          disclosure={s.machine.powerDisclosure}
-          unavailable={readiness ? s.machine.notReady : powerUnavailable(confirm.action, caps)}
-          onClose={() => setConfirm(null)}
-          onConfirm={(c) => {
-            op.start(confirm.action, confirm.version, c);
-            setConfirm(null);
-          }}
-        >
-          <PowerMaintenance machine={resource.name} active={maintenance?.state === "active" ? maintenance : null} />
-        </PowerDialog>
-      )}
     </section>
   );
 }
 
 /** The machine's maintenance and operations tab. */
-export function MachineOperationsTab({ resource, selector }: { resource: ResourceDetail; selector: string }) {
+export function MachineOperationsTab({ resource, selector, power }: { resource: ResourceDetail; selector: string; power: PowerControl }) {
   const caps = useQuery(capabilitiesQuery(selector));
   const maintenance = useQuery(maintenanceQuery(selector));
   const [dialog, setDialog] = useState<"enter" | "exit" | null>(null);
@@ -128,12 +145,7 @@ export function MachineOperationsTab({ resource, selector }: { resource: Resourc
         </div>
       </section>
       <ErrorBox error={caps.error} onRetry={() => void caps.refetch()} />
-      <MachineControls
-        resource={resource}
-        caps={caps.isSuccess ? caps.data.items : undefined}
-        maintenance={active}
-        unavailable={caps.isError || maintenance.isError || maintenance.isPending}
-      />
+      <MachineControls resource={resource} power={power} />
       <OperationsList resource={selector} />
       {dialog && <MaintenanceDialog machine={resource} exit={dialog === "exit"} onClose={() => setDialog(null)} />}
     </div>

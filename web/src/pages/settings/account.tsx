@@ -6,7 +6,7 @@ import { s } from "../../strings";
 export function AccountPanel() {
   const me = useQuery(meQuery());
   return (
-    <div className="stack" style={{ maxWidth: 560 }}>
+    <div className="stack narrow">
       <h2>{s.settings.accountPanel.title}</h2>
       <Async q={me}>
         {(d) => (

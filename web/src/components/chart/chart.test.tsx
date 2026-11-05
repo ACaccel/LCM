@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { BarSeries, ChartFrame, LineSeries, RangeSwitch, ThresholdMark, UsageBar, usageTone } from ".";
+import { BarSeries, ChartFrame, ChartKey, ChartTooltip, LineSeries, RangeSwitch, ThresholdMark, TimeSeriesChart, TipRow, UsageBar, fmtBytes, fmtCelsius, fmtCount, fmtMs, fmtPercent, fmtRate, usageTone } from ".";
 import type { RangeKey } from ".";
 import { useState } from "react";
+import { s } from "../../strings";
 
 const T0 = Date.parse("2026-11-05T00:00:00Z");
 const times = [T0, T0 + 3_600_000, T0 + 7_200_000];
@@ -163,5 +164,115 @@ describe("UsageBar", () => {
     expect(container.textContent).toBe("未知");
     rerender(<UsageBar value={140} label="x" />);
     expect((container.querySelector(".usage-fill") as HTMLElement).style.width).toBe("100%");
+  });
+});
+
+describe("value formatters", () => {
+  it("trims trailing zeros and keeps one decimal at most", () => {
+    expect(fmtPercent(12.5)).toBe("12.5%");
+    expect(fmtPercent(30)).toBe("30%");
+    expect(fmtPercent(33.333)).toBe("33.3%");
+    expect(fmtCelsius(47.04)).toBe("47 °C");
+    expect(fmtCelsius(47.25)).toBe("47.3 °C");
+  });
+
+  it("abbreviates large counts but not small ones", () => {
+    expect(fmtCount(0)).toBe("0");
+    expect(fmtCount(9_999)).toBe("9999");
+    expect(fmtCount(10_000)).toBe("10k");
+    expect(fmtCount(12_500)).toBe("12.5k");
+  });
+
+  it("formats durations, sizes and rates with their units", () => {
+    expect(fmtMs(250)).toBe("250ms");
+    expect(fmtBytes(1024)).toMatch(/KiB|KB/);
+    expect(fmtRate(1024)).toBe(`${fmtBytes(1024)}/s`);
+  });
+});
+
+describe("ChartTooltip and ChartKey", () => {
+  it("sits right of the cursor in the left part of the chart and flips left in the right part", () => {
+    const view = render(
+      <ChartTooltip x={100} width={400}>
+        value
+      </ChartTooltip>,
+    );
+    expect(screen.getByRole("status").className).not.toContain("left");
+    view.rerender(
+      <ChartTooltip x={300} width={400}>
+        value
+      </ChartTooltip>,
+    );
+    expect(screen.getByRole("status").className).toContain("left");
+  });
+
+  it("shows a tooltip row as colour key, name and value", () => {
+    const { container } = render(<TipRow color="red" name="CPU" value="12%" dashed />);
+    expect(screen.getByText("CPU")).toBeTruthy();
+    expect(screen.getByText("12%").tagName).toBe("STRONG");
+    expect(container.querySelector(".tip-key.dashed")).toBeTruthy();
+  });
+
+  it("names every series and tells lines, dashed lines and bars apart by shape", () => {
+    const { container } = render(
+      <ChartKey
+        items={[
+          { name: "Requests", color: "var(--chart-1)", swatch: true },
+          { name: "Down", color: "var(--chart-2)", dashed: true },
+          { name: "Up", color: "var(--chart-3)" },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Requests")).toBeTruthy();
+    expect(container.querySelector(".key.bar")).toBeTruthy();
+    expect(container.querySelector(".key.series-dashed")).toBeTruthy();
+    expect(container.querySelector(".key.series")).toBeTruthy();
+    // The colour key is decoration: the name carries the identity.
+    expect([...container.querySelectorAll("i")].every((i) => i.getAttribute("aria-hidden") === "true")).toBe(true);
+  });
+});
+
+describe("TimeSeriesChart", () => {
+  const point = (i: number, v: number | null) => ({ t: T0 + i * 3_600_000, v });
+  const cpu = { name: "CPU", color: "var(--chart-1)", points: [point(0, 10), point(1, 40), point(2, 30)] };
+  const memory = { name: "Memory", color: "var(--chart-2)", dashed: true, points: [point(0, 50), point(1, null), point(2, 70)] };
+  const base = { from: T0, to: T0 + 7_200_000, format: (v: number) => `${v}%` };
+
+  it("names the chart with the latest value of each series and its range", () => {
+    render(<TimeSeriesChart name="Usage" series={[cpu, memory]} {...base} />);
+    const frame = screen.getByRole("group", { name: /Usage/ });
+    expect(frame.getAttribute("aria-label")).toContain("CPU 30%");
+    expect(frame.getAttribute("aria-label")).toContain("Memory 70%");
+  });
+
+  it("says a series has no value instead of showing zero", () => {
+    render(<TimeSeriesChart name="Usage" series={[{ ...cpu, points: [point(0, null)] }]} {...base} />);
+    expect(screen.getByRole("group", { name: /Usage/ }).getAttribute("aria-label")).toContain(`CPU ${s.chart.noValue}`);
+  });
+
+  it("shows a legend only when there is more than one series", () => {
+    const view = render(<TimeSeriesChart name="Usage" series={[cpu]} {...base} />);
+    expect(view.container.querySelector(".chart-legend")).toBeNull();
+    view.rerender(<TimeSeriesChart name="Usage" series={[cpu, memory]} {...base} />);
+    expect(within(view.container.querySelector(".chart-legend") as HTMLElement).getByText("Memory")).toBeTruthy();
+  });
+
+  it("lists every series at the focused time and marks a missing sample", () => {
+    render(<TimeSeriesChart name="Usage" series={[cpu, memory]} {...base} />);
+    const frame = screen.getByRole("group", { name: /Usage/ });
+    fireEvent.focus(frame);
+    // Focus starts on the latest sample.
+    let tip = screen.getByRole("status");
+    expect(within(tip).getByText("CPU").parentElement?.textContent).toContain("30%");
+    expect(within(tip).getByText("Memory").parentElement?.textContent).toContain("70%");
+    fireEvent.keyDown(frame, { key: "ArrowLeft" });
+    tip = screen.getByRole("status");
+    expect(within(tip).getByText("CPU").parentElement?.textContent).toContain("40%");
+    expect(within(tip).getByText("Memory").parentElement?.textContent).toContain(s.chart.noValue);
+  });
+
+  it("draws a limit line for each threshold", () => {
+    const { container } = render(<TimeSeriesChart name="Usage" series={[cpu]} {...base} thresholds={[{ value: 90, label: "90%" }]} />);
+    expect(container.querySelector(".chart-threshold")).toBeTruthy();
   });
 });

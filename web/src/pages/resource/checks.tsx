@@ -106,7 +106,7 @@ export function ChecksTab({ resource }: { resource: string }) {
               <span className="meta">{s.checks.latency}</span>
               <RangeSwitch value={win} onChange={setWin} />
             </div>
-            <div className="cards" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 340px), 1fr))" }}>
+            <div className="cards wide">
               {data.checks.map((c) => (
                 <CheckPanel key={`${c.name}-${win}`} resource={resource} check={c} windowKey={win} />
               ))}

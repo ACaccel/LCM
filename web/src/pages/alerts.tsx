@@ -89,7 +89,7 @@ export function AlertsPage() {
                     <code>{a.source}</code>
                   </td>
                   <td>
-                    <div className="row" style={{ gap: 4 }}>
+                    <div className="row tight">
                       {Object.entries(a.labels ?? {}).map(([k, v]) => (
                         <Tag key={k}>{`${k}=${v}`}</Tag>
                       ))}

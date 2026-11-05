@@ -287,7 +287,7 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
         )}
       </PageHead>
 
-      <div className="stack" style={{ marginBottom: 10 }}>
+      <div className="stack spaced">
         {baseVersion === null && <div className="banner">{s.editor.newBanner}</div>}
         {dirty && <div className="banner warn">{s.editor.unsaved}</div>}
         {serverNewer !== null && <div className="banner warn">{s.editor.newerVersion(serverNewer)}</div>}
@@ -320,7 +320,7 @@ function EditorBody({ name, init }: { name: string; init: Init }) {
           )}
         </div>
         <div className="panel side-pane">
-          <div className="tabs" style={{ margin: "0 0 8px" }}>
+          <div className="tabs flush">
             <button type="button" aria-selected={tab === "props"} onClick={() => setTab("props")}>
               {s.editor.tabProps}
             </button>

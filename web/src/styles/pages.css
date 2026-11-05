@@ -282,3 +282,61 @@ a.stat:hover {
   flex-wrap: wrap;
   gap: 10px;
 }
+
+.narrow {
+  max-width: 560px;
+}
+
+.cards.wide {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+
+.block.tall {
+  max-height: 60vh;
+}
+
+.meta.slot {
+  height: 24px;
+}
+
+.stat b.tone-bad {
+  color: var(--destructive);
+}
+
+.stat b.tone-warn {
+  color: var(--warning);
+}
+
+.node-prop-heading {
+  margin: 4px 0;
+}
+
+.prop-entry {
+  flex-wrap: nowrap;
+}
+
+.panel.prop-entry {
+  padding: 8px;
+}
+
+.prop-key {
+  min-width: 80px;
+  padding-top: 6px;
+}
+
+.prop-key-input {
+  max-width: 160px;
+}
+
+textarea.autosize {
+  field-sizing: content;
+  min-height: 32px;
+}
+
+.stack.spaced {
+  margin-bottom: 10px;
+}
+
+.tabs.flush {
+  margin: 0 0 8px;
+}

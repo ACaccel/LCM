@@ -57,7 +57,7 @@ function ParsedInput({
     placeholder,
     spellCheck: false,
     "aria-invalid": invalid || undefined,
-    style: mono ? { fontFamily: "var(--font-mono)" } : undefined,
+    className: mono ? "input-mono" : undefined,
     onBlur: () => setDraft(null),
   };
   const change = (t: string) => {
@@ -67,7 +67,7 @@ function ParsedInput({
   };
   return (
     <>
-      {multiline ? <textarea rows={1} {...common} style={{ ...common.style, fieldSizing: "content", minHeight: 32 } as React.CSSProperties} onChange={(e) => change(e.target.value)} /> : <input type="text" {...common} onChange={(e) => change(e.target.value)} />}
+      {multiline ? <textarea rows={1} {...common} className={`${common.className ?? ""} autosize`.trim()} onChange={(e) => change(e.target.value)} /> : <input type="text" {...common} onChange={(e) => change(e.target.value)} />}
       {invalid && <span className="hint" role="alert">{s.editor.invalidValue}</span>}
     </>
   );
@@ -118,7 +118,7 @@ function Scalar({ schema, value, ctx, path }: { schema: NodeProp; value: unknown
           spellCheck={false}
           value={typeof value === "string" ? value : value === undefined ? "" : JSON.stringify(value)}
           placeholder={mono ? s.editor.exprHint : placeholder}
-          style={mono ? { fontFamily: "var(--font-mono)" } : undefined}
+          className={mono ? "input-mono" : undefined}
           onChange={(e) => onValue(e.target.value === "" ? undefined : e.target.value)}
         />
       );
@@ -132,7 +132,7 @@ function Label({ schema, id, labelId }: { schema: NodeProp; id?: string; labelId
     <Tag htmlFor={id} id={labelId} className={id ? undefined : "label"}>
       {schema.name}
       {schema.required && (
-        <span aria-label={s.common.required} title={s.common.required} style={{ color: "var(--destructive)" }}>
+        <span aria-label={s.common.required} title={s.common.required} className="required-mark">
           {" "}
           *
         </span>
@@ -151,10 +151,10 @@ function ArrayField({ schema, value, ctx, path }: { schema: NodeProp; value: unk
   const blank = item.type === "object" ? {} : item.type === "boolean" ? false : item.type === "integer" || item.type === "number" ? 0 : "";
   const add = () => ctx.set(path, [...list, blank]);
   return (
-    <div className="stack" style={{ gap: 6 }}>
+    <div className="stack snug">
       {list.map((el, i) => (
-        <div key={i} className={item.type === "object" ? "panel" : "row"} style={{ padding: item.type === "object" ? 8 : 0, flexWrap: "nowrap" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
+        <div key={i} className={item.type === "object" ? "panel prop-entry" : "row prop-entry"}>
+          <div className="fill">
             {item.type === "object" && item.props ? (
               <ObjectFields props={item.props} value={el} ctx={ctx} path={[...path, i]} />
             ) : (
@@ -181,11 +181,11 @@ function MapField({ schema, value, ctx, path }: { schema: NodeProp; value: unkno
   const item: NodeProp = schema.items ?? { name: "", type: "any" };
   const [pending, setPending] = useState("");
   return (
-    <div className="stack" style={{ gap: 6 }}>
+    <div className="stack snug">
       {entries.map(([k, v]) => (
-        <div key={k} className="row" style={{ flexWrap: "nowrap", alignItems: "flex-start" }}>
-          <code style={{ minWidth: 80, paddingTop: 6 }}>{k}</code>
-          <div style={{ flex: 1, minWidth: 0 }}>
+        <div key={k} className="row top prop-entry">
+          <code className="prop-key">{k}</code>
+          <div className="fill">
             <PropInput schema={{ ...item, name: k }} value={v} ctx={ctx} path={[...path, k]} />
           </div>
           <button
@@ -202,7 +202,7 @@ function MapField({ schema, value, ctx, path }: { schema: NodeProp; value: unkno
         </div>
       ))}
       <div className="row">
-        <input type="text" aria-label={s.editor.keyName} placeholder={s.editor.keyName} value={pending} onChange={(e) => setPending(e.target.value)} style={{ maxWidth: 160 }} />
+        <input type="text" aria-label={s.editor.keyName} placeholder={s.editor.keyName} value={pending} onChange={(e) => setPending(e.target.value)} className="prop-key-input" />
         <button
           type="button"
           className="btn small"
@@ -222,7 +222,7 @@ function MapField({ schema, value, ctx, path }: { schema: NodeProp; value: unkno
 function ObjectFields({ props, value, ctx, path }: { props: readonly NodeProp[]; value: unknown; ctx: Ctx; path: Path }) {
   const rec = typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   return (
-    <div className="stack" style={{ gap: 4 }}>
+    <div className="stack tight">
       {props.map((p) => (
         <PropField key={p.name} schema={p} value={rec[p.name]} ctx={ctx} path={[...path, p.name]} />
       ))}

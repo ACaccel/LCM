@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Overview } from "../api/types";
@@ -125,5 +126,78 @@ describe("overview page", () => {
   it("offers to create the first resource when there are none", async () => {
     setup({ ...overview(0), types: [], resources: [], attention: [] });
     expect(await screen.findByText(s.overview.createFirst)).toBeTruthy();
+  });
+});
+
+describe("overview page states", () => {
+  function mount(handler: (url: URL) => Response | Promise<Response>) {
+    vi.stubGlobal("fetch", async (req: Request) => handler(new URL(req.url)));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <OverviewPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+  const quietTimeline = (url: URL) => (url.pathname === "/api/v1/timeline" ? jsonResponse({ items: [], nextCursor: null }) : undefined);
+
+  it("shows a spinner while the overview loads, then the page", async () => {
+    let finish: (r: Response) => void = () => undefined;
+    mount((url) => quietTimeline(url) ?? new Promise<Response>((resolve) => (finish = resolve)));
+    expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
+    expect(screen.queryByText(s.overview.needsAttention)).toBeNull();
+    finish(jsonResponse(overview(2)));
+    expect(await screen.findByRole("heading", { name: s.overview.needsAttention })).toBeTruthy();
+  });
+
+  it("reports a failed overview without claiming all is clear, and retries on request", async () => {
+    let failing = true;
+    mount((url) => quietTimeline(url) ?? (failing ? jsonResponse({ error: { code: "unavailable", message: "Overview failed", details: {} } }, 503) : jsonResponse(overview(2))));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Overview failed");
+    expect(screen.queryByText(s.overview.allClear)).toBeNull();
+    failing = false;
+    await userEvent.click(screen.getByRole("button", { name: s.common.retry }));
+    expect(await screen.findByRole("heading", { name: s.overview.needsAttention })).toBeTruthy();
+  });
+
+  it("keeps the overview when only the recent events fail", async () => {
+    mount((url) => (url.pathname === "/api/v1/overview" ? jsonResponse(overview(2)) : jsonResponse({ error: { code: "unavailable", message: "Events failed", details: {} } }, 503)));
+    expect(await screen.findByRole("heading", { name: s.overview.needsAttention })).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/Events failed/)).toBeTruthy());
+  });
+
+  it("counts resources per type and health and links each count into the filtered list", async () => {
+    mount((url) => quietTimeline(url) ?? jsonResponse(overview(10)));
+    const table = (await screen.findByRole("heading", { name: s.overview.byType })).nextElementSibling as HTMLElement;
+    const row = within(table).getByRole("row", { name: new RegExp(s.resourceType.service) });
+    expect(within(row).getByRole("link", { name: s.resourceType.service }).getAttribute("href")).toBe("/resources?type=service");
+    // Only non-zero health counts are links.
+    const hrefs = within(row)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/resources?type=service&health=down&phase=managed");
+    expect(hrefs).toContain("/resources?type=service&health=degraded&phase=managed");
+    expect(hrefs.some((h) => h?.includes("health=unknown"))).toBe(false);
+  });
+
+  it("marks degraded and down counts by tone only when there are some", async () => {
+    mount((url) => quietTimeline(url) ?? jsonResponse(overview(10)));
+    const stats = await screen.findByLabelText(s.overview.stats);
+    const value = (label: string) => within(stats).getByText(label).previousElementSibling as HTMLElement;
+    expect(value(s.overview.down).className).toContain("tone-bad");
+    expect(value(s.overview.degraded).className).toContain("tone-warn");
+    expect(value(s.overview.healthy).className).toBe("");
+    expect(within(stats).queryByText(s.overview.unknownHealth)).toBeNull();
+  });
+
+  it("explains a resource without availability data instead of drawing an empty strip", async () => {
+    const data = overview(10);
+    data.attention = [{ name: "svc-09", type: "service", state: "running", health: "degraded", since: null, firingAlerts: 0, reasons: [] }];
+    mount((url) => quietTimeline(url) ?? jsonResponse(data));
+    const block = await screen.findByLabelText(s.overview.needsAttention);
+    expect(within(block).getByText(s.checks.none)).toBeTruthy();
+    expect(within(block).queryByText(s.resource.since)).toBeNull();
   });
 });

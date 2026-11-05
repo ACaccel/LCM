@@ -3,6 +3,7 @@
  * Traditional Chinese (Taiwan); technical terms such as policy, run, deploy
  * and commit stay in English.
  */
+import type { Category, DetectionState, Incident, Severity, Source } from "./api/security";
 import type { Deployment, NodeStatus, RunStatus } from "./api/types";
 
 export const s = {
@@ -1085,10 +1086,17 @@ export const sec = {
   profiles: "核准監控範本", required: "必要，不能移除", auditProfiles: "auditd 範本", aideProfiles: "AIDE 範本", profileHelp: "只可切換 root 預先核准的選用範本。AIDE 範圍變更不會接受既有差異或自動重建基線。", noProfiles: "未回報核准範本。", hostScope: "以下控制作用於本機 Machine", schedule: "每日檢查時段", hour: "小時", minute: "分鐘", scheduleHelp: "主機當地時間，每日一次；保留 systemd timer 的執行抖動與低優先權。", scheduleAction: "預覽排程變更", scan: "手動執行 AIDE 比對", baselineRequest: "申請更新基線", baselineHelp: "本頁只建立更新申請；實際接受差異仍需本機 sudo 核准。完整原始報告與檔案內容不透過網頁公開。", nginxHelp: "僅調整已核准分類。觀察模式不會阻擋請求；本頁不能略過 R11 的資料與門檻審閱。", nginxMode: "入口模式", r11: "R11 本機核准", burst: "Burst", connections: "連線上限", preview: "預覽變更", previewTitle: "確認主機變更", previewExpires: "預覽到期", localApproval: "此操作需要後續本機 sudo 核准。", confirmHost: "我已審閱差異、作用範圍與原因", applyHost: "套用已預覽的變更", cancel: "取消", operation: "主機操作", operations: "操作紀錄", operationEmpty: "尚無主機操作紀錄。", queryOperation: "查詢操作", operationId: "操作編號", machineLink: "機器設定", collectionHealth: "收集來源健康摘要", serviceLink: "服務設定", stale: "資料超過 5 分鐘未更新", previewStale: "生效版本已變更或預覽已到期，請重新預覽。", invalidNumber: "請確認數值範圍。", retainAttempt: "原要求已保留在此瀏覽器，重新整理後可繼續查詢。", storageError: "無法保存操作編號，未送出變更。請允許此網站使用瀏覽器儲存空間。", operationStates: { prepared: "已準備", running: "執行中", succeeded: "已驗證成功", failed: "失敗", indeterminate: "結果未確定", "awaiting-local-approval": "等待本機核准" },
 } as const;
 
-/** Labels of security enum values that the console shows. */
+/**
+ * Labels of security enum values that the console shows. The records are typed
+ * by the API enums, so the filter options follow the schema and a new server
+ * value fails to compile until it has a label.
+ */
 export const secLabels = {
-  source: { nginx: "Nginx 入口", auditd: "auditd 稽核", aide: "AIDE 完整性", collector: "收集器", machine: "機器", service: "服務" } as Record<string, string>,
-  delivery: { disabled: "未啟用", pending: "待送", sent: "已送出", failed: "投遞失敗", overflow: "容量丟棄", expired: "過期", filtered: "低於通知級別" } as Record<string, string>,
+  source: { nginx: "Nginx 入口", auditd: "auditd 稽核", aide: "AIDE 完整性", collector: "收集器", machine: "機器", service: "服務" } satisfies Record<Source, string>,
+  delivery: { disabled: "未啟用", pending: "待送", sent: "已送出", failed: "投遞失敗", overflow: "容量丟棄", expired: "過期", filtered: "低於通知級別" } satisfies Record<Incident["delivery"], string>,
+  severity: sec.severityLabels satisfies Record<Severity, string>,
+  state: sec.stateLabels satisfies Record<DetectionState, string>,
+  category: { auth: "auth", api: "api", upload: "upload", socket: "socket", static: "static", other: "other" } satisfies Record<Category, string>,
 };
 
 type Params = Record<string, string>;

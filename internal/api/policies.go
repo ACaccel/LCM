@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/model"
+	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/trigger"
 )
 
 type triggerDTO struct {
@@ -76,6 +79,54 @@ type policySummaryDTO struct {
 	LastRun *lastRunDTO `json:"lastRun"`
 	// ManagedBy is null when only the web UI and API manage the policy.
 	ManagedBy *managedByDTO `json:"managedBy"`
+	// Relation is set only when the list is filtered by resource.
+	Relation *policyRelationDTO `json:"relation"`
+}
+
+// policyRelationDTO says how a policy concerns a resource: "acts" (nodes act
+// on it; Types are their node types), "dynamic" (a trigger listens to it and
+// some node picks its resource at run time) or "watches" (only a trigger
+// listens to it).
+type policyRelationDTO struct {
+	Kind  string   `json:"kind"`
+	Types []string `json:"types"`
+}
+
+// policyRelation resolves how the deployed plan of a policy concerns the
+// resource; nil when it does not.
+func (s *Server) policyRelation(policy string, rec resource.Record) *policyRelationDTO {
+	plan, ok := s.engine.Plan(policy)
+	if !ok {
+		return nil
+	}
+	types := []string{}
+	dynamic := false
+	for _, t := range plan.ResourceTargets() {
+		switch t.Resource {
+		case rec.Name:
+			if !slices.Contains(types, t.Type) {
+				types = append(types, t.Type)
+			}
+		case "":
+			dynamic = true
+		}
+	}
+	if len(types) > 0 {
+		return &policyRelationDTO{Kind: "acts", Types: types}
+	}
+	var labels map[string]string
+	if rec.Document != nil {
+		labels = rec.Document.Metadata.Labels
+	}
+	for _, t := range plan.Triggers() {
+		if trigger.ConcernsResource(t.Type, t.Props, rec.Name, rec.Type, labels) {
+			if dynamic {
+				return &policyRelationDTO{Kind: "dynamic", Types: []string{}}
+			}
+			return &policyRelationDTO{Kind: "watches", Types: []string{}}
+		}
+	}
+	return nil
 }
 
 func (s *Server) policySummary(r *http.Request, info engine.PolicyInfo) (policySummaryDTO, error) {
@@ -115,6 +166,19 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
+	relations := map[string]*policyRelationDTO{}
+	if ref := r.URL.Query().Get("resource"); ref != "" {
+		rec, err := s.resources.Get(r.Context(), ref)
+		if err != nil {
+			s.fail(w, r, err, nil)
+			return
+		}
+		infos = slices.DeleteFunc(infos, func(info engine.PolicyInfo) bool {
+			rel := s.policyRelation(info.Name, rec)
+			relations[info.Name] = rel
+			return rel == nil
+		})
+	}
 	page, next, ok := pageSlice(w, p, infos)
 	if !ok {
 		return
@@ -128,6 +192,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		item.ManagedBy = managed[info.Name]
+		item.Relation = relations[info.Name]
 		items = append(items, item)
 	}
 	writeList(w, items, next)

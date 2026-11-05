@@ -17,7 +17,7 @@ function StateBadges({ o }: { o: Ownership }) {
   if (o.orphaned) out.push(<Pill key="o" view={{ tone: "warn", icon: "▲", label: s.ownership.orphaned }} />);
   if (o.missing) out.push(<Tag key="m">{s.settings.ownership.missing}</Tag>);
   if (out.length === 0) out.push(<Pill key="ok" view={{ tone: "ok", icon: "✓", label: s.settings.ownership.inSync }} />);
-  return <div className="row" style={{ gap: 4 }}>{out}</div>;
+  return <div className="row tight">{out}</div>;
 }
 
 export function OwnershipPanel() {
@@ -87,7 +87,7 @@ export function OwnershipPanel() {
                         <StateBadges o={o} />
                       </td>
                       <td>
-                        <div className="row" style={{ gap: 4 }}>
+                        <div className="row tight">
                           {(o.drifted || o.conflict) && (
                             <>
                               <button type="button" className="btn small" onClick={() => setPending({ kind: "git", item: o })}>

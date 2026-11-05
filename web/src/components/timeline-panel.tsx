@@ -116,8 +116,8 @@ export function TimelinePanel({ resource, withResourceFilter, observations, note
         <Field label={s.timeline.to} htmlFor="tl-to">
           <input id="tl-to" type="datetime-local" value={range.to} onChange={(e) => setTime("to", e.target.value)} />
         </Field>
-        <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend className="meta" style={{ marginBottom: 4 }}>
+        <fieldset className="plain-fieldset">
+          <legend className="meta">
             {s.timeline.kinds}
           </legend>
           <div className="row">

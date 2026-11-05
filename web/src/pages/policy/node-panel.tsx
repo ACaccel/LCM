@@ -24,7 +24,7 @@ function CommitInput({ id, value, onCommit, placeholder, mono }: { id: string; v
       value={draft ?? value}
       placeholder={placeholder}
       spellCheck={false}
-      style={mono ? { fontFamily: "var(--font-mono)" } : undefined}
+      className={mono ? "input-mono" : undefined}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
@@ -114,7 +114,7 @@ export function NodePanel({
         <code>{node.type}</code>
         {schema?.description && <span className="hint">{schema.description}</span>}
       </div>
-      <h3 style={{ margin: "4px 0" }}>{s.editor.props}</h3>
+      <h3 className="node-prop-heading">{s.editor.props}</h3>
       {schema ? (
         <PropsForm schema={schema} value={node.props} issues={issues} idPrefix={`np-${node.index}`} onChange={(next) => apply((t) => setProps(t, node.id, next))} />
       ) : (
@@ -123,12 +123,12 @@ export function NodePanel({
           <RawProps node={node} apply={apply} />
         </>
       )}
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div className="field" style={{ flex: 1 }}>
+      <div className="row top">
+        <div className="field fill">
           <label htmlFor="np-timeout">{s.editor.timeout}</label>
           <CommitInput id="np-timeout" value={node.timeout ?? ""} placeholder="30s" onCommit={(v) => apply((t) => setNodeField(t, node.id, "timeout", v || undefined))} />
         </div>
-        <div className="field" style={{ flex: 1 }}>
+        <div className="field fill">
           <label htmlFor="np-join">{s.editor.joinMode}</label>
           <select id="np-join" value={node.joinMode ?? ""} onChange={(e) => apply((t) => setNodeField(t, node.id, "joinMode", e.target.value || undefined))}>
             <option value="">{s.common.unset}</option>
@@ -137,8 +137,8 @@ export function NodePanel({
           </select>
         </div>
       </div>
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div className="field" style={{ flex: 1 }}>
+      <div className="row top">
+        <div className="field fill">
           <label htmlFor="np-retry">{s.editor.retryMax}</label>
           <CommitInput
             id="np-retry"
@@ -146,11 +146,11 @@ export function NodePanel({
             onCommit={(v) => apply((t) => setRetry(t, node.id, { ...node.retry, max: v === "" || Number.isNaN(Number(v)) ? undefined : Number(v) }))}
           />
         </div>
-        <div className="field" style={{ flex: 1 }}>
+        <div className="field fill">
           <label htmlFor="np-backoff">{s.editor.retryBackoff}</label>
           <CommitInput id="np-backoff" value={node.retry?.backoff ?? ""} placeholder="2s" onCommit={(v) => apply((t) => setRetry(t, node.id, { ...node.retry, backoff: v || undefined }))} />
         </div>
-        <div className="field" style={{ flex: 1 }}>
+        <div className="field fill">
           <label htmlFor="np-maxbackoff">{s.editor.retryMaxBackoff}</label>
           <CommitInput id="np-maxbackoff" value={node.retry?.maxBackoff ?? ""} placeholder="1m" onCommit={(v) => apply((t) => setRetry(t, node.id, { ...node.retry, maxBackoff: v || undefined }))} />
         </div>
@@ -177,8 +177,8 @@ export function PolicySettings({ model, spec, apply, issues }: { model: PolicyMo
           <IssueList issues={issues.map((m) => m.issue)} />
         </div>
       )}
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div className="field" style={{ flex: 1 }}>
+      <div className="row top">
+        <div className="field fill">
           <label htmlFor="ps-mode">{s.editor.concurrency}</label>
           <select id="ps-mode" value={conc.mode ?? ""} onChange={(e) => apply((t) => setPath(t, ["spec", "concurrency", "mode"], e.target.value || undefined))}>
             <option value="">{s.common.unset}</option>
@@ -189,17 +189,17 @@ export function PolicySettings({ model, spec, apply, issues }: { model: PolicyMo
             ))}
           </select>
         </div>
-        <div className="field" style={{ flex: 1 }}>
+        <div className="field fill">
           <label htmlFor="ps-limit">{s.editor.concurrencyLimit}</label>
           <CommitInput id="ps-limit" value={conc.limit ? String(conc.limit) : ""} onCommit={(v) => apply((t) => setPath(t, ["spec", "concurrency", "limit"], v === "" ? undefined : Number(v)))} />
         </div>
       </div>
-      <div className="row" style={{ alignItems: "flex-start" }}>
-        <div className="field" style={{ flex: 1 }}>
+      <div className="row top">
+        <div className="field fill">
           <label htmlFor="ps-timeout">{s.editor.policyTimeout}</label>
           <CommitInput id="ps-timeout" value={typeof spec["timeout"] === "string" ? spec["timeout"] : ""} placeholder="30m" onCommit={(v) => apply((t) => setPath(t, ["spec", "timeout"], v || undefined))} />
         </div>
-        <div className="field" style={{ flex: 1 }}>
+        <div className="field fill">
           <label htmlFor="ps-interrupt">{s.editor.onInterrupt}</label>
           <select id="ps-interrupt" value={typeof spec["onInterrupt"] === "string" ? spec["onInterrupt"] : ""} onChange={(e) => apply((t) => setPath(t, ["spec", "onInterrupt"], e.target.value || undefined))}>
             <option value="">{s.common.unset}</option>

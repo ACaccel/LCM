@@ -87,7 +87,7 @@ function NodeDetail({ run, node, onResume }: { run: Run; node: RunNode; onResume
   return (
     <div className="stack">
       <div className="row between">
-        <h2 style={{ overflowWrap: "anywhere" }}>{node.id}</h2>
+        <h2 className="break-anywhere">{node.id}</h2>
         <Pill view={view} />
       </div>
       <dl className="kv">
@@ -148,13 +148,13 @@ function NodeDetail({ run, node, onResume }: { run: Run; node: RunNode; onResume
       )}
       {node.props !== undefined && (
         <div>
-          <h3 style={{ marginTop: 0 }}>{s.run.props}</h3>
+          <h3 className="flat-top">{s.run.props}</h3>
           <Json value={node.props} />
         </div>
       )}
       {node.output !== undefined && (
         <div>
-          <h3 style={{ marginTop: 0 }}>{s.run.output}</h3>
+          <h3 className="flat-top">{s.run.output}</h3>
           <Json value={node.output} />
         </div>
       )}
@@ -242,7 +242,7 @@ export function RunDetailPage() {
       {run.error && <ErrorBox error={new Error(run.error)} />}
 
       <div className="run-grid">
-        <div style={{ minWidth: 0 }}>
+        <div className="min-w-0">
           {version.isError ? (
             <ErrorBox error={version.error} onRetry={() => void version.refetch()} />
           ) : model ? (

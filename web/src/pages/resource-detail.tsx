@@ -17,12 +17,13 @@ import { ActionDialog } from "./resource/action-dialog";
 import { ChecksTab } from "./resource/checks";
 import { ConfigTab, resourceRef } from "./resource/config-tab";
 import { DeploymentsTab } from "./resource/deployments";
-import { MachineOperationsTab } from "./resource/machine/controls";
+import { MachineOperationsTab, MachinePowerHost } from "./resource/machine/controls";
 import { OverviewTab } from "./resource/overview";
 import { PhaseControls } from "./resource/phase";
 import { PoliciesTab } from "./resource/policies";
 import { RelationsTab } from "./resource/relations";
-import { RouterOperationsTab } from "./resource/router";
+import type { PowerControl } from "./resource/power";
+import { RouterOperationsTab, RouterPowerHost } from "./resource/router";
 
 export type Tab = keyof typeof s.resource.tabs;
 
@@ -51,10 +52,20 @@ interface Pending {
 /**
  * Actions offered by the server for this resource. Service actions open the
  * preview dialog; observation runs at once; durable operations live on the
- * operations tab, where their confirmation and recovery flow is; phase
- * changes have their own confirmation.
+ * power requests open their confirmation here, and their recovery flow is on
+ * the operations tab; phase changes have their own confirmation.
  */
-function ActionBar({ detail, base, onAction }: { detail: ResourceDetail; base: string; onAction: (a: ActionName) => void }) {
+function ActionBar({
+  detail,
+  base,
+  power,
+  onAction,
+}: {
+  detail: ResourceDetail;
+  base: string;
+  power: PowerControl | null;
+  onAction: (a: ActionName) => void;
+}) {
   const qc = useQueryClient();
   const toast = useToast();
   const observe = useMutation({
@@ -103,17 +114,30 @@ function ActionBar({ detail, base, onAction }: { detail: ResourceDetail; base: s
           {actionLabel("observe")}
         </button>
       )}
-      {operations.map((a) => (
-        <Link key={a.name} className="btn" to={`${base}/${opsTab}`} title={s.resource.goOperations}>
-          {actionLabel(a.name)}
-        </Link>
-      ))}
+      {operations.map((a) =>
+        power?.offered.includes(a.name) ? (
+          <button
+            key={a.name}
+            type="button"
+            className="btn"
+            disabled={power.disabled(a.name)}
+            title={power.reason(a.name) || undefined}
+            onClick={() => power.request(a.name)}
+          >
+            {actionLabel(a.name)}
+          </button>
+        ) : (
+          <Link key={a.name} className="btn" to={`${base}/${opsTab}`} title={s.resource.goOperations}>
+            {actionLabel(a.name)}
+          </Link>
+        ),
+      )}
       <PhaseControls detail={detail} />
     </div>
   );
 }
 
-function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefined }) {
+function Detail({ detail, tab, power }: { detail: ResourceDetail; tab: string | undefined; power: PowerControl | null }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const selector = resourceRef(detail);
   const archived = detail.phase === "unmanaged";
@@ -150,7 +174,7 @@ function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefin
           </div>
         }
       >
-        {!archived && <ActionBar detail={detail} base={base} onAction={(a) => setPending({ action: a })} />}
+        {!archived && <ActionBar detail={detail} base={base} power={power} onAction={(a) => setPending({ action: a })} />}
       </PageHead>
       {detail.health.reasons.length > 0 && (
         <p className="meta">
@@ -178,8 +202,8 @@ function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefin
           onDeploy={(version) => setPending({ action: "deploy", version })}
         />
       )}
-      {active === "maintenance" && <MachineOperationsTab resource={detail} selector={selector} />}
-      {active === "operations" && <RouterOperationsTab resource={detail} selector={selector} />}
+      {active === "maintenance" && power && <MachineOperationsTab resource={detail} selector={selector} power={power} />}
+      {active === "operations" && power && <RouterOperationsTab resource={detail} selector={selector} power={power} />}
       {active === "checks" && <ChecksTab resource={selector} />}
       {active === "timeline" && (
         <TimelinePanel resource={detail.name} observations={detail.type === "service" ? undefined : selector} note={detail.type === "machine" ? s.machine.journalNote : undefined} />
@@ -191,6 +215,26 @@ function Detail({ detail, tab }: { detail: ResourceDetail; tab: string | undefin
       {pending && <ActionDialog resource={detail.name} action={pending.action} version={pending.version} jobs={jobs} onClose={() => setPending(null)} />}
     </div>
   );
+}
+
+/** The page of a resource; machines and routers share one power request state between header and operations tab. */
+function DetailWithPower({ detail, tab }: { detail: ResourceDetail; tab: string | undefined }) {
+  const selector = resourceRef(detail);
+  if (detail.type === "machine") {
+    return (
+      <MachinePowerHost resource={detail} selector={selector}>
+        {(power) => <Detail detail={detail} tab={tab} power={power} />}
+      </MachinePowerHost>
+    );
+  }
+  if (detail.type === "router") {
+    return (
+      <RouterPowerHost resource={detail} selector={selector}>
+        {(power) => <Detail detail={detail} tab={tab} power={power} />}
+      </RouterPowerHost>
+    );
+  }
+  return <Detail detail={detail} tab={tab} power={null} />;
 }
 
 export function ResourceDetailPage() {
@@ -220,5 +264,5 @@ export function ResourceDetailPage() {
     );
   }
   // A new incarnation under the same name gets a fresh page state.
-  return <Detail key={q.data.id} detail={q.data} tab={tab} />;
+  return <DetailWithPower key={q.data.id} detail={q.data} tab={tab} />;
 }

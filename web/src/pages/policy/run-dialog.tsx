@@ -50,7 +50,7 @@ export function ManualRunDialog({ policy, triggers, deployed, onClose }: { polic
     >
       <div className="stack">
         {!deployed && <div className="banner warn">{s.editor.runNotDeployed}</div>}
-        <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+        <fieldset className="plain-fieldset">
           <legend className="meta">{s.editor.runMode}</legend>
           <div className="row">
             {(["dry", "live"] as const).map((v) => (

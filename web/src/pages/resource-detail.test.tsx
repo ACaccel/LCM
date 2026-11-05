@@ -186,6 +186,29 @@ describe("phase controls", () => {
   });
 });
 
+describe("power requests in the header", () => {
+  it("opens the router reboot confirmation without leaving the tab", async () => {
+    setup(routerFixture, "/resources/gateway");
+    const group = await screen.findByRole("group", { name: "可執行的動作" });
+    const reboot = within(group).getByRole("button", { name: "重新開機" }) as HTMLButtonElement;
+    await waitFor(() => expect(reboot.disabled).toBe(false));
+    await userEvent.click(reboot);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/重開路由器會中斷網路/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "總覽" }).getAttribute("aria-current")).toBe("page");
+    await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers the machine power requests as buttons that stay disabled until the helper reports them", async () => {
+    setup(freshMachine(), "/resources/workstation");
+    const group = await screen.findByRole("group", { name: "可執行的動作" });
+    const reboot = within(group).getByRole("button", { name: "重新開機" }) as HTMLButtonElement;
+    expect(reboot.disabled).toBe(true);
+    expect(within(group).queryByRole("link", { name: "重新開機" })).toBeNull();
+  });
+});
+
 const dependentImpact: ResourceImpact = {
   ...noImpact("web"),
   dependents: [{ name: "api", type: "service", relation: "dependsOn", via: "web", depth: 1 }],

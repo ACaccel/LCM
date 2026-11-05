@@ -117,7 +117,7 @@ export function SourcesPanel() {
   return (
     <div className="stack">
       <div className="row between">
-        <p className="meta" style={{ margin: 0 }}>
+        <p className="meta flat">
           {s.settings.sources.help}
         </p>
         <button type="button" className="btn primary" onClick={() => setEditing("new")}>
@@ -170,7 +170,7 @@ export function SourcesPanel() {
                         {src.lastError && !src.syncing && <div className="meta">{src.lastError}</div>}
                       </td>
                       <td>
-                        <div className="row" style={{ gap: 4 }}>
+                        <div className="row tight">
                           <button type="button" className="btn small" disabled={src.syncing || sync.isPending} onClick={() => sync.mutate(src.name)}>
                             {s.settings.sources.sync}
                           </button>

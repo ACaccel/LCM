@@ -1,13 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router";
-import { policiesQuery } from "../../api/queries";
-import type { ResourceDetail } from "../../api/types";
+import { resourcePoliciesQuery } from "../../api/queries";
+import type { PolicyRelation, ResourceDetail } from "../../api/types";
 import { ManagedBadges } from "../../components/badges";
 import { Async, Empty } from "../../components/ui";
 import { actionLabel } from "../../lib/actions";
-import { policyRelation } from "../../lib/policy-match";
-import type { PolicyRelation } from "../../lib/policy-match";
 import { s } from "../../strings";
 import { TemplateDialog } from "../template-dialog";
 
@@ -19,16 +17,12 @@ function relationText(r: PolicyRelation): string {
 
 /** Deployed policies that act on the resource or listen to it. Templates target services only. */
 export function PoliciesTab({ detail }: { detail: ResourceDetail }) {
-  const q = useQuery(policiesQuery());
+  const q = useQuery(resourcePoliciesQuery(detail.name));
   const [applying, setApplying] = useState(false);
   return (
     <Async q={q}>
       {(policies) => {
-        const ref = { name: detail.name, type: detail.type, labels: detail.labels };
-        const matched = policies.flatMap((p) => {
-          const relation = policyRelation(p, ref);
-          return relation ? [{ policy: p, relation }] : [];
-        });
+        const matched = policies.flatMap((p) => (p.relation ? [{ policy: p, relation: p.relation }] : []));
         return (
           <div className="stack">
             <div className="row">
@@ -62,7 +56,7 @@ export function PoliciesTab({ detail }: { detail: ResourceDetail }) {
                         <td>{relationText(relation)}</td>
                         <td>{p.paused ? s.policies.paused : s.policies.deployed}</td>
                         <td>
-                          <div className="row" style={{ gap: 4 }}>
+                          <div className="row tight">
                             <ManagedBadges managedBy={p.managedBy} />
                           </div>
                         </td>

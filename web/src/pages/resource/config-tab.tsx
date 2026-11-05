@@ -61,7 +61,7 @@ function Ownership({ detail }: { detail: ResourceDetail }) {
         <span>{s.config.ownershipTitle}</span>
       </div>
       <div className="stack">
-        <div className="row" style={{ gap: 4 }}>
+        <div className="row tight">
           <ManagedBadges managedBy={m} />
         </div>
         {m && (
@@ -129,7 +129,7 @@ function Ownership({ detail }: { detail: ResourceDetail }) {
             </>
           }
         >
-          <pre className="block" style={{ maxHeight: "60vh" }}>
+          <pre className="block tall">
             {exported}
           </pre>
         </Dialog>
@@ -166,9 +166,9 @@ function History({ detail, readOnly, onRestored }: { detail: ResourceDetail; rea
       </div>
       <Async q={q}>
         {(data) => (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          <ul className="plain-list">
             {data.items.map((v) => (
-              <li key={v.version} className="row between" style={{ padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+              <li key={v.version} className="row between list-item divided">
                 <span>
                   <b>{s.config.version(v.version)}</b>{" "}
                   <span className="meta">

@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResourceSummary, Template } from "../api/types";
+import { s as strings } from "../strings";
 import { jsonResponse, resourceFixture } from "./resource/test-fixtures";
 import { TemplateDialog } from "./template-dialog";
 
@@ -149,5 +150,161 @@ describe("TemplateDialog", () => {
         ],
       },
     });
+  });
+});
+
+describe("TemplateDialog preview and deployment", () => {
+  interface Options {
+    resource?: string;
+    policies?: string[];
+    templatesResponse?: () => Response;
+    instantiate?: (body: { dryRun: boolean }) => Response;
+  }
+
+  function Where() {
+    return <output aria-label="location">{useLocation().pathname}</output>;
+  }
+
+  function mount(opts: Options = {}) {
+    const sent: { name: string; dryRun: boolean; params: Record<string, unknown> }[] = [];
+    const closed = vi.fn();
+    vi.stubGlobal("fetch", async (req: Request) => {
+      const url = new URL(req.url);
+      switch (url.pathname) {
+        case "/api/v1/templates":
+          return opts.templatesResponse?.() ?? jsonResponse({ items: [template] });
+        case "/api/v1/resources":
+          return jsonResponse({ items: [summaryFixture("web"), summaryFixture("api")], nextCursor: null });
+        case "/api/v1/policies":
+          return jsonResponse({ items: (opts.policies ?? []).map((name) => ({ name })), nextCursor: null });
+        case "/api/v1/resources/web": {
+          const doc = resourceFixture().document;
+          return jsonResponse(resourceFixture({ document: { ...doc, spec: { ...doc.spec, config: { source: { url: "https://github.com/acme/web.git", branch: "main" } } } } }));
+        }
+        case "/api/v1/templates/auto-deploy/instantiate": {
+          const body = (await req.json()) as { name: string; dryRun: boolean; params: Record<string, unknown> };
+          sent.push(body);
+          return opts.instantiate?.(body) ?? jsonResponse({ template: "auto-deploy", name: body.name, yaml: "kind: Policy\n# preview\n", version: body.dryRun ? null : 1, deployed: !body.dryRun, warnings: [] });
+        }
+      }
+      return jsonResponse({ error: { code: "not_found", message: `unexpected ${url.pathname}`, details: {} } }, 404);
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={["/resources/web"]}>
+          <Routes>
+            <Route path="*" element={<TemplateDialog resource={opts.resource} onClose={closed} />} />
+          </Routes>
+          <Where />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    return { sent, closed };
+  }
+
+  const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+  async function fillAndPreview(user: ReturnType<typeof userEvent.setup>) {
+    await user.selectOptions(await screen.findByLabelText(/服務/), "web");
+    await waitFor(() => expect((screen.getByLabelText(/Git repo/) as HTMLInputElement).value).toBe("https://github.com/acme/web.git"));
+    await user.click(button(strings.templates.preview));
+    await screen.findByText(strings.templates.previewTitle);
+  }
+
+  it("keeps preview and deploy disabled until the required fields are filled", async () => {
+    mount();
+    expect(await screen.findByRole("option", { name: "自動部署" })).toBeTruthy();
+    expect(button(strings.templates.preview).disabled).toBe(true);
+    expect(button(strings.templates.deploy).disabled).toBe(true);
+  });
+
+  it("presets the target service when opened from a resource", async () => {
+    mount({ resource: "web" });
+    const service = (await screen.findByLabelText(/服務/)) as HTMLSelectElement;
+    expect(service.value).toBe("web");
+    expect((screen.getByRole("textbox", { name: new RegExp(strings.templates.policyName) }) as HTMLInputElement).value).toBe("web-auto-deploy");
+  });
+
+  it("enables deploying only for the previewed parameters and asks for a new preview after a change", async () => {
+    const { sent } = mount();
+    const user = userEvent.setup();
+    await fillAndPreview(user);
+    expect(sent.map((x) => x.dryRun)).toEqual([true]);
+    expect(screen.getByText(/# preview/)).toBeTruthy();
+    expect(button(strings.templates.deploy).disabled).toBe(false);
+    await user.type(screen.getByLabelText(/分支/), "x");
+    expect(screen.getByText(strings.templates.previewStale)).toBeTruthy();
+    expect(button(strings.templates.deploy).disabled).toBe(true);
+    await user.click(button(strings.templates.preview));
+    await waitFor(() => expect(screen.queryByText(strings.templates.previewStale)).toBeNull());
+    expect(button(strings.templates.deploy).disabled).toBe(false);
+  });
+
+  it("deploys for real, closes the dialog and opens the new policy", async () => {
+    const { sent, closed } = mount();
+    const user = userEvent.setup();
+    await fillAndPreview(user);
+    await user.click(button(strings.templates.deploy));
+    await waitFor(() => expect(sent.map((x) => x.dryRun)).toEqual([true, false]));
+    expect(sent[1]?.name).toBe("web-auto-deploy");
+    expect(sent[1]?.params).toEqual(sent[0]?.params);
+    await waitFor(() => expect(closed).toHaveBeenCalled());
+    expect(screen.getByLabelText("location").textContent).toBe("/policies/web-auto-deploy");
+  });
+
+  it("warns about a policy name that is taken and blocks the preview", async () => {
+    mount({ policies: ["web-auto-deploy"] });
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText(/服務/), "web");
+    await waitFor(() => expect(screen.getByText(strings.templates.exists)).toBeTruthy());
+    expect(button(strings.templates.preview).disabled).toBe(true);
+    const name = screen.getByRole("textbox", { name: new RegExp(strings.templates.policyName) });
+    await user.clear(name);
+    await user.type(name, "web-deploy-2");
+    await waitFor(() => expect(button(strings.templates.preview).disabled).toBe(false));
+  });
+
+  it("shows the server's findings and compiler warnings without enabling deployment", async () => {
+    mount({
+      instantiate: (body) =>
+        body.dryRun
+          ? jsonResponse({ template: "auto-deploy", name: "web-auto-deploy", yaml: "kind: Policy\n", version: null, deployed: false, warnings: [{ path: "spec", message: "node unreachable" }] })
+          : jsonResponse({ error: { code: "validation_failed", message: "Parameters are invalid", details: {} } }, 422),
+    });
+    const user = userEvent.setup();
+    await fillAndPreview(user);
+    expect(screen.getByText(/node unreachable/)).toBeTruthy();
+    await user.click(button(strings.templates.deploy));
+    expect((await screen.findByRole("alert")).textContent).toContain("Parameters are invalid");
+  });
+
+  it("reports a failed preview and keeps the form", async () => {
+    mount({ instantiate: () => jsonResponse({ error: { code: "validation_failed", message: "Unknown repository", details: {} } }, 422) });
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText(/服務/), "web");
+    await waitFor(() => expect((screen.getByLabelText(/Git repo/) as HTMLInputElement).value).not.toBe(""));
+    await user.click(button(strings.templates.preview));
+    expect((await screen.findByRole("alert")).textContent).toContain("Unknown repository");
+    expect(button(strings.templates.deploy).disabled).toBe(true);
+    expect(screen.getByLabelText(/Git repo/)).toBeTruthy();
+  });
+
+  it("reports that the templates could not be loaded and loads again on retry", async () => {
+    let failing = true;
+    mount({ templatesResponse: () => (failing ? jsonResponse({ error: { code: "unavailable", message: "Templates unavailable", details: {} } }, 503) : jsonResponse({ items: [template] })) });
+    expect((await screen.findByRole("alert")).textContent).toContain("Templates unavailable");
+    failing = false;
+    await userEvent.click(screen.getByRole("button", { name: strings.common.retry }));
+    expect(await screen.findByRole("option", { name: "自動部署" })).toBeTruthy();
+  });
+
+  it("keeps the dialog open on a backdrop click once the form has been edited", async () => {
+    const { closed } = mount();
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText(/服務/), "web");
+    const backdrop = screen.getByRole("dialog").parentElement!;
+    await user.pointer({ target: backdrop, keys: "[MouseLeft]" });
+    expect(closed).not.toHaveBeenCalled();
+    await user.click(button(strings.common.cancel));
+    expect(closed).toHaveBeenCalledTimes(1);
   });
 });

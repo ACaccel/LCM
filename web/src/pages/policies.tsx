@@ -125,7 +125,7 @@ export function PoliciesPage() {
                         <Pill view={policyStateView(p)} />
                       </td>
                       <td>
-                        <div className="row" style={{ gap: 4 }}>
+                        <div className="row tight">
                           {p.triggers.map((t) => (
                             <Tag key={t.id} title={t.id}>
                               {t.type}
@@ -135,7 +135,7 @@ export function PoliciesPage() {
                       </td>
                       <td>
                         {p.lastRun ? (
-                          <span className="row" style={{ gap: 6 }}>
+                          <span className="row snug">
                             <Pill view={runStatusView(p.lastRun.status)} />
                             <Link to={`/runs/${encodeURIComponent(p.lastRun.id)}`}>{formatTime(p.lastRun.createdAt)}</Link>
                           </span>
@@ -144,7 +144,7 @@ export function PoliciesPage() {
                         )}
                       </td>
                       <td>
-                        <div className="row" style={{ gap: 4 }}>
+                        <div className="row tight">
                           <ManagedBadges managedBy={p.managedBy} />
                         </div>
                       </td>

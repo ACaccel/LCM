@@ -21,6 +21,7 @@ const policy = (name: string, over: Partial<PolicySummary> = {}): PolicySummary 
   targets: [],
   lastRun: null,
   managedBy: null,
+  relation: null,
   ...over,
 });
 

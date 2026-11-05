@@ -85,7 +85,7 @@ export function TokensPanel() {
   return (
     <div className="stack">
       <div className="row between">
-        <p className="meta" style={{ margin: 0 }}>
+        <p className="meta flat">
           {s.settings.tokens.help}
         </p>
         <button type="button" className="btn primary" onClick={() => setCreating(true)}>

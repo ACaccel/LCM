@@ -66,8 +66,8 @@ export function RunsPage() {
             ))}
           </select>
         </div>
-        <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend className="meta" style={{ marginBottom: 4 }}>
+        <fieldset className="plain-fieldset">
+          <legend className="meta">
             {s.runs.filterStatus}
           </legend>
           <div className="row">

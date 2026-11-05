@@ -16,7 +16,7 @@ function VersionDiff({ name, version, current, onLoad }: { name: string; version
   return (
     <div className="stack">
       <div className="row between">
-        <h3 style={{ margin: 0 }}>
+        <h3 className="flat">
           {s.config.version(version)} → {s.editor.versionNow}
         </h3>
         <button type="button" className="btn primary small" onClick={() => onLoad(text)}>
@@ -41,9 +41,9 @@ export function HistoryDialog({ name, deployedVersion, current, onLoad, onClose 
       <div className="stack">
         <Async q={q}>
           {(data) => (
-            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            <ul className="plain-list">
               {data.items.map((v) => (
-                <li key={v.version} className="row between" style={{ padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
+                <li key={v.version} className="row between list-item divided">
                   <span>
                     <b>{s.config.version(v.version)}</b>{" "}
                     {v.version === deployedVersion && <span className="pill ok">{s.editor.stateDeployed}</span>}{" "}

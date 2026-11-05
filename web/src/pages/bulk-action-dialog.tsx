@@ -150,7 +150,7 @@ export function BulkActionDialog({ names, action, onClose }: { names: string[]; 
           <ErrorBox error={plan.error ?? run.error} onRetry={plan.isError ? () => void plan.refetch() : undefined} />
           {plan.data && (
             <>
-              <h3 style={{ marginTop: 0 }}>{s.bulk.planTitle}</h3>
+              <h3 className="flat-top">{s.bulk.planTitle}</h3>
               <p className="meta">{s.bulk.planNote}</p>
               <ol aria-label={s.bulk.planTitle}>
                 {steps.map((st) => (

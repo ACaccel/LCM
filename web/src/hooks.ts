@@ -10,3 +10,13 @@ export function useNow(active: boolean): number {
   }, [active]);
   return now;
 }
+
+/** The current time, refreshed every `ms` milliseconds, for conditions that depend on the clock. */
+export function useTick(ms: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+  return now;
+}

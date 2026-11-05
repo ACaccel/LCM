@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { capabilitiesQuery, historyQuery } from "../../api/observations";
-import type { ResourceDetail, RouterSnapshot, RouterStatus } from "../../api/types";
+import type { ResourceCapability, ResourceDetail, RouterSnapshot, RouterStatus } from "../../api/types";
 import { RANGE_MS, RangeSwitch, TimeSeriesChart, fmtCelsius, fmtCount, fmtRate, windowSeries } from "../../components/chart";
 import type { RangeKey, XY } from "../../components/chart";
 import { ErrorBox, Pill, Spinner } from "../../components/ui";
@@ -11,10 +13,11 @@ import { capabilityReason, coverageView, cpuPercent, thresholdOf } from "../../l
 import { translate, translateAll } from "../../lib/messages";
 import { routerOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
-import { PowerDialog } from "./machine/dialogs";
 import { UsageTrend } from "./machine/trend";
 import { CoverageSummary } from "./coverage";
-import { AttemptPanel, OperationsList, useDurableOperation } from "./operations";
+import { AttemptPanel, OperationsList } from "./operations";
+import { usePowerRequest } from "./power";
+import type { PowerControl } from "./power";
 
 function seconds(v: number | null): string {
   return v != null ? formatDuration(v * 1000) : s.machine.unknown;
@@ -181,10 +184,7 @@ export function RouterOverview({ resource, selector }: { resource: ResourceDetai
 }
 
 /** Durable router operations (reboot): administrator only, confirmed with a reason and the typed name. */
-export function RouterControls({ resource, selector }: { resource: ResourceDetail; selector: string }) {
-  const caps = useQuery(capabilitiesQuery(selector));
-  const op = useDurableOperation(resource);
-  const [confirm, setConfirm] = useState<{ action: string; version: number } | null>(null);
+export function useRouterPower(resource: ResourceDetail, caps: UseQueryResult<{ items: ResourceCapability[] }>): PowerControl {
   const operations = resource.actions.filter((a) => a.kind === "operation");
   const unavailable = (name: string): string => {
     const a = operations.find((x) => x.name === name);
@@ -194,22 +194,49 @@ export function RouterControls({ resource, selector }: { resource: ResourceDetai
     const cap = caps.data.items.find((c) => c.action === name);
     return cap && !cap.available ? capabilityReason(cap) : "";
   };
+  return usePowerRequest(resource, {
+    offered: operations.map((a) => a.name),
+    reason: unavailable,
+    blocked: () => resource.phase !== "managed",
+    unavailable,
+    disclosure: s.router.rebootDisclosure,
+  });
+}
+
+/** Reads what the router operations depend on and hands the control to a page. */
+export function RouterPowerHost({
+  resource,
+  selector,
+  children,
+}: {
+  resource: ResourceDetail;
+  selector: string;
+  children: (power: PowerControl) => ReactNode;
+}) {
+  const caps = useQuery(capabilitiesQuery(selector));
+  const power = useRouterPower(resource, caps);
+  return (
+    <>
+      {children(power)}
+      {power.dialog}
+    </>
+  );
+}
+
+export function RouterControls({ resource, selector, power }: { resource: ResourceDetail; selector: string; power: PowerControl }) {
+  const caps = useQuery(capabilitiesQuery(selector));
+  const { op } = power;
   return (
     <section className="panel stack">
       <h2>{s.machine.controls}</h2>
       <ErrorBox error={caps.error} onRetry={() => void caps.refetch()} />
-      {operations.map((a) => {
-        const reason = unavailable(a.name);
+      {power.offered.map((action) => {
+        const reason = power.reason(action);
         return (
-          <div className="stack" key={a.name}>
+          <div className="stack" key={action}>
             <div>
-              <button
-                type="button"
-                className="btn danger"
-                disabled={!!reason || !!op.attempt || !!op.storageError || resource.phase !== "managed"}
-                onClick={() => setConfirm({ action: a.name, version: resource.version })}
-              >
-                {actionLabel(a.name)}
+              <button type="button" className="btn danger" disabled={power.disabled(action)} onClick={() => power.request(action)}>
+                {actionLabel(action)}
               </button>
             </div>
             {reason && <p className="meta">{reason}</p>}
@@ -219,29 +246,15 @@ export function RouterControls({ resource, selector }: { resource: ResourceDetai
       <ErrorBox error={op.storageError} />
       <ErrorBox error={op.mutation.error} />
       <AttemptPanel resource={resource.name} op={op} />
-      {confirm && (
-        <PowerDialog
-          resource={resource}
-          action={confirm.action}
-          version={confirm.version}
-          disclosure={s.router.rebootDisclosure}
-          unavailable={unavailable(confirm.action)}
-          onClose={() => setConfirm(null)}
-          onConfirm={(c) => {
-            op.start(confirm.action, confirm.version, c);
-            setConfirm(null);
-          }}
-        />
-      )}
     </section>
   );
 }
 
-export function RouterOperationsTab({ resource, selector }: { resource: ResourceDetail; selector: string }) {
+export function RouterOperationsTab({ resource, selector, power }: { resource: ResourceDetail; selector: string; power: PowerControl }) {
   return (
     <div className="stack">
       <p className="meta">{s.machine.refreshNote}</p>
-      <RouterControls resource={resource} selector={selector} />
+      <RouterControls resource={resource} selector={selector} power={power} />
       <OperationsList resource={selector} />
     </div>
   );

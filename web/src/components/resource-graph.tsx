@@ -1,8 +1,9 @@
-import { Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider } from "@xyflow/react";
-import type { Edge, Node, NodeProps } from "@xyflow/react";
+import { Background, BaseEdge, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider } from "@xyflow/react";
+import type { Edge, EdgeProps, Node, NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { memo, useMemo } from "react";
 import { healthView } from "../lib/status";
+import { edgeRoute, roundedPath } from "../lib/topology";
 import type { RelationType, Topology } from "../lib/topology";
 import { s } from "../strings";
 
@@ -47,7 +48,18 @@ const ResourceNodeView = memo(function ResourceNodeView({ data }: NodeProps<Reso
   );
 });
 
+/**
+ * An edge that skips columns: it leaves the source, runs along the gutter
+ * between two rows and enters the target, so it does not cross the nodes of
+ * the columns in between.
+ */
+function RoutedEdge({ id, sourceX, sourceY, targetX, targetY, data, style, markerEnd }: EdgeProps<Edge<{ lane: number }>>) {
+  const path = roundedPath(edgeRoute({ x: sourceX, y: sourceY }, { x: targetX, y: targetY }, data?.lane));
+  return <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />;
+}
+
 const nodeTypes = { resource: ResourceNodeView };
+const edgeTypes = { routed: RoutedEdge };
 
 const EDGE_STYLE: Record<RelationType, { stroke: string; dash?: string }> = {
   dependsOn: { stroke: "var(--muted-foreground)" },
@@ -111,7 +123,8 @@ function Inner({ topology, onOpen, focus, small }: Props) {
           id: e.id,
           source: e.from,
           target: e.to,
-          type: "smoothstep",
+          type: e.lane === undefined ? "smoothstep" : "routed",
+          data: e.lane === undefined ? undefined : { lane: e.lane },
           ariaLabel: `${e.from} ${s.relations.types[e.type] ?? e.type} ${e.to}`,
           style: { stroke: style.stroke, strokeWidth: 1.6, strokeDasharray: style.dash },
           markerEnd: { type: MarkerType.ArrowClosed, color: style.stroke },
@@ -125,6 +138,7 @@ function Inner({ topology, onOpen, focus, small }: Props) {
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}

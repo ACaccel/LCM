@@ -604,12 +604,7 @@ paths:
             Location: { schema: { type: string } }
           content:
             application/json:
-              schema:
-                type: object
-                required: [actionId, status]
-                properties:
-                  actionId: { type: string }
-                  status: { type: string, enum: [running] }
+              schema: { $ref: "#/components/schemas/ActionStarted" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1293,6 +1288,13 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
+        - name: resource
+          in: query
+          required: false
+          description: >-
+            Keep only deployed policies that concern this resource (by name or `@id`) and
+            report how in `relation`.
+          schema: { type: string }
       responses:
         "200":
           description: Policies ordered by name, deployed or not.
@@ -1302,6 +1304,7 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /policies/{p}:
     parameters:
       - $ref: "#/components/parameters/Policy"
@@ -4571,6 +4574,13 @@ components:
           type: array
           description: "`steps` with codes (`step.*`), in the same order."
           items: { $ref: "#/components/schemas/Message" }
+    ActionStarted:
+      description: A started action, answered with 202; the dry run answers an `ActionPlan` instead.
+      type: object
+      required: [actionId, status]
+      properties:
+        actionId: { type: string }
+        status: { type: string, enum: [running] }
     ActionPlan:
       allOf:
         - $ref: "#/components/schemas/ActionSteps"
@@ -4907,7 +4917,7 @@ components:
         createdAt: { type: string, format: date-time }
     PolicySummary:
       type: object
-      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, targets, lastRun, managedBy]
+      required: [name, labels, latestVersion, deployedVersion, deployed, paused, deployedAt, updatedAt, triggers, targets, lastRun, managedBy, relation]
       properties:
         name: { type: string }
         labels: { $ref: "#/components/schemas/Labels" }
@@ -4929,6 +4939,26 @@ components:
             - $ref: "#/components/schemas/LastRun"
             - type: "null"
         managedBy: { $ref: "#/components/schemas/ManagedBy" }
+        relation:
+          description: How the policy concerns the resource of the `resource` filter; null when the list is not filtered.
+          oneOf:
+            - $ref: "#/components/schemas/PolicyRelation"
+            - type: "null"
+    PolicyRelation:
+      type: object
+      required: [kind, types]
+      properties:
+        kind:
+          type: string
+          enum: [acts, dynamic, watches]
+          description: >-
+            acts - nodes of the policy act on the resource; dynamic - a trigger listens to the
+            resource and some node picks its resource at run time; watches - a trigger listens
+            to the resource and no node acts on it.
+        types:
+          type: array
+          description: Node types acting on the resource (kind acts), else empty.
+          items: { type: string }
     PolicyTarget:
       type: object
       required: [node, type, resource]

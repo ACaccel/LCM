@@ -7,7 +7,7 @@ import type { MachineMaintenance, ResourceDetail } from "../../../api/types";
 import { readAttempt } from "../../../lib/operation";
 import { OperationsList } from "../operations";
 import { freshMachine, jsonResponse, maintenanceFixture, noImpact, operationFixture } from "../test-fixtures";
-import { MachineControls } from "./controls";
+import { MachineControls, useMachinePower } from "./controls";
 import { MaintenanceDialog } from "./dialogs";
 
 interface Seen {
@@ -64,8 +64,17 @@ function wrap(children: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
+function Controls({ machine, caps: available, maintenance }: { machine: ResourceDetail; caps: typeof caps; maintenance: MachineMaintenance | null }) {
+  const power = useMachinePower(machine, { caps: available, maintenance });
+  return (
+    <>
+      <MachineControls resource={machine} power={power} />
+      {power.dialog}
+    </>
+  );
+}
 function controls(machine: ResourceDetail = freshMachine(), maintenance: MachineMaintenance | null = maintenanceFixture) {
-  return <MachineControls resource={machine} caps={caps} maintenance={maintenance} />;
+  return <Controls machine={machine} caps={caps} maintenance={maintenance} />;
 }
 async function fillConfirmation(name = "workstation") {
   const user = userEvent.setup();
@@ -99,8 +108,8 @@ describe("MachineControls", () => {
     expect((screen.getByRole("button", { name: "重新開機" }) as HTMLButtonElement).disabled).toBe(true);
     view.rerender(
       wrap(
-        <MachineControls
-          resource={freshMachine()}
+        <Controls
+          machine={freshMachine()}
           caps={[{ action: "reboot", available: false, reason: "helper unavailable", reasonMessage: { code: "", params: {}, message: "helper unavailable" } }]}
           maintenance={maintenanceFixture}
         />,

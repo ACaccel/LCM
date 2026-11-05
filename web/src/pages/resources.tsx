@@ -82,12 +82,12 @@ function ResourceRow({ r, selected, onToggle }: { r: ResourceSummary; selected: 
         )}
       </td>
       <td>
-        <div className="row" style={{ gap: 4 }}>
+        <div className="row tight">
           <ManagedBadges managedBy={r.managedBy} hideGui />
         </div>
       </td>
       <td>
-        <div className="row" style={{ gap: 4 }}>
+        <div className="row tight">
           {Object.entries(r.labels).map(([k, v]) => (
             <Tag key={k}>{`${k}=${v}`}</Tag>
           ))}
@@ -285,7 +285,7 @@ function BulkBar({ shown, selected, setSelected }: { shown: ResourceSummary[]; s
     <div className="bulk-bar row" role="group" aria-label={s.bulk.bar}>
       <div className="field">
         <label htmlFor="bulk-label">{s.bulk.byLabel}</label>
-        <div className="row" style={{ gap: 4 }}>
+        <div className="row tight">
           <input
             id="bulk-label"
             type="text"

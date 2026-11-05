@@ -83,3 +83,37 @@ func signalStatus(sig signal.Signal) string {
 	}
 	return ""
 }
+
+// ConcernsResource reports whether a trigger's static props select the
+// resource: the resource selectors (resources, types, labels) that are set
+// must all match it. A trigger without any resource selector, or of another
+// type than trigger.signal, is not attributed to one resource.
+func ConcernsResource(triggerType string, props any, name, resourceType string, labels map[string]string) bool {
+	if triggerType != TypeSignal {
+		return false
+	}
+	var p SignalProps
+	switch v := props.(type) {
+	case SignalProps:
+		p = v
+	case *SignalProps:
+		p = *v
+	default:
+		return false
+	}
+	if len(p.Resources)+len(p.Types)+len(p.Labels) == 0 {
+		return false
+	}
+	if len(p.Resources) > 0 && !slices.Contains(p.Resources, name) {
+		return false
+	}
+	if len(p.Types) > 0 && !slices.Contains(p.Types, resourceType) {
+		return false
+	}
+	for k, v := range p.Labels {
+		if got, ok := labels[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
+}

@@ -238,7 +238,7 @@ function Form({ templates, services, resource, onClose }: { templates: Template[
       {previewM.isPending && <Spinner label={s.templates.previewing} />}
       {preview && (
         <div>
-          <h3 style={{ marginTop: 0 }}>{s.templates.previewTitle}</h3>
+          <h3 className="flat-top">{s.templates.previewTitle}</h3>
           {!fresh && <p className="meta">{s.templates.previewStale}</p>}
           {preview.warnings.length > 0 && (
             <div className="banner warn">

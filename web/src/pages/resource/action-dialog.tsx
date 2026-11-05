@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { client, unwrap } from "../../api/client";
 import { actionQuery, qk } from "../../api/queries";
-import type { Action, ActionName, ActionPlan } from "../../api/types";
+import type { Action, ActionName, ActionPlan, ActionStarted } from "../../api/types";
 import { Dialog } from "../../components/dialog";
 import { ErrorBox, Field, Pill, Spinner } from "../../components/ui";
 import { formatDuration, shortVersion } from "../../lib/format";
@@ -25,6 +25,18 @@ interface Props {
 }
 
 const DANGEROUS: ReadonlySet<ActionName> = new Set(["stop", "rollback"]);
+
+// One endpoint answers a dry run with the plan (200) and a real run with the
+// started action (202); the generated type is their union.
+function expectPlan(r: ActionPlan | ActionStarted): ActionPlan {
+  if (!("impact" in r)) throw new Error("unexpected answer to a dry run");
+  return r;
+}
+
+function expectStarted(r: ActionPlan | ActionStarted): ActionStarted {
+  if (!("actionId" in r)) throw new Error("unexpected answer to a run");
+  return r;
+}
 
 function ActionProgress({ id, onClose }: { id: string; onClose: () => void }) {
   const live = useLiveState();
@@ -112,19 +124,23 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
 
   const preview = useMutation({
     mutationFn: async () =>
-      (await unwrap(
-        client.POST("/resources/{resource}/actions/{action}", { params: { path: { resource, action }, query: { dryRun: true } }, body }),
-      )) as unknown as ActionPlan,
+      expectPlan(
+        await unwrap(
+          client.POST("/resources/{resource}/actions/{action}", { params: { path: { resource, action }, query: { dryRun: true } }, body }),
+        ),
+      ),
     onSuccess: (p) => setPlan({ plan: p, key }),
   });
   const run = useMutation({
     mutationFn: async () =>
-      (await unwrap(
-        client.POST("/resources/{resource}/actions/{action}", {
-          params: { path: { resource, action } },
-          body: { ...body, ...(ack.acknowledged ? { acknowledgeImpact: true } : {}) },
-        }),
-      )) as unknown as { actionId: string },
+      expectStarted(
+        await unwrap(
+          client.POST("/resources/{resource}/actions/{action}", {
+            params: { path: { resource, action } },
+            body: { ...body, ...(ack.acknowledged ? { acknowledgeImpact: true } : {}) },
+          }),
+        ),
+      ),
     onSuccess: (r) => {
       setActionId(r.actionId);
       void qc.invalidateQueries({ queryKey: qk.resource(resource) });
@@ -193,7 +209,7 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
           {preview.isPending && <Spinner label={s.action.previewing} />}
           {plan && (
             <div className={current ? undefined : "meta"}>
-              <h3 style={{ marginTop: 0 }}>{s.action.planTitle}</h3>
+              <h3 className="flat-top">{s.action.planTitle}</h3>
               <p className="meta">
                 {s.action.planFrom}: {s.state[plan.plan.from]} → {s.state[plan.plan.to]}
               </p>

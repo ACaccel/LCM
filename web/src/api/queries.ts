@@ -35,6 +35,7 @@ export const qk = {
   overview: (since: string) => ["overview", since] as const,
   overviewAll: () => ["overview"] as const,
   policies: () => ["policies"] as const,
+  policiesFor: (resource: string) => ["policies", "resource", resource] as const,
   policy: (name: string) => ["policy", name] as const,
   policyVersions: (name: string) => ["policy", name, "versions"] as const,
   policyVersion: (name: string, v: number) => ["policy", name, "version", v] as const,
@@ -226,6 +227,14 @@ export const policiesQuery = () =>
   queryOptions({
     queryKey: qk.policies(),
     queryFn: () => fetchAll((cursor) => unwrap(client.GET("/policies", { params: { query: { limit: 500, cursor } } }))),
+  });
+
+/** Deployed policies that act on or listen to a resource, each with its `relation`. */
+export const resourcePoliciesQuery = (resource: string) =>
+  queryOptions({
+    queryKey: qk.policiesFor(resource),
+    queryFn: () =>
+      fetchAll((cursor) => unwrap(client.GET("/policies", { params: { query: { limit: 500, cursor, resource } } }))),
   });
 
 export const policyQuery = (name: string) =>

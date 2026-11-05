@@ -55,7 +55,7 @@ export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => v
         </ul>
       )}
       {onRetry && (
-        <div style={{ marginTop: 6 }}>
+        <div className="retry-row">
           <button type="button" className="btn small" onClick={onRetry}>
             {s.common.retry}
           </button>

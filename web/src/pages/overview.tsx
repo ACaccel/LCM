@@ -15,10 +15,9 @@ type OverviewResource = Overview["resources"][number];
 type Attention = Overview["attention"][number];
 
 function Stat({ value, label, tone, to }: { value: number | string; label: string; tone?: "warn" | "bad"; to?: string }) {
-  const color = tone === "bad" ? "var(--destructive)" : tone === "warn" ? "var(--warning)" : undefined;
   const body = (
     <>
-      <b style={color ? { color } : undefined}>{value}</b>
+      <b className={tone ? `tone-${tone}` : undefined}>{value}</b>
       <span>{label}</span>
     </>
   );
@@ -41,7 +40,7 @@ function Availability({ r }: { r: OverviewResource }) {
       </div>
     </>
   ) : (
-    <div className="meta" style={{ height: 24 }}>
+    <div className="meta slot">
       {r.hasChecks ? s.overview.noUptimeData : s.checks.none}
     </div>
   );
@@ -57,7 +56,7 @@ function AttentionCard({ item, resource }: { item: Attention; resource: Overview
         </span>
         <HealthPill health={item.health} />
       </div>
-      <div className="row" style={{ gap: 4 }}>
+      <div className="row tight">
         <TypeTag type={item.type} />
         <StatePill state={item.state} />
       </div>
@@ -95,7 +94,7 @@ function QuietCard({ r }: { r: OverviewResource }) {
         )}
       </div>
       {r.buckets.length > 0 && <Sparkline buckets={r.buckets} tone={tone === "info" ? "neutral" : tone} />}
-      <div className="row" style={{ gap: 4 }}>
+      <div className="row tight">
         <ManagedBadges managedBy={r.managedBy} hideGui />
       </div>
     </Link>
