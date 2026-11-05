@@ -76,5 +76,8 @@
 // while a run is active are stored as dropped runs), replace (the active run
 // is cancelled and the new one starts once it has stopped; older queued
 // events are replaced as well) and parallel (up to limit active runs).
-// Suspended runs count as active.
+// Suspended runs count as active. Starts of one policy are admitted one at
+// a time: the mode decision reserves the run's place in memory, the run row
+// is written without holding the engine lock, and a failed write gives the
+// place back. Replacement takes effect only once the new run is stored.
 package engine
