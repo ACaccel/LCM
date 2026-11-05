@@ -49,6 +49,10 @@ func (m *Manager) Do(ctx context.Context, name, action string, opts ActionOption
 // action to run on all of them.
 type GroupRequest struct {
 	Labels map[string]string
+	// Names, when not empty, narrows the services the labels match to these;
+	// each must be a managed service that matches the labels. Without
+	// labels, the names alone select the group.
+	Names  []string
 	Action string
 	// Options carries Version (deploy) and Job (run-job) for every step.
 	Options           ActionOptions
@@ -91,6 +95,11 @@ func (m *Manager) PlanGroup(ctx context.Context, req GroupRequest) (Group, error
 	if err != nil {
 		return Group{}, err
 	}
+	if len(req.Names) > 0 {
+		if recs, err = narrowToNames(recs, req.Names); err != nil {
+			return Group{}, err
+		}
+	}
 	if len(recs) == 0 {
 		return Group{}, ErrEmptyGroup
 	}
@@ -118,6 +127,30 @@ func (m *Manager) PlanGroup(ctx context.Context, req GroupRequest) (Group, error
 		g.Steps[i] = st
 	}
 	return g, nil
+}
+
+// narrowToNames keeps the records named in names. A name that no record
+// carries is refused rather than ignored, so a stale selection never runs a
+// smaller group than the one that was reviewed.
+func narrowToNames(recs []resource.Record, names []string) ([]resource.Record, error) {
+	byName := make(map[string]resource.Record, len(recs))
+	for _, r := range recs {
+		byName[r.Name] = r
+	}
+	out := make([]resource.Record, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		r, ok := byName[n]
+		if !ok {
+			return nil, precondition(fmt.Sprintf("catalog: %q is not a managed service matching the selector", n))
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // Check refuses to start the group when a step cannot run as planned or
@@ -224,6 +257,9 @@ func (m *Manager) recordGroup(ctx context.Context, g Group, failed int, failure 
 		}
 	}
 	details := map[string]any{"action": g.Request.Action, "labels": g.Request.Labels, "order": order}
+	if len(g.Request.Names) > 0 {
+		details["names"] = g.Request.Names
+	}
 	if g.Request.Options.Version != "" {
 		details["version"] = g.Request.Options.Version
 	}
@@ -240,16 +276,17 @@ func (m *Manager) recordGroup(ctx context.Context, g Group, failed int, failure 
 		details["notRun"] = order[failed+1:]
 		details["error"] = headCap(failure.Error(), 1<<10)
 	}
-	if err := m.cat.audit.Record(ctx, "service.group-action", selectorTarget(g.Request.Labels), outcome, details); err != nil {
+	if err := m.cat.audit.Record(ctx, "service.group-action", selectorTarget(g.Request.Labels, g.Request.Names), outcome, details); err != nil {
 		m.log.Error("write audit entry failed", "action", "service.group-action", "error", err)
 	}
 }
 
-// selectorTarget names a group in the audit log by its label selector.
-func selectorTarget(labels map[string]string) string {
-	parts := make([]string, 0, len(labels))
+// selectorTarget names a group in the audit log by its selector.
+func selectorTarget(labels map[string]string, names []string) string {
+	parts := make([]string, 0, len(labels)+len(names))
 	for _, k := range slices.Sorted(maps.Keys(labels)) {
 		parts = append(parts, k+"="+labels[k])
 	}
+	parts = append(parts, slices.Sorted(slices.Values(names))...)
 	return "services:" + strings.Join(parts, ",")
 }

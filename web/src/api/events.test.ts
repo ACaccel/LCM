@@ -101,6 +101,17 @@ describe("timeline events", () => {
     expect(qc.getQueryData<InfiniteData<TimelineList>>(qk.timeline({}))?.pages[0]?.items).toHaveLength(1);
   });
 
+  it("refreshes the overview when health, alerts or runs change", async () => {
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const a = createEventApplier(qc);
+    a.apply(env("signal", { id: "s1", kind: "health.changed", time: "t", resource: "web", source: "monitor", data: { health: "down" } }));
+    a.apply(env("signal", { id: "s2", kind: "alert", time: "t", source: "monitor", data: {} }));
+    a.apply(env("run", { kind: "run.finished", runId: "r1", policy: "p", status: "succeeded", time: "t" }));
+    await vi.advanceTimersByTimeAsync(300);
+    const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    expect(keys.filter((k) => k === JSON.stringify(["overview"]))).toHaveLength(1);
+  });
+
   it("coalesces deployment invalidations into one refetch", async () => {
     const spy = vi.spyOn(qc, "invalidateQueries");
     const a = createEventApplier(qc);
@@ -109,7 +120,7 @@ describe("timeline events", () => {
     expect(spy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(300);
     const keys = spy.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
-    expect(keys.filter((k) => k === JSON.stringify(["deployments-since"]))).toHaveLength(1);
+    expect(keys.filter((k) => k === JSON.stringify(["overview"]))).toHaveLength(1);
   });
 });
 

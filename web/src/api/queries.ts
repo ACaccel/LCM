@@ -32,7 +32,8 @@ export const qk = {
   resourceMaintenance: (ref: string) => ["resource", ref, "maintenance"] as const,
   timeline: (f: TimelineFilter = {}) => ["timeline", f.resource ?? "", f.kinds ?? [], f.from ?? "", f.to ?? ""] as const,
   timelineAll: () => ["timeline"] as const,
-  deploymentsSince: (since: string) => ["deployments-since", since] as const,
+  overview: (since: string) => ["overview", since] as const,
+  overviewAll: () => ["overview"] as const,
   policies: () => ["policies"] as const,
   policy: (name: string) => ["policy", name] as const,
   policyVersions: (name: string) => ["policy", name, "versions"] as const,
@@ -44,6 +45,9 @@ export const qk = {
   runsAll: () => ["runs"] as const,
   run: (id: string) => ["run", id] as const,
   alerts: (resource?: string) => ["alerts", resource ?? ""] as const,
+  /** Under the alerts prefix, so alert events refresh it. */
+  alertList: (f: AlertFilter) => ["alerts", "list", f.state ?? "firing", f.resource ?? ""] as const,
+  audit: (f: AuditFilter) => ["audit", f.from ?? "", f.to ?? "", f.actor ?? "", f.action ?? "", f.target ?? ""] as const,
   tokens: () => ["tokens"] as const,
   sources: () => ["sources"] as const,
   ownership: () => ["ownership"] as const,
@@ -65,6 +69,22 @@ export interface TimelineFilter {
   /** RFC 3339 instants: entries at or after `from` and before `to`. */
   from?: string;
   to?: string;
+}
+
+export interface AlertFilter {
+  state?: "firing" | "resolved" | "all";
+  resource?: string;
+}
+
+export interface AuditFilter {
+  /** RFC 3339 instants: entries at or after `from` and before `to`. */
+  from?: string;
+  to?: string;
+  actor?: string;
+  /** An action, or a dotted prefix such as `service`. */
+  action?: string;
+  /** Exactly this target, such as a resource name. */
+  target?: string;
 }
 
 export interface RunFilter {
@@ -191,16 +211,15 @@ export const timelineQuery = (f: TimelineFilter = {}) =>
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
 
-/** Deployments finished or started since the given instant, from the global timeline. */
-export const deploymentsSinceQuery = (since: Date) =>
+/**
+ * Everything the overview page shows, in one request. `since` bounds the
+ * deployment count (the start of the day for "deployed today"); the key
+ * carries its day so a new day refetches.
+ */
+export const overviewQuery = (since: Date) =>
   queryOptions({
-    queryKey: qk.deploymentsSince(since.toISOString().slice(0, 10)),
-    queryFn: async () => {
-      const items = await fetchAll((cursor) =>
-        unwrap(client.GET("/timeline", { params: { query: { limit: 500, cursor, kinds: ["deployment"], from: since.toISOString() } } })),
-      );
-      return items;
-    },
+    queryKey: qk.overview(since.toISOString().slice(0, 10)),
+    queryFn: () => unwrap(client.GET("/overview", { params: { query: { since: since.toISOString() } } })),
   });
 
 export const policiesQuery = () =>
@@ -273,6 +292,32 @@ export const alertsQuery = (resource?: string) =>
   queryOptions({
     queryKey: qk.alerts(resource),
     queryFn: () => fetchAll((cursor) => unwrap(client.GET("/alerts", { params: { query: { limit: 500, cursor, resource } } }))),
+  });
+
+/** Alerts in a state, firing first; pages by cursor. */
+export const alertListQuery = (f: AlertFilter = {}) =>
+  infiniteQueryOptions({
+    queryKey: qk.alertList(f),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      unwrap(client.GET("/alerts", { params: { query: { limit: 100, cursor: pageParam, state: f.state ?? "firing", resource: f.resource || undefined } } })),
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+  });
+
+export const AUDIT_PAGE = 100;
+
+/** The audit log, newest first, filtered by the server; pages by the id of the last entry. */
+export const auditQuery = (f: AuditFilter = {}) =>
+  infiniteQueryOptions({
+    queryKey: qk.audit(f),
+    initialPageParam: undefined as number | undefined,
+    queryFn: ({ pageParam }) =>
+      unwrap(
+        client.GET("/audit", {
+          params: { query: { limit: AUDIT_PAGE, before: pageParam, from: f.from || undefined, to: f.to || undefined, actor: f.actor || undefined, action: f.action || undefined, target: f.target || undefined } },
+        }),
+      ),
+    getNextPageParam: (last) => last.nextBefore ?? undefined,
   });
 
 export const tokensQuery = () =>

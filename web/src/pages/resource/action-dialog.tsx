@@ -11,7 +11,7 @@ import { actionStatusView } from "../../lib/status";
 import { translate } from "../../lib/messages";
 import { useLiveState } from "../../live";
 import { s } from "../../strings";
-import { ImpactAcknowledgement, useAck } from "./impact";
+import { confirmLabel, ImpactAcknowledgement, useAck } from "./impact";
 
 interface Props {
   /** Name of the service. */
@@ -107,7 +107,7 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
   };
   const key = JSON.stringify(body);
   const current = plan?.key === key;
-  // The dry run carries the impact; the acknowledgement applies to the plan on screen only.
+  // The dry run carries the impact; confirming acknowledges the plan on screen only.
   const ack = useAck(current ? plan.plan.impact : undefined);
 
   const preview = useMutation({
@@ -115,10 +115,7 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
       (await unwrap(
         client.POST("/resources/{resource}/actions/{action}", { params: { path: { resource, action }, query: { dryRun: true } }, body }),
       )) as unknown as ActionPlan,
-    onSuccess: (p) => {
-      ack.setChecked(false);
-      setPlan({ plan: p, key });
-    },
+    onSuccess: (p) => setPlan({ plan: p, key }),
   });
   const run = useMutation({
     mutationFn: async () =>
@@ -167,7 +164,7 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
               title={current ? undefined : s.action.needPreview}
               onClick={() => run.mutate()}
             >
-              {s.action.confirmRun}
+              {confirmLabel(s.action.confirmRun, verb, ack)}
             </button>
           </>
         )

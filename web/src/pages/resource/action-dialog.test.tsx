@@ -112,16 +112,16 @@ describe("ActionDialog", () => {
     expect((screen.getByRole("button", { name: "確認執行" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("requires an explicit impact acknowledgement and sends it with the run", async () => {
+  it("lists the impact without a checkbox and acknowledges it when the run is confirmed", async () => {
     const seen = server({ preview: () => new Response(JSON.stringify(impactedPlan), { status: 200, headers: { "Content-Type": "application/json" } }) });
     const user = userEvent.setup();
     renderDialog();
     const group = await screen.findByRole("group", { name: "影響範圍" });
     expect(group.textContent).toContain("api（依賴 web）");
     expect(group.textContent).toContain("nas（經由 api 控制）");
-    const run = screen.getByRole("button", { name: "確認執行" }) as HTMLButtonElement;
-    expect(run.disabled).toBe(true);
-    await user.click(screen.getByRole("checkbox", { name: "我已檢查影響範圍，確認要繼續。" }));
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    // The button names the verb and how many resources it reaches.
+    const run = screen.getByRole("button", { name: "確認部署（影響 2 個資源）" }) as HTMLButtonElement;
     expect(run.disabled).toBe(false);
     await user.click(run);
     expect(await screen.findByText("已完成")).toBeTruthy();

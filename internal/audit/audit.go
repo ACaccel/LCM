@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/store"
@@ -151,21 +153,73 @@ func (p pending) insert(ctx context.Context, tx *sql.Tx, action, target string, 
 	return err
 }
 
+// Query selects audit entries. Zero fields do not filter.
+type Query struct {
+	// Limit is the page size; a value outside 1..MaxLimit is replaced by
+	// DefaultLimit or MaxLimit.
+	Limit int
+	// Before, when positive, restricts the result to entries with a smaller
+	// ID, which makes it a stable cursor.
+	Before int64
+	// From and To bound the entry time: From is inclusive, To exclusive.
+	From, To time.Time
+	// Actor matches the actor's name exactly.
+	Actor string
+	// Action matches an action exactly or as a dotted prefix, so "service"
+	// selects "service.deploy" and "service.stop".
+	Action string
+	// Target matches the target exactly, such as a resource name.
+	Target string
+}
+
 // List returns entries newest first. before, when positive, restricts the
 // result to entries with a smaller ID, which makes it a stable cursor.
 // A limit outside 1..MaxLimit is replaced by DefaultLimit or MaxLimit.
 func (l *Log) List(ctx context.Context, limit int, before int64) ([]Entry, error) {
+	return l.Search(ctx, Query{Limit: limit, Before: before})
+}
+
+// Search returns the entries matching q, newest first.
+func (l *Log) Search(ctx context.Context, q Query) ([]Entry, error) {
+	limit := q.Limit
 	switch {
 	case limit <= 0:
 		limit = DefaultLimit
 	case limit > MaxLimit:
 		limit = MaxLimit
 	}
+	var (
+		where []string
+		args  []any
+	)
+	if q.Before > 0 {
+		where = append(where, `id < ?`)
+		args = append(args, q.Before)
+	}
+	if !q.From.IsZero() {
+		where = append(where, `time >= ?`)
+		args = append(args, q.From.UnixMilli())
+	}
+	if !q.To.IsZero() {
+		where = append(where, `time < ?`)
+		args = append(args, q.To.UnixMilli())
+	}
+	if q.Actor != "" {
+		where = append(where, `actor_name = ?`)
+		args = append(args, q.Actor)
+	}
+	if q.Action != "" {
+		prefix := q.Action + "."
+		where = append(where, `(action = ? OR substr(action, 1, ?) = ?)`)
+		args = append(args, q.Action, utf8.RuneCountInString(prefix), prefix)
+	}
+	if q.Target != "" {
+		where = append(where, `target = ?`)
+		args = append(args, q.Target)
+	}
 	query := `SELECT id, time, actor_kind, actor_id, actor_name, action, target, details, outcome FROM audit_log`
-	args := []any{}
-	if before > 0 {
-		query += ` WHERE id < ?`
-		args = append(args, before)
+	if len(where) > 0 {
+		query += ` WHERE ` + strings.Join(where, ` AND `)
 	}
 	query += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limit)

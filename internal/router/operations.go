@@ -124,23 +124,23 @@ func (m *Manager) Capabilities(ctx context.Context, ref string) ([]Capability, e
 // rebootBlocked returns why a reboot of r cannot be submitted now, or "".
 func (m *Manager) rebootBlocked(ctx context.Context, r Record) (string, error) {
 	if r.Phase != resource.PhaseManaged {
-		return "router is not managed", nil
+		return resource.RouterNotManaged, nil
 	}
 	conn, ok := m.conns.Get(r.Connection)
 	switch {
 	case !ok:
-		return "connection is not configured on this host", nil
+		return resource.ReasonNoConnection, nil
 	case conn.Type != r.Document.Spec.Adapter:
-		return "connection type does not match the adapter", nil
+		return resource.ReasonConnectionType, nil
 	case !conn.AllowsResource(r.Name):
-		return "connection does not allow this resource", nil
+		return resource.ReasonConnectionDenied, nil
 	case !conn.Allows(connection.ActionReboot):
-		return "connection does not allow reboot", nil
+		return resource.ConnectionNoReboot, nil
 	case !online(r):
-		return "a fresh successful observation is required", nil
+		return resource.NeedsObservation, nil
 	}
 	if _, ok := bootAt(r.Status.Snapshot); !ok {
-		return "the router does not report its uptime", nil
+		return resource.NoUptime, nil
 	}
 	db := m.db.Reader()
 	var unresolved, maint int
@@ -148,13 +148,13 @@ func (m *Manager) rebootBlocked(ctx context.Context, r Record) (string, error) {
 		return "", err
 	}
 	if unresolved > 0 {
-		return "an unresolved operation already exists", nil
+		return resource.OperationUnresolved, nil
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance`).Scan(&maint); err != nil {
 		return "", err
 	}
 	if maint > 0 {
-		return "local machine maintenance is active", nil
+		return resource.LocalMaintenance, nil
 	}
 	return "", nil
 }
@@ -249,14 +249,14 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 			return ErrConflict
 		}
 		if cur.phase != resource.PhaseManaged {
-			return precondition("router is not managed")
+			return precondition(resource.RouterNotManaged)
 		}
 		var count int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_operations WHERE resource_id = ? AND unresolved = 1`, r.ID).Scan(&count); err != nil {
 			return err
 		}
 		if count > 0 {
-			return precondition("an unresolved operation already exists")
+			return precondition(resource.OperationUnresolved)
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO resource_operations(id,resource_id,idempotency_key,request_hash,action,state,created_at,updated_at,body) VALUES(?,?,?,?,?,?,?,?,?)`,
 			op.ID, r.ID, key, hash, action, op.State, now.UnixMilli(), now.UnixMilli(), body)
@@ -273,13 +273,13 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 	// and one that was not sent must not stay pending.
 	ctx = context.WithoutCancel(ctx)
 	if err := m.record(ctx, "operation.submit", r, op.ID, map[string]any{"operationId": op.ID, "action": action, "connection": r.Connection, "reason": req.Reason}); err != nil {
-		m.failUnsent(ctx, &op, "request was not sent: its audit entry could not be stored")
+		m.failUnsent(ctx, &op, resource.NotSentAudit)
 		return op, err
 	}
 	op.State = stateSubmitting
 	if err := m.saveOperation(ctx, &op, statePending); err != nil {
 		op.State = statePending
-		m.failUnsent(ctx, &op, "request was not sent: its state could not be stored")
+		m.failUnsent(ctx, &op, resource.NotSentState)
 		return op, err
 	}
 	outcome, sendErr := c.Reboot(ctx)
@@ -287,18 +287,18 @@ func (m *Manager) Submit(ctx context.Context, ref string, req resource.Operation
 	switch outcome {
 	case xiaomi.RebootAccepted:
 		op.State, op.Receipt = stateObserving, &Receipt{Outcome: receiptAccepted, SubmittedAt: submittedAt}
-		op.Reason = "router accepted the request; waiting for reboot evidence"
+		op.Reason = resource.RouterAccepted
 	case xiaomi.RebootUnknown:
 		op.State, op.Receipt = stateObserving, &Receipt{Outcome: receiptUnknown, SubmittedAt: submittedAt}
-		op.Reason = "submission outcome unknown; waiting for reboot evidence"
+		op.Reason = resource.OutcomeUnknown
 	case xiaomi.RebootRejected:
 		op.State, op.Unresolved, op.Receipt = stateFailed, false, &Receipt{Outcome: receiptRejected, SubmittedAt: submittedAt}
-		op.Reason = "router rejected the request"
+		op.Reason = resource.RouterRejected
 	default:
 		op.State, op.Unresolved, op.Receipt = stateFailed, false, &Receipt{Outcome: receiptNotSent, SubmittedAt: submittedAt}
-		op.Reason = "request was not delivered"
+		op.Reason = resource.NotDelivered
 		if errors.Is(sendErr, xiaomi.ErrAuth) {
-			op.Reason = "request was not delivered: authentication rejected"
+			op.Reason = resource.NotDeliveredAuth
 			m.dropClient(r.Connection)
 		}
 	}
@@ -337,10 +337,10 @@ func (m *Manager) closeAbandoned(ctx context.Context, op *Operation) error {
 	case statePending:
 		op.State, op.Unresolved = stateFailed, false
 		op.Receipt = &Receipt{Outcome: receiptNotSent, SubmittedAt: m.clk.Now().UTC()}
-		op.Reason = "request was never sent: submission stopped before sending"
+		op.Reason = resource.NeverSent
 	case stateSubmitting:
 		op.State = stateIndeterminate
-		op.Reason = "interrupted before the submission outcome was recorded; never resubmitted"
+		op.Reason = resource.InterruptedBeforeOutcome
 	default:
 		return nil
 	}
@@ -393,10 +393,10 @@ func (m *Manager) settle(ctx context.Context, id string) {
 		case rebootVerified(*op, r.Status):
 			ev := r.Status
 			op.State, op.Unresolved, op.Evidence = stateSucceeded, false, &ev
-			op.Reason = "router booted after the request and answers again"
+			op.Reason = resource.RouterBooted
 		case !now.Before(op.Request.Deadline):
 			op.State = stateIndeterminate
-			op.Reason = "no reboot evidence before the deadline"
+			op.Reason = resource.NoRebootEvidence
 		default:
 			continue
 		}

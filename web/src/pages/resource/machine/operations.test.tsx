@@ -16,8 +16,8 @@ interface Seen {
   body: Record<string, unknown>;
 }
 const caps = [
-  { action: "reboot", available: true, reason: "" },
-  { action: "graceful-shutdown", available: true, reason: "" },
+  { action: "reboot", available: true, reason: "", reasonMessage: { code: "", params: {}, message: "" } },
+  { action: "graceful-shutdown", available: true, reason: "", reasonMessage: { code: "", params: {}, message: "" } },
 ];
 function setupServer(submit?: (n: number, request: Request) => Response | Promise<Response>) {
   const posts: Seen[] = [];
@@ -101,7 +101,7 @@ describe("MachineControls", () => {
       wrap(
         <MachineControls
           resource={freshMachine()}
-          caps={[{ action: "reboot", available: false, reason: "helper unavailable" }]}
+          caps={[{ action: "reboot", available: false, reason: "helper unavailable", reasonMessage: { code: "", params: {}, message: "helper unavailable" } }]}
           maintenance={maintenanceFixture}
         />,
       ),
@@ -242,6 +242,16 @@ describe("maintenance and manual resolution", () => {
     await userEvent.click(screen.getByRole("button", { name: "確認" }));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toEqual({ path: "/api/v1/resources/workstation/maintenance/exit", match: "3", body: { reason: "Workloads inspected and recovered" } });
+  });
+  it("shows the operator's request reason and the translated state reason", async () => {
+    setupServer();
+    render(wrap(<OperationsList resource="workstation" />));
+    expect(await screen.findByText("請求理由")).toBeTruthy();
+    expect(screen.getByText("Kernel update")).toBeTruthy();
+    expect(screen.getByText("狀態說明")).toBeTruthy();
+    // The state reason is the translation of its code, not the server's English text.
+    expect(screen.getByText("操作缺少已驗證的完成證據")).toBeTruthy();
+    expect(screen.queryByText("Awaiting new boot evidence")).toBeNull();
   });
   it("requires explicit manual resolution and shows it as unverified with actor/reason", async () => {
     const posts = setupServer();

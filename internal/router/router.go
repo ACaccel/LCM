@@ -149,11 +149,18 @@ type Snapshot struct {
 // translatable message for each health reason.
 type StatusView struct {
 	Status
+	// Snapshot replaces the stored snapshot with its translatable form.
+	Snapshot       *SnapshotView     `json:"snapshot"`
 	ReasonMessages []message.Message `json:"reasonMessages"`
 }
 
 func newStatusView(s Status) StatusView {
-	return StatusView{Status: s, ReasonMessages: resource.ReasonMessages(s.Reasons)}
+	v := StatusView{Status: s, ReasonMessages: resource.ReasonMessages(s.Reasons)}
+	if s.Snapshot != nil {
+		sv := NewSnapshotView(*s.Snapshot)
+		v.Snapshot = &sv
+	}
+	return v
 }
 
 // Status is the current observed state; Fresh, and with it Health, is
@@ -344,14 +351,14 @@ func (m *Manager) client(r Record) (Client, error) {
 	}
 	pw, err := m.secrets.Get(conn.PasswordSecret)
 	if err != nil || pw.Reveal() == "" {
-		return nil, errNotConfigured("password secret is unavailable")
+		return nil, errNotConfigured(resource.PasswordSecretUnavailable)
 	}
 	c, err := xiaomi.New(xiaomi.Config{
 		BaseURL: conn.URL, Username: conn.Username, Password: pw.Reveal(), DeviceID: conn.DeviceID,
 		InsecureSkipVerify: conn.InsecureSkipVerify, Clock: m.clk, HTTP: m.httpc,
 	})
 	if err != nil {
-		return nil, errNotConfigured("connection settings are invalid")
+		return nil, errNotConfigured(resource.ConnectionSettingsInvalid)
 	}
 	m.clients[conn.Name] = c
 	return c, nil

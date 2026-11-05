@@ -15,6 +15,9 @@ import (
 // maxTrackedGroups bounds the group actions kept in memory.
 const maxTrackedGroups = 100
 
+// maxGroupNames bounds the service names of a group selector.
+const maxGroupNames = 200
+
 // Statuses of a step of a group action, besides the action statuses.
 const (
 	stepPending = "pending"
@@ -24,12 +27,14 @@ const (
 type groupSelectorDTO struct {
 	Type   string            `json:"type"`
 	Labels map[string]string `json:"labels"`
+	Names  []string          `json:"names,omitempty"`
 }
 
 type groupRequest struct {
 	Selector struct {
 		Type   string            `json:"type"`
 		Labels map[string]string `json:"labels"`
+		Names  []string          `json:"names"`
 	} `json:"selector"`
 	Action string `json:"action"`
 	Params struct {
@@ -157,8 +162,14 @@ func (s *Server) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 	case req.Selector.Type != "" && req.Selector.Type != model.ResourceService:
 		writeFieldError(w, "selector.type", "group actions run service lifecycle actions; machine and router operations are not run in groups")
 		return
-	case len(req.Selector.Labels) == 0:
-		writeFieldError(w, "selector.labels", "at least one label is required, so a group never selects every service by accident")
+	case len(req.Selector.Labels) == 0 && len(req.Selector.Names) == 0:
+		writeFieldError(w, "selector.labels", "at least one label or service name is required, so a group never selects every service by accident")
+		return
+	case len(req.Selector.Names) > maxGroupNames:
+		writeFieldError(w, "selector.names", "too many service names")
+		return
+	case slices.Contains(req.Selector.Names, ""):
+		writeFieldError(w, "selector.names", "service names must not be empty")
 		return
 	case !slices.Contains(catalog.Actions, action):
 		writeFieldError(w, "action", "must be a service lifecycle action: "+strings.Join(catalog.Actions, ", "))
@@ -173,9 +184,12 @@ func (s *Server) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 		writeFieldError(w, "params.job", "run-job needs the name of a job")
 		return
 	}
-	sel := groupSelectorDTO{Type: model.ResourceService, Labels: req.Selector.Labels}
+	if req.Selector.Labels == nil {
+		req.Selector.Labels = map[string]string{}
+	}
+	sel := groupSelectorDTO{Type: model.ResourceService, Labels: req.Selector.Labels, Names: req.Selector.Names}
 	g, err := s.manager.PlanGroup(r.Context(), catalog.GroupRequest{
-		Labels: req.Selector.Labels, Action: action, AcknowledgeImpact: req.AcknowledgeImpact,
+		Labels: req.Selector.Labels, Names: req.Selector.Names, Action: action, AcknowledgeImpact: req.AcknowledgeImpact,
 		Options: catalog.ActionOptions{Version: req.Params.Version, Job: req.Params.Job},
 	})
 	if err != nil {

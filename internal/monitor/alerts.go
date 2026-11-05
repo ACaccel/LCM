@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/monitor/alert"
@@ -143,10 +144,52 @@ func (m *Monitor) AllFiringAlerts(ctx context.Context) ([]Alert, error) {
 	return m.queryAlerts(ctx, `resolved_at IS NULL`)
 }
 
+// AlertState selects firing, resolved or all alerts.
+type AlertState string
+
+// Alert states for ListAlerts.
+const (
+	AlertsFiring   AlertState = "firing"
+	AlertsResolved AlertState = "resolved"
+	AlertsAll      AlertState = "all"
+)
+
+// Valid reports whether s is a known state.
+func (s AlertState) Valid() bool {
+	return s == AlertsFiring || s == AlertsResolved || s == AlertsAll
+}
+
+// ListAlerts returns the stored alerts in state, optionally of one resource
+// (empty selects every resource). Firing alerts come first, oldest first,
+// then resolved ones, most recently resolved first. Resolved alerts are kept
+// for the rollup retention.
+func (m *Monitor) ListAlerts(ctx context.Context, state AlertState, resource string) ([]Alert, error) {
+	var where []string
+	var args []any
+	switch state {
+	case AlertsFiring:
+		where = append(where, `resolved_at IS NULL`)
+	case AlertsResolved:
+		where = append(where, `resolved_at IS NOT NULL`)
+	case AlertsAll:
+	default:
+		return nil, fmt.Errorf("monitor: unknown alert state %q", state)
+	}
+	if resource != "" {
+		where = append(where, `resource = ?`)
+		args = append(args, resource)
+	}
+	if len(where) == 0 {
+		where = append(where, `1`)
+	}
+	return m.queryAlerts(ctx, strings.Join(where, ` AND `), args...)
+}
+
 func (m *Monitor) queryAlerts(ctx context.Context, where string, args ...any) ([]Alert, error) {
 	rows, err := m.db.Reader().QueryContext(ctx,
-		`SELECT source, fingerprint, resource, name, severity, labels, message, started_at, updated_at
-         FROM monitor_alerts WHERE `+where+` ORDER BY started_at, source, fingerprint`, args...)
+		`SELECT source, fingerprint, resource, name, severity, labels, message, started_at, updated_at, resolved_at
+         FROM monitor_alerts WHERE `+where+`
+         ORDER BY resolved_at IS NOT NULL, CASE WHEN resolved_at IS NULL THEN started_at END, resolved_at DESC, source, fingerprint`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("monitor: alerts: %w", err)
 	}
@@ -155,11 +198,15 @@ func (m *Monitor) queryAlerts(ctx context.Context, where string, args ...any) ([
 		var a Alert
 		var labels string
 		var started, updated int64
-		if err := rows.Scan(&a.Source, &a.Fingerprint, &a.Resource, &a.Name, &a.Severity, &labels, &a.Message, &started, &updated); err != nil {
+		var resolved sql.NullInt64
+		if err := rows.Scan(&a.Source, &a.Fingerprint, &a.Resource, &a.Name, &a.Severity, &labels, &a.Message, &started, &updated, &resolved); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("monitor: alerts: %w", err)
 		}
 		a.StartedAt, a.UpdatedAt = fromMillis(started), fromMillis(updated)
+		if resolved.Valid {
+			a.ResolvedAt = fromMillis(resolved.Int64)
+		}
 		if err := json.Unmarshal([]byte(labels), &a.Labels); err != nil {
 			a.Labels = nil
 		}

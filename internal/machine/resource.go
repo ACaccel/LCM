@@ -73,7 +73,7 @@ func (h hooks) BeforePhase(ctx context.Context, tx *sql.Tx, p resource.PhaseChan
 		return err
 	}
 	if maint > 0 {
-		return hookPrecondition("exit maintenance first")
+		return hookPrecondition(resource.ExitMaintenanceFirst)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE resource_status SET status = '{}', updated_at = ? WHERE resource_id = ?`, m.clk.Now().UnixMilli(), id); err != nil {
 		return err
@@ -247,7 +247,7 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 	}
 	action := func(name string, ok bool, reason string) resource.Action {
 		if readErr != nil {
-			ok, reason = false, "machine state could not be read"
+			ok, reason = false, resource.MachineUnreadable
 		}
 		i := slices.IndexFunc(machineActions, func(a resource.Action) bool { return a.Name == name })
 		a := machineActions[i]
@@ -256,18 +256,18 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 	}
 	var out []resource.Action
 
-	ok, reason := unavailable(!managed, "machine is not managed")
+	ok, reason := unavailable(!managed, resource.MachineNotManaged)
 	if ok && m.observer == nil {
-		ok, reason = false, "no observer is configured"
+		ok, reason = false, resource.NoObserver
 	}
 	out = append(out, action("observe", ok, reason))
 
-	ok, reason = unavailable(!managed, "machine is not managed")
+	ok, reason = unavailable(!managed, resource.MachineNotManaged)
 	if ok && maint > 0 {
-		ok, reason = false, "maintenance is already active"
+		ok, reason = false, resource.MaintenanceActive
 	}
 	out = append(out, action("maintenance-enter", ok, reason))
-	ok, reason = unavailable(maint == 0, "maintenance is not active")
+	ok, reason = unavailable(maint == 0, resource.MaintenanceInactive)
 	out = append(out, action("maintenance-exit", ok, reason))
 
 	power := map[string]Capability{}
@@ -281,9 +281,9 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 		ok, reason := c.Available, c.Reason
 		switch {
 		case !found:
-			ok, reason = false, "machine is not available"
+			ok, reason = false, resource.MachineUnavailable
 		case ok && unresolved > 0:
-			ok, reason = false, "an unresolved operation already exists"
+			ok, reason = false, resource.OperationUnresolved
 		}
 		out = append(out, action(op, ok, reason))
 	}
@@ -291,23 +291,23 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 	phaseBlock := ""
 	switch {
 	case unresolved > 0:
-		phaseBlock = "resolve the outstanding operation first"
+		phaseBlock = resource.ResolveOperationFirst
 	case maint > 0:
-		phaseBlock = "exit maintenance first"
+		phaseBlock = resource.ExitMaintenanceFirst
 	}
-	ok, reason = unavailable(!managed, "machine is not managed")
+	ok, reason = unavailable(!managed, resource.MachineNotManaged)
 	if ok && phaseBlock != "" {
 		ok, reason = false, phaseBlock
 	}
 	out = append(out, action("retire", ok, reason))
-	ok, reason = unavailable(rec.Phase != resource.PhaseRetired, "machine is not retired")
+	ok, reason = unavailable(rec.Phase != resource.PhaseRetired, resource.MachineNotRetired)
 	out = append(out, action("resume", ok, reason))
-	ok, reason = unavailable(rec.Phase != resource.PhaseRetired, "retire the machine first")
+	ok, reason = unavailable(rec.Phase != resource.PhaseRetired, resource.RetireMachineFirst)
 	switch {
 	case ok && phaseBlock != "":
 		ok, reason = false, phaseBlock
 	case ok && owned > 0:
-		ok, reason = false, "release Git ownership first"
+		ok, reason = false, resource.ReleaseOwnershipFirst
 	}
 	out = append(out, action("unmanage", ok, reason))
 	return out

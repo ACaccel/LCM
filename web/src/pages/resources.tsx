@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { client, unwrap, yamlBody } from "../api/client";
 import { archivesQuery, qk, resourcesQuery, resourceTypesQuery } from "../api/queries";
-import type { Health, ResourceSummary, ResourceType, ResourceTypeName } from "../api/types";
+import type { ActionName, Health, ResourceSummary, ResourceType, ResourceTypeName } from "../api/types";
 import { HealthPill, ManagedBadges, PhasePill, StatePill, TypeTag } from "../components/badges";
 import { Dialog } from "../components/dialog";
 import { SortTh, useSort } from "../components/sort-header";
@@ -11,6 +11,7 @@ import { useToast } from "../components/toast";
 import { Async, Empty, ErrorBox, Field, PageHead, Tag } from "../components/ui";
 import { ValidationReport } from "../components/validation";
 import { YamlEditor } from "../components/yaml-editor-lazy";
+import { BULK_ACTIONS, BulkActionDialog } from "./bulk-action-dialog";
 import { formatDateTime, shortVersion } from "../lib/format";
 import { nameMatches, sortRows } from "../lib/list";
 import { resourceSkeleton } from "../lib/templates";
@@ -19,14 +20,18 @@ import { s } from "../strings";
 const healths: Health[] = ["healthy", "degraded", "down", "unknown"];
 const phases = ["managed", "retired"] as const;
 
-const resourceSortKeys = ["name", "type", "phase", "state", "health", "version"] as const;
+const resourceSortKeys = ["name", "type", "state", "health", "version"] as const;
 type ResourceSortKey = (typeof resourceSortKeys)[number];
 // Ascending health puts the resources that need attention first.
-const healthRank: Record<Health, number> = { down: 0, degraded: 1, unknown: 2, healthy: 3 };
+const healthRank: Record<Health, number> = {
+  down: 0,
+  degraded: 1,
+  unknown: 2,
+  healthy: 3,
+};
 const resourceSort: Record<ResourceSortKey, (r: ResourceSummary) => string | number> = {
   name: (r) => r.name,
   type: (r) => s.resourceType[r.type],
-  phase: (r) => s.phase[r.phase],
   state: (r) => (r.state ? (s.state[r.state] ?? r.state) : ""),
   health: (r) => healthRank[r.health],
   version: (r) => r.version,
@@ -36,17 +41,31 @@ function isType(types: readonly ResourceType[] | undefined, v: string): v is Res
   return !!types?.some((t) => t.type === v);
 }
 
-function ResourceRow({ r }: { r: ResourceSummary }) {
+function ResourceRow({ r, selected, onToggle }: { r: ResourceSummary; selected: boolean; onToggle: (name: string) => void }) {
+  const service = r.type === "service";
   return (
     <tr>
       <td>
+        <input
+          type="checkbox"
+          checked={selected}
+          disabled={!service || r.phase !== "managed"}
+          title={service ? undefined : s.bulk.onlyServices}
+          aria-label={s.bulk.selectRow(r.name)}
+          onChange={() => onToggle(r.name)}
+        />
+      </td>
+      <td>
         <Link to={`/resources/${encodeURIComponent(r.name)}`}>{r.name}</Link>
+        {r.phase !== "managed" && (
+          <>
+            {" "}
+            <PhasePill phase={r.phase} />
+          </>
+        )}
       </td>
       <td>
         <TypeTag type={r.type} adapter={r.adapter} />
-      </td>
-      <td>
-        <PhasePill phase={r.phase} />
       </td>
       <td>
         <StatePill state={r.state} />
@@ -64,7 +83,7 @@ function ResourceRow({ r }: { r: ResourceSummary }) {
       </td>
       <td>
         <div className="row" style={{ gap: 4 }}>
-          <ManagedBadges managedBy={r.managedBy} />
+          <ManagedBadges managedBy={r.managedBy} hideGui />
         </div>
       </td>
       <td>
@@ -236,8 +255,83 @@ function CreateDialog({ types, initialType, onClose }: { types: ResourceType[]; 
   );
 }
 
+/** Rows a bulk action can select: managed services, the only resources group actions run on. */
+const selectable = (r: ResourceSummary) => r.type === "service" && r.phase === "managed";
+
+/**
+ * Selection and launcher of bulk actions. Services are checked in the table
+ * or picked by a label; the dialog then previews the ordered plan before
+ * anything runs.
+ */
+function BulkBar({ shown, selected, setSelected }: { shown: ResourceSummary[]; selected: Set<string>; setSelected: (next: Set<string>) => void }) {
+  const [action, setAction] = useState<ActionName>(BULK_ACTIONS[0] ?? "start");
+  const [labelText, setLabelText] = useState("");
+  const [open, setOpen] = useState(false);
+  const [labelError, setLabelError] = useState(false);
+
+  function selectByLabel() {
+    const [k, v] = labelText.trim().split("=", 2);
+    if (!k || v === undefined) {
+      setLabelError(true);
+      return;
+    }
+    setLabelError(false);
+    const next = new Set(selected);
+    for (const r of shown) if (selectable(r) && r.labels[k] === v) next.add(r.name);
+    setSelected(next);
+  }
+
+  return (
+    <div className="bulk-bar row" role="group" aria-label={s.bulk.bar}>
+      <div className="field">
+        <label htmlFor="bulk-label">{s.bulk.byLabel}</label>
+        <div className="row" style={{ gap: 4 }}>
+          <input
+            id="bulk-label"
+            type="text"
+            value={labelText}
+            placeholder="tier=web"
+            aria-invalid={labelError || undefined}
+            onChange={(e) => {
+              setLabelText(e.target.value);
+              setLabelError(false);
+            }}
+          />
+          <button type="button" className="btn small" onClick={selectByLabel}>
+            {s.bulk.selectByLabel}
+          </button>
+        </div>
+        {labelError && <span className="hint">{s.bulk.labelHint}</span>}
+      </div>
+      {selected.size > 0 && (
+        <>
+          <span>{s.bulk.selected(selected.size)}</span>
+          <div className="field">
+            <label htmlFor="bulk-action">{s.bulk.action}</label>
+            <select id="bulk-action" value={action} onChange={(e) => setAction(e.target.value as ActionName)}>
+              {BULK_ACTIONS.map((a) => (
+                <option key={a} value={a}>
+                  {s.actionName[a] ?? a}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button type="button" className="btn primary" onClick={() => setOpen(true)}>
+            {s.bulk.preview}
+          </button>
+          <button type="button" className="btn" onClick={() => setSelected(new Set())}>
+            {s.bulk.clear}
+          </button>
+        </>
+      )}
+      {open && <BulkActionDialog names={[...selected].sort()} action={action} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
 export function ResourcesPage() {
   const [params, setParams] = useSearchParams();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const types = useQuery(resourceTypesQuery());
   const rawType = params.get("type") ?? "";
   const type = isType(types.data, rawType) ? rawType : undefined;
@@ -247,7 +341,10 @@ export function ResourcesPage() {
   const health = (params.get("health") ?? "") as Health | "";
   const archived = params.get("archived") === "1";
   const creating = params.get("create") === "1";
-  const { sort, toggle: toggleSort } = useSort(resourceSortKeys, { key: "name", dir: "asc" });
+  const { sort, toggle: toggleSort } = useSort(resourceSortKeys, {
+    key: "name",
+    dir: "asc",
+  });
 
   const labels = label
     .split(",")
@@ -255,7 +352,12 @@ export function ResourcesPage() {
     .filter(Boolean);
   // The type filter waits for the descriptors so that an unknown type in the URL is not sent.
   const q = useQuery({
-    ...resourcesQuery({ type, label: labels, phase, health: health || undefined }),
+    ...resourcesQuery({
+      type,
+      label: labels,
+      phase,
+      health: health || undefined,
+    }),
     enabled: !archived && (!rawType || types.isSuccess),
   });
 
@@ -338,29 +440,54 @@ export function ResourcesPage() {
               resourceSort,
             );
             const th = (key: ResourceSortKey, label: string) => <SortTh sortKey={key} label={label} sort={sort} onSort={toggleSort} />;
+            const rows = shown.filter(selectable);
+            const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.name));
+            const toggle = (name: string) => {
+              const next = new Set(selected);
+              if (!next.delete(name)) next.add(name);
+              setSelected(next);
+            };
             return shown.length === 0 ? (
               <Empty>{s.resources.empty}</Empty>
             ) : (
-              <div className="table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      {th("name", s.resources.columns.name)}
-                      {th("type", s.resources.columns.type)}
-                      {th("phase", s.resources.columns.phase)}
-                      {th("state", s.resources.columns.state)}
-                      {th("health", s.resources.columns.health)}
-                      {th("version", s.resources.columns.version)}
-                      <th>{s.resources.columns.managed}</th>
-                      <th>{s.resources.columns.labels}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shown.map((r) => (
-                      <ResourceRow key={r.id} r={r} />
-                    ))}
-                  </tbody>
-                </table>
+              <div className="stack">
+                <BulkBar shown={shown} selected={selected} setSelected={setSelected} />
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>
+                          <input
+                            type="checkbox"
+                            aria-label={s.bulk.selectAll}
+                            checked={allChecked}
+                            disabled={rows.length === 0}
+                            onChange={() => {
+                              const next = new Set(selected);
+                              for (const r of rows) {
+                                if (allChecked) next.delete(r.name);
+                                else next.add(r.name);
+                              }
+                              setSelected(next);
+                            }}
+                          />
+                        </th>
+                        {th("name", s.resources.columns.name)}
+                        {th("type", s.resources.columns.type)}
+                        {th("state", s.resources.columns.state)}
+                        {th("health", s.resources.columns.health)}
+                        {th("version", s.resources.columns.version)}
+                        <th>{s.resources.columns.managed}</th>
+                        <th>{s.resources.columns.labels}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shown.map((r) => (
+                        <ResourceRow key={r.id} r={r} selected={selected.has(r.name)} onToggle={toggle} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             );
           }}

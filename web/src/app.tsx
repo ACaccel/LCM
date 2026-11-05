@@ -46,6 +46,8 @@ const router = createBrowserRouter([
       { path: "policies/:name", ...lazyPage(() => import("./pages/policy-editor"), "PolicyEditorPage") },
       { path: "runs", ...lazyPage(() => import("./pages/runs"), "RunsPage") },
       { path: "runs/:id", ...lazyPage(() => import("./pages/run-detail"), "RunDetailPage") },
+      { path: "alerts", ...lazyPage(() => import("./pages/alerts"), "AlertsPage") },
+      { path: "audit", ...lazyPage(() => import("./pages/audit"), "AuditPage") },
       { path: "settings/:tab?", ...lazyPage(() => import("./pages/settings"), "SettingsPage") },
       { path: "*", Component: NotFoundPage },
     ],

@@ -67,6 +67,7 @@ func (s *Server) routes() http.Handler {
 	handle("GET", v1+"/resources/{resource}/deployments", admin(s.handleListDeployments))
 	handle("GET", v1+"/resources/{resource}/timeline", admin(s.handleResourceTimeline))
 	handle("GET", v1+"/timeline", admin(s.handleTimeline))
+	handle("GET", v1+"/overview", admin(s.handleOverview))
 
 	// Native observation, maintenance and durable operations (machines,
 	// routers). Writes are direct administrator requests: the components

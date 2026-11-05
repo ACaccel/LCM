@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/ACaccel/lcm/internal/message"
@@ -54,6 +55,12 @@ var reasonCodes = map[string]string{
 func ReasonMessage(reason string) message.Message {
 	if code, ok := reasonCodes[reason]; ok {
 		return message.New(code, reason)
+	}
+	if m, ok := unavailableReasons[reason]; ok {
+		params := make(map[string]string, len(m.Params))
+		maps.Copy(params, m.Params)
+		m.Params = params
+		return m
 	}
 	if metric, ok := strings.CutSuffix(reason, notReportedSuffix); ok {
 		if m, ok := metricParams(metric); ok {

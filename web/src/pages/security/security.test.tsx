@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostStatusQuery } from "../../api/security";
 import type { HostStatus, Incident, SecuritySettings, TrafficPoint } from "../../api/security";
 import { SecurityIncidents, HandlingForm } from "./incidents";
-import { ProfileForm, ScheduleForm, SecurityChecks } from "./controls";
+import { ProfileForm, ScheduleForm, SecurityHost } from "./controls";
 import { HostActions } from "./host-actions";
 import { NotificationTest, SettingsForm, SettingsHistory } from "./notifications";
 import { trafficSegments, trafficTotals, TrafficDisplay } from "./traffic";
@@ -147,7 +147,7 @@ describe("host controls", () => {
   it("shows setup guidance for an unconfigured host and stops polling it", async () => {
     const unconfigured: HostStatus = { ...host, configured: false, available: false, machineId: "", reason: "not configured" };
     const fetch = vi.fn(async () => json(unconfigured)); vi.stubGlobal("fetch", fetch);
-    render(wrap(<SecurityChecks />));
+    render(wrap(<SecurityHost />));
     expect(await screen.findByText(sec.hostNotConfigured)).toBeTruthy();
     expect(screen.getByRole("link", { name: sec.hostSetupLink }).getAttribute("href")).toContain("docs/operations.md");
     expect(screen.queryByRole("button", { name: sec.scheduleAction })).toBeNull();

@@ -41,6 +41,7 @@ const action = (name: string, kind: ResourceAction["kind"], available = true, re
   kind,
   available,
   reason,
+  reasonMessage: { code: "", params: {}, message: reason },
   risk: "reversible",
   policy: false,
 });
@@ -184,6 +185,8 @@ export const operationFixture: ResourceOperation = {
   },
   receipt: { state: "accepted", acceptedAt: "2026-11-01T00:00:00Z", bootId: "boot-1" },
   reason: "Awaiting new boot evidence",
+  reasonMessage: { code: "op.noCompletionEvidence", params: {}, message: "Awaiting new boot evidence" },
+  requestReason: "Kernel update",
 };
 
 /** A machine whose latest snapshot was taken just now. */

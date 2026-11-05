@@ -229,3 +229,33 @@ textarea[aria-invalid="true"] {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+
+a.stat {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+a.stat:hover {
+  border-color: var(--primary);
+}
+
+.cards.compact {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.svc-card.compact {
+  padding: 6px 10px;
+  gap: 3px;
+}
+
+.svc-card.attention {
+  border-color: var(--warning);
+}
+
+.bulk-bar {
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}

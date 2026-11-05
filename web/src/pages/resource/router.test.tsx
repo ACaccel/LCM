@@ -41,6 +41,21 @@ describe("router snapshot", () => {
     expect(screen.getByText("login rejected")).toBeTruthy();
   });
 
+  it("translates the reasons of the attempt and of each source", () => {
+    const coded = {
+      ...snapshot,
+      outcome: "unreachable",
+      reason: "router unreachable",
+      reasonMessage: { code: "health.unreachable", params: {}, message: "router unreachable" },
+      sources: { wan: { state: "unavailable", reason: "code 3", reasonMessage: { code: "router.code", params: { code: "3" }, message: "code 3" } } },
+    } satisfies RouterSnapshot;
+    render(<RouterSnapshotView snapshot={coded} />);
+    expect(screen.getByText("路由器無法連線")).toBeTruthy();
+    expect(screen.getByText("路由器回報錯誤碼 3")).toBeTruthy();
+    expect(screen.queryByText("router unreachable")).toBeNull();
+    expect(screen.queryByText("code 3")).toBeNull();
+  });
+
   it("formats byte sizes with binary units", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(1536)).toBe("1.5 KiB");
@@ -71,14 +86,14 @@ describe("router monitoring", () => {
 
 describe("router reboot", () => {
   it.each([
-    { name: "without dependents", impact: noImpact("gateway", "reboot"), checks: 0, ack: undefined },
+    { name: "without dependents", impact: noImpact("gateway", "reboot"), label: "確認", ack: undefined },
     {
       name: "with a control dependent",
       impact: { ...noImpact("gateway", "reboot"), controlDependents: [{ name: "nas", type: "service" as const, relation: "controlPath" as const, via: "gateway", depth: 1 }], acknowledgementRequired: true },
-      checks: 1,
+      label: "確認重新開機（影響 1 個資源）",
       ack: true,
     },
-  ])("submits one request with a reason and the typed name ($name)", async ({ impact, checks, ack }) => {
+  ])("submits one request with a reason and the typed name ($name)", async ({ impact, label, ack }) => {
     const posts: { path: string; match: string | null; body: Record<string, unknown> }[] = [];
     vi.stubGlobal("fetch", async (req: Request) => {
       const path = new URL(req.url).pathname;
@@ -97,19 +112,16 @@ describe("router reboot", () => {
     await waitFor(() => expect((reboot as HTMLButtonElement).disabled).toBe(false));
     await user.click(reboot);
     const dialog = screen.getByRole("dialog");
-    const confirm = within(dialog).getByRole("button", { name: "確認" }) as HTMLButtonElement;
+    // Confirming is the acknowledgement: the button states the impact and there is no checkbox.
+    const confirm = (await within(dialog).findByRole("button", { name: label })) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
+    expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(0);
     // The consequences are shown once, in the dialog.
     expect(screen.getAllByText(/重開路由器會中斷網路/)).toHaveLength(1);
     await user.type(within(dialog).getByLabelText("理由"), "Clear stuck WAN");
     await user.type(within(dialog).getByLabelText(/輸入資源名稱/), "gateway ");
     expect(confirm.disabled).toBe(true);
     await user.type(within(dialog).getByLabelText(/輸入資源名稱/), "{Backspace}");
-    await waitFor(() => expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(checks));
-    for (const box of within(dialog).queryAllByRole("checkbox")) {
-      expect(confirm.disabled).toBe(true);
-      await user.click(box);
-    }
     await waitFor(() => expect(confirm.disabled).toBe(false));
     await user.click(confirm);
     await waitFor(() => expect(posts).toHaveLength(1));

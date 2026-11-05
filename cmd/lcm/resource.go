@@ -47,8 +47,10 @@ Commands:
 
 A disruptive action (stop, restart, deploy, rollback, run-job, retiring a
 service, reboot, shutdown) on a resource other managed resources depend on or
-are controlled through is refused unless --acknowledge-impact is given; review
-the impact with "impact" or --dry-run first.
+are controlled through prints that impact first. On a terminal, answering y
+accepts it. Without a terminal, and with --yes, the command is refused unless
+--acknowledge-impact is given; review the impact with "impact" or --dry-run
+first.
 
 Writes (maintenance enter/exit, reboot, shutdown, resolve, retire, resume,
 unmanage) require --reason and --confirm <name>; the current document version
@@ -374,6 +376,9 @@ func (a *app) prepareWrite(ctx context.Context, cl *client.Client, c *resourceCa
 	if c.version == 0 {
 		c.version = cur.Version
 	}
+	// accepting is set when the person at the prompt accepts the impact
+	// printed above; it is sent as acknowledgeImpact.
+	accepting := false
 	if c.impact != "" {
 		var imp impactView
 		if err := cl.JSON(ctx, http.MethodGet, client.Path("resources", c.name, "impact"), url.Values{"action": {c.impact}}, nil, &imp); err != nil {
@@ -384,7 +389,10 @@ func (a *app) prepareWrite(ctx context.Context, cl *client.Client, c *resourceCa
 		}
 		a.printImpact(a.stderr, "", imp)
 		if imp.AcknowledgementRequired && !f.ackImpact {
-			return usagef("resource: %s %s reaches the resources above; add --acknowledge-impact", c.impact, c.name)
+			if !a.canAcceptImpact(f) {
+				return usagef("resource: %s %s reaches the resources above; add --acknowledge-impact", c.impact, c.name)
+			}
+			accepting = true
 		}
 	}
 	if c.enter || (c.power && cur.Type == "machine") {
@@ -409,7 +417,12 @@ func (a *app) prepareWrite(ctx context.Context, cl *client.Client, c *resourceCa
 		c.body["version"] = c.version
 	}
 	if c.asks() {
-		return a.confirmWrite(f.yes)
+		if err := a.confirmWrite(f.yes, accepting); err != nil {
+			return err
+		}
+		if accepting {
+			c.body["acknowledgeImpact"] = true
+		}
 	}
 	return nil
 }
@@ -465,17 +478,30 @@ func (a *app) printMaintenance(ctx context.Context, cl *client.Client, c *resour
 	return nil
 }
 
+// canAcceptImpact reports whether a person can accept the impact printed
+// above by answering the prompt. A script, and any run with --yes, must say
+// so up front with --acknowledge-impact, so that nobody acknowledges an
+// impact they did not read.
+func (a *app) canAcceptImpact(f resourceFlags) bool {
+	return !f.yes && a.interactive()
+}
+
 // confirmWrite asks before a write whose effect was printed. Without --yes
 // a stdin that is not a terminal refuses, so that a script never sends a
-// write nobody reviewed.
-func (a *app) confirmWrite(yes bool) error {
+// write nobody reviewed. With accepting set the answer also accepts the
+// impact that was printed.
+func (a *app) confirmWrite(yes, accepting bool) error {
 	if yes {
 		return nil
 	}
 	if !a.interactive() {
 		return usagef("resource: stdin is not a terminal; review the output above and add --yes to proceed")
 	}
-	_, _ = fmt.Fprint(a.stderr, "Proceed? [y/N] ")
+	if accepting {
+		_, _ = fmt.Fprint(a.stderr, "Proceed and accept the impact above? [y/N] ")
+	} else {
+		_, _ = fmt.Fprint(a.stderr, "Proceed? [y/N] ")
+	}
 	line, err := bufio.NewReader(a.stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("read answer: %w", err)
@@ -518,6 +544,15 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 	}
 	name, act := pos[1], pos[2]
 	path := client.Path("resources", name, "actions", act)
+	if !f.dryRun && !f.ackImpact {
+		accepted, err := a.askActionImpact(ctx, cl, name, act, f)
+		if err != nil {
+			return err
+		}
+		if accepted {
+			body["acknowledgeImpact"] = true
+		}
+	}
 	if f.dryRun {
 		var plan struct {
 			From   string     `json:"from"`
@@ -585,6 +620,28 @@ func (a *app) waitAction(ctx context.Context, cl *client.Client, id string) erro
 	}
 }
 
+// askActionImpact prints the impact of a service action and, when the action
+// needs it acknowledged, lets a person at a terminal accept it. It reports
+// whether the impact was accepted; an action without a guarded impact needs
+// nothing. Anyone else must pass --acknowledge-impact, which skips this.
+func (a *app) askActionImpact(ctx context.Context, cl *client.Client, name, act string, f resourceFlags) (bool, error) {
+	var imp impactView
+	if err := cl.JSON(ctx, http.MethodGet, client.Path("resources", name, "impact"), url.Values{"action": {act}}, nil, &imp); err != nil {
+		return false, apiError(err)
+	}
+	if !imp.AcknowledgementRequired {
+		return false, nil
+	}
+	a.printImpact(a.stderr, "", imp)
+	if !a.canAcceptImpact(f) {
+		return false, fmt.Errorf("resource: %s %s reaches the resources above; add --acknowledge-impact", act, name)
+	}
+	if err := a.confirmWrite(false, true); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // impactView is the part of a ResourceImpact the CLI prints.
 type impactView struct {
 	Dependents []struct {
@@ -642,30 +699,25 @@ func (a *app) groupAction(ctx context.Context, conn *connection, pos []string, f
 	}
 	path := client.Path("resource-groups", "actions")
 	if f.dryRun {
-		var plan struct {
-			Steps []struct {
-				Resource string `json:"resource"`
-				Plan     *struct {
-					From string `json:"from"`
-					To   string `json:"to"`
-				} `json:"plan"`
-				Error  string     `json:"error"`
-				Impact impactView `json:"impact"`
-			} `json:"steps"`
+		_, err := a.groupPlan(ctx, cl, path, a.stdout, pos[1], body)
+		return err
+	}
+	if !f.ackImpact {
+		// Preview the ordered plan so that a person can accept the impact of
+		// the whole group at once; a group that needs none starts directly.
+		plan, err := a.groupPlan(ctx, cl, path, a.stderr, pos[1], dryRunBody(body))
+		if err != nil {
+			return err
 		}
-		if err := cl.JSON(ctx, "POST", path, nil, body, &plan); err != nil {
-			return apiError(err)
-		}
-		for i, st := range plan.Steps {
-			switch {
-			case st.Error != "":
-				_, _ = fmt.Fprintf(a.stdout, "%d. %s %s: cannot run: %s\n", i+1, pos[1], st.Resource, st.Error)
-			case st.Plan != nil:
-				_, _ = fmt.Fprintf(a.stdout, "%d. %s %s (%s -> %s)\n", i+1, pos[1], st.Resource, st.Plan.From, st.Plan.To)
+		if plan.acknowledgementRequired() {
+			if !a.canAcceptImpact(f) {
+				return fmt.Errorf("resource: group-action %s reaches the resources above; add --acknowledge-impact", pos[1])
 			}
-			a.printImpact(a.stdout, "   ", st.Impact)
+			if err := a.confirmWrite(false, true); err != nil {
+				return err
+			}
+			body["acknowledgeImpact"] = true
 		}
-		return nil
 	}
 	var started struct {
 		ID string `json:"id"`
@@ -707,4 +759,56 @@ func (a *app) groupAction(ctx context.Context, conn *connection, pos []string, f
 			return fmt.Errorf("stopped waiting for group action %s: %w", started.ID, err)
 		}
 	}
+}
+
+// groupPlanView is the ordered plan of a group action.
+type groupPlanView struct {
+	Steps []struct {
+		Resource string `json:"resource"`
+		Plan     *struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"plan"`
+		Error  string     `json:"error"`
+		Impact impactView `json:"impact"`
+	} `json:"steps"`
+}
+
+// acknowledgementRequired reports whether any step needs its impact
+// acknowledged.
+func (p groupPlanView) acknowledgementRequired() bool {
+	for _, st := range p.Steps {
+		if st.Impact.AcknowledgementRequired {
+			return true
+		}
+	}
+	return false
+}
+
+// dryRunBody returns a copy of a group action body that only plans.
+func dryRunBody(body map[string]any) map[string]any {
+	out := make(map[string]any, len(body))
+	for k, v := range body {
+		out[k] = v
+	}
+	out["dryRun"] = true
+	return out
+}
+
+// groupPlan requests the plan of a group action and prints it to w.
+func (a *app) groupPlan(ctx context.Context, cl *client.Client, path string, w io.Writer, action string, body map[string]any) (groupPlanView, error) {
+	var plan groupPlanView
+	if err := cl.JSON(ctx, "POST", path, nil, body, &plan); err != nil {
+		return plan, apiError(err)
+	}
+	for i, st := range plan.Steps {
+		switch {
+		case st.Error != "":
+			_, _ = fmt.Fprintf(w, "%d. %s %s: cannot run: %s\n", i+1, action, st.Resource, st.Error)
+		case st.Plan != nil:
+			_, _ = fmt.Fprintf(w, "%d. %s %s (%s -> %s)\n", i+1, action, st.Resource, st.Plan.From, st.Plan.To)
+		}
+		a.printImpact(w, "   ", st.Impact)
+	}
+	return plan, nil
 }

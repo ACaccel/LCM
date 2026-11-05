@@ -13,3 +13,6 @@
 .security-console .table input { min-width: 90px; max-width: 160px; }
 .security-console form > .btn { justify-self: start; }
 @media (max-width: 650px) { .security-console .filters > .field { width: 100%; } .security-console .kv { grid-template-columns: 1fr; gap: 4px; } }
+/* Labels sit on one line whatever the control below them is: inputs, selects and date pickers share a height and the row aligns to the top. */
+.security-console .filters { align-items: flex-start; }
+.security-console .filters :is(input, select) { box-sizing: border-box; height: 32px; }

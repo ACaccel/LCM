@@ -43,8 +43,12 @@ describe("machine observation semantics", () => {
   });
   it("requires explicit server capability, and never enables power-on", () => {
     expect(powerUnavailable("reboot", undefined)).not.toBe("");
-    expect(powerUnavailable("reboot", [{ action: "reboot", available: false, reason: "helper unavailable" }])).toBe("helper unavailable");
-    expect(powerUnavailable("reboot", [{ action: "reboot", available: true, reason: "" }])).toBe("");
-    expect(powerUnavailable("power-on", [{ action: "power-on", available: true, reason: "" }])).toContain("人工開機");
+    const none = { code: "", params: {}, message: "" };
+    expect(powerUnavailable("reboot", [{ action: "reboot", available: false, reason: "helper unavailable", reasonMessage: { ...none, message: "helper unavailable" } }])).toBe("helper unavailable");
+    expect(powerUnavailable("reboot", [{ action: "reboot", available: true, reason: "", reasonMessage: none }])).toBe("");
+    expect(powerUnavailable("power-on", [{ action: "power-on", available: true, reason: "", reasonMessage: none }])).toContain("人工開機");
+    // A coded reason is shown in the console's language.
+    const coded = { action: "reboot", available: false, reason: "power control requires a verified Linux/systemd host", reasonMessage: { code: "capability.needsSystemd", params: {}, message: "power control requires a verified Linux/systemd host" } };
+    expect(powerUnavailable("reboot", [coded])).toBe("電源控制需要已驗證的 Linux/systemd 主機");
   });
 });

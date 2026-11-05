@@ -5,8 +5,8 @@ import type { ResourceDetail, ResourceSnapshot, RouterSnapshot, RouterStatus } f
 import { ErrorBox, Pill, Tag } from "../../components/ui";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { formatBytes, formatDateTime, formatDuration } from "../../lib/format";
-import { coverageView, cpuPercent } from "../../lib/machine";
-import { translateAll } from "../../lib/messages";
+import { capabilityReason, coverageView, cpuPercent } from "../../lib/machine";
+import { translate, translateAll } from "../../lib/messages";
 import { healthView, reachabilityView, routerOutcomeView } from "../../lib/status";
 import { s } from "../../strings";
 import { PowerDialog } from "./machine/dialogs";
@@ -36,7 +36,7 @@ export function RouterSnapshotView({ snapshot }: { snapshot: RouterSnapshot }) {
         <dt>{s.router.outcome}</dt>
         <dd>
           <Pill view={routerOutcomeView(snapshot.outcome)} />
-          {snapshot.reason && <div className="meta">{snapshot.reason}</div>}
+          {snapshot.reason && <div className="meta">{snapshot.reasonMessage ? translate(snapshot.reasonMessage) : snapshot.reason}</div>}
         </dd>
         <dt>{s.router.model}</dt>
         <dd>{snapshot.model || s.machine.unknown}</dd>
@@ -96,7 +96,7 @@ export function RouterSnapshotView({ snapshot }: { snapshot: RouterSnapshot }) {
                 <td>
                   <Pill view={coverageView(c)} />
                 </td>
-                <td>{c.reason || s.common.none}</td>
+                <td>{c.reason ? (c.reasonMessage ? translate(c.reasonMessage) : c.reason) : s.common.none}</td>
               </tr>
             ))}
           </tbody>
@@ -173,7 +173,7 @@ export function RouterControls({ resource, selector }: { resource: ResourceDetai
     if (!a.available) return reasonText(a, resource.state) || s.action.unavailable.notOffered;
     if (!caps.isSuccess) return s.machine.capabilityUnknown;
     const cap = caps.data.items.find((c) => c.action === name);
-    return cap && !cap.available ? cap.reason || s.machine.capabilityUnknown : "";
+    return cap && !cap.available ? capabilityReason(cap) : "";
   };
   return (
     <section className="panel stack">

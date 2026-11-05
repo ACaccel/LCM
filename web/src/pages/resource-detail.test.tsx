@@ -149,16 +149,16 @@ describe("relations and impact", () => {
     expect(await screen.findByText("目標資源不存在")).toBeTruthy();
   });
 
-  it("requires acknowledging the impact before retiring and sends it", async () => {
+  it("shows the impact in the retire dialog and acknowledges it on confirm", async () => {
     const service = resourceFixture();
     const { writes } = setup(service, "/resources/web", dependentImpact);
     const group = await screen.findByRole("group", { name: "可執行的動作" });
     await userEvent.click(within(group).getByRole("button", { name: "退役" }));
     const dialog = screen.getByRole("dialog");
-    const confirm = within(dialog).getByRole("button", { name: "確認" }) as HTMLButtonElement;
     expect(await within(dialog).findByText("api（依賴 web）")).toBeTruthy();
-    expect(confirm.disabled).toBe(true);
-    await userEvent.click(within(dialog).getByRole("checkbox", { name: "我已檢查影響範圍，確認要繼續。" }));
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    const confirm = within(dialog).getByRole("button", { name: "確認退役（影響 2 個資源）" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
     await userEvent.click(confirm);
     await waitFor(() => expect(writes).toEqual([{ method: "POST", path: "/api/v1/resources/web/phase", body: { phase: "retired", version: 3, acknowledgeImpact: true } }]));
   });

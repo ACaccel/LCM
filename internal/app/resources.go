@@ -7,6 +7,7 @@ import (
 	"github.com/ACaccel/lcm/internal/api"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/machine"
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/resource"
 	"github.com/ACaccel/lcm/internal/router"
@@ -83,8 +84,15 @@ type machineOperations struct{ m *machine.Manager }
 
 var _ api.Operations = machineOperations{}
 
+// machineOperationBody is the wire form of a machine operation: the stored
+// operation with a translatable message for its reason.
+type machineOperationBody struct {
+	machine.Operation
+	ReasonMessage message.Message `json:"reasonMessage"`
+}
+
 func toAPIOperation(op machine.Operation) api.Operation {
-	return api.Operation{ID: op.ID, Unresolved: op.Unresolved, Body: op}
+	return api.Operation{ID: op.ID, Unresolved: op.Unresolved, Body: machineOperationBody{Operation: op, ReasonMessage: resource.ReasonMessage(op.Reason)}}
 }
 
 func (o machineOperations) Capabilities(ctx context.Context, ref string) ([]api.Capability, error) {
@@ -149,7 +157,7 @@ func (o routerObservations) History(ctx context.Context, ref string, after int64
 	out := make([]api.ObservedItem, 0, len(snaps))
 	for _, s := range snaps {
 		out = append(out, api.ObservedItem{ID: s.ID, Body: api.Snapshot{
-			ID: s.ID, ResourceID: rec.ID, Type: model.ResourceRouter, ObservedAt: s.ObservedAt, Router: s,
+			ID: s.ID, ResourceID: rec.ID, Type: model.ResourceRouter, ObservedAt: s.ObservedAt, Router: router.NewSnapshotView(s),
 		}})
 	}
 	return out, nil
@@ -174,8 +182,15 @@ type routerOperations struct{ m *router.Manager }
 
 var _ api.Operations = routerOperations{}
 
+// routerOperationBody is the wire form of a router operation: the stored
+// operation with a translatable message for its reason.
+type routerOperationBody struct {
+	router.Operation
+	ReasonMessage message.Message `json:"reasonMessage"`
+}
+
 func toRouterOperation(op router.Operation) api.Operation {
-	return api.Operation{ID: op.ID, Unresolved: op.Unresolved, Body: op}
+	return api.Operation{ID: op.ID, Unresolved: op.Unresolved, Body: routerOperationBody{Operation: op, ReasonMessage: resource.ReasonMessage(op.Reason)}}
 }
 
 func (o routerOperations) Capabilities(ctx context.Context, ref string) ([]api.Capability, error) {

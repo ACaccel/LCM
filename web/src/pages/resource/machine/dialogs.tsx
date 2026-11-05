@@ -8,7 +8,7 @@ import { Dialog } from "../../../components/dialog";
 import { ErrorBox, Spinner } from "../../../components/ui";
 import { actionLabel } from "../../../lib/actions";
 import { s } from "../../../strings";
-import { ImpactAcknowledgement, useImpactAck } from "../impact";
+import { confirmLabel, ImpactAcknowledgement, useImpactAck } from "../impact";
 
 const previewQuery = (machine: string, enabled: boolean) =>
   queryOptions({
@@ -100,7 +100,7 @@ export function PowerDialog({
             disabled={!ready}
             onClick={() => onConfirm({ reason: reason.trim(), confirm: typed, acknowledgeImpact: impact.acknowledged })}
           >
-            {s.common.confirm}
+            {confirmLabel(s.common.confirm, actionLabel(action), impact)}
           </button>
         </>
       }

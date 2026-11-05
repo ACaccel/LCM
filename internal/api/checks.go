@@ -194,15 +194,15 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var (
-		alerts []monitor.Alert
-		err    error
-	)
-	if name := r.URL.Query().Get("resource"); name != "" {
-		alerts, err = s.monitor.FiringAlerts(r.Context(), name)
-	} else {
-		alerts, err = s.monitor.AllFiringAlerts(r.Context())
+	state := monitor.AlertState(r.URL.Query().Get("state"))
+	if state == "" {
+		state = monitor.AlertsFiring
 	}
+	if !state.Valid() {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "state must be firing, resolved or all", map[string]any{"param": "state"})
+		return
+	}
+	alerts, err := s.monitor.ListAlerts(r.Context(), state, r.URL.Query().Get("resource"))
 	if err != nil {
 		s.internalError(w, r, err)
 		return

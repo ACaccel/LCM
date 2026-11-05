@@ -164,6 +164,9 @@ Administrator endpoints:
 
 The [OpenAPI document](../internal/api/openapi.yaml) defines response schemas.
 Operational state changes are audited without secret values or raw summaries.
+
+The console groups the module into four tabs: *資安事件* (monitoring status and incidents), *流量*, *主機控制* (the helper's summary, rules, schedule and scans, or the setup guide when no helper is configured) and *通知* (notification settings). The earlier `/security/overview`, `/security/rules` and `/security/checks` addresses redirect to the incident and host tabs.
+
 Schema migration 0011 is additive; follow the existing
 [upgrade and database recovery procedure](operations.md) before deployment.
 

@@ -8,7 +8,7 @@ import { ConfirmDialog } from "../../components/dialog";
 import { useToast } from "../../components/toast";
 import { actionLabel, reasonText } from "../../lib/actions";
 import { s } from "../../strings";
-import { ImpactAcknowledgement, useImpactAck } from "./impact";
+import { confirmLabel, ImpactAcknowledgement, useImpactAck } from "./impact";
 
 export type PhaseAction = "retire" | "resume" | "unmanage";
 
@@ -68,7 +68,7 @@ export function PhaseDialog({ detail, action, onClose }: { detail: ResourceDetai
   return (
     <ConfirmDialog
       title={s.phaseChange.title(verb, detail.name)}
-      confirmLabel={s.common.confirm}
+      confirmLabel={confirmLabel(s.common.confirm, verb, impact)}
       danger={action !== "resume"}
       busy={mutation.isPending}
       disabled={!impact.ready}

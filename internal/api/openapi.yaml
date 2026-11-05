@@ -206,6 +206,26 @@ paths:
           in: query
           description: Return entries with an id below this one.
           schema: { type: integer, format: int64, minimum: 1 }
+        - name: from
+          in: query
+          description: Only entries at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Only entries before this instant.
+          schema: { type: string, format: date-time }
+        - name: actor
+          in: query
+          description: Only entries of the actor with this name.
+          schema: { type: string }
+        - name: action
+          in: query
+          description: Only this action, or every action under a dotted prefix (`service` matches `service.deploy`).
+          schema: { type: string }
+        - name: target
+          in: query
+          description: Only entries whose target is exactly this, such as a resource name.
+          schema: { type: string }
       responses:
         "200":
           description: Entries, newest first.
@@ -268,7 +288,7 @@ paths:
     get:
       tags: [Monitoring]
       operationId: listAlerts
-      summary: Firing external alerts
+      summary: External alerts
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
@@ -276,9 +296,13 @@ paths:
           in: query
           description: Only alerts of this resource.
           schema: { type: string }
+        - name: state
+          in: query
+          description: Which alerts to list; resolved alerts are kept for the monitoring retention.
+          schema: { type: string, enum: [firing, resolved, all], default: firing }
       responses:
         "200":
-          description: Alerts, oldest first.
+          description: Firing alerts come first, oldest first, then resolved alerts, most recently resolved first.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AlertList" }
@@ -740,6 +764,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TimelineList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /overview:
+    get:
+      tags: [Resources]
+      operationId: getOverview
+      summary: Summary for the overview page
+      description: |
+        Everything the overview page shows, in one response: resource counts per
+        type and health, the managed resources that need attention (most urgent
+        first), a day of hourly availability per managed resource, and the headline
+        numbers.
+      parameters:
+        - name: since
+          in: query
+          description: Count deployments started at or after this instant. Defaults to 24 hours ago.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: The overview.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overview" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4536,14 +4584,18 @@ components:
       properties:
         selector:
           type: object
-          required: [labels]
           additionalProperties: false
+          description: At least one label or one name is required, so a group never selects every service by accident.
           properties:
             type: { type: string, enum: [service], description: Only services run group actions. }
             labels:
               type: object
-              minProperties: 1
               additionalProperties: { type: string }
+            names:
+              type: array
+              maxItems: 200
+              description: Narrows the services the labels match to these; each must be a managed service that matches the labels, or the request is refused. Without labels, the names alone select the group.
+              items: { type: string, minLength: 1 }
         action: { $ref: "#/components/schemas/ActionName" }
         params:
           type: object
@@ -4561,6 +4613,9 @@ components:
         labels:
           type: object
           additionalProperties: { type: string }
+        names:
+          type: array
+          items: { type: string }
     ResourceGroupPlan:
       type: object
       required: [action, selector, steps, acknowledgementRequired]
@@ -5429,13 +5484,16 @@ components:
       description: "`managed` is observed and controlled; `retired` keeps records without observation or control and can be resumed; `unmanaged` is archived and has released its name."
     ResourceAction:
       type: object
-      required: [name, available, reason, risk, policy, kind]
+      required: [name, available, reason, reasonMessage, risk, policy, kind]
       properties:
         name: { type: string, description: "Action, operation or phase change, such as `restart`, `reboot` or `retire`." }
         available: { type: boolean }
         reason:
           type: string
           description: "Why the action is unavailable now; empty when available. Services use notConfigured, unsupported, invalidState, notManaged or busy."
+        reasonMessage:
+          $ref: "#/components/schemas/Message"
+          description: "`reason` with a code for translation (`action.*`, `capability.*`); services' reason codes have none."
         risk: { type: string, enum: [read, reversible, disruptive, destructive] }
         policy: { type: boolean, description: Whether policies may run it. }
         kind:
@@ -5524,6 +5582,76 @@ components:
           type: string
           description: Commit of a service's last successful deployment; empty if none and for other types.
         managedBy: { $ref: "#/components/schemas/ManagedBy" }
+    Overview:
+      type: object
+      required: [generatedAt, types, attention, resources, activeRuns, deploys, firingAlerts]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        types:
+          type: array
+          description: One entry per resource type that has resources, in display order.
+          items:
+            type: object
+            required: [type, total, retired, health]
+            properties:
+              type: { $ref: "#/components/schemas/ResourceTypeName" }
+              total: { type: integer }
+              retired: { type: integer }
+              health:
+                type: object
+                description: Managed resources by health; every health value is present.
+                additionalProperties: { type: integer }
+        attention:
+          type: array
+          description: Managed resources whose health is down or degraded, whose state is failed, or that have firing alerts; most urgent first.
+          items:
+            type: object
+            required: [name, type, state, health, since, firingAlerts, reasons]
+            properties:
+              name: { type: string }
+              type: { $ref: "#/components/schemas/ResourceTypeName" }
+              state: { type: string }
+              health: { $ref: "#/components/schemas/Health" }
+              since: { type: [string, "null"], format: date-time, description: When the combined health last changed. }
+              firingAlerts: { type: integer }
+              reasons:
+                type: array
+                items: { $ref: "#/components/schemas/Message" }
+        resources:
+          type: array
+          description: Managed resources, by name.
+          items:
+            type: object
+            required: [name, type, state, health, deployedVersion, lastDeployedAt, managedBy, hasChecks, uptime, buckets]
+            properties:
+              name: { type: string }
+              type: { $ref: "#/components/schemas/ResourceTypeName" }
+              state: { type: string }
+              health: { $ref: "#/components/schemas/Health" }
+              deployedVersion: { type: string, description: Commit of a service's last successful deployment; empty if none and for other types. }
+              lastDeployedAt: { type: [string, "null"], format: date-time }
+              managedBy: { $ref: "#/components/schemas/ManagedBy" }
+              hasChecks: { type: boolean }
+              uptime:
+                type: [number, "null"]
+                description: Share of passing check results over the last 24 hours; null when no check ran.
+              buckets:
+                type: array
+                description: Availability in 24 hourly buckets, oldest first; empty when no check ran in the window.
+                items:
+                  type: object
+                  required: [ratio, failures]
+                  properties:
+                    ratio: { type: [number, "null"], description: Share of passing results; null when no check ran in the bucket. }
+                    failures: { type: integer }
+        activeRuns: { type: integer, description: Runs that are queued, running or suspended. }
+        deploys:
+          type: object
+          required: [since, count]
+          properties:
+            since: { type: string, format: date-time }
+            count: { type: integer, description: Deployments and rollbacks started since then. }
+        firingAlerts: { type: integer }
     ResourceList:
       type: object
       required: [items, nextCursor]
@@ -5689,16 +5817,17 @@ components:
     ResourceCapability:
       type: object
       additionalProperties: false
-      required: [action, available, reason]
+      required: [action, available, reason, reasonMessage]
       properties:
         action: { type: string }
         available: { type: boolean }
         reason: { type: string }
+        reasonMessage: { $ref: "#/components/schemas/Message" }
     ResourceOperation:
       type: object
       additionalProperties: false
       description: A durable operation. `request`, `receipt` and `evidence` are type-specific.
-      required: [id, resourceId, action, state, unresolved, version, createdAt, updatedAt, actor, request, receipt, reason]
+      required: [id, resourceId, action, state, unresolved, version, createdAt, updatedAt, actor, request, receipt, reason, reasonMessage]
       properties:
         id: { type: string }
         resourceId: { type: string }
@@ -5714,6 +5843,9 @@ components:
           type: [object, "null"]
           additionalProperties: true
         reason: { type: string, description: Explains the current state. }
+        reasonMessage:
+          $ref: "#/components/schemas/Message"
+          description: "`reason` with a code for translation (`op.*`)."
         requestReason: { type: string, description: The operator's reason for the request. }
         resolution: { type: string }
         resolvedBy: { $ref: "#/components/schemas/Actor" }
@@ -5746,6 +5878,9 @@ components:
           enum: [ok, unreachable, auth-failed, unavailable, not-configured]
           description: "`unreachable`: no HTTP answer; `unavailable`: an answer without usable status; `not-configured`: no usable connection or password secret on this host."
         reason: { type: string, description: Fixed description of a failed attempt. }
+        reasonMessage:
+          $ref: "#/components/schemas/Message"
+          description: "`reason` with a code for translation."
         cpuPercent: { type: [number, "null"] }
         cpuCores: { type: [integer, "null"] }
         memoryPercent: { type: [number, "null"] }
@@ -5756,9 +5891,19 @@ components:
         sources:
           type: object
           description: Availability of each status source (`status`, `wan`).
-          additionalProperties: { $ref: "#/components/schemas/MachineCoverage" }
+          additionalProperties: { $ref: "#/components/schemas/RouterCoverage" }
         model: { type: string }
         firmware: { type: string }
+    RouterCoverage:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state: { type: string }
+        reason: { type: string }
+        reasonMessage:
+          $ref: "#/components/schemas/Message"
+          description: "`reason` with a code for translation (`router.*`)."
     RouterStatus:
       type: object
       additionalProperties: false

@@ -154,6 +154,12 @@ type eventDTO struct {
 	ReasonMessage *message.Message `json:"reasonMessage,omitempty"`
 }
 
+// capabilityDTO is a capability with a translatable message for its reason.
+type capabilityDTO struct {
+	Capability
+	ReasonMessage message.Message `json:"reasonMessage"`
+}
+
 func (s *Server) handleResourceCapabilities(w http.ResponseWriter, r *http.Request) {
 	rec, ops, ok := s.operations(w, r, false)
 	if !ok {
@@ -164,10 +170,11 @@ func (s *Server) handleResourceCapabilities(w http.ResponseWriter, r *http.Reque
 		s.fail(w, r, err, nil)
 		return
 	}
-	if caps == nil {
-		caps = []Capability{}
+	items := make([]capabilityDTO, 0, len(caps))
+	for _, c := range caps {
+		items = append(items, capabilityDTO{Capability: c, ReasonMessage: resource.ReasonMessage(c.Reason)})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": caps})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handleResourceMaintenance(w http.ResponseWriter, r *http.Request) {

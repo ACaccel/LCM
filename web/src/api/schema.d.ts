@@ -202,7 +202,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Firing external alerts */
+        /** External alerts */
         get: operations["listAlerts"];
         put?: never;
         post?: never;
@@ -521,6 +521,29 @@ export interface paths {
         };
         /** Timeline of all resources */
         get: operations["listTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summary for the overview page
+         * @description Everything the overview page shows, in one response: resource counts per
+         *     type and health, the managed resources that need attention (most urgent
+         *     first), a day of hourly availability per managed resource, and the headline
+         *     numbers.
+         */
+        get: operations["getOverview"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2592,15 +2615,18 @@ export interface components {
             acknowledgementRequired: boolean;
         };
         ResourceGroupActionRequest: {
+            /** @description At least one label or one name is required, so a group never selects every service by accident. */
             selector: {
                 /**
                  * @description Only services run group actions.
                  * @enum {string}
                  */
                 type?: "service";
-                labels: {
+                labels?: {
                     [key: string]: string;
                 };
+                /** @description Narrows the services the labels match to these; each must be a managed service that matches the labels, or the request is refused. Without labels, the names alone select the group. */
+                names?: string[];
             };
             action: components["schemas"]["ActionName"];
             params?: {
@@ -2620,6 +2646,7 @@ export interface components {
             labels: {
                 [key: string]: string;
             };
+            names?: string[];
         };
         ResourceGroupPlan: {
             action: components["schemas"]["ActionName"];
@@ -3291,6 +3318,8 @@ export interface components {
             available: boolean;
             /** @description Why the action is unavailable now; empty when available. Services use notConfigured, unsupported, invalidState, notManaged or busy. */
             reason: string;
+            /** @description `reason` with a code for translation (`action.*`, `capability.*`); services' reason codes have none. */
+            reasonMessage: components["schemas"]["Message"];
             /** @enum {string} */
             risk: "read" | "reversible" | "disruptive" | "destructive";
             /** @description Whether policies may run it. */
@@ -3365,6 +3394,64 @@ export interface components {
             /** @description Commit of a service's last successful deployment; empty if none and for other types. */
             deployedVersion: string;
             managedBy: components["schemas"]["ManagedBy"];
+        };
+        Overview: {
+            /** Format: date-time */
+            generatedAt: string;
+            /** @description One entry per resource type that has resources, in display order. */
+            types: {
+                type: components["schemas"]["ResourceTypeName"];
+                total: number;
+                retired: number;
+                /** @description Managed resources by health; every health value is present. */
+                health: {
+                    [key: string]: number;
+                };
+            }[];
+            /** @description Managed resources whose health is down or degraded, whose state is failed, or that have firing alerts; most urgent first. */
+            attention: {
+                name: string;
+                type: components["schemas"]["ResourceTypeName"];
+                state: string;
+                health: components["schemas"]["Health"];
+                /**
+                 * Format: date-time
+                 * @description When the combined health last changed.
+                 */
+                since: string | null;
+                firingAlerts: number;
+                reasons: components["schemas"]["Message"][];
+            }[];
+            /** @description Managed resources, by name. */
+            resources: {
+                name: string;
+                type: components["schemas"]["ResourceTypeName"];
+                state: string;
+                health: components["schemas"]["Health"];
+                /** @description Commit of a service's last successful deployment; empty if none and for other types. */
+                deployedVersion: string;
+                /** Format: date-time */
+                lastDeployedAt: string | null;
+                managedBy: components["schemas"]["ManagedBy"];
+                hasChecks: boolean;
+                /** @description Share of passing check results over the last 24 hours; null when no check ran. */
+                uptime: number | null;
+                /** @description Availability in 24 hourly buckets, oldest first; empty when no check ran in the window. */
+                buckets: {
+                    /** @description Share of passing results; null when no check ran in the bucket. */
+                    ratio: number | null;
+                    failures: number;
+                }[];
+            }[];
+            /** @description Runs that are queued */
+            activeRuns: number;
+            deploys: {
+                /** Format: date-time */
+                since: string;
+                /** @description Deployments and rollbacks started since then. */
+                count: number;
+            };
+            firingAlerts: number;
         };
         ResourceList: {
             items: components["schemas"]["ResourceSummary"][];
@@ -3482,6 +3569,7 @@ export interface components {
             action: string;
             available: boolean;
             reason: string;
+            reasonMessage: components["schemas"]["Message"];
         };
         /** @description A durable operation. `request`, `receipt` and `evidence` are type-specific. */
         ResourceOperation: {
@@ -3507,6 +3595,8 @@ export interface components {
             } | null;
             /** @description Explains the current state. */
             reason: string;
+            /** @description `reason` with a code for translation (`op.*`). */
+            reasonMessage: components["schemas"]["Message"];
             /** @description The operator's reason for the request. */
             requestReason?: string;
             resolution?: string;
@@ -3544,6 +3634,8 @@ export interface components {
             outcome: "ok" | "unreachable" | "auth-failed" | "unavailable" | "not-configured";
             /** @description Fixed description of a failed attempt. */
             reason?: string;
+            /** @description `reason` with a code for translation. */
+            reasonMessage?: components["schemas"]["Message"];
             cpuPercent: number | null;
             cpuCores: number | null;
             memoryPercent: number | null;
@@ -3554,10 +3646,16 @@ export interface components {
             wan: components["schemas"]["RouterWAN"];
             /** @description Availability of each status source (`status`, `wan`). */
             sources: {
-                [key: string]: components["schemas"]["MachineCoverage"];
+                [key: string]: components["schemas"]["RouterCoverage"];
             };
             model: string;
             firmware: string;
+        };
+        RouterCoverage: {
+            state: string;
+            reason?: string;
+            /** @description `reason` with a code for translation (`router.*`). */
+            reasonMessage?: components["schemas"]["Message"];
         };
         RouterStatus: {
             /** @description The latest observation attempt. */
@@ -3955,6 +4053,16 @@ export interface operations {
                 limit?: number;
                 /** @description Return entries with an id below this one. */
                 before?: number;
+                /** @description Only entries at or after this instant. */
+                from?: string;
+                /** @description Only entries before this instant. */
+                to?: string;
+                /** @description Only entries of the actor with this name. */
+                actor?: string;
+                /** @description Only this action, or every action under a dotted prefix (`service` matches `service.deploy`). */
+                action?: string;
+                /** @description Only entries whose target is exactly this, such as a resource name. */
+                target?: string;
             };
             header?: never;
             path?: never;
@@ -4038,6 +4146,8 @@ export interface operations {
                 cursor?: components["parameters"]["Cursor"];
                 /** @description Only alerts of this resource. */
                 resource?: string;
+                /** @description Which alerts to list; resolved alerts are kept for the monitoring retention. */
+                state?: "firing" | "resolved" | "all";
             };
             header?: never;
             path?: never;
@@ -4045,7 +4155,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Alerts, oldest first. */
+            /** @description Firing alerts come first, oldest first, then resolved alerts, most recently resolved first. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4614,6 +4724,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TimelineList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getOverview: {
+        parameters: {
+            query?: {
+                /** @description Count deployments started at or after this instant. Defaults to 24 hours ago. */
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The overview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Overview"];
                 };
             };
             400: components["responses"]["BadRequest"];

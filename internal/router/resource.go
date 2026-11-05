@@ -45,7 +45,7 @@ func (h hooks) BeforePhase(ctx context.Context, tx *sql.Tx, p resource.PhaseChan
 		return err
 	}
 	if unresolved > 0 {
-		return fmt.Errorf("%w: %w", resource.ErrPrecondition, precondition("resolve the outstanding operation first"))
+		return fmt.Errorf("%w: %w", resource.ErrPrecondition, precondition(resource.ResolveOperationFirst))
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE resource_status SET status = '{}', updated_at = ? WHERE resource_id = ?`, h.m.clk.Now().UnixMilli(), p.Record.ID)
 	return err
@@ -128,7 +128,7 @@ func (t routerType) Actions(ctx context.Context, rec resource.Record) []resource
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_ownership WHERE kind = ? AND name = ?`, string(model.KindResource), rec.Name).Scan(&owned); err != nil {
 		readErr = err
 	}
-	rebootReason := "router is not available"
+	rebootReason := resource.RouterUnavailable
 	if r, err := m.view(ctx, rec); err == nil {
 		if reason, err := m.rebootBlocked(ctx, r); err == nil {
 			rebootReason = reason
@@ -137,24 +137,24 @@ func (t routerType) Actions(ctx context.Context, rec resource.Record) []resource
 	managed := rec.Phase == resource.PhaseManaged
 	reasons := map[string]string{"reboot": rebootReason}
 	if !managed {
-		reasons["observe"] = "router is not managed"
-		reasons["retire"] = "router is not managed"
+		reasons["observe"] = resource.RouterNotManaged
+		reasons["retire"] = resource.RouterNotManaged
 	} else if unresolved > 0 {
-		reasons["retire"] = "resolve the outstanding operation first"
+		reasons["retire"] = resource.ResolveOperationFirst
 	}
 	if rec.Phase != resource.PhaseRetired {
-		reasons["resume"] = "router is not retired"
-		reasons["unmanage"] = "retire the router first"
+		reasons["resume"] = resource.RouterNotRetired
+		reasons["unmanage"] = resource.RetireRouterFirst
 	} else if unresolved > 0 {
-		reasons["unmanage"] = "resolve the outstanding operation first"
+		reasons["unmanage"] = resource.ResolveOperationFirst
 	} else if owned > 0 {
-		reasons["unmanage"] = "release Git ownership first"
+		reasons["unmanage"] = resource.ReleaseOwnershipFirst
 	}
 	out := make([]resource.Action, 0, len(routerActions))
 	for _, a := range routerActions {
 		a.Reason = reasons[a.Name]
 		if readErr != nil {
-			a.Reason = "router state could not be read"
+			a.Reason = resource.RouterUnreadable
 		}
 		a.Available = a.Reason == ""
 		out = append(out, a)

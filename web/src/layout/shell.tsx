@@ -15,6 +15,8 @@ const items = [
   { to: "/timeline", label: s.nav.timeline },
   { to: "/policies", label: s.nav.policies },
   { to: "/runs", label: s.nav.runs },
+  { to: "/alerts", label: s.nav.alerts },
+  { to: "/audit", label: s.nav.audit },
   { to: "/settings", label: s.nav.settings },
 ];
 

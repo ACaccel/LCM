@@ -8,6 +8,7 @@ import { Dialog } from "../../components/dialog";
 import { ErrorBox, Pill, Spinner } from "../../components/ui";
 import { actionLabel } from "../../lib/actions";
 import { formatDateTime } from "../../lib/format";
+import { translate } from "../../lib/messages";
 import { clearAttempt, newAttempt, operationView, readAttempt, submitAttempt, writeAttempt } from "../../lib/operation";
 import type { AttemptConfirmation, OperationAttempt } from "../../lib/operation";
 import { s } from "../../strings";
@@ -101,8 +102,14 @@ export function OperationCard({ resource, op }: { resource: string; op: Resource
         <dd>
           {formatDateTime(op.createdAt)} / {formatDateTime(op.updatedAt)}
         </dd>
-        <dt>{s.operation.reason}</dt>
-        <dd>{op.reason || s.common.none}</dd>
+        <dt>{s.operation.stateReason}</dt>
+        <dd>{op.reason ? translate(op.reasonMessage) : s.common.none}</dd>
+        {op.requestReason && (
+          <>
+            <dt>{s.operation.requestReason}</dt>
+            <dd>{op.requestReason}</dd>
+          </>
+        )}
         <dt>{s.common.version}</dt>
         <dd>{op.version}</dd>
         <dt>{s.operation.request}</dt>

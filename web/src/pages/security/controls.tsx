@@ -6,32 +6,28 @@ import type { HostStatus, NginxLimit, Profile } from "../../api/security";
 import { Async, Field } from "../../components/ui";
 import { HostActions, Reason } from "./host-actions";
 import type { BeginHostAction } from "./host-actions";
-import { NotificationSettings } from "./notifications";
-import { Capability, HostNotConfigured, UnknownReport, auditEnabled, number, showTime, showValue, validReason } from "./shared";
+import { HostSummary } from "./overview";
+import { Capability, UnknownReport, auditEnabled, number, showTime, showValue, validReason } from "./shared";
 import { sec } from "../../strings";
 
-export function SecurityRules() {
-  return <div className="stack"><NotificationSettings /><HostPanel mode="rules" /></div>;
-}
-export function SecurityChecks() { return <HostPanel mode="checks" />; }
-function HostPanel({ mode }: { mode: "rules" | "checks" }) {
+/** The host control tab: what the helper reports, then the rules, scans and schedule it can change. */
+export function SecurityHost() {
   const q = useQuery(hostStatusQuery());
-  return <Async q={q}>{(host) => host.configured ? <HostForms host={host} mode={mode} /> : <section className="panel stack"><HostNotConfigured /></section>}</Async>;
+  return <div className="stack"><HostSummary /><Async q={q}>{(host) => host.configured ? <HostForms host={host} /> : null}</Async></div>;
 }
-function HostForms({ host, mode }: { host: HostStatus; mode: "rules" | "checks" }) {
+function HostForms({ host }: { host: HostStatus }) {
   const [draft, setDraft] = useState(host);
   const changed = draft.effectiveDigest !== host.effectiveDigest;
   return <div className="stack"><p className="meta">{sec.hostScope}：<code>{host.machineId || sec.unknown}</code> · {sec.digest}：<code>{host.effectiveDigest || sec.unknown}</code></p>{!host.available && <p className="banner warn">{sec.readOnly}：{host.reason || sec.unavailable}</p>}{changed && <p className="banner warn">{sec.conflict}<button type="button" className="btn small" onClick={() => setDraft(host)}>{sec.refresh}</button></p>}
-    <HostActions host={host}>{(begin, busy) => <div className="stack" key={draft.effectiveDigest}><fieldset className="security-fields" disabled={busy || changed}>{mode === "rules" ? <>
+    <HostActions host={host}>{(begin, busy) => <div className="stack" key={draft.effectiveDigest}><fieldset className="security-fields" disabled={busy || changed}>
       <NginxForm host={draft} begin={begin} />
       <section className="panel stack"><h2>{sec.audit}</h2><dl className="kv"><dt>{sec.status}</dt><dd>{auditEnabled(host.audit?.enabled)}</dd><dt>{sec.lost}</dt><dd>{number(host.audit?.lost)}</dd><dt>{sec.backlog}</dt><dd>{number(host.audit?.backlog)}</dd><dt>{sec.rulesLoaded}</dt><dd>{showValue(host.audit?.rulesLoaded)}</dd></dl><ProfileForm host={draft} type="audit" begin={begin} /></section>
       <section className="panel stack"><h2>{sec.aideProfiles}</h2><ProfileForm host={draft} type="aide" begin={begin} /></section>
-    </> : <>
       <section className="panel stack"><h2>{sec.aide}</h2><dl className="kv"><dt>{sec.status}</dt><dd>{host.aide?.result || sec.unknown}</dd><dt>{sec.lastRun}</dt><dd>{showTime(host.aide?.lastRunAt)}</dd><dt>{sec.nextRun}</dt><dd>{showTime(host.aide?.nextRunAt)}</dd><dt>{sec.baseline}</dt><dd>{showTime(host.aide?.baselineCreatedAt)}</dd><dt>{sec.baselineDigest}</dt><dd><code>{host.aide?.baselineDigest || sec.unknown}</code></dd></dl><h3>{sec.targets}</h3><UnknownReport value={host.aide?.targets} /><h3>{sec.report}</h3><UnknownReport value={host.aide?.reportSummary} /></section>
       <ScheduleForm host={draft} begin={begin} />
       <SimpleAction host={draft} action="aide.check" title={sec.scan} begin={begin} />
       <SimpleAction host={draft} action="baseline.request" title={sec.baselineRequest} help={sec.baselineHelp} begin={begin} />
-    </>}</fieldset></div>}</HostActions>
+    </fieldset></div>}</HostActions>
   </div>;
 }
 export function ScheduleForm({ host, begin }: { host: HostStatus; begin: BeginHostAction }) {

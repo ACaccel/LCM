@@ -68,27 +68,34 @@ export function createEventApplier(qc: QueryClient): EventApplier {
   function onSignal(env: EventEnvelope, sig: Signal) {
     const name = sig.resource ?? env.resource;
     if (!name) {
-      if (sig.kind === "alert") invalidate(["alerts"]);
+      if (sig.kind === "alert") {
+        invalidate(["alerts"]);
+        invalidate(qk.overviewAll());
+      }
       return;
     }
     const data = sig.data ?? {};
     switch (sig.kind) {
       case "health.changed":
+        invalidate(qk.overviewAll());
         if (typeof data["health"] === "string") patchResources(name, { health: data["health"] as ResourceSummary["health"] });
         // Reasons are not in the signal.
         invalidate(qk.resource(name));
         invalidate(qk.resourceChecks(name));
         break;
       case "lifecycle.changed":
+        invalidate(qk.overviewAll());
         if (typeof data["state"] === "string") patchResources(name, { state: data["state"], stateSince: sig.time });
         invalidate(qk.resource(name));
         break;
       case "check.changed":
+        invalidate(qk.overviewAll());
         invalidate(qk.resourceChecks(name));
         invalidate(qk.resource(name));
         break;
       case "alert":
         invalidate(["alerts"]);
+        invalidate(qk.overviewAll());
         invalidate(qk.resource(name));
         break;
       default:
@@ -107,7 +114,7 @@ export function createEventApplier(qc: QueryClient): EventApplier {
       qc.setQueryData<InfiniteData<TimelineList>>(key, (d) => (d ? { ...d, pages: insertLive(d.pages, entry) } : d));
     }
     if (entry.kind === "deployment") {
-      invalidate(["deployments-since"]);
+      invalidate(qk.overviewAll());
       invalidate(qk.resourceDeployments(entry.resource));
       invalidate(qk.resource(entry.resource));
     }
@@ -118,6 +125,7 @@ export function createEventApplier(qc: QueryClient): EventApplier {
     const name = change.name || env.resource;
     const id = change.id || env.resourceId;
     invalidate(qk.resourcesAll());
+    invalidate(qk.overviewAll());
     if (change.change === "phase" || change.change === "unmanaged") invalidate(qk.archivesAll());
     if (name) invalidate(qk.resourceAll(name));
     if (id) invalidate(qk.resourceAll(`@${id}`));
@@ -135,6 +143,7 @@ export function createEventApplier(qc: QueryClient): EventApplier {
       invalidate(qk.resourceMaintenance(ref));
     }
     invalidate(qk.resourcesAll());
+    invalidate(qk.overviewAll());
   }
 
   function onRun(ev: EngineEvent) {
@@ -154,6 +163,8 @@ export function createEventApplier(qc: QueryClient): EventApplier {
         (d) => (d ? { ...d, pages: d.pages.map((p) => ({ ...p, items: p.items.map((x) => (x.id === id ? { ...x, ...patch } : x)) })) } : d),
       );
     }
+    // The overview counts active runs.
+    if (ev.kind === "run.queued" || ev.kind === "run.finished") invalidate(qk.overviewAll());
     if (ev.kind === "run.queued") invalidate(qk.runsAll());
     if (ev.kind === "run.finished") {
       // A finished run leaves lists filtered by status, such as the active
@@ -194,6 +205,7 @@ export function createEventApplier(qc: QueryClient): EventApplier {
   function onAction(a: Action) {
     qc.setQueryData<Action>(qk.action(a.id), a);
     if (a.status !== "running") {
+      invalidate(qk.overviewAll());
       invalidate(qk.resource(a.resource));
       invalidate(qk.resourceChecks(a.resource));
     }

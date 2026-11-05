@@ -19,9 +19,13 @@ export function TypeTag({ type, adapter }: { type: ResourceTypeName; adapter?: s
   return <Tag title={s.resources.columns.type}>{adapter ? `${s.resourceType[type]} · ${adapter}` : s.resourceType[type]}</Tag>;
 }
 
-/** Where a resource is managed from, and whether it left its git source. */
-export function ManagedBadges({ managedBy }: { managedBy: ManagedBy | null | undefined }) {
-  if (!managedBy) return <Tag>{s.ownership.gui}</Tag>;
+/**
+ * Where a resource is managed from, and whether it left its git source.
+ * Lists set `hideGui` because the web console is the default: only a git
+ * owner is worth a tag there.
+ */
+export function ManagedBadges({ managedBy, hideGui }: { managedBy: ManagedBy | null | undefined; hideGui?: boolean }) {
+  if (!managedBy) return hideGui ? null : <Tag>{s.ownership.gui}</Tag>;
   return (
     <>
       <Tag title={managedBy.path}>{s.ownership.managed(managedBy.source)}</Tag>

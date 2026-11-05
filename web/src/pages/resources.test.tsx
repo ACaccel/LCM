@@ -32,13 +32,71 @@ const summary = (name: string, type: ResourceSummary["type"], over: Partial<Reso
   ...over,
 });
 
-const all = [summary("api", "service"), summary("gateway", "router", { health: "degraded" }), summary("web", "service"), summary("workstation", "machine")];
+const all = [
+  summary("api", "service", { labels: { tier: "web" } }),
+  summary("gateway", "router", { health: "degraded" }),
+  summary("web", "service", { labels: { tier: "web" }, managedBy: { source: "infra", path: "web.yaml", commit: "abc", drifted: false, conflict: false } }),
+  summary("workstation", "machine"),
+];
+
+const impactOfApi = {
+  resource: "api",
+  action: "stop",
+  dependents: [{ name: "web", type: "service", relation: "dependsOn", via: "api", depth: 1 }],
+  controlDependents: [],
+  unresolved: [],
+  acknowledgementRequired: true,
+};
+const quiet = { ...impactOfApi, resource: "web", dependents: [], acknowledgementRequired: false };
+const groupPlan = {
+  action: "stop",
+  selector: { type: "service", labels: {}, names: ["api", "web"] },
+  steps: [
+    { resource: "web", plan: { resource: "web", action: "stop", from: "running", to: "stopped", steps: [], stepMessages: [] }, error: "", impact: quiet },
+    { resource: "api", plan: { resource: "api", action: "stop", from: "running", to: "stopped", steps: [], stepMessages: [] }, error: "", impact: impactOfApi },
+  ],
+  acknowledgementRequired: true,
+};
 
 function setup() {
   const lists: URLSearchParams[] = [];
   const archives: URLSearchParams[] = [];
+  const groups: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", async (req: Request) => {
     const url = new URL(req.url);
+    if (url.pathname === "/api/v1/resource-groups/actions" && req.method === "POST") {
+      const body = JSON.parse(await req.text()) as Record<string, unknown>;
+      groups.push(body);
+      if (body["dryRun"]) return jsonResponse(groupPlan);
+      return jsonResponse(
+        {
+          id: "grp_1",
+          action: "stop",
+          status: "running",
+          actor: { kind: "user", id: "1", name: "admin" },
+          selector: groupPlan.selector,
+          startedAt: "2026-11-01T00:00:00Z",
+          finishedAt: null,
+          steps: [],
+        },
+        202,
+      );
+    }
+    if (url.pathname === "/api/v1/resource-groups/actions/grp_1") {
+      return jsonResponse({
+        id: "grp_1",
+        action: "stop",
+        status: "succeeded",
+        actor: { kind: "user", id: "1", name: "admin" },
+        selector: groupPlan.selector,
+        startedAt: "2026-11-01T00:00:00Z",
+        finishedAt: "2026-11-01T00:00:05Z",
+        steps: [
+          { resource: "web", status: "succeeded", actionId: "a1", result: null, error: "" },
+          { resource: "api", status: "failed", actionId: "a2", result: null, error: "unit refused to stop" },
+        ],
+      });
+    }
     if (url.pathname === "/api/v1/resource-types") return jsonResponse({ items: types });
     if (url.pathname === "/api/v1/resources") {
       lists.push(url.searchParams);
@@ -62,14 +120,14 @@ function setup() {
       </ToastProvider>
     </QueryClientProvider>,
   );
-  return { lists, archives };
+  return { lists, archives, groups };
 }
 
 const rowNames = () =>
   screen
     .getAllByRole("row")
     .slice(1)
-    .map((r) => within(r).getAllByRole("cell")[0]?.querySelector("a")?.textContent);
+    .map((r) => r.querySelector("a")?.textContent);
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -110,6 +168,71 @@ describe("resource list", () => {
     // Ascending health lists the resources that need attention first.
     await userEvent.click(within(screen.getByRole("columnheader", { name: s.resources.columns.health })).getByRole("button"));
     expect(rowNames()[0]).toBe("gateway");
+  });
+
+  it("has no phase column and tags only the resources a git source manages", async () => {
+    setup();
+    await screen.findByRole("link", { name: "workstation" });
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(headers).not.toContain(s.resources.columns.phase);
+    expect(headers).toContain(s.resources.columns.managed);
+    expect(screen.queryByText(s.ownership.gui)).toBeNull();
+    expect(screen.getAllByText(s.ownership.managed("infra"))).toHaveLength(1);
+  });
+
+  it("selects services by checkbox or label and previews the ordered plan before acknowledging the impact", async () => {
+    const { groups } = setup();
+    await screen.findByRole("link", { name: "workstation" });
+    // Only managed services can be selected.
+    expect((screen.getByRole("checkbox", { name: "選取 gateway" }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "選取 workstation" }) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: s.bulk.preview })).toBeNull();
+
+    await userEvent.type(screen.getByLabelText(s.bulk.byLabel), "tier=web");
+    await userEvent.click(screen.getByRole("button", { name: s.bulk.selectByLabel }));
+    expect(screen.getByText(s.bulk.selected(2))).toBeTruthy();
+    await userEvent.click(screen.getByRole("checkbox", { name: "選取 web" }));
+    expect(screen.getByText(s.bulk.selected(1))).toBeTruthy();
+    await userEvent.click(screen.getByRole("checkbox", { name: "選取 web" }));
+
+    await userEvent.selectOptions(screen.getByLabelText(s.bulk.action), "stop");
+    await userEvent.click(screen.getByRole("button", { name: s.bulk.preview }));
+    const dialog = await screen.findByRole("dialog");
+    // Nothing runs on preview: the first request is a dry run.
+    expect(groups).toEqual([{ selector: { names: ["api", "web"] }, action: "stop", dryRun: true, acknowledgeImpact: false }]);
+
+    const plan = await within(dialog).findByRole("list", { name: s.bulk.planTitle });
+    expect([...plan.querySelectorAll("li strong")].map((x) => x.textContent)).toEqual(["web", "api"]);
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    expect(within(dialog).getByText("web（依賴 api）")).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole("button", { name: "確認停止（影響 1 個資源）" }));
+
+    // Confirming runs the reviewed group and acknowledges its impact.
+    await within(dialog).findByText("unit refused to stop");
+    expect(groups).toHaveLength(2);
+    expect(groups[1]).toEqual({ selector: { names: ["api", "web"] }, action: "stop", dryRun: false, acknowledgeImpact: true });
+  });
+
+  it("does not run a plan with a step that cannot run", async () => {
+    const { groups } = setup();
+    vi.stubGlobal("fetch", async (req: Request) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/v1/resource-groups/actions") {
+        groups.push(JSON.parse(await req.text()) as Record<string, unknown>);
+        return jsonResponse({
+          ...groupPlan,
+          acknowledgementRequired: false,
+          steps: [{ ...groupPlan.steps[0]!, plan: null, error: "service is busy", impact: quiet }],
+        });
+      }
+      if (url.pathname === "/api/v1/resource-types") return jsonResponse({ items: types });
+      return jsonResponse({ items: all, nextCursor: null });
+    });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "選取 web" }));
+    await userEvent.click(screen.getByRole("button", { name: s.bulk.preview }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("無法執行：service is busy")).toBeTruthy();
+    expect((within(dialog).getByRole("button", { name: "確認啟動（1 個服務）" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("lists archives read only, linked by immutable ID", async () => {

@@ -111,7 +111,7 @@ lcm resource operation workstation <operation-id>
 
 - Writes in `lcm resource` (maintenance enter/exit, reboot, shutdown, resolve, retire, resume, unmanage) need `--reason` and `--confirm <exact-name>`. The CLI reads the current document version; `--version` overrides it.
 - `reboot`, `shutdown`, `maintenance enter`, `retire` and `unmanage` print what they affect (impact, workloads or the active maintenance) on stderr and ask `Proceed? [y/N]`. When stdin is not a terminal they refuse unless `--yes` is given.
-- Use `shutdown` for a graceful-shutdown request. When other managed resources depend on or are controlled through the machine, `reboot` and `shutdown` also need `--acknowledge-impact`.
+- Use `shutdown` for a graceful-shutdown request. When other managed resources depend on or are controlled through the machine, `reboot` and `shutdown` print them and the `y` answer accepts that impact too; with `--yes` or without a terminal they need `--acknowledge-impact` ([acknowledgement](resources.md#relations)).
 - The CLI generates the idempotency key and prints it with the version before sending. If the response is ambiguous, inspect operations and retry only with the same `--idempotency-key` and `--version`; a new key could request a second operation. Keys are 1–128 characters, starting with a letter/digit and otherwise containing letters, digits, `_`, `.`, `:` or `-`. There is no command that cancels an accepted OS request.
 
 The reason is recorded in the operation (`requestReason`), the audit entries and an automatically entered maintenance.

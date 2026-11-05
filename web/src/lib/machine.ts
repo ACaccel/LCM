@@ -1,5 +1,6 @@
 import type { MachineCoverage, MachineStatus, ResourceCapability, ResourceDetail } from "../api/types";
 import { s } from "../strings";
+import { translate } from "./messages";
 import { healthView } from "./status";
 import type { StatusView } from "./status";
 
@@ -48,11 +49,16 @@ export function coverageView(coverage?: MachineCoverage): StatusView {
   return { tone: state === "available" ? "ok" : state === "partial" || state === "gap" ? "warn" : "neutral", icon: state === "available" ? "✓" : "?", label };
 }
 
+/** The translated reason of an unavailable capability, or a generic text when the server gave none. */
+export function capabilityReason(cap: Pick<ResourceCapability, "reason" | "reasonMessage"> | undefined): string {
+  return cap?.reason ? translate(cap.reasonMessage) : s.machine.capabilityUnknown;
+}
+
 /** Why a durable operation cannot be requested now; power-on never can, as there is no independent channel. */
 export function powerUnavailable(action: string, caps: ResourceCapability[] | undefined): string {
   if (action === "power-on") return s.machine.noPowerOn;
   const cap = caps?.find((c) => c.action === action);
-  return cap?.available ? "" : cap?.reason || s.machine.capabilityUnknown;
+  return cap?.available ? "" : capabilityReason(cap);
 }
 
 export function percentUsed(total: number, available: number): string {

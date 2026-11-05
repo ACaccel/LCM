@@ -1,8 +1,9 @@
 import type { ResourceAction, ResourceDetail } from "../api/types";
 import { s } from "../strings";
+import { translate } from "./messages";
 
-/** Service reason codes have their own wording; other types send readable text. */
-export function reasonText(a: Pick<ResourceAction, "reason">, state: string): string {
+/** Service reason codes have their own wording; other types send a message with a code to translate. */
+export function reasonText(a: Pick<ResourceAction, "reason" | "reasonMessage">, state: string): string {
   switch (a.reason) {
     case "":
       return "";
@@ -17,7 +18,7 @@ export function reasonText(a: Pick<ResourceAction, "reason">, state: string): st
     case "busy":
       return s.action.unavailable.busy;
     default:
-      return a.reason;
+      return translate(a.reasonMessage);
   }
 }
 

@@ -112,24 +112,24 @@ func (m *Manager) Capabilities(ctx context.Context, name string) ([]Capability, 
 	reason := ""
 	switch {
 	case m.power == nil:
-		reason = "restricted helper is not configured"
+		reason = resource.NoPowerHelper
 	case r.Phase != resource.PhaseManaged:
-		reason = "machine is retired"
+		reason = resource.MachineRetired
 	case r.Status.Snapshot == nil || r.Status.Snapshot.Init != "systemd":
-		reason = "power control requires a verified Linux/systemd host"
+		reason = resource.PowerNeedsSystemd
 	case !r.Status.Fresh || r.Status.Identity != "verified":
-		reason = "fresh verified observations are required"
+		reason = resource.PowerNeedsFresh
 	case r.Status.Health != "healthy":
-		reason = "required health checks must be healthy"
+		reason = resource.PowerNeedsHealthy
 	case !powerEvidenceReady(r.Status):
-		reason = "required OS evidence sources are unavailable"
+		reason = resource.PowerNeedsEvidence
 	}
 	if reason == "" {
 		if err := m.power.Preflight(ctx); err != nil {
-			reason = "power control is disabled or its helper/autostart preflight failed"
+			reason = resource.PowerPreflightFailed
 		}
 	}
-	return []Capability{{Action: "reboot", Available: reason == "", Reason: reason}, {Action: "graceful-shutdown", Available: reason == "", Reason: reason}, {Action: "power-on", Available: false, Reason: "no independent power-on channel; manual power-on is required"}}, nil
+	return []Capability{{Action: "reboot", Available: reason == "", Reason: reason}, {Action: "graceful-shutdown", Available: reason == "", Reason: reason}, {Action: "power-on", Available: false, Reason: resource.NoPowerOn}}, nil
 }
 
 func (m *Manager) Maintenance(ctx context.Context, name string) (*Maintenance, error) {
@@ -169,7 +169,7 @@ func (m *Manager) EnterMaintenance(ctx context.Context, name, reason string, exp
 		return Maintenance{}, ErrConflict
 	}
 	if r.Phase != resource.PhaseManaged {
-		return Maintenance{}, precondition("machine is retired")
+		return Maintenance{}, precondition(resource.MachineRetired)
 	}
 	var v Maintenance
 	var event Event
@@ -216,7 +216,7 @@ func (m *Manager) enterTx(ctx context.Context, tx *sql.Tx, r Record, reason, act
 		return v, err
 	}
 	if cur.phase != resource.PhaseManaged {
-		return v, precondition("machine is retired")
+		return v, precondition(resource.MachineRetired)
 	}
 	if cur.version != expected {
 		return v, ErrConflict
@@ -226,7 +226,7 @@ func (m *Manager) enterTx(ctx context.Context, tx *sql.Tx, r Record, reason, act
 		return v, err
 	}
 	if count > 0 {
-		return v, precondition("maintenance is already active")
+		return v, precondition(resource.MaintenanceActive)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO machine_maintenance(host,resource_id,state,entered_at,body) VALUES('local',?,?,?,?)`, r.ID, v.State, v.EnteredAt.UnixMilli(), body)
 	return v, err
@@ -275,7 +275,7 @@ func (m *Manager) ExitMaintenance(ctx context.Context, name, reason string, expe
 			return err
 		}
 		if count > 0 {
-			return precondition("resolve the outstanding operation first")
+			return precondition(resource.ResolveOperationFirst)
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM machine_maintenance WHERE resource_id=?`, r.ID)
 		if err != nil {
@@ -414,7 +414,7 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 			return err
 		}
 		if count > 0 {
-			return precondition("an unresolved operation already exists")
+			return precondition(resource.OperationUnresolved)
 		}
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM machine_maintenance WHERE resource_id=? AND state='active'`, r.ID).Scan(&count); err != nil {
 			return err
@@ -455,20 +455,20 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 	if err != nil {
 		op.State = "failed"
 		op.Unresolved = false
-		op.Reason = "helper preparation failed"
+		op.Reason = resource.HelperPrepareFailed
 		return op, m.saveOperation(ctx, &op)
 	}
 	op.Receipt = &receipt
 	if receipt.State != "prepared" {
 		op.State = "indeterminate"
-		op.Reason = "helper preparation did not establish a new prepared receipt"
+		op.Reason = resource.HelperNoPrepared
 		return op, m.saveOperation(ctx, &op)
 	}
 	op.State = "submitting"
 	if err = m.saveSubmitting(ctx, &op, r); err != nil {
 		op.State = "failed"
 		op.Unresolved = false
-		op.Reason = "required preconditions changed before handoff"
+		op.Reason = resource.PreconditionsChanged
 		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
 		if saveErr := m.saveOperation(fctx, &op); saveErr != nil {
@@ -479,17 +479,17 @@ func (m *Manager) Submit(ctx context.Context, name string, req resource.Operatio
 	receipt, err = m.power.Submit(ctx, op.Request)
 	if err != nil {
 		op.State = "indeterminate"
-		op.Reason = "helper submission could not be verified"
+		op.Reason = resource.HelperUnverified
 	} else {
 		op.Receipt = &receipt
 		op.State = "observing"
 		if receipt.State != "accepted" {
 			op.State = "indeterminate"
-			op.Reason = "helper did not verify OS request acceptance"
+			op.Reason = resource.HelperNoAcceptance
 		}
 		if action == "graceful-shutdown" {
 			op.State = "indeterminate"
-			op.Reason = "accepted request has no independent power-off evidence"
+			op.Reason = resource.NoPowerOffEvidence
 		}
 	}
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -679,23 +679,23 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		op := &ops[i]
 		if m.power == nil {
 			op.State = "indeterminate"
-			op.Reason = "helper unavailable during recovery"
+			op.Reason = resource.HelperDownOnRecovery
 		} else {
 			receipt, queryErr := m.power.Query(ctx, op.Request)
 			if queryErr != nil {
 				op.State = "indeterminate"
-				op.Reason = "helper receipt unavailable"
+				op.Reason = resource.HelperNoReceipt
 			} else {
 				op.Receipt = &receipt
 				r, readErr := m.Get(ctx, "@"+op.ResourceID)
 				if readErr == nil && rebootVerified(*op, receipt, r) {
 					op.State = "succeeded"
 					op.Unresolved = false
-					op.Reason = "new boot and fresh required health verified"
+					op.Reason = resource.BootVerified
 					op.Evidence = &r.Status
 				} else if !m.clk.Now().Before(op.Request.Deadline) || op.Action == "graceful-shutdown" || op.State == "pending" || op.State == "submitting" {
 					op.State = "indeterminate"
-					op.Reason = "operation lacks verified completion evidence"
+					op.Reason = resource.NoCompletionEvidence
 				}
 			}
 		}
@@ -740,7 +740,7 @@ func (m *Manager) Resolve(ctx context.Context, name, id, reason string, expected
 		return Operation{}, err
 	}
 	if !r.Status.Fresh || r.Status.Identity != "verified" {
-		return Operation{}, precondition("fresh verified observations are required")
+		return Operation{}, precondition(resource.PowerNeedsFresh)
 	}
 	if r.Version != expected {
 		return Operation{}, ErrConflict

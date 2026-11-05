@@ -217,8 +217,24 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	from, ok := timeParam(w, r, "from")
+	if !ok {
+		return
+	}
+	to, ok := timeParam(w, r, "to")
+	if !ok {
+		return
+	}
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		writeError(w, http.StatusBadRequest, codeBadRequest, "from must be before to", map[string]any{"param": "from"})
+		return
+	}
 	limit := int(limit64)
-	entries, err := s.audit.List(r.Context(), limit, before)
+	q := r.URL.Query()
+	entries, err := s.audit.Search(r.Context(), audit.Query{
+		Limit: limit, Before: before, From: from, To: to,
+		Actor: q.Get("actor"), Action: q.Get("action"), Target: q.Get("target"),
+	})
 	if err != nil {
 		s.internalError(w, r, err)
 		return
