@@ -738,13 +738,16 @@ func (r *run) suspendLocked(i int, oc outcome, rec *nodeRec) {
 	r.suspended++
 	rec.status, rec.suspendKey, rec.resumeAt, rec.output, rec.finishedAt = rowSuspended, s.Key, ns.resumeAt, oc.outputJSON, time.Time{}
 	r.e.journal.submit(nil, rec)
+	// The timer is armed before the event is emitted, so that an observer
+	// reacting to the event (or advancing a fake clock) cannot move the
+	// clock between computing the delay and arming the timer.
+	r.armResumeTimerLocked(i)
 	r.emitLocked(EventNodeSuspended, i, func(ev *Event) {
 		if !ns.resumeAt.IsZero() {
 			at := ns.resumeAt
 			ev.RetryAt = &at
 		}
 	})
-	r.armResumeTimerLocked(i)
 }
 
 func (r *run) armResumeTimerLocked(i int) {
