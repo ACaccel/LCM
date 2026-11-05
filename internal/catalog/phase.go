@@ -277,7 +277,9 @@ func (serviceType) ActionCatalog() []resource.Action {
 // stop it; a failed stop aborts the retirement. A runtime that cannot stop
 // the service leaves its state as it is, because LCM never records a state
 // change it did not make. Resuming recomputes the state from the runtime.
-// Unmanaging requires a registered, stopped or failed service.
+// Unmanaging requires a registered, stopped or failed service. A service
+// that leaves the managed phase is forgotten by the monitor before
+// ChangePhase returns.
 func (t serviceType) ChangePhase(ctx context.Context, rec resource.Record, to string, expected int, reason string) error {
 	m := t.m
 	if rec.Type != model.ResourceService {
@@ -336,6 +338,9 @@ func (t serviceType) ChangePhase(ctx context.Context, rec resource.Record, to st
 		return err
 	}
 	if to != resource.PhaseManaged {
+		if m.monitor != nil {
+			m.monitor.Forget(rec.Name)
+		}
 		return nil
 	}
 	closeOnce()

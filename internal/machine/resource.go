@@ -20,8 +20,7 @@ func (m *Manager) Hooks() resource.TypeHooks { return hooks{m} }
 func (m *Manager) Type() resource.Type { return machineType{m} }
 
 // Changed publishes control events written by the hooks of a committed
-// change; connect it to the resource store's OnChange. It only reads the
-// database and never calls back into the store.
+// change; subscribe it to the resource store. It only reads the database.
 func (m *Manager) Changed(c resource.Change) {
 	if c.Type == model.ResourceMachine {
 		m.flushStaged(context.Background())
@@ -318,8 +317,9 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 // that leaves it and is told the (unknown) health of a resumed one.
 func (t machineType) ChangePhase(ctx context.Context, rec resource.Record, to string, expected int, reason string) error {
 	m := t.m
+	// The store's subscription publishes the staged control event after
+	// the resource change itself.
 	err := m.resources.SetPhase(ctx, "@"+rec.ID, to, expected, reason)
-	m.flushStaged(ctx)
 	if err != nil {
 		return err
 	}

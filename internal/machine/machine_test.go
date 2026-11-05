@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +132,8 @@ type testEnv struct {
 	ctx    context.Context
 	clk    *clock.Fake
 	probe  *fakeObserver
+
+	mu     sync.Mutex
 	events []Event
 }
 
@@ -148,19 +152,23 @@ func newEnv(t testing.TB) *testEnv {
 	log := audit.New(db, audit.WithClock(clk.Now))
 	e.native = &fakeNative{}
 	var err error
-	e.store, err = resource.New(resource.Config{DB: db, Gate: gate, Audit: log, Clock: clk, OnChange: func(c resource.Change) {
-		if e.m != nil {
-			e.m.Changed(c)
-		}
-	}})
+	e.store, err = resource.New(resource.Config{DB: db, Gate: gate, Audit: log, Clock: clk})
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.cfg = Config{DB: db, Resources: e.store, Native: e.native, Audit: log, Clock: clk, Gate: gate, Observer: e.probe, OnEvent: func(ev Event) { e.events = append(e.events, ev) }}
+	t.Cleanup(e.store.Close)
+	e.cfg = Config{DB: db, Resources: e.store, Native: e.native, Audit: log, Clock: clk, Gate: gate, Observer: e.probe, OnEvent: func(ev Event) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.events = append(e.events, ev)
+	}}
 	e.m, err = New(e.cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Tests replace e.m to simulate a restart; the helpers that write flush
+	// the store, so no delivery reads e.m while a test replaces it.
+	e.store.Subscribe(func(c resource.Change) { e.m.Changed(c) })
 	e.store.RegisterHooks(model.ResourceMachine, e.m.Hooks())
 	return e
 }
@@ -171,6 +179,7 @@ func (e *testEnv) put(t testing.TB, doc string, expected int) resource.PutResult
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.flush(t)
 	return res
 }
 
@@ -182,6 +191,24 @@ func (e *testEnv) prune(t testing.TB) {
 	}
 }
 
+// flush waits until the store has delivered every committed change.
+func (e *testEnv) flush(t testing.TB) {
+	t.Helper()
+	if err := e.store.Flush(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// published returns the events published so far, after the store has
+// delivered every committed change.
+func (e *testEnv) published(t testing.TB) []Event {
+	t.Helper()
+	e.flush(t)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.events)
+}
+
 func (e *testEnv) setPhase(t testing.TB, name, phase string, expected int) {
 	t.Helper()
 	rec, err := e.store.Get(e.ctx, name)
@@ -191,6 +218,7 @@ func (e *testEnv) setPhase(t testing.TB, name, phase string, expected int) {
 	if err := e.m.Type().ChangePhase(e.ctx, rec, phase, expected, "test"); err != nil {
 		t.Fatal(err)
 	}
+	e.flush(t)
 }
 
 type nativeCall struct {
@@ -274,11 +302,11 @@ func TestPollingCheckpointRestartAndFreshness(t *testing.T) {
 	if second.Status.Health != "healthy" || second.Status.Snapshot.CPUPercent == nil {
 		t.Fatalf("second %+v", second.Status)
 	}
-	count := len(e.events)
+	count := len(e.published(t))
 	e.m, _ = New(e.cfg)
 	e.poll(t)
-	if len(e.events) != count {
-		t.Fatalf("restart duplicated events: %d -> %d", count, len(e.events))
+	if got := len(e.published(t)); got != count {
+		t.Fatalf("restart duplicated events: %d -> %d", count, got)
 	}
 	e.probe.snapshot.MemoryAvailable = 1
 	e.poll(t)
@@ -291,10 +319,10 @@ func TestPollingCheckpointRestartAndFreshness(t *testing.T) {
 	if err != nil || stale.Status.Fresh || stale.Status.Health != "unknown" {
 		t.Fatalf("stale %+v %v", stale, err)
 	}
-	count = len(e.events)
+	count = len(e.published(t))
 	e.m, _ = New(e.cfg)
 	e.poll(t)
-	if len(e.events) > count+1 {
+	if len(e.published(t)) > count+1 {
 		t.Fatal("stale gap created duplicate firing")
 	}
 	e.probe.snapshot.BootID = "boot-b"
@@ -325,7 +353,7 @@ func TestFailedCommitNeverPublishesOrAdvancesCursor(t *testing.T) {
 	e := newEnv(t)
 	e.put(t, testDoc, 0)
 	e.poll(t)
-	count := len(e.events)
+	count := len(e.published(t))
 	err := e.db.Write(e.ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(e.ctx, `CREATE TRIGGER reject_snapshot BEFORE INSERT ON resource_snapshots BEGIN SELECT RAISE(ABORT,'injected failure'); END`)
 		return err
@@ -342,8 +370,8 @@ func TestFailedCommitNeverPublishesOrAdvancesCursor(t *testing.T) {
 	if err = e.db.Reader().QueryRowContext(e.ctx, `SELECT cursor FROM machine_cursors`).Scan(&cursor); err != nil {
 		t.Fatal(err)
 	}
-	if cursor != "cursor-a" || len(e.events) != count {
-		t.Fatalf("published failed transaction: %q %d", cursor, len(e.events))
+	if got := len(e.published(t)); cursor != "cursor-a" || got != count {
+		t.Fatalf("published failed transaction: %q %d", cursor, got)
 	}
 }
 

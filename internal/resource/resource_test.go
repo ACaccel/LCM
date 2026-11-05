@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,12 +24,32 @@ import (
 var alice = auth.Actor{Kind: auth.KindUser, ID: "1", Name: "alice"}
 
 type harness struct {
-	db      *store.DB
-	store   *resource.Store
-	audit   *audit.Log
-	clk     *clock.Fake
+	db    *store.DB
+	store *resource.Store
+	audit *audit.Log
+	clk   *clock.Fake
+	ctx   context.Context
+
+	mu      sync.Mutex
 	changes []resource.Change
-	ctx     context.Context
+}
+
+// ownedGuard refuses to unmanage the names it lists, reading them from a
+// table inside the phase change transaction.
+type ownedGuard struct{}
+
+func (ownedGuard) CheckPhase(ctx context.Context, tx *sql.Tx, rec resource.Record, to string) error {
+	if to != resource.PhaseUnmanaged {
+		return nil
+	}
+	var owned int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_ownership WHERE kind = 'Resource' AND name = ?`, rec.Name).Scan(&owned); err != nil {
+		return err
+	}
+	if owned > 0 {
+		return fmt.Errorf("%w: %s is owned", resource.ErrPrecondition, rec.Name)
+	}
+	return nil
 }
 
 func newHarness(t *testing.T) *harness {
@@ -36,14 +57,31 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{db: storetest.Open(t), clk: clock.NewFake(time.UnixMilli(1_700_000_000_000)), ctx: auth.WithActor(context.Background(), alice)}
 	h.audit = audit.New(h.db)
 	s, err := resource.New(resource.Config{
-		DB: h.db, Gate: maintenance.New(h.db), Audit: h.audit, Clock: h.clk,
-		OnChange: func(c resource.Change) { h.changes = append(h.changes, c) },
+		DB: h.db, Gate: maintenance.New(h.db), Audit: h.audit, Clock: h.clk, Phases: ownedGuard{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.Subscribe(func(c resource.Change) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.changes = append(h.changes, c)
+	})
+	t.Cleanup(s.Close)
 	h.store = s
 	return h
+}
+
+// flushed returns the changes delivered so far, after every change
+// committed before the call.
+func (h *harness) flushed(t *testing.T) []resource.Change {
+	t.Helper()
+	if err := h.store.Flush(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.changes)
 }
 
 func service(name, adapter, extra string) []byte {
@@ -123,7 +161,7 @@ func TestPutVersionsAndGet(t *testing.T) {
 
 	want := []string{"created", "updated", "restored"}
 	var got []string
-	for _, c := range h.changes {
+	for _, c := range h.flushed(t) {
 		if c.Name != "web" || c.ID != rec.ID || c.Type != "service" {
 			t.Fatalf("change = %+v", c)
 		}
@@ -277,14 +315,14 @@ func TestPhaseLifecycleAndIncarnations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Git ownership blocks unmanaging.
+	// The phase guard can refuse a change inside its transaction.
 	if err := h.db.Write(h.ctx, func(tx *sql.Tx) error {
 		_, err := tx.Exec(`INSERT INTO config_ownership (kind, name, source, path, commit_id, applied_version, document, applied_at) VALUES ('Resource', 'web', 'repo', 'web.yaml', 'c', 2, '{}', 1)`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.SetPhase(h.ctx, "web", resource.PhaseUnmanaged, 2, ""); !errors.Is(err, resource.ErrPrecondition) || !strings.Contains(err.Error(), "Git ownership") {
+	if err := h.store.SetPhase(h.ctx, "web", resource.PhaseUnmanaged, 2, ""); !errors.Is(err, resource.ErrPrecondition) || !strings.Contains(err.Error(), "web is owned") {
 		t.Fatalf("owned: %v", err)
 	}
 	if err := h.db.Write(h.ctx, func(tx *sql.Tx) error {
@@ -324,7 +362,7 @@ func TestPhaseLifecycleAndIncarnations(t *testing.T) {
 	}
 
 	var changes []string
-	for _, c := range h.changes {
+	for _, c := range h.flushed(t) {
 		changes = append(changes, c.Change)
 	}
 	if !slices.Equal(changes, []string{"created", "updated", "phase", "phase", "phase", "unmanaged", "created"}) {
@@ -591,7 +629,7 @@ func TestWritesRollBackWithoutAudit(t *testing.T) {
 	if err != nil || rec.Version != 1 || rec.Phase != resource.PhaseManaged {
 		t.Fatalf("web = v%d %s, %v", rec.Version, rec.Phase, err)
 	}
-	if len(h.changes) != 1 {
-		t.Fatalf("changes published for rolled back writes: %+v", h.changes)
+	if changes := h.flushed(t); len(changes) != 1 {
+		t.Fatalf("changes published for rolled back writes: %+v", changes)
 	}
 }

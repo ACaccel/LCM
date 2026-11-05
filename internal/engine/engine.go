@@ -900,6 +900,11 @@ func (e *Engine) Wait(ctx context.Context, runID string) (RunView, error) {
 	return e.Run(ctx, runID)
 }
 
+// AddObserver delivers the events emitted from now on to ob as well, like
+// the observers of Config. It lets a component that needs the engine to be
+// built observe it too; add it before the engine is used.
+func (e *Engine) AddObserver(ob Observer) { e.obs.add(ob) }
+
 // ObserverDrops returns how many events observers have missed because
 // their buffers were full.
 func (e *Engine) ObserverDrops() uint64 { return e.obs.dropped() }

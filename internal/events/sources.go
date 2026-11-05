@@ -88,7 +88,7 @@ func (h *Hub) Timeline(e catalog.Entry) {
 }
 
 // ResourceChanged announces a committed resource document or phase change.
-// It fits resource.Config.OnChange: it never blocks.
+// It fits resource.Store.Subscribe: it never blocks.
 func (h *Hub) ResourceChanged(c resource.Change) {
 	h.Publish(Event{Type: TypeResource, Resource: c.Name, ResourceID: c.ID, Data: c})
 }

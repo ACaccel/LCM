@@ -45,7 +45,7 @@ func newMachineEnv(t *testing.T) *machineEnv {
 	e := &machineEnv{env: newEnv(t)}
 	e.gate = maintenance.New(e.db)
 	var err error
-	e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Gate: e.gate})
+	e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Gate: e.gate, Phases: configsync.PhaseGuard{}})
 	if err != nil {
 		t.Fatal(err)
 	}

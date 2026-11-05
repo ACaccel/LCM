@@ -90,6 +90,15 @@ type ManagerConfig struct {
 	// directory named after the resource; required, absolute. It is the
 	// work directory of the data directory, which LCM alone writes to.
 	WorkDir string
+	// Monitor, when set, forgets a service as soon as it leaves the managed
+	// phase, so that no read after ChangePhase sees its health.
+	Monitor Forgetter
+}
+
+// Forgetter drops the monitor state of a resource; *monitor.Monitor
+// implements it.
+type Forgetter interface {
+	Forget(resource string)
 }
 
 // Manager performs lifecycle actions and phase changes on service resources.
@@ -102,6 +111,7 @@ type Manager struct {
 	lockTTL  time.Duration
 	git      string
 	workDir  string
+	monitor  Forgetter
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -117,7 +127,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	}
 	m := &Manager{
 		cat: cfg.Catalog, runtimes: cfg.Runtimes, runner: cfg.Runner, locker: cfg.Locker,
-		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, inflight: map[string]struct{}{},
+		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, monitor: cfg.Monitor, inflight: map[string]struct{}{},
 	}
 	if m.log == nil {
 		m.log = slog.New(slog.NewTextHandler(io.Discard, nil))

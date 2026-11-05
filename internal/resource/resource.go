@@ -62,7 +62,7 @@ const (
 	PhaseUnmanaged = "unmanaged"
 )
 
-// Changes reported to Config.OnChange.
+// Changes reported to subscribers (Store.Subscribe).
 const (
 	ChangeCreated   = "created"
 	ChangeUpdated   = "updated"
@@ -104,7 +104,7 @@ type PutResult struct {
 	Unresolved []string
 }
 
-// Change describes a committed change for Config.OnChange.
+// Change describes a committed change for subscribers.
 type Change struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
@@ -187,21 +187,21 @@ type Config struct {
 	// that a check type or props error is refused for all resource types
 	// in one place.
 	Checks CheckValidator
-	// OnChange, when set, is called after a committed change. It runs on
-	// the caller's goroutine and must not block or call back into the
-	// Store.
-	OnChange func(Change)
+	// Phases, when set, takes part in every phase change, such as refusing
+	// to unmanage a resource a config source owns.
+	Phases PhaseGuard
 }
 
 // Store keeps resource identities, documents and phases.
 type Store struct {
-	db       *store.DB
-	gate     *maintenance.Gate
-	audit    *audit.Log
-	clk      clock.Clock
-	log      *slog.Logger
-	checks   CheckValidator
-	onChange func(Change)
+	db     *store.DB
+	gate   *maintenance.Gate
+	audit  *audit.Log
+	clk    clock.Clock
+	log    *slog.Logger
+	checks CheckValidator
+	phases PhaseGuard
+	subs   subscribers
 
 	mu    sync.RWMutex
 	hooks map[string]TypeHooks
@@ -212,7 +212,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.DB == nil || cfg.Audit == nil {
 		return nil, errors.New("resource: DB and Audit are required")
 	}
-	s := &Store{db: cfg.DB, gate: cfg.Gate, audit: cfg.Audit, clk: cfg.Clock, log: cfg.Log, checks: cfg.Checks, onChange: cfg.OnChange, hooks: map[string]TypeHooks{}}
+	s := &Store{db: cfg.DB, gate: cfg.Gate, audit: cfg.Audit, clk: cfg.Clock, log: cfg.Log, checks: cfg.Checks, phases: cfg.Phases, hooks: map[string]TypeHooks{}}
 	if s.clk == nil {
 		s.clk = clock.Real()
 	}
@@ -234,12 +234,6 @@ func (s *Store) hooksFor(typ string) TypeHooks {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hooks[typ]
-}
-
-func (s *Store) changed(c Change) {
-	if s.onChange != nil {
-		s.onChange(c)
-	}
 }
 
 func requireActor(ctx context.Context) (auth.Actor, error) {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/ACaccel/lcm/internal/audit"
-	"github.com/ACaccel/lcm/internal/model"
 )
 
 // transitions lists the allowed phase changes. Unmanaging goes through
@@ -17,11 +16,19 @@ var transitions = map[string][]string{
 	PhaseRetired: {PhaseManaged, PhaseUnmanaged},
 }
 
+// PhaseGuard takes part in every phase change of any resource type. It runs
+// inside the write transaction before the type's hooks; an error, usually
+// wrapping ErrPrecondition, aborts the change.
+type PhaseGuard interface {
+	CheckPhase(ctx context.Context, tx *sql.Tx, rec Record, to string) error
+}
+
 // SetPhase moves a resource to another management phase. expected must
-// equal the current document version. Unmanaging is refused while a config
-// source owns the resource. Type-specific conditions are checked by the
-// type's hooks in the same transaction; work outside the database (such as
-// stopping a service) belongs to the type before it calls SetPhase.
+// equal the current document version. The configured PhaseGuard can refuse
+// the change, such as unmanaging a resource a config source owns.
+// Type-specific conditions are checked by the type's hooks in the same
+// transaction; work outside the database (such as stopping a service)
+// belongs to the type before it calls SetPhase.
 func (s *Store) SetPhase(ctx context.Context, ref, phase string, expected int, reason string) error {
 	actor, err := requireActor(ctx)
 	if err != nil {
@@ -50,14 +57,9 @@ func (s *Store) SetPhase(ctx context.Context, ref, phase string, expected int, r
 		if !allowed(rec.Phase, phase) {
 			return precondition("%s is %s and cannot become %s", rec.Name, rec.Phase, phase)
 		}
-		if phase == PhaseUnmanaged {
-			var owned int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_ownership WHERE kind = ? AND name = ?`,
-				string(model.KindResource), rec.Name).Scan(&owned); err != nil {
+		if s.phases != nil {
+			if err := s.phases.CheckPhase(ctx, tx, rec, phase); err != nil {
 				return err
-			}
-			if owned > 0 {
-				return precondition("%s is owned by a config source; release Git ownership before unmanaging it", rec.Name)
 			}
 		}
 		if h := s.hooksFor(rec.Type); h != nil {

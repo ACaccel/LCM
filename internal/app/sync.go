@@ -13,9 +13,9 @@ import (
 	"github.com/ACaccel/lcm/internal/resource"
 )
 
-// monitorSyncInterval is the safety net behind the resource change hook: a
-// missed kick (or a change made by another process, such as a restore from
-// backup) is picked up within this time.
+// monitorSyncInterval is the safety net behind the resource change
+// subscription: a missed kick (or a change made by another process, such
+// as a restore from backup) is picked up within this time.
 const monitorSyncInterval = time.Minute
 
 // monitorSyncer keeps the monitor's check set equal to the checks of the
@@ -33,15 +33,6 @@ type monitorSyncer struct {
 
 func newMonitorSyncer(res *resource.Store, mon *monitor.Monitor, log *slog.Logger) *monitorSyncer {
 	return &monitorSyncer{res: res, mon: mon, log: log, kick: make(chan struct{}, 1)}
-}
-
-// Kick requests a sync without blocking. It is called from the resource
-// change hook, which runs on the writer's goroutine and so must be cheap.
-func (s *monitorSyncer) Kick() {
-	select {
-	case s.kick <- struct{}{}:
-	default:
-	}
 }
 
 // monitorDefs lists the checks of every managed resource of any type.
@@ -86,27 +77,34 @@ func (s *monitorSyncer) Sync(ctx context.Context) error {
 	return err
 }
 
-// Changed makes the monitor forget a resource that left observation, before
-// the sync the change kicks: a sync that removed the checks of a retired
-// machine or router first would recompute its health from its native input
-// alone and announce a change. It runs on the resource writer's goroutine
-// after the commit.
-func (s *monitorSyncer) Changed(ctx context.Context, c resource.Change) {
+// Changed makes the monitor forget a resource that left observation and
+// then requests a sync: a sync that removed the checks of a retired machine
+// or router first would recompute its health from its native input alone
+// and announce a change. It is a resource store subscriber.
+func (s *monitorSyncer) Changed(c resource.Change) {
+	if s.leftObservation(c) {
+		s.mon.Forget(c.Name)
+	}
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (s *monitorSyncer) leftObservation(c resource.Change) bool {
 	switch c.Change {
 	case resource.ChangeUnmanaged:
+		return true
 	case resource.ChangePhase:
-		rec, err := s.res.Get(ctx, "@"+c.ID)
+		rec, err := s.res.Get(context.Background(), "@"+c.ID)
 		if err != nil {
 			s.log.Warn("resource phase not read", "resource", c.Name, "error", err)
-			return
+			return false
 		}
-		if rec.Phase == resource.PhaseManaged {
-			return
-		}
+		return rec.Phase != resource.PhaseManaged
 	default:
-		return
+		return false
 	}
-	s.mon.Forget(c.Name)
 }
 
 // syncQuietly runs Sync and logs failures; a closed monitor or a cancelled

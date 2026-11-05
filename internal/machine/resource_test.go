@@ -24,8 +24,8 @@ func TestHooksCreateStatusAndResetCursors(t *testing.T) {
 	if err := e.db.Reader().QueryRow(`SELECT status FROM resource_status WHERE resource_id = ?`, r.ID).Scan(&status); err != nil || status != "{}" {
 		t.Fatalf("status row = %q %v", status, err)
 	}
-	if len(e.events) != 1 || e.events[0].Kind != "machine.save" || e.events[0].ID == 0 || e.events[0].ResourceID != r.ID {
-		t.Fatalf("save event = %+v", e.events)
+	if events := e.published(t); len(events) != 1 || events[0].Kind != "machine.save" || events[0].ID == 0 || events[0].ResourceID != r.ID {
+		t.Fatalf("save event = %+v", events)
 	}
 	e.poll(t)
 	cursors := func() int {

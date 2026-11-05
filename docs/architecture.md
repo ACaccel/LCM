@@ -18,6 +18,8 @@ flowchart LR
     CS --> Res
     CS --> Eng
     Res -->|type hooks| Cat & Mach & Rtr
+    Res -.->|change subscriptions| Hub & Mach & Rtr & Mon
+    CS -.->|phase guard| Res
     Mach & Rtr -->|native health| Mon
     Mon[monitor] -->|check, health, alert signals| Bus((signal bus))
     Cat -->|lifecycle signals| Bus
@@ -64,7 +66,12 @@ A typical loop: a health check fails, `monitor` publishes a `health.changed` sig
 
 **Retention ownership.** Each component prunes the tables it owns (engine runs, catalog timeline and deployments, monitor results, security incidents, the resource store's snapshots, points and events) from the hourly job in `internal/app`. `internal/retention` owns the rules whose references cross components, as plain SQL. Every prune deletes in bounded batches, one write transaction per batch, so the single writer connection is never held for long; anything still in use or unresolved is never deleted. Limits are in the [configuration](../README.md#configuration).
 
-Every type shares one registry and write path; type-specific work runs in the type's hooks inside the store's write transaction, so there is never a second copy of a resource that could overwrite the first. The monitor combines checks with the native health machines and routers report. Observations, health baselines, journal events and cursors commit together before best-effort SSE publication as `observation` events keyed by immutable ID. A data-directory file lock permits only one `serve` process; startup recovers machine and router operations and maintenance gates before enabling writes and automation. The shared Gate and durable maintenance row protect local writes; this is a single-controller design, not a distributed lease or HA protocol. The [Machine contract](machines.md) owns identity, freshness, retention and completion semantics.
+Every type shares one registry and write path; type-specific work runs in the type's hooks inside the store's write transaction, so there is never a second copy of a resource that could overwrite the first. `internal/app` connects the rest of the store's collaborators after construction:
+
+- **Change subscriptions** (`Store.Subscribe`): after a commit, each subscriber receives the change on its own goroutine, in commit order, never coalesced or dropped; a subscriber that falls behind a bounded queue makes writers wait. Subscribers may read the store but not write to it; `Close` drains the queues. The event hub (followed by the machine type's staged control events), the router loops and the monitor sync subscribe. A phase change that must take effect before the call returns (forgetting monitor state) is done by the type's `ChangePhase`, not by a subscriber.
+- **Phase guard** (`resource.PhaseGuard`): checked inside every phase change transaction; config sync's guard refuses to unmanage an owned resource.
+
+The monitor combines checks with the native health machines and routers report. Observations, health baselines, journal events and cursors commit together before best-effort SSE publication as `observation` events keyed by immutable ID. A data-directory file lock permits only one `serve` process; startup recovers machine and router operations and maintenance gates before enabling writes and automation. The shared Gate and durable maintenance row protect local writes; this is a single-controller design, not a distributed lease or HA protocol. The [Machine contract](machines.md) owns identity, freshness, retention and completion semantics.
 
 ## Engine semantics
 

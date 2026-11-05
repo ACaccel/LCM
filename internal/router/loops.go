@@ -32,9 +32,8 @@ func (l *loop) exited() bool {
 	}
 }
 
-// Changed notes a committed resource change; connect it to the resource
-// store's OnChange. It never blocks and never calls back into the store:
-// Run starts, wakes or stops the affected loop.
+// Changed notes a committed resource change; subscribe it to the resource
+// store. It never blocks: Run starts, wakes or stops the affected loop.
 func (m *Manager) Changed(c resource.Change) {
 	if c.Type != model.ResourceRouter {
 		return

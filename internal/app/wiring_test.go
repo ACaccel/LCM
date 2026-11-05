@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"net/http"
@@ -384,5 +385,53 @@ func TestHandlerServesConsoleAndAPI(t *testing.T) {
 	code, body := get("/resources/web")
 	if (code != http.StatusOK && code != http.StatusServiceUnavailable) || !strings.Contains(body, "<html") {
 		t.Fatalf("console route = %d %q", code, body)
+	}
+}
+
+// The trigger manager observes the engine it was built from: a policy
+// deployed while the loops run gets its watcher without waiting for the
+// periodic trigger sync.
+func TestDeployWakesTriggerManager(t *testing.T) {
+	h := newHarness(t)
+	before := h.clk.Pending()
+	h.run()
+	h.waitTimers(before + loopTimers)
+	h.deploy(`
+apiVersion: lcm/v2
+kind: Policy
+metadata: { name: nightly }
+spec:
+  nodes:
+    - { id: t, type: trigger.cron, props: { schedule: "0 3 * * *", timezone: UTC } }
+`)
+	// The cron watcher arms one timer; the clock has not moved, so only
+	// the deploy event can have started it.
+	h.waitTimers(before + loopTimers + 1)
+	if n := h.app.Triggers.Watching(); n != 1 {
+		t.Fatalf("watching = %d", n)
+	}
+}
+
+// The resource store refuses to unmanage a resource a config source owns,
+// through the phase guard the app installs.
+func TestOwnedResourceCannotBeUnmanaged(t *testing.T) {
+	h := newHarness(t)
+	h.putService(checkedService)
+	rec, err := h.app.Resources.Get(h.ctx, "cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.Manager.Type().ChangePhase(h.ctx, rec, resource.PhaseRetired, rec.Version, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.DB.Write(h.ctx, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO config_ownership (kind, name, source, path, commit_id, applied_version, document, applied_at) VALUES ('Resource', 'cache', 'repo', 'cache.yaml', 'c', 1, '{}', 1)`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = h.app.Manager.Type().ChangePhase(h.ctx, rec, resource.PhaseUnmanaged, rec.Version, "test")
+	if !errors.Is(err, resource.ErrPrecondition) || !strings.Contains(err.Error(), "release Git ownership") {
+		t.Fatalf("unmanage owned = %v", err)
 	}
 }

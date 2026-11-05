@@ -152,14 +152,11 @@ func newEnv(t *testing.T) *env {
 	}
 	e.gate = maintenance.New(db)
 	log := audit.New(db, audit.WithClock(clk.Now))
-	e.store, err = resource.New(resource.Config{DB: db, Gate: e.gate, Audit: log, Clock: clk, OnChange: func(c resource.Change) {
-		if e.m != nil {
-			e.m.Changed(c)
-		}
-	}})
+	e.store, err = resource.New(resource.Config{DB: db, Gate: e.gate, Audit: log, Clock: clk})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(e.store.Close)
 	e.m, err = router.New(router.Config{
 		DB: db, Resources: e.store, Audit: log, Gate: e.gate, Connections: conns, Secrets: sec, Native: e.native,
 		Clock: clk, HTTP: e.fake.HTTPClient(),
@@ -173,6 +170,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e.store.RegisterHooks(model.ResourceRouter, e.m.Hooks())
+	e.store.Subscribe(e.m.Changed)
 	return e
 }
 

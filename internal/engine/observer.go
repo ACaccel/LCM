@@ -71,19 +71,30 @@ type dispatcher struct {
 }
 
 type observers struct {
+	log    *slog.Logger
 	ds     []*dispatcher
 	mu     sync.RWMutex
 	closed bool
 }
 
 func newObservers(obs []Observer, log *slog.Logger) *observers {
-	o := &observers{}
+	o := &observers{log: log}
 	for _, ob := range obs {
-		d := &dispatcher{obs: ob, ch: make(chan Event, observerBuffer), log: log, done: make(chan struct{})}
-		o.ds = append(o.ds, d)
-		go d.loop()
+		o.add(ob)
 	}
 	return o
+}
+
+// add starts delivering events to ob; it does nothing once closed.
+func (o *observers) add(ob Observer) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return
+	}
+	d := &dispatcher{obs: ob, ch: make(chan Event, observerBuffer), log: o.log, done: make(chan struct{})}
+	o.ds = append(o.ds, d)
+	go d.loop()
 }
 
 func (d *dispatcher) loop() {
@@ -119,6 +130,8 @@ func (o *observers) emit(e Event) {
 }
 
 func (o *observers) dropped() uint64 {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
 	var n uint64
 	for _, d := range o.ds {
 		n += d.dropped.Load()

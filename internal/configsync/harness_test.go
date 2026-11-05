@@ -65,7 +65,7 @@ func newEnv(t *testing.T) *env {
 	e.audit = audit.New(e.db, audit.WithClock(e.clk.Now))
 	e.bus = signal.NewBus(discardLogger(), e.clk.Now)
 	var err error
-	if e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk}); err != nil {
+	if e.res, err = resource.New(resource.Config{DB: e.db, Audit: e.audit, Clock: e.clk, Phases: configsync.PhaseGuard{}}); err != nil {
 		t.Fatal(err)
 	}
 	if e.cat, err = catalog.New(catalog.Config{DB: e.db, Audit: e.audit, Bus: e.bus, Clock: e.clk, Resources: e.res}); err != nil {

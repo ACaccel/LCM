@@ -400,3 +400,25 @@ func shortCommit(c string) string {
 	}
 	return c
 }
+
+// PhaseGuard refuses to unmanage a resource that a config source owns; the
+// ownership has to be released first. It implements resource.PhaseGuard and
+// needs no Syncer, so the resource store can use it before config sync
+// exists.
+type PhaseGuard struct{}
+
+// CheckPhase implements resource.PhaseGuard.
+func (PhaseGuard) CheckPhase(ctx context.Context, tx *sql.Tx, rec resource.Record, to string) error {
+	if to != resource.PhaseUnmanaged {
+		return nil
+	}
+	var owned int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_ownership WHERE kind = ? AND name = ?`,
+		string(model.KindResource), rec.Name).Scan(&owned); err != nil {
+		return err
+	}
+	if owned > 0 {
+		return fmt.Errorf("%w: %s is owned by a config source; release Git ownership before unmanaging it", resource.ErrPrecondition, rec.Name)
+	}
+	return nil
+}

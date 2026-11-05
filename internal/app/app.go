@@ -301,32 +301,11 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	}
 	ready("monitor", "concurrency", cfg.MonitorConcurrency)
 
-	// A committed resource change is announced on the event stream, lets
-	// the machine type publish the control events its hooks staged, and
-	// resyncs the monitor's checks. The machine manager and the syncer need
-	// the store, so the hook reaches them through pointers set once they
-	// exist; a change before that is covered by the initial sync in Run.
-	var (
-		kick         atomic.Pointer[monitorSyncer]
-		machinesLate atomic.Pointer[machine.Manager]
-		routersLate  atomic.Pointer[router.Manager]
-	)
+	// The phase guard refuses to unmanage a resource a config source owns;
+	// it reads ownership inside the phase change and needs no Syncer.
 	a.Resources, err = resource.New(resource.Config{
 		DB: a.DB, Gate: a.Maintenance, Audit: a.Audit, Clock: clk, Log: log.With("component", "resource"),
-		Checks: a.Monitor,
-		OnChange: func(c resource.Change) {
-			a.Events.ResourceChanged(c)
-			if m := machinesLate.Load(); m != nil {
-				m.Changed(c)
-			}
-			if r := routersLate.Load(); r != nil {
-				r.Changed(c)
-			}
-			if s := kick.Load(); s != nil {
-				s.Changed(context.Background(), c)
-				s.Kick()
-			}
-		},
+		Checks: a.Monitor, Phases: configsync.PhaseGuard{},
 	})
 	if err != nil {
 		return nil, err
@@ -349,7 +328,6 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	if err != nil {
 		return nil, err
 	}
-	machinesLate.Store(a.Machines)
 	a.Routers, err = router.New(router.Config{
 		DB: a.DB, Resources: a.Resources, Audit: a.Audit, Gate: a.Maintenance, Connections: a.Connections,
 		Secrets: a.Secrets, Native: a.Monitor, Clock: clk, Log: log.With("component", "router"), HTTP: o.routerHTTP,
@@ -358,7 +336,17 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	if err != nil {
 		return nil, err
 	}
-	routersLate.Store(a.Routers)
+	a.syncer = newMonitorSyncer(a.Resources, a.Monitor, log.With("component", "monitor"))
+	// Subscribed before anything writes. A committed resource change is
+	// announced on the event stream before the control events the machine
+	// type's hooks staged for it; it also wakes the router loops and the
+	// monitor sync, which first forgets a resource that left observation.
+	a.Resources.Subscribe(func(c resource.Change) {
+		a.Events.ResourceChanged(c)
+		a.Machines.Changed(c)
+	})
+	a.Resources.Subscribe(a.Routers.Changed)
+	a.Resources.Subscribe(a.syncer.Changed)
 	ready("connections", "count", len(a.Connections.List()))
 	ready("secrets", "dir", cfg.SecretsPath())
 
@@ -376,7 +364,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	ready("runtimes", "systemctl", cfg.Systemctl, "docker", cfg.Docker, "privilege", cfg.Privilege())
 	a.Manager, err = catalog.NewManager(catalog.ManagerConfig{
 		Catalog: a.Catalog, Runtimes: a.Runtimes, Runner: o.runner, Locker: lockAdapter{m: a.Locks},
-		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git, WorkDir: workDir,
+		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git, WorkDir: workDir, Monitor: a.Monitor,
 	})
 	if err != nil {
 		return nil, err
@@ -418,8 +406,6 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 			return nil, err
 		}
 	}
-	a.syncer = newMonitorSyncer(a.Resources, a.Monitor, log.With("component", "monitor"))
-	kick.Store(a.syncer)
 	// One registration per resource type: its state, actions and phase
 	// changes, and the optional observation and operation backends.
 	resourceTypes := []api.ResourceType{
@@ -443,15 +429,11 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 
 	ready("nodes", "types", len(a.Registry.Schemas()))
 	a.releaser = stateful.NewReleaser(a.Locks, clk, log.With("component", "locks"))
-	// The trigger manager needs the engine, which needs the manager as an
-	// observer: events that arrive before it exists are covered by its
-	// first sync.
-	var triggers lateObserver
 	a.Engine, err = engine.New(engine.Config{
 		Gate: a.Maintenance,
 		DB:   a.DB, Registry: a.Registry, Modules: a.Modules, Workers: cfg.EngineWorkers, Clock: clk, Audit: a.Audit,
 		Logger:    log.With("component", "engine"),
-		Observers: append([]engine.Observer{a.releaser, &triggers, a.Events.Observer()}, o.observers...),
+		Observers: []engine.Observer{a.releaser, a.Events.Observer()},
 		Vars:      []engine.Var{a.State.Var(), resourceVar(a.Resources, stateTypes(resourceTypes), a.Monitor)},
 	})
 	if err != nil {
@@ -468,7 +450,13 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	if err != nil {
 		return nil, err
 	}
-	triggers.set(a.Triggers)
+	// The trigger manager needs the engine, so it observes deployments from
+	// here on; nothing has been deployed or recovered yet. Observers passed
+	// as options come last, after every component's observer.
+	a.Engine.AddObserver(a.Triggers)
+	for _, ob := range o.observers {
+		a.Engine.AddObserver(ob)
+	}
 	ready("engine", "policies", len(a.Engine.Plans()))
 
 	// The sync loop starts in Run, after recovery, so that a pulled
@@ -559,9 +547,16 @@ func (a *App) PprofAddr() net.Addr {
 }
 
 // SyncMonitor applies the managed resources' checks to the monitor now. The
-// resource change hook does this in the background; callers that need the checks
-// scheduled before they continue use this.
-func (a *App) SyncMonitor(ctx context.Context) error { return a.syncer.Sync(ctx) }
+// resource change subscription does this in the background; callers that
+// need the checks scheduled before they continue use this.
+func (a *App) SyncMonitor(ctx context.Context) error {
+	// Committed changes are delivered first, so that the monitor has
+	// forgotten a resource that left observation before the sync.
+	if err := a.Resources.Flush(ctx); err != nil {
+		return err
+	}
+	return a.syncer.Sync(ctx)
+}
 
 // Run starts the background loops and serves HTTP until ctx ends or the
 // server fails, then stops them. It may be called once. Stopping the
@@ -725,6 +720,11 @@ func (a *App) Close(ctx context.Context) error {
 				errs = append(errs, fmt.Errorf("close engine: %w", err))
 			}
 		}
+		// Queued resource changes still reach the monitor and the machine
+		// type, which need the database.
+		if a.Resources != nil {
+			a.Resources.Close()
+		}
 		if a.Monitor != nil {
 			if err := a.Monitor.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("close monitor: %w", err))
@@ -746,19 +746,4 @@ func (a *App) Close(ctx context.Context) error {
 		}
 	})
 	return a.closeErr
-}
-
-// lateObserver forwards engine events to an observer that can only be
-// created after the engine.
-type lateObserver struct {
-	target atomic.Pointer[trigger.Manager]
-}
-
-func (l *lateObserver) set(m *trigger.Manager) { l.target.Store(m) }
-
-// Observe implements engine.Observer.
-func (l *lateObserver) Observe(e engine.Event) {
-	if m := l.target.Load(); m != nil {
-		m.Observe(e)
-	}
 }
