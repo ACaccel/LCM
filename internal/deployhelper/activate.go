@@ -1,7 +1,6 @@
 package deployhelper
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -232,20 +231,46 @@ func (h *Helper) checkServiceFiles(svc string, acc hostsetup.Account) error {
 	if err != nil {
 		return err
 	}
-	sc := bufio.NewScanner(strings.NewReader(string(data)))
-	for sc.Scan() {
-		line := strings.TrimPrefix(strings.TrimSpace(sc.Text()), "export ")
-		for _, key := range []string{"PORT", "HOST"} {
-			if strings.HasPrefix(strings.TrimSpace(line), key+"=") {
-				return fmt.Errorf("%s sets %s, which comes from host.json; remove it", env, key)
-			}
-		}
+	if key := envSets(string(data), "PORT", "HOST"); key != "" {
+		return fmt.Errorf("%s sets %s, which comes from host.json; remove it", env, key)
 	}
 	info, err := h.FS.Lstat(hostsetup.ServiceDataDir(svc))
 	if err != nil || !info.IsDir() || info.UID != acc.UID {
 		return fmt.Errorf("%s is not a directory of the account %s", hostsetup.ServiceDataDir(svc), svc)
 	}
 	return nil
+}
+
+// envSets returns the first of keys that an environment file may assign,
+// or "". It errs on the side of finding one: every physical line and every
+// line joined by backslash continuations is read the way systemd reads an
+// assignment (whitespace around the key, an "export" prefix, a quoted key),
+// keys are compared without regard to case, and comments are skipped only
+// where they start a line.
+func envSets(data string, keys ...string) string {
+	data = strings.ReplaceAll(data, "\r", "\n")
+	physical := strings.Split(data, "\n")
+	logical := strings.Split(strings.ReplaceAll(data, "\\\n", ""), "\n")
+	for _, line := range append(physical, logical...) {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && strings.TrimLeft(rest, " \t") != rest {
+			line = strings.TrimSpace(rest)
+		}
+		key, _, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.Trim(strings.TrimSpace(key), `"'`)
+		for _, k := range keys {
+			if strings.EqualFold(strings.TrimSpace(key), k) {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 // startCommand is ExecStart: the runtime's interpreter with a release file,
@@ -358,13 +383,19 @@ func (h *Helper) restoreLink(p, id string) error {
 	return h.setLink(p, "releases/"+id)
 }
 
+// readFile reads a file of at most 1 MiB; a larger one is refused rather
+// than read in part.
 func (h *Helper) readFile(p string) ([]byte, error) {
 	f, err := h.FS.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(f, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
+	if err == nil && len(data) > 1<<20 {
+		err = fmt.Errorf("%s is larger than 1 MiB", p)
+	}
+	return data, err
 }
 
 // pruneReleases keeps the newest keep releases and always current and
