@@ -50,18 +50,9 @@ describe("host drift notice", () => {
     expect(screen.getByText(/缺少/)).toBeTruthy();
   });
 
-  it("shows only a quiet hint, no warning, for unreadable files", async () => {
-    answer([{ name: "core", state: "unknown", files: [{ path: "/etc/sudoers.d/lcm", state: "unknown", detail: "not readable as this user" }, { path: "/usr/local/libexec/lcm/self-install", state: "up_to_date" }] }]);
-    show();
-    expect(await screen.findByText(/lcm 帳號無法讀取/)).toBeTruthy();
-    expect(screen.getByText("/etc/sudoers.d/lcm")).toBeTruthy();
-    expect(screen.queryByText("make build && sudo bin/lcm host apply")).toBeNull();
-    expect(document.querySelector(".banner")).toBeNull();
-  });
-
   it("shows nothing when everything is current, not installed, or unreadable by the server", async () => {
     const asked = answer([
-      { name: "core", state: "up_to_date", files: [{ path: "/usr/local/libexec/lcm/self-install", state: "up_to_date" }] },
+      { name: "core", state: "unknown", files: [{ path: "/usr/local/libexec/lcm/self-install", state: "up_to_date" }, { path: "/etc/sudoers.d/lcm", state: "unknown", detail: "not readable as this user" }] },
       { name: "security-host", state: "not_installed", files: [{ path: "/usr/local/libexec/lcm/security-host/helper.py", state: "missing" }] },
     ]);
     const { container } = show();

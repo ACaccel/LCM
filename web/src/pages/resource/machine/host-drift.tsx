@@ -31,35 +31,27 @@ function FileList({ rows }: { rows: { component: string; file: HostFile }[] }) {
 
 /**
  * Tells the administrator that the root-owned helper files of the host no
- * longer match this LCM build. It shows nothing when everything matches or a
- * component is not installed, and only a quiet hint for files the server
- * account cannot read. A failed or empty read shows nothing either: the
- * notice must never be the reason a page looks broken.
+ * longer match this LCM build. It shows nothing when everything matches, a
+ * component is not installed, or a file is unreadable: sudoers rules and the
+ * security host helper are root-only by design, so an unreadable file is the
+ * normal state, not a finding. A failed or empty read shows nothing either:
+ * the notice must never be the reason a page looks broken.
  */
 export function HostDriftNotice() {
   const q = useQuery(hostComponentsQuery());
   if (!q.data) return null;
   const drift = files(q.data, ["outdated", "missing"]);
-  const unknown = files(q.data, ["unknown"]);
-  if (drift.length > 0) {
-    return (
-      <div className="banner warn stack" role="status">
-        <strong>{s.hostDrift.title}</strong>
-        <FileList rows={drift} />
-        <p>{s.hostDrift.help}</p>
-        <pre className="block">{s.hostDrift.command}</pre>
-        <p className="meta">{s.hostDrift.warning}</p>
-        <a href={updateGuide} target="_blank" rel="noreferrer">
-          {s.hostDrift.docs}
-        </a>
-      </div>
-    );
-  }
-  if (unknown.length === 0) return null;
+  if (drift.length === 0) return null;
   return (
-    <div className="stack" role="status">
-      <p className="meta">{s.hostDrift.unknownHint}</p>
-      <FileList rows={unknown} />
+    <div className="banner warn stack" role="status">
+      <strong>{s.hostDrift.title}</strong>
+      <FileList rows={drift} />
+      <p>{s.hostDrift.help}</p>
+      <pre className="block">{s.hostDrift.command}</pre>
+      <p className="meta">{s.hostDrift.warning}</p>
+      <a href={updateGuide} target="_blank" rel="noreferrer">
+        {s.hostDrift.docs}
+      </a>
     </div>
   );
 }

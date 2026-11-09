@@ -767,8 +767,7 @@ export const s = {
     command: "make build && sudo bin/lcm host apply",
     warning: "不要執行 sudo lcm host apply；以 root 執行自部署的 binary 會被拒絕。",
     docs: "更新步驟說明",
-    unknownHint: "以下檔案 lcm 帳號無法讀取，無法比對（root 專屬的 sudoers 規則通常如此）：",
-    states: { outdated: "與內建版本不同", missing: "缺少", unknown: "無法讀取" } as Record<string, string>,
+    states: { outdated: "與內建版本不同", missing: "缺少" } as Record<string, string>,
   },
   machine: {
     trend: "CPU 與記憶體使用率趨勢",
