@@ -25,6 +25,7 @@ import (
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/connection"
+	"github.com/ACaccel/lcm/internal/deployhelper"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/execx"
@@ -67,6 +68,7 @@ type Option func(*options)
 type options struct {
 	machineObserver machine.Observer
 	machinePower    machine.PowerBackend
+	deployHelper    rt.DeployHelper
 	routerHTTP      *http.Client
 	clock           clock.Clock
 	log             *slog.Logger
@@ -98,6 +100,12 @@ func WithMachineObserver(observer machine.Observer) Option {
 // WithMachinePower substitutes the privileged boundary for deterministic tests.
 func WithMachinePower(backend machine.PowerBackend) Option {
 	return func(o *options) { o.machinePower = backend }
+}
+
+// WithDeployHelper substitutes the deploy helper of managed services, which
+// otherwise runs through its sudo wrapper when that is installed.
+func WithDeployHelper(h rt.DeployHelper) Option {
+	return func(o *options) { o.deployHelper = h }
 }
 
 // WithRouterHTTPClient replaces the HTTP client that router clients use to
@@ -363,9 +371,13 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	ready("connections", "count", len(a.Connections.List()))
 	ready("secrets", "dir", cfg.SecretsPath())
 
+	helper := o.deployHelper
+	if helper == nil {
+		helper = deployHelper{client: deployhelper.Client{Runner: o.runner}, wrapper: deployhelper.WrapperPath, workDir: workDir}
+	}
 	a.Runtimes = rt.NewRegistry(o.runner, rt.Options{
 		Systemctl: cfg.Systemctl, Privilege: cfg.Privilege(), Docker: cfg.Docker,
-		StatusTimeout: cfg.RuntimeStatusTimeout, ActionTimeout: cfg.RuntimeActionTimeout,
+		StatusTimeout: cfg.RuntimeStatusTimeout, ActionTimeout: cfg.RuntimeActionTimeout, Deploy: helper,
 	})
 	a.Catalog, err = catalog.New(catalog.Config{
 		Gate: a.Maintenance, DB: a.DB, Audit: a.Audit, Resources: a.Resources, Bus: a.Bus, Clock: clk,
@@ -378,6 +390,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Manager, err = catalog.NewManager(catalog.ManagerConfig{
 		Catalog: a.Catalog, Runtimes: a.Runtimes, Runner: o.runner, Locker: lockAdapter{m: a.Locks},
 		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git, WorkDir: workDir, Monitor: a.Monitor,
+		Deploy: helper,
 	})
 	if err != nil {
 		return nil, err

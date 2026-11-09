@@ -22,6 +22,7 @@ import (
 	"github.com/ACaccel/lcm/internal/engine/enginetest"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/machine"
+	rt "github.com/ACaccel/lcm/internal/runtime"
 	"github.com/ACaccel/lcm/internal/trigger"
 )
 
@@ -55,6 +56,7 @@ type testOpts struct {
 	machineObserver machine.Observer
 	machinePower    machine.PowerBackend
 	hostStatus      api.HostStatusFunc
+	deployHelper    rt.DeployHelper
 }
 
 func newHarness(t *testing.T, mod ...func(*testOpts)) *harness {
@@ -84,6 +86,7 @@ func (h *harness) open(o testOpts) *app.App {
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(h.ctx, cfg,
 		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower), app.WithHostStatus(o.hostStatus),
+		app.WithDeployHelper(o.deployHelper),
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client),
 		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git), app.WithConnectionsTrust(trustTestFile))
 	if err != nil {
