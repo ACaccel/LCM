@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/ACaccel/lcm/internal/hostsetup"
@@ -138,12 +139,16 @@ func (a *app) hostStatus(fs *flag.FlagSet, args []string) error {
 	for _, c := range components {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\n", c.Name, c.State)
 		for _, f := range c.Files {
-			detail := "embedded " + short(f.Embedded)
+			var parts []string
 			if f.Installed != "" {
-				detail = "installed " + short(f.Installed) + ", " + detail
+				parts = append(parts, "installed "+short(f.Installed))
 			}
+			if f.Embedded != "" {
+				parts = append(parts, "embedded "+short(f.Embedded))
+			}
+			detail := strings.Join(parts, ", ")
 			if f.Detail != "" {
-				detail += " (" + f.Detail + ")"
+				detail = strings.TrimSpace(detail + " (" + f.Detail + ")")
 			}
 			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", f.Path, f.State, detail)
 		}

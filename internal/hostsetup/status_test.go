@@ -47,9 +47,20 @@ func TestStatus(t *testing.T) {
 	if w := th.fs.writes(); len(w) > 0 {
 		t.Fatalf("status wrote %v", w)
 	}
-	if f := got[ComponentMachinePower].Files[1]; f.Path != PowerHelper || f.Installed != sha(exeData) || f.Embedded != sha(exeData) {
+	if f := got[ComponentMachinePower].Files[1]; f.Path != PowerHelper || f.State != StateUpToDate || f.Installed != sha(exeData) || f.Embedded != "" || f.Detail != "pinned" {
 		t.Errorf("machine helper = %+v", f)
 	}
+	// A self-deploy changes the running binary, not the pin.
+	th.fs.file(testExe, "a newer self-deployed build", 0o755, aliceUID, aliceUID)
+	th.host.Executable = "/nonexistent"
+	if c := statusOf(t, th)[ComponentMachinePower]; c.State != StateUpToDate {
+		t.Errorf("machine power after a new build: %+v", c)
+	}
+	th.fs.get(PowerHelper).mode = 0o775
+	if f := statusOf(t, th)[ComponentMachinePower].Files[1]; f.State != StateOutdated || f.Detail != "mode 0775, want 0755" {
+		t.Errorf("writable pin: %+v", f)
+	}
+	th.fs.get(PowerHelper).mode = 0o755
 
 	th.fs.file(SelfInstall, "old", 0o755, 0, 0)
 	th.fs.get(Unit).mode = 0o664
