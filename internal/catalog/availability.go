@@ -1,8 +1,10 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
@@ -38,6 +40,9 @@ type Availability struct {
 	Allowed bool
 	// Reason is one of the Reason constants; empty when allowed.
 	Reason string
+	// Message says more about Reason when its cause varies (why the deploy
+	// helper is unavailable); nil otherwise.
+	Message *message.Message
 }
 
 // AvailableActions reports for every action whether it can start on rec,
@@ -49,6 +54,7 @@ func AvailableActions(rec *Record, helper error) []Availability {
 	out := make([]Availability, 0, len(Actions))
 	for _, a := range Actions {
 		reason := ""
+		var msg *message.Message
 		switch {
 		case rec.Phase != resource.PhaseManaged:
 			reason = ReasonNotManaged
@@ -57,13 +63,35 @@ func AvailableActions(rec *Record, helper error) []Availability {
 		case checkRuntime(a, rec.Runtime()) != nil:
 			reason = ReasonUnsupported
 		case checkHelper(a, rec.Runtime(), helper) != nil:
-			reason = ReasonHelperUnavailable
+			reason, msg = ReasonHelperUnavailable, helperMessage(helper)
 		case !CanAct(a, rec.State):
 			reason = ReasonInvalidState
 		}
-		out = append(out, Availability{Action: a, Allowed: reason == "", Reason: reason})
+		out = append(out, Availability{Action: a, Allowed: reason == "", Reason: reason, Message: msg})
 	}
 	return out
+}
+
+// helperMessage is the message naming why the deploy helper cannot be
+// called.
+func helperMessage(ready error) *message.Message {
+	var ue *rt.UnavailableError
+	if !errors.As(ready, &ue) {
+		m := message.New("action.helperNotInstalled", ready.Error())
+		return &m
+	}
+	code := "action.helperNotInstalled"
+	switch ue.Cause {
+	case rt.CauseUntrusted:
+		code = "action.helperUntrusted"
+	case rt.CauseWorkDir:
+		code = "action.helperWorkDir"
+	}
+	m := message.New(code, ue.Error())
+	for k, v := range ue.Params {
+		m.Params[k] = v
+	}
+	return &m
 }
 
 func configured(action string, cfg *model.ServiceConfig) bool {

@@ -3,6 +3,8 @@ package resource
 import (
 	"context"
 	"time"
+
+	"github.com/ACaccel/lcm/internal/message"
 )
 
 // Type is the runtime side of one resource type: its status and actions.
@@ -72,7 +74,10 @@ type Action struct {
 	Available bool
 	// Reason explains why the action is not available.
 	Reason string
-	Risk   string
+	// ReasonMessage replaces the message derived from Reason, for a reason
+	// whose cause varies; nil derives it from Reason.
+	ReasonMessage *message.Message
+	Risk          string
 	// Policy reports whether policies may run the action.
 	Policy bool
 	Kind   string

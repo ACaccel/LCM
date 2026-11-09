@@ -135,7 +135,8 @@ type resourceActionDTO struct {
 	// Reason explains why the action is not available; empty when it is.
 	Reason string `json:"reason"`
 	// ReasonMessage is Reason with a code for translation; service reasons
-	// are codes themselves and carry none.
+	// are codes themselves and carry none, except helperUnavailable, which
+	// names the cause.
 	ReasonMessage message.Message `json:"reasonMessage"`
 	Risk          string          `json:"risk"`
 	Policy        bool            `json:"policy"`
@@ -145,8 +146,12 @@ type resourceActionDTO struct {
 func toActionDTOs(actions []resource.Action) []resourceActionDTO {
 	out := make([]resourceActionDTO, 0, len(actions))
 	for _, a := range actions {
+		m := resource.ReasonMessage(a.Reason)
+		if a.ReasonMessage != nil {
+			m = *a.ReasonMessage
+		}
 		out = append(out, resourceActionDTO{
-			Name: a.Name, Available: a.Available, Reason: a.Reason, ReasonMessage: resource.ReasonMessage(a.Reason),
+			Name: a.Name, Available: a.Available, Reason: a.Reason, ReasonMessage: m,
 			Risk: a.Risk, Policy: a.Policy, Kind: a.Kind,
 		})
 	}

@@ -74,7 +74,7 @@ spec:
 
 The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused, and the managed fields are refused for every other adapter. The helper checks every request again and refuses what the host does not grant; its message is shown as the error of the action.
 
-**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy` and `rollback` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; `backup` and jobs are unaffected. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
+**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy` and `rollback` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; `backup` and jobs are unaffected. The reason message names the cause (wrapper missing, wrapper not a root-owned file only root can write, or another data directory) and the console shows it. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
 
 ## Source
 

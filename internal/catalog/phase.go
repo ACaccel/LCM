@@ -216,7 +216,7 @@ func (t serviceType) Actions(ctx context.Context, rec resource.Record) []resourc
 			reason = ReasonBusy
 		}
 		out = append(out, resource.Action{
-			Name: a.Action, Available: reason == "", Reason: reason,
+			Name: a.Action, Available: reason == "", Reason: reason, ReasonMessage: a.Message,
 			Risk: actionRisks[a.Action], Policy: true, Kind: resource.KindAction,
 		})
 	}

@@ -31,18 +31,21 @@ func (h deployHelper) Call(ctx context.Context, req deployhelper.Request) (deplo
 func (h deployHelper) Ready() error {
 	info, err := os.Lstat(h.wrapper)
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w (%s is missing)", rt.ErrHelperUnavailable, h.wrapper)
+		return &rt.UnavailableError{Cause: rt.CauseNotInstalled, Params: map[string]string{"path": h.wrapper},
+			Detail: h.wrapper + " is missing"}
 	}
 	if err != nil {
-		return fmt.Errorf("%w (%w)", rt.ErrHelperUnavailable, err)
+		return &rt.UnavailableError{Cause: rt.CauseUntrusted, Params: map[string]string{"path": h.wrapper},
+			Detail: fmt.Sprintf("%s cannot be inspected: %v", h.wrapper, err)}
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Uid != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%w (%s is not a root-owned file that only root can write)", rt.ErrHelperUnavailable, h.wrapper)
+		return &rt.UnavailableError{Cause: rt.CauseUntrusted, Params: map[string]string{"path": h.wrapper},
+			Detail: h.wrapper + " is not a root-owned file that only root can write"}
 	}
 	if h.workDir != hostsetup.WorkDir {
-		return fmt.Errorf("%w (the helper builds from %s, but this server's build directory is %s)",
-			rt.ErrHelperUnavailable, hostsetup.WorkDir, h.workDir)
+		return &rt.UnavailableError{Cause: rt.CauseWorkDir, Params: map[string]string{"expected": hostsetup.WorkDir, "actual": h.workDir},
+			Detail: fmt.Sprintf("the helper builds from %s, but this server's build directory is %s", hostsetup.WorkDir, h.workDir)}
 	}
 	return nil
 }

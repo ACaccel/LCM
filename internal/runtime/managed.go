@@ -25,6 +25,40 @@ type DeployHelper interface {
 // service while the deploy helper is not installed.
 var ErrHelperUnavailable = errors.New("the deploy helper is not installed on this host; enable components.deploy in /etc/lcm/host.json and run sudo lcm host apply")
 
+// Why the deploy helper cannot be called, as the Cause of an
+// UnavailableError.
+const (
+	// CauseNotInstalled: the sudo wrapper does not exist.
+	CauseNotInstalled = "notInstalled"
+	// CauseUntrusted: the wrapper is not a root-owned file only root can
+	// write, or cannot be inspected.
+	CauseUntrusted = "untrusted"
+	// CauseWorkDir: LCM's build directory is not the one the helper builds
+	// from.
+	CauseWorkDir = "workDir"
+)
+
+// UnavailableError says why the deploy helper cannot be called. It matches
+// ErrHelperUnavailable.
+type UnavailableError struct {
+	// Cause is one of the Cause constants.
+	Cause string
+	// Params are the paths the cause names, by name, for translation.
+	Params map[string]string
+	// Detail is the English explanation.
+	Detail string
+}
+
+func (e *UnavailableError) Error() string {
+	if e.Cause == CauseNotInstalled {
+		return fmt.Sprintf("%s (%s)", ErrHelperUnavailable, e.Detail)
+	}
+	return "the deploy helper cannot be used on this host: " + e.Detail
+}
+
+// Is makes errors.Is(err, ErrHelperUnavailable) true.
+func (e *UnavailableError) Is(target error) bool { return target == ErrHelperUnavailable }
+
 // HelperError is a helper operation that was refused, that failed, or whose
 // outcome is unknown.
 type HelperError struct {

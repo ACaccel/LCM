@@ -202,10 +202,34 @@ func TestManagedServiceWithoutHelper(t *testing.T) {
 	srv := httptest.NewServer(h.app.Handler())
 	defer srv.Close()
 
-	r := actionReasons(apiCall(t, h, srv, "GET", "/api/v1/resources/web"))
+	body := apiCall(t, h, srv, "GET", "/api/v1/resources/web")
+	r := actionReasons(body)
 	for _, a := range []string{"start", "stop", "deploy", "rollback"} {
 		if r[a] != catalog.ReasonHelperUnavailable {
 			t.Fatalf("reasons = %v", r)
+		}
+	}
+	// The reason names its cause: a host without the wrapper (a developer's
+	// machine) or, where it is installed, the harness's build directory
+	// differing from the one the helper builds from.
+	for _, a := range body["actions"].([]any) {
+		m := a.(map[string]any)
+		if m["name"] != "deploy" {
+			continue
+		}
+		msg := m["reasonMessage"].(map[string]any)
+		params := msg["params"].(map[string]any)
+		switch msg["code"] {
+		case "action.helperNotInstalled":
+			if params["path"] != deployhelper.WrapperPath {
+				t.Fatalf("reasonMessage = %v", msg)
+			}
+		case "action.helperWorkDir":
+			if params["expected"] != hostsetup.WorkDir || params["actual"] == "" {
+				t.Fatalf("reasonMessage = %v", msg)
+			}
+		default:
+			t.Fatalf("reasonMessage = %v", msg)
 		}
 	}
 	_, err := h.app.Manager.Deploy(h.ctx, "web", catalog.ActionOptions{})

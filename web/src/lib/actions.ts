@@ -14,7 +14,7 @@ export function reasonText(a: Pick<ResourceAction, "reason" | "reasonMessage">, 
     case "notConfigured":
       return s.action.unavailable.notConfigured;
     case "helperUnavailable":
-      return s.action.unavailable.helperUnavailable;
+      return a.reasonMessage.code ? translate(a.reasonMessage) : s.action.unavailable.helperUnavailable;
     case "notManaged":
       return s.action.unavailable.notManaged;
     case "busy":

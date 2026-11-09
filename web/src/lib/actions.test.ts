@@ -12,6 +12,13 @@ describe("reasonText", () => {
     expect(reasonText({ ...base, reason: "helperUnavailable" }, "running")).toContain("sudo lcm host apply");
   });
 
+  it("names why the deploy helper is unavailable", () => {
+    const m = (code: string, params: Record<string, string>) => ({ reason: "helperUnavailable", reasonMessage: message(code, "english", params) });
+    expect(reasonText(m("action.helperNotInstalled", { path: "/w" }), "running")).toContain("components.deploy");
+    expect(reasonText(m("action.helperUntrusted", { path: "/w" }), "running")).toContain("/w");
+    expect(reasonText(m("action.helperWorkDir", { expected: "/var/lib/lcm/work", actual: "/tmp/w" }), "running")).toContain("/tmp/w");
+  });
+
   it("translates the coded reasons of machines and routers", () => {
     const text = "router is not managed";
     expect(reasonText({ reason: text, reasonMessage: message("action.notManaged", text, { type: "router" }) }, "unknown")).toBe("路由器不在納管中");

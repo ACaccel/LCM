@@ -558,3 +558,42 @@ func TestManagedInterruptedDeployment(t *testing.T) {
 		t.Fatalf("deployment = %+v", deps[0])
 	}
 }
+
+// TestHelperUnavailableNamesItsCause: the message of a helperUnavailable
+// reason says which of the helper's checks failed.
+func TestHelperUnavailableNamesItsCause(t *testing.T) {
+	e, _, _ := managedEnv(t)
+	rec, err := e.cat.Get(context.Background(), "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		ready  error
+		code   string
+		params map[string]string
+	}{
+		{rt.ErrHelperUnavailable, "action.helperNotInstalled", nil},
+		{&rt.UnavailableError{Cause: rt.CauseNotInstalled, Params: map[string]string{"path": "/w"}, Detail: "/w is missing"}, "action.helperNotInstalled", map[string]string{"path": "/w"}},
+		{&rt.UnavailableError{Cause: rt.CauseUntrusted, Params: map[string]string{"path": "/w"}, Detail: "/w is writable"}, "action.helperUntrusted", map[string]string{"path": "/w"}},
+		{&rt.UnavailableError{Cause: rt.CauseWorkDir, Params: map[string]string{"expected": "/a", "actual": "/b"}, Detail: "elsewhere"}, "action.helperWorkDir", map[string]string{"expected": "/a", "actual": "/b"}},
+	}
+	for _, c := range cases {
+		var got *catalog.Availability
+		for _, a := range catalog.AvailableActions(rec, c.ready) {
+			if a.Action == catalog.ActionDeploy {
+				got = &a
+			}
+		}
+		if got == nil || got.Reason != catalog.ReasonHelperUnavailable || got.Message == nil || got.Message.Code != c.code {
+			t.Fatalf("%v: %+v", c.ready, got)
+		}
+		for k, v := range c.params {
+			if got.Message.Params[k] != v {
+				t.Errorf("%v: params = %v", c.ready, got.Message.Params)
+			}
+		}
+		if !errors.Is(c.ready, rt.ErrHelperUnavailable) {
+			t.Errorf("%v does not match ErrHelperUnavailable", c.ready)
+		}
+	}
+}

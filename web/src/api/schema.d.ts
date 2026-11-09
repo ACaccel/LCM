@@ -3384,7 +3384,7 @@ export interface components {
             available: boolean;
             /** @description Why the action is unavailable now; empty when available. Services use the codes notConfigured, unsupported, helperUnavailable (a managed service on a host without the deploy helper), invalidState, notManaged or busy, and the shared text reasons of every type otherwise (`release Git ownership first` when a config source owns a service to unmanage). */
             reason: string;
-            /** @description `reason` with a code for translation (`action.*`, `capability.*`); the services' own reason codes have none. */
+            /** @description `reason` with a code for translation (`action.*`, `capability.*`); the services' own reason codes have none, except `helperUnavailable`, whose message code names the cause (`action.helperNotInstalled`, `action.helperUntrusted`, `action.helperWorkDir`). */
             reasonMessage: components["schemas"]["Message"];
             /** @enum {string} */
             risk: "read" | "reversible" | "disruptive" | "destructive";
