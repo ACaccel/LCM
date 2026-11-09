@@ -602,6 +602,7 @@ func newTestHost(t *testing.T) *testHost {
 	th := &testHost{t: t, fs: m, r: r, clock: clk}
 	th.host = Host{
 		FS: m, Runner: r, Clock: clk, Privileged: true, Executable: testExe,
+		OpenExecutable: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(exeData)), nil },
 		Health: func(context.Context) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()

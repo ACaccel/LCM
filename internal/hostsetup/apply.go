@@ -526,12 +526,19 @@ func (a *applier) preflightStage(ctx context.Context) error {
 	if err := fsys.Chmod(stage, 0o755); err != nil {
 		return err
 	}
-	exe, err := FileContent(fsys, a.h.Executable)
+	if a.h.OpenExecutable == nil {
+		return errors.New("the running executable cannot be read")
+	}
+	exe, err := a.h.OpenExecutable()
 	if err != nil {
 		return fmt.Errorf("read the running executable: %w", err)
 	}
 	bin := stage + "/lcm"
-	if err := a.writeContent(bin, exe, 0o755, 0, 0); err != nil {
+	err = fsys.WriteFile(bin, exe, 0o755, 0, 0)
+	if cerr := exe.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
 	if a.exe, err = FileContent(fsys, bin); err != nil {

@@ -2,6 +2,8 @@ package hostsetup
 
 import (
 	"context"
+	"errors"
+	"io"
 	"io/fs"
 	"strings"
 	"testing"
@@ -681,5 +683,26 @@ func TestEnvFileOfAnotherOwnerNeedsReview(t *testing.T) {
 	}
 	if n := th.fs.get(EnvFile); n.uid != aliceUID {
 		t.Fatal("apply took the file over")
+	}
+}
+
+func TestTheRunningExecutableIsInstalled(t *testing.T) {
+	th := newTestHost(t)
+	// The operator's build is replaced after apply started; apply installs
+	// what runs, not what the path names now.
+	th.fs.file(testExe, "a different build", 0o755, aliceUID, aliceUID)
+	th.converge()
+	if got := th.fs.content(Binary); got != exeData {
+		t.Fatalf("installed %q", got)
+	}
+
+	th = newTestHost(t)
+	th.host.OpenExecutable = func() (io.ReadCloser, error) { return nil, errors.New("no /proc") }
+	th.fs.resetOps()
+	if _, _, err := th.apply(Options{}); err == nil || !strings.Contains(err.Error(), "read the running executable: no /proc") {
+		t.Fatalf("err = %v", err)
+	}
+	if w := th.fs.writes(); len(w) > 0 {
+		t.Fatalf("wrote %v", w)
 	}
 }

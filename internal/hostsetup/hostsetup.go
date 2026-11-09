@@ -15,6 +15,7 @@ package hostsetup
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -33,9 +34,13 @@ type Host struct {
 	// Privileged reports that the process may change the host: it runs as
 	// root, or the host is a test host.
 	Privileged bool
-	// Executable is the FS path of the running lcm binary, the one apply
-	// installs.
+	// Executable is the path of the running lcm binary, which decides
+	// whether it may run as root.
 	Executable string
+	// OpenExecutable opens the content of the running binary, the one
+	// apply installs. It is not read by path: the file there may have
+	// changed since the program started.
+	OpenExecutable func() (io.ReadCloser, error)
 }
 
 // OSHost returns the real host.
@@ -46,8 +51,18 @@ func OSHost() (Host, error) {
 	}
 	return Host{
 		FS: OS{}, Runner: OSRunner{}, Clock: clock.Real(), Health: httpHealth,
-		Privileged: os.Geteuid() == 0, Executable: exe,
+		Privileged: os.Geteuid() == 0, Executable: exe, OpenExecutable: openSelf,
 	}, nil
+}
+
+// openSelf opens the running program's own file through the kernel, which
+// keeps it even if the path it was started from now names another file.
+func openSelf() (io.ReadCloser, error) {
+	f, err := os.Open("/proc/self/exe")
+	if err != nil {
+		return nil, fmt.Errorf("open /proc/self/exe (is /proc mounted?): %w", err)
+	}
+	return f, nil
 }
 
 func httpHealth(ctx context.Context) error {
