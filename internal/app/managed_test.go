@@ -27,12 +27,13 @@ type fakeDeployHelper struct {
 	mu       sync.Mutex
 	n        int
 	commits  map[string]string
+	runtimes map[string][]string
 	releases []deployhelper.Release
 	current  string
 }
 
 func newFakeDeployHelper() *fakeDeployHelper {
-	f := &fakeDeployHelper{commits: map[string]string{}}
+	f := &fakeDeployHelper{commits: map[string]string{}, runtimes: map[string][]string{}}
 	f.Handle = f.handle
 	return f
 }
@@ -50,10 +51,11 @@ func (f *fakeDeployHelper) handle(req deployhelper.Request) (deployhelper.Respon
 	id := fmt.Sprintf("20261101T1200%02dZ-%08x", f.n, f.n)
 	switch req.Op {
 	case deployhelper.OpBuild:
-		f.commits[id] = req.Commit
+		f.commits[id], f.runtimes[id] = req.Commit, req.Runtimes
 		resp.Build = &deployhelper.BuildResult{BuildID: id, Commit: req.Commit}
 	case deployhelper.OpInstall:
-		m := deployhelper.Manifest{Version: 1, Service: req.Service, ReleaseID: id, BuildID: req.BuildID, Commit: f.commits[req.BuildID]}
+		m := deployhelper.Manifest{Version: 1, Service: req.Service, ReleaseID: id, BuildID: req.BuildID, Commit: f.commits[req.BuildID],
+			Artifact: req.Artifact, Runtimes: f.runtimes[req.BuildID]}
 		f.releases = append([]deployhelper.Release{{ReleaseID: id, Manifest: &m}}, f.releases...)
 		resp.Install = &deployhelper.InstallResult{ReleaseID: id, Manifest: m}
 	case deployhelper.OpActivate:
