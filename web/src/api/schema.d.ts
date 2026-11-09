@@ -848,6 +848,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/host/components": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Host components compared with this build
+         * @description Compares the root-owned files that `lcm host apply` installs (`core`,
+         *     `machine-power`, `security-host`) with the versions embedded in the running
+         *     binary. The server only reads them as its own unprivileged account: files it
+         *     cannot read are `unknown`, and nothing is ever changed through the API. An
+         *     administrator brings an `outdated` or `missing` component up to date with
+         *     `sudo bin/lcm host apply` from a reviewed build. The pinned machine helper has
+         *     no embedded version and is compared only by owner and mode. The answer is
+         *     cached for 30 seconds. An empty list means the host cannot be inspected.
+         */
+        get: operations["listHostComponents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/policies": {
         parameters: {
             query?: never;
@@ -3743,6 +3770,37 @@ export interface components {
             /** @description Managed and retired resources whose document names the connection. */
             resources: string[];
         };
+        /**
+         * @description `up_to_date`: every file matches. `outdated`: a file differs in content, owner or
+         *     mode. `missing`: only some files are installed. `not_installed`: none is, which is
+         *     normal for an optional component. `unknown`: a file is not readable by the server.
+         * @enum {string}
+         */
+        HostComponentState: "up_to_date" | "outdated" | "missing" | "not_installed" | "unknown";
+        HostFile: {
+            path: string;
+            state: components["schemas"]["HostComponentState"];
+            /** @description First 12 hex characters of the installed file's SHA-256; absent when it is missing or unreadable. */
+            installed?: string;
+            /** @description First 12 hex characters of the SHA-256 this build would install; absent for a pinned file. */
+            embedded?: string;
+            /** @description English reason for an `outdated` or `unknown` file, such as the unexpected mode. */
+            detail?: string;
+        };
+        HostComponent: {
+            /** @enum {string} */
+            name: "core" | "machine-power" | "security-host";
+            state: components["schemas"]["HostComponentState"];
+            files: components["schemas"]["HostFile"][];
+        };
+        HostComponentList: {
+            items: components["schemas"]["HostComponent"][];
+            /**
+             * Format: date-time
+             * @description When the files were read.
+             */
+            checkedAt: string;
+        };
         /** @description Payload of `resource` events. */
         ResourceChange: {
             id: string;
@@ -5360,6 +5418,28 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listHostComponents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Components in a fixed order. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostComponentList"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };

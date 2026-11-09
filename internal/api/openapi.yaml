@@ -1284,6 +1284,28 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
+  /host/components:
+    get:
+      tags: [Resources]
+      operationId: listHostComponents
+      summary: Host components compared with this build
+      description: |
+        Compares the root-owned files that `lcm host apply` installs (`core`,
+        `machine-power`, `security-host`) with the versions embedded in the running
+        binary. The server only reads them as its own unprivileged account: files it
+        cannot read are `unknown`, and nothing is ever changed through the API. An
+        administrator brings an `outdated` or `missing` component up to date with
+        `sudo bin/lcm host apply` from a reviewed build. The pinned machine helper has
+        no embedded version and is compared only by owner and mode. The answer is
+        cached for 30 seconds. An empty list means the host cannot be inspected.
+      responses:
+        "200":
+          description: Components in a fixed order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HostComponentList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /policies:
     get:
@@ -6048,6 +6070,51 @@ components:
           type: array
           description: Managed and retired resources whose document names the connection.
           items: { type: string }
+    HostComponentState:
+      type: string
+      description: |
+        `up_to_date`: every file matches. `outdated`: a file differs in content, owner or
+        mode. `missing`: only some files are installed. `not_installed`: none is, which is
+        normal for an optional component. `unknown`: a file is not readable by the server.
+      enum: [up_to_date, outdated, missing, not_installed, unknown]
+    HostFile:
+      type: object
+      additionalProperties: false
+      required: [path, state]
+      properties:
+        path: { type: string }
+        state: { $ref: "#/components/schemas/HostComponentState" }
+        installed:
+          type: string
+          description: First 12 hex characters of the installed file's SHA-256; absent when it is missing or unreadable.
+        embedded:
+          type: string
+          description: First 12 hex characters of the SHA-256 this build would install; absent for a pinned file.
+        detail:
+          type: string
+          description: English reason for an `outdated` or `unknown` file, such as the unexpected mode.
+    HostComponent:
+      type: object
+      additionalProperties: false
+      required: [name, state, files]
+      properties:
+        name: { type: string, enum: [core, machine-power, security-host] }
+        state: { $ref: "#/components/schemas/HostComponentState" }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/HostFile" }
+    HostComponentList:
+      type: object
+      additionalProperties: false
+      required: [items, checkedAt]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/HostComponent" }
+        checkedAt:
+          type: string
+          format: date-time
+          description: When the files were read.
     ResourceChange:
       type: object
       description: Payload of `resource` events.

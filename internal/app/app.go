@@ -28,6 +28,7 @@ import (
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/events"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/hostsetup"
 	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/machine"
 	"github.com/ACaccel/lcm/internal/machine/power"
@@ -73,6 +74,7 @@ type options struct {
 	client          *http.Client
 	git             trigger.GitRunner
 	connectionTrust connection.TrustCheck
+	hostStatus      api.HostStatusFunc
 
 	observers []engine.Observer
 }
@@ -114,6 +116,11 @@ func WithGitRunner(g trigger.GitRunner) Option { return func(o *options) { o.git
 func WithConnectionsTrust(c connection.TrustCheck) Option {
 	return func(o *options) { o.connectionTrust = c }
 }
+
+// WithHostStatus replaces the read of the root-owned host files behind the
+// host components endpoint, for tests that must not depend on the machine
+// they run on.
+func WithHostStatus(f api.HostStatusFunc) Option { return func(o *options) { o.hostStatus = f } }
 
 // WithObservers adds engine observers next to the ones the app installs.
 func WithObservers(obs ...engine.Observer) Option {
@@ -205,6 +212,12 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	}
 	if o.log == nil {
 		o.log = cfg.NewLogger(os.Stderr)
+	}
+	if o.hostStatus == nil {
+		// Only the filesystem is set: status reads files and runs nothing.
+		o.hostStatus = func() ([]hostsetup.ComponentStatus, error) {
+			return hostsetup.Status(hostsetup.Host{FS: hostsetup.OS{}})
+		}
 	}
 	if o.runner == nil {
 		o.runner = execx.New()
@@ -501,6 +514,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		TrustedProxies: proxies,
 		Machines:       a.Machines,
 		Connections:    a.Connections,
+		HostStatus:     o.hostStatus,
 		Resources:      a.Resources,
 		ResourceTypes:  resourceTypes,
 		Security:       a.Security,

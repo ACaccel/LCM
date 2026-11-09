@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	"github.com/ACaccel/lcm/internal/api"
 	"github.com/ACaccel/lcm/internal/app"
 	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
@@ -53,6 +54,7 @@ type testOpts struct {
 	configure       func(*config.Config)
 	machineObserver machine.Observer
 	machinePower    machine.PowerBackend
+	hostStatus      api.HostStatusFunc
 }
 
 func newHarness(t *testing.T, mod ...func(*testOpts)) *harness {
@@ -81,7 +83,7 @@ func (h *harness) open(o testOpts) *app.App {
 	// Keep-alives would leave connection goroutines behind for goleak.
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(h.ctx, cfg,
-		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower),
+		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower), app.WithHostStatus(o.hostStatus),
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client),
 		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git), app.WithConnectionsTrust(trustTestFile))
 	if err != nil {

@@ -85,6 +85,7 @@ func (s *Server) routes() http.Handler {
 	handle("GET", v1+"/resources/{resource}/operations/{id}", admin(s.handleGetOperation))
 	handle("POST", v1+"/resources/{resource}/operations/{id}/resolve", admin(s.handleResolveOperation))
 	handle("GET", v1+"/connections", admin(s.handleListConnections))
+	handle("GET", v1+"/host/components", admin(s.handleHostComponents))
 
 	// Security incident state is admin-only; collectors can only submit.
 	handle("POST", v1+"/hooks/security", ingest(s.handleSecurityHook))

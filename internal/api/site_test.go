@@ -75,6 +75,11 @@ func newSite(t *testing.T, configure ...func(*config.Config)) *site {
 // newSiteBeforeStart returns a site whose background loops have not
 // started, like a server that is still recovering.
 func newSiteBeforeStart(t *testing.T, configure ...func(*config.Config)) *site {
+	return newSiteWith(t, nil, configure...)
+}
+
+// newSiteWith is newSiteBeforeStart with extra app options.
+func newSiteWith(t *testing.T, extra []app.Option, configure ...func(*config.Config)) *site {
 	t.Helper()
 	x := &site{
 		t: t, clk: clock.NewFake(epoch), runner: &execx.Fake{}, git: &fakeGit{heads: map[string]string{}},
@@ -88,11 +93,12 @@ func newSiteBeforeStart(t *testing.T, configure ...func(*config.Config)) *site {
 		c(&cfg)
 	}
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-	a, err := app.New(x.ctx, cfg,
+	opts := append([]app.Option{
 		app.WithClock(x.clk), app.WithRunner(x.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client), app.WithGitRunner(x.git),
 		// Test files belong to the test user, not root.
 		app.WithConnectionsTrust(func(string, os.FileInfo) error { return nil }),
-		app.WithLogger(slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelWarn}))))
+		app.WithLogger(slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelWarn})))}, extra...)
+	a, err := app.New(x.ctx, cfg, opts...)
 	if err != nil {
 		t.Fatalf("app.New: %v", err)
 	}

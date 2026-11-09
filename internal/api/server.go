@@ -46,11 +46,14 @@ type Deps struct {
 	// Connections are the host-configured connections, listed without
 	// addresses or secrets; nil is none.
 	Connections *connection.Set
-	DB          *store.DB
-	Auth        *auth.Service
-	Audit       *audit.Log
-	Logger      *slog.Logger
-	Version     string
+	// HostStatus compares the root-owned host files with the embedded ones
+	// without changing anything; nil reports no components.
+	HostStatus HostStatusFunc
+	DB         *store.DB
+	Auth       *auth.Service
+	Audit      *audit.Log
+	Logger     *slog.Logger
+	Version    string
 
 	// CookieSecure sets the Secure attribute on the session cookie.
 	CookieSecure bool
@@ -113,6 +116,8 @@ type Server struct {
 	securityHost *securityhost.Client
 	machines     *machine.Manager
 	connections  *connection.Set
+	hostStatus   HostStatusFunc
+	hostCache    hostStatusCache
 	db           *store.DB
 	auth         *auth.Service
 	audit        *audit.Log
@@ -158,6 +163,7 @@ func New(d Deps) *Server {
 	s := &Server{
 		machines:     d.Machines,
 		connections:  d.Connections,
+		hostStatus:   d.HostStatus,
 		security:     d.Security,
 		securityHost: d.SecurityHost,
 		db:           d.DB, auth: d.Auth, audit: d.Audit, log: d.Logger, version: d.Version,
