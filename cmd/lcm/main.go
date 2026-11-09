@@ -16,7 +16,6 @@ import (
 
 	"github.com/ACaccel/lcm/internal/buildinfo"
 	"github.com/ACaccel/lcm/internal/hostsetup"
-	"github.com/ACaccel/lcm/internal/store"
 )
 
 const usage = `Usage: lcm <command> [flags]
@@ -28,7 +27,7 @@ Commands:
   token list                  List API tokens
   token revoke <id>           Revoke an API token
   version                     Print version information
-  storage-schema              Print the supported storage version
+  storage-schema [--data-dir] Print the supported storage version (or the database's)
   convert -f <file|dir>       Print lcm/v1 documents converted to lcm/v2 (offline)
   host init --operator <user> Write the host configuration /etc/lcm/host.json (root)
   host apply [--check]        Install or converge LCM's host components (root)
@@ -117,15 +116,7 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 	cmd, rest := args[0], args[1:]
 	switch cmd {
 	case "storage-schema":
-		if len(rest) != 0 {
-			return usagef("storage-schema accepts no arguments")
-		}
-		v, err := store.SchemaVersion()
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(a.stdout, v)
-		return err
+		return a.storageSchema(ctx, rest)
 	case "serve":
 		return a.serve(ctx, rest)
 	case "convert":
