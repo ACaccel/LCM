@@ -31,7 +31,8 @@ func TestDeployConfig(t *testing.T) {
 		`"services":{"web":{"port":3200,"Port":3201}}`:                        `unknown key "services.web.Port"`,
 		`"services":{"web":{"port":3200},"web":{"port":3201}}`:                `duplicate key "services.web"`,
 		`"services":{"lcm":{"port":3200}}`:                                    `must not start with "lcm"`,
-		`"services":{"lcm-build":{"port":3200}}`:                              `must not start with "lcm"`,
+		`"services":{"lcmb-web":{"port":3200}}`:                               `must not start with "lcm"`,
+		`"services":{"abcdefghijklmnopqrstuvwxyz12":{"port":3200}}`:           `service names must match`,
 		`"services":{"Web":{"port":3200}}`:                                    `service names must match`,
 		`"services":{"web":{"port":80}}`:                                      "between 1024 and 65535",
 		`"services":{"web":{"port":7800}}`:                                    "is LCM's own",
@@ -84,7 +85,7 @@ func TestDeployComponentAndGrants(t *testing.T) {
 	}
 	for _, want := range []string{
 		"deploy:          would change: install /usr/local/libexec/lcm-deploy\n",
-		"deploy:          would change: create the system account lcm-build",
+		"service web:     would change: create the system account lcmb-web (home /var/lib/lcm-build/web, no login shell)",
 		"runtime node24:  would change: copy /home/alice/.local/node to /opt/lcm/runtimes/node24 (missing)",
 		"service web:     would change: create the system account web (home /var/lib/web, no login shell)",
 		"service web:     would change: create an empty /etc/web/env (root:web 0640)",
@@ -95,8 +96,9 @@ func TestDeployComponentAndGrants(t *testing.T) {
 	}
 
 	out = th.converge()
-	build, web := th.r.accounts[BuildAccount], th.r.accounts["web"]
-	if build.Home != BuildDir || build.Shell != "/usr/sbin/nologin" || web.Home != "/var/lib/web" {
+	build, web := th.r.accounts["lcmb-web"], th.r.accounts["web"]
+	if build.Home != "/var/lib/lcm-build/web" || build.Shell != "/usr/sbin/nologin" || build.GECOS != "LCM build web" ||
+		web.Home != "/var/lib/web" || web.GECOS != "LCM service web" {
 		t.Fatalf("accounts %+v %+v", build, web)
 	}
 	for _, f := range []struct {
@@ -121,7 +123,8 @@ func TestDeployComponentAndGrants(t *testing.T) {
 		perm     fs.FileMode
 		uid, gid int
 	}{
-		{BuildDir, 0o750, 0, build.GID}, {BuildCacheDir, 0o750, 0, build.GID}, {DeployLedger, 0o700, 0, 0},
+		{BuildDir, 0o755, 0, 0}, {BuildCacheDir, 0o755, 0, 0}, {DeployLedger, 0o700, 0, 0},
+		{"/var/lib/lcm-build/web", 0o750, 0, build.GID}, {"/var/cache/lcm-build/web", 0o750, build.UID, build.GID},
 		{RuntimesDir, 0o755, 0, 0}, {"/opt/web", 0o755, 0, 0}, {"/opt/web/releases", 0o755, 0, 0},
 		{"/var/lib/web", 0o750, web.UID, web.GID}, {"/etc/web", 0o750, 0, web.GID},
 	} {
@@ -171,15 +174,36 @@ func TestGrantProblemsNeedManualAction(t *testing.T) {
 		setup func(th *testHost)
 		want  string
 	}{
+		"account LCM did not create": {func(th *testHost) {
+			th.r.accounts["web"] = Account{Name: "web", UID: 120, GID: 120, Home: "/var/lib/web", Shell: "/usr/sbin/nologin"}
+		}, `account web exists and was not created by LCM (its comment is not "LCM service web")`},
 		"login account": {func(th *testHost) {
-			th.r.accounts["web"] = Account{Name: "web", UID: 1001, GID: 1001, Home: "/home/web", Shell: "/bin/bash"}
+			th.r.accounts["web"] = Account{Name: "web", UID: 1001, GID: 1001, GECOS: "LCM service web", Home: "/var/lib/web", Shell: "/bin/bash"}
 		}, "account web exists and is not a system account"},
 		"system account with a shell": {func(th *testHost) {
-			th.r.accounts["web"] = Account{Name: "web", UID: 120, GID: 120, Home: "/var/lib/web", Shell: "/bin/sh"}
+			th.r.accounts["web"] = Account{Name: "web", UID: 120, GID: 120, GECOS: "LCM service web", Home: "/var/lib/web", Shell: "/bin/sh"}
 		}, "account web exists with a login shell"},
 		"system account with another home": {func(th *testHost) {
-			th.r.accounts["web"] = Account{Name: "web", UID: 120, GID: 120, Home: "/var/www", Shell: "/usr/sbin/nologin"}
+			th.r.accounts["web"] = Account{Name: "web", UID: 120, GID: 120, GECOS: "LCM service web", Home: "/var/www", Shell: "/usr/sbin/nologin"}
 		}, "account web exists with home directory /var/www"},
+		"build account LCM did not create": {func(th *testHost) {
+			th.r.accounts["lcmb-web"] = Account{Name: "lcmb-web", UID: 121, GID: 121, Home: "/var/lib/lcm-build/web", Shell: "/usr/sbin/nologin"}
+		}, "account lcmb-web exists and was not created by LCM"},
+		"build directory without the account": {func(th *testHost) {
+			th.fs.dir("/var/cache/lcm-build/web", 0o750, 0, 0)
+		}, "/var/cache/lcm-build/web exists but the account lcmb-web does not"},
+		"drop-in": {func(th *testHost) {
+			th.fs.dir("/etc/systemd/system/web.service.d", 0o755, 0, 0)
+		}, "the drop-in directory /etc/systemd/system/web.service.d exists"},
+		"runtime control drop-in": {func(th *testHost) {
+			th.fs.dir("/etc/systemd/system.control/web.service.d", 0o755, 0, 0)
+		}, "the drop-in directory /etc/systemd/system.control/web.service.d exists"},
+		"generated unit": {func(th *testHost) {
+			th.fs.file("/run/systemd/generator/web.service", "[Service]\n", 0o644, 0, 0)
+		}, "the unit /run/systemd/generator/web.service exists"},
+		"transient unit": {func(th *testHost) {
+			th.fs.file("/run/systemd/transient/web.service", "[Service]\n", 0o644, 0, 0)
+		}, "the unit /run/systemd/transient/web.service exists"},
 		"directory without the account": {func(th *testHost) {
 			th.fs.dir("/etc/web", 0o755, 0, 0)
 		}, "/etc/web exists but the account web does not"},
@@ -235,10 +259,8 @@ func TestUntrustedDeploySourcesAreRefused(t *testing.T) {
 			th.cfg.Runtimes["node24"] = "/home/alice/rt"
 			th.writeConfig(th.cfg)
 		}, "runtimes.node24: link /home/alice/rt/lib -> ../../.. points outside"},
-		"build account with a shell": {func(th *testHost) {
-			th.r.accounts[BuildAccount] = Account{Name: BuildAccount, UID: 120, GID: 120, Home: BuildDir, Shell: "/bin/bash"}
-		}, "account lcm-build exists with a login shell"},
-		"ledger of another owner": {func(th *testHost) { th.fs.dir(DeployLedger, 0o700, 5, 5) }, "/var/lib/lcm-deploy is not owned by root"},
+		"build root of another owner": {func(th *testHost) { th.fs.dir(BuildDir, 0o755, 5, 5) }, "/var/lib/lcm-build is not owned by root"},
+		"ledger of another owner":     {func(th *testHost) { th.fs.dir(DeployLedger, 0o700, 5, 5) }, "/var/lib/lcm-deploy is not owned by root"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			th := deployHost(t)

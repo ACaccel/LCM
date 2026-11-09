@@ -233,6 +233,9 @@ type copier struct {
 	uid, gid int
 	// perm, when set, replaces copyPerm.
 	perm func(Info) fs.FileMode
+	// exclude, when set, leaves out the entries whose source path it
+	// accepts.
+	exclude func(rel string) bool
 	budget
 }
 
@@ -270,6 +273,9 @@ func (c *copier) dir(rel, dst string, want Info) error {
 			return err
 		}
 		r, d := path.Join(rel, name), path.Join(dst, name)
+		if c.exclude != nil && c.exclude(r) {
+			continue
+		}
 		li, err := c.src.Lstat(r)
 		if err != nil {
 			return err

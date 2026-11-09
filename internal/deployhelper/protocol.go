@@ -104,9 +104,9 @@
 //
 // build copies the lcm-owned checkout /var/lib/lcm/work/<service>, whose
 // HEAD (read from .git without running git as root) must be the commit,
-// into /var/lib/lcm-build/<service>/<buildId>/src owned by lcm-build, and
-// runs the command there with systemd-run as lcm-build in a sandbox (see
-// buildArgs). It keeps the last 3 builds of a service. install copies the
+// into /var/lib/lcm-build/<service>/<buildId>/src owned by the service's
+// own build account lcmb-<service>, and runs the command there with
+// systemd-run as that account in a sandbox (see buildArgs). It keeps the last 3 builds of a service. install copies the
 // artifact directory of a successful build to
 // /opt/<service>/releases/<releaseId>, root-owned, directories 0755 and
 // files 0644 or 0755, refusing links that leave it, and writes the

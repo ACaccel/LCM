@@ -229,14 +229,15 @@ func (h *Helper) perform(ctx context.Context, req Request, cfg hostsetup.Config,
 	case OpInstall:
 		return h.install(ctx, req)
 	case OpActivate:
-		return h.activate(ctx, req, g)
+		return h.activate(ctx, req, cfg, g)
 	}
 	return h.unitAction(ctx, req)
 }
 
 // account reads an account; with home set it must be the dedicated system
-// account that host setup creates, without a login shell.
-func (h *Helper) account(ctx context.Context, name, home string) (hostsetup.Account, error) {
+// account that host setup creates, with its comment and without a login
+// shell.
+func (h *Helper) account(ctx context.Context, name, home, comment string) (hostsetup.Account, error) {
 	acc, ok, err := h.Lookup(ctx, name)
 	if err != nil {
 		return acc, err
@@ -248,7 +249,7 @@ func (h *Helper) account(ctx context.Context, name, home string) (hostsetup.Acco
 		return acc, fmt.Errorf("account %s has user ID 0", name)
 	}
 	if home != "" {
-		if p := hostsetup.SystemAccountProblem(h.FS, acc, home); p != "" {
+		if p := hostsetup.SystemAccountProblem(h.FS, acc, home, comment); p != "" {
 			return acc, errors.New(p)
 		}
 	}

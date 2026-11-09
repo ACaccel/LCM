@@ -46,15 +46,18 @@ type buildRecord struct {
 	FinishedAt int64    `json:"finishedAt,omitempty"`
 }
 
-func serviceBuilds(service string) string { return hostsetup.BuildDir + "/" + service }
+func serviceBuilds(service string) string { return hostsetup.ServiceBuildDir(service) }
 
 // build copies the service's checkout into a new build directory owned by
-// lcm-build and runs the command there in a sandbox.
+// the service's build account and runs the command there in a sandbox.
 //
-// Layout: /var/lib/lcm-build and /var/lib/lcm-build/<service>/<buildId> are
-// root:lcm-build 0750, so the build account can never rename or replace
-// what root writes; src/ and home/ in a build directory and
-// /var/cache/lcm-build/<service> are the build account's.
+// Layout: /var/lib/lcm-build and /var/cache/lcm-build are root's;
+// /var/lib/lcm-build/<service> and each <buildId> in it are
+// root:lcmb-<service> 0750, so the build account can never rename or
+// replace what root writes; src/ and home/ in a build directory and
+// /var/cache/lcm-build/<service> belong to the build account alone. Every
+// service has its own build account, so no build can read or change
+// another service's builds, caches or inputs.
 func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g hostsetup.ServiceGrant) Response {
 	resp, svc := reply(req), req.Service
 	for _, rt := range req.Runtimes {
@@ -66,7 +69,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 		}
 	}
 	if len(g.Inputs) > 0 {
-		operator, err := h.account(ctx, cfg.Operator, "")
+		operator, err := h.account(ctx, cfg.Operator, "", "")
 		if err != nil {
 			return refuse(resp, CodeRefused, "operator: %v", err)
 		}
@@ -78,14 +81,14 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 	}
 	// The lcm account predates the deploy component; apply checks only its
 	// home directory, and so does the helper.
-	lcm, err := h.account(ctx, hostsetup.ServiceAccount, "")
+	lcm, err := h.account(ctx, hostsetup.ServiceAccount, "", "")
 	if err == nil && lcm.Home != hostsetup.DataDir {
 		err = fmt.Errorf("account lcm has home directory %s, not %s", lcm.Home, hostsetup.DataDir)
 	}
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
 	}
-	builder, err := h.account(ctx, hostsetup.BuildAccount, hostsetup.BuildDir)
+	builder, err := h.builder(ctx, svc)
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
 	}
@@ -96,17 +99,9 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 	if head != req.Commit {
 		return refuse(resp, CodeRefused, "the checkout %s is at %s, not %s", hostsetup.ServiceCheckout(svc), head, req.Commit)
 	}
-	for _, d := range []string{hostsetup.BuildDir, hostsetup.BuildCacheDir} {
-		if _, err := h.trustedPath(d, false); err != nil {
-			return refuse(resp, CodeRefused, "%v; run sudo bin/lcm host apply", err)
-		}
-	}
-	builds, cache := serviceBuilds(svc), hostsetup.BuildCacheDir+"/"+svc
-	if err := h.ensureDir(builds, 0o750, h.RootUID, builder.GID); err != nil {
-		return refuse(resp, CodeFailed, "%v", err)
-	}
-	if err := h.ensureDir(cache, 0o750, builder.UID, builder.GID); err != nil {
-		return refuse(resp, CodeFailed, "%v", err)
+	builds, cache := serviceBuilds(svc), hostsetup.ServiceCacheDir(svc)
+	if err := h.buildDirs(svc, builder); err != nil {
+		return refuse(resp, CodeRefused, "%v; run sudo bin/lcm host allow or host apply", err)
 	}
 	if len(g.Inputs) > 0 {
 		if err := h.ensureDir(inputsRoot, 0o755, h.RootUID, h.RootGID); err != nil {
@@ -156,7 +151,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 		return finish(refuse(resp, CodeFailed, "prepare the build: %v", err))
 	}
 	unit := "lcm-build-" + svc + "-" + id
-	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs)
+	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs, backupDir(cfg))
 	res, err := h.run(ctx, time.Duration(req.TimeoutSec)*time.Second+2*time.Minute, argv...)
 	resp.Log = sanitizeLog(res.Output)
 	if err != nil {
@@ -167,16 +162,20 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 }
 
 // buildArgs is the systemd-run command line of a build. The command runs
-// as lcm-build in a new service unit: everything is read-only except its
-// source tree, its home and its cache; /home, /root and /run/user are
-// hidden, and so are LCM's data, its configuration and the helper's
-// ledger; it gets no capabilities, no new privileges, a private /tmp and
-// /dev, a time limit and a memory limit. It has the network, to download
-// dependencies. Its environment is fixed: PATH (the runtimes' bin
-// directories first), HOME, LANG, the commit, the cache (also as the npm
-// and Go caches) and, with inputs, where they are mounted read-only. The command is run from a root-owned script file,
-// so that systemd never expands anything in it.
-func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, inputs map[string]string) []string {
+// as the service's build account in a new service unit: everything is
+// read-only except its source tree, its home and its cache; /home, /root and
+// /run/user are hidden, and so are LCM's data, its configuration, the
+// helper's ledgers and the backups; the build and cache roots are replaced
+// by empty read-only file systems with only this build's directories bound
+// back; other processes are invisible in /proc; it gets no capabilities, no
+// new privileges, a private /tmp and /dev, a time limit and a memory limit.
+// It has the network, to download dependencies, but not the local host,
+// where LCM's API and the services listen. Its environment is fixed: PATH
+// (the runtimes' bin directories first), HOME, LANG, the commit, the cache
+// (also as the npm and Go caches) and, with inputs, where they are mounted
+// read-only. The command is run from a root-owned script file, so that
+// systemd never expands anything in it.
+func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, inputs map[string]string, backup string) []string {
 	var paths []string
 	for _, rt := range req.Runtimes {
 		paths = append(paths, hostsetup.RuntimesDir+"/"+rt+"/bin")
@@ -197,8 +196,16 @@ func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, 
 		"--setenv=GOMODCACHE=" + cache + "/go-mod",
 		"--setenv=LCM_COMMIT=" + req.Commit,
 	}
-	props := sandbox("0022")
+	props := sandbox("0022", backup)
 	props = append(props,
+		"ProcSubset=pid",
+		"IPAddressDeny=localhost",
+		"TemporaryFileSystem="+hostsetup.BuildDir+":ro",
+		"TemporaryFileSystem="+hostsetup.BuildCacheDir+":ro",
+		"BindPaths="+dir+"/src",
+		"BindPaths="+dir+"/home",
+		"BindPaths="+cache,
+		"BindReadOnlyPaths="+dir+"/build.sh",
 		"ReadWritePaths="+dir+"/src",
 		"ReadWritePaths="+dir+"/home",
 		"ReadWritePaths="+cache,
@@ -223,12 +230,22 @@ func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, 
 // permissions.
 var hidden = []string{hostsetup.DataDir, hostsetup.EtcDir, hostsetup.DeployLedger, hostsetup.PowerLedger}
 
+// backupDir is the configured backup directory, or "".
+func backupDir(cfg hostsetup.Config) string {
+	if cfg.Backup == nil {
+		return ""
+	}
+	return cfg.Backup.Dir
+}
+
 // sandbox is the hardening that builds, migrations and service units
-// share.
-func sandbox(umask string) []string {
-	inaccessible := make([]string, len(hidden))
-	for i, p := range hidden {
-		inaccessible[i] = "-" + p
+// share; backup, when set, is hidden too.
+func sandbox(umask, backup string) []string {
+	var inaccessible []string
+	for _, p := range append(slices.Clone(hidden), backup) {
+		if p != "" {
+			inaccessible = append(inaccessible, "-"+p)
+		}
 	}
 	return []string{
 		"NoNewPrivileges=yes",
@@ -242,6 +259,7 @@ func sandbox(umask string) []string {
 		"ProtectControlGroups=yes",
 		"ProtectClock=yes",
 		"ProtectHostname=yes",
+		"ProtectProc=invisible",
 		"RestrictSUIDSGID=yes",
 		"RestrictRealtime=yes",
 		"LockPersonality=yes",
@@ -250,6 +268,34 @@ func sandbox(umask string) []string {
 		"UMask=" + umask,
 		"InaccessiblePaths=" + strings.Join(inaccessible, " "),
 	}
+}
+
+// builder reads the service's build account.
+func (h *Helper) builder(ctx context.Context, svc string) (hostsetup.Account, error) {
+	return h.account(ctx, hostsetup.BuildAccount(svc), hostsetup.ServiceBuildDir(svc), hostsetup.BuildComment(svc))
+}
+
+// buildDirs checks the service's build and cache directories that host
+// setup made: the builds root:<builder> and not writable by the group, the
+// cache the build account's alone.
+func (h *Helper) buildDirs(svc string, builder hostsetup.Account) error {
+	builds := serviceBuilds(svc)
+	info, err := h.trustedPath(builds, false)
+	if err != nil {
+		return err
+	}
+	if info.GID != builder.GID || info.Mode.Perm()&0o007 != 0 {
+		return fmt.Errorf("%s is not root:%s 0750", builds, builder.Name)
+	}
+	if _, err := h.trustedPath(hostsetup.BuildCacheDir, false); err != nil {
+		return err
+	}
+	cache := hostsetup.ServiceCacheDir(svc)
+	info, err = h.FS.Lstat(cache)
+	if err != nil || !info.IsDir() || info.IsLink() || info.UID != builder.UID || info.Mode.Perm()&0o007 != 0 {
+		return fmt.Errorf("%s is not a directory of %s alone", cache, builder.Name)
+	}
+	return nil
 }
 
 // stopUnit stops a transient unit that a command left behind when it did

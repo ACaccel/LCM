@@ -24,9 +24,10 @@ func releasePerm(info hostsetup.Info) fs.FileMode {
 }
 
 // install copies the artifact directory of a successful build into a new
-// root-owned release. The build tree belongs to lcm-build, whose build ran
-// third-party code, so the copy is confined to it, accepts only entries
-// that lcm-build owns and refuses links that leave the release.
+// root-owned release. The build tree belongs to the service's build
+// account, whose build ran third-party code, so the copy is confined to it,
+// accepts only entries that account owns and refuses links that leave the
+// release.
 func (h *Helper) install(ctx context.Context, req Request) Response {
 	resp, svc := reply(req), req.Service
 	dir := serviceBuilds(svc) + "/" + req.BuildID
@@ -42,7 +43,7 @@ func (h *Helper) install(ctx context.Context, req Request) Response {
 	case rec.State != StateSucceeded:
 		return refuse(resp, CodeRefused, "build %s did not succeed", req.BuildID)
 	}
-	builder, err := h.account(ctx, hostsetup.BuildAccount, hostsetup.BuildDir)
+	builder, err := h.builder(ctx, svc)
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
 	}

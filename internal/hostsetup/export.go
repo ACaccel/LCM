@@ -22,6 +22,9 @@ type CopyOptions struct {
 	Perm func(Info) fs.FileMode
 	// Verify runs on the finished copy before it replaces dst.
 	Verify func(dir string) error
+	// Exclude, when set, leaves out the entries (and everything below them)
+	// whose path relative to src it accepts.
+	Exclude func(rel string) bool
 }
 
 // CopyTree replaces dst with a copy of the directory rel of the tree src.
@@ -30,7 +33,7 @@ type CopyOptions struct {
 // is refused when one of its symbolic links leads outside it. Any failure
 // removes the partial copy and keeps dst.
 func CopyTree(fsys FS, src, rel, dst string, o CopyOptions) error {
-	return copySubtree(fsys, src, rel, dst, &copier{owners: o.Owners, uid: o.UID, gid: o.GID, perm: o.Perm}, o.Verify)
+	return copySubtree(fsys, src, rel, dst, &copier{owners: o.Owners, uid: o.UID, gid: o.GID, perm: o.Perm, exclude: o.Exclude}, o.Verify)
 }
 
 // HandOver gives the files and directories of a tree that only root can
@@ -85,8 +88,8 @@ func handOver(fsys FS, dir string, want Info, uid, gid int, b *budget) error {
 func Printable(s string, max int) string { return printable(s, max) }
 
 // SystemAccountProblem describes why acc cannot be the dedicated system
-// account with home directory home and no login shell that host setup
-// creates, or returns "".
-func SystemAccountProblem(fsys FS, acc Account, home string) string {
-	return systemAccountProblem(acc, home, uidMin(fsys))
+// account with home directory home, the comment and no login shell that
+// host setup creates, or returns "".
+func SystemAccountProblem(fsys FS, acc Account, home, comment string) string {
+	return systemAccountProblem(acc, home, comment, uidMin(fsys))
 }

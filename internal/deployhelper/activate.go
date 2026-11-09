@@ -24,16 +24,16 @@ func unitName(svc string) string { return svc + ".service" }
 
 // serviceSandbox is the hardening of a service's unit and migration: it
 // runs as its own account, can write only its data directory, and sees
-// neither LCM's data nor the build trees.
-func serviceSandbox(svc string) []string {
-	props := sandbox("0027")
+// neither LCM's data, the backups nor the build trees.
+func serviceSandbox(svc, backup string) []string {
+	props := sandbox("0027", backup)
 	props = append(props, "ReadWritePaths="+hostsetup.ServiceDataDir(svc))
 	return append(props, "InaccessiblePaths=-"+hostsetup.BuildDir+" -"+hostsetup.BuildCacheDir)
 }
 
 // renderUnit is the built-in unit template. Every value in it is checked
 // to need no quoting or escaping.
-func renderUnit(svc string, port int, execStart []string, rtBin string) string {
+func renderUnit(svc string, port int, execStart []string, rtBin, backup string) string {
 	lines := []string{
 		hostsetup.ServiceUnitMarker,
 		"[Unit]",
@@ -53,7 +53,7 @@ func renderUnit(svc string, port int, execStart []string, rtBin string) string {
 		lines = append(lines, "Environment=PATH="+rtBin+":"+systemPath)
 	}
 	lines = append(lines, "Restart=on-failure", "RestartSec=5")
-	lines = append(lines, serviceSandbox(svc)...)
+	lines = append(lines, serviceSandbox(svc, backup)...)
 	lines = append(lines, "", "[Install]", "WantedBy=multi-user.target")
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -61,7 +61,7 @@ func renderUnit(svc string, port int, execStart []string, rtBin string) string {
 // activate makes a release current and (re)starts the service with a unit
 // from the built-in template. The optional migration runs first, in the new
 // release; when it fails nothing is switched.
-func (h *Helper) activate(ctx context.Context, req Request, g hostsetup.ServiceGrant) Response {
+func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config, g hostsetup.ServiceGrant) Response {
 	resp, svc := reply(req), req.Service
 	releases := hostsetup.ServiceReleases(svc)
 	if _, err := h.trustedPath(releases, false); err != nil {
@@ -77,7 +77,7 @@ func (h *Helper) activate(ctx context.Context, req Request, g hostsetup.ServiceG
 	if _, err := h.trustedPath(relDir, false); err != nil || m.Service != svc || m.ReleaseID != req.ReleaseID {
 		return refuse(resp, CodeFailed, "release %s is incomplete or not this service's", req.ReleaseID)
 	}
-	acc, err := h.account(ctx, svc, hostsetup.ServiceDataDir(svc))
+	acc, err := h.account(ctx, svc, hostsetup.ServiceDataDir(svc), hostsetup.ServiceComment(svc))
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
 	}
@@ -110,14 +110,14 @@ func (h *Helper) activate(ctx context.Context, req Request, g hostsetup.ServiceG
 			return refuse(resp, CodeRefused, "%v", err)
 		}
 		unit := "lcm-migrate-" + svc + "-" + req.OperationID[:8]
-		res, err := h.run(ctx, migrateTimeout+time.Minute, migrateArgs(unit, svc, acc, relDir, g.Port, rtBin, argv)...)
+		res, err := h.run(ctx, migrateTimeout+time.Minute, migrateArgs(unit, svc, acc, relDir, g.Port, rtBin, backupDir(cfg), argv)...)
 		resp.Log = sanitizeLog(res.Output)
 		if err != nil {
 			h.stopUnit(ctx, unit, err)
 			return refuse(resp, CodeFailed, "%s; nothing was switched", commandFailure("the migration", err))
 		}
 	}
-	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin))
+	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin, backupDir(cfg)))
 }
 
 // switchAndRestart installs the unit, switches the current and previous
@@ -282,7 +282,7 @@ func (h *Helper) migrateCommand(relDir string, migrate []string, rtBin string) (
 
 // migrateArgs runs a migration like the service would run: as its account,
 // in the new release, with its env file and sandbox.
-func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port int, rtBin string, argv []string) []string {
+func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port int, rtBin, backup string, argv []string) []string {
 	args := []string{
 		systemdRun, "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec",
 		"--unit=" + unit,
@@ -293,7 +293,7 @@ func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port in
 	if rtBin != "" {
 		args = append(args, "--setenv=PATH="+rtBin+":"+systemPath)
 	}
-	props := append(serviceSandbox(svc), "EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
+	props := append(serviceSandbox(svc, backup), "EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
 		"RuntimeMaxSec="+strconv.Itoa(int(migrateTimeout.Seconds())))
 	for _, p := range props {
 		args = append(args, "--property="+p)

@@ -59,6 +59,8 @@ func newEnv(t *testing.T) *env {
 		e.mkdir(d, 0o755)
 	}
 	e.mkdir("/var/lib/lcm-deploy", 0o700)
+	e.mkdir("/var/lib/lcm-build/web", 0o750)
+	e.mkdir("/var/cache/lcm-build/web", 0o750)
 	e.write("/etc/login.defs", "UID_MIN 100000\n", 0o644)
 	e.write("/etc/web/env", "SECRET=1\n", 0o640)
 	e.write("/opt/lcm/runtimes/node24/bin/node", "node", 0o755)
@@ -69,11 +71,14 @@ func newEnv(t *testing.T) *env {
 
 	uid, gid := os.Getuid(), os.Getgid()
 	accounts := map[string]hostsetup.Account{}
-	for name, home := range map[string]string{"lcm": hostsetup.DataDir, "lcm-build": hostsetup.BuildDir, "web": "/var/lib/web", "alice": "/home/alice"} {
-		accounts[name] = hostsetup.Account{Name: name, UID: uid, GID: gid, Home: home, Shell: "/usr/sbin/nologin"}
+	for name, a := range map[string][2]string{
+		"lcm": {hostsetup.DataDir, ""}, "lcmb-web": {"/var/lib/lcm-build/web", "LCM build web"},
+		"web": {"/var/lib/web", "LCM service web"}, "alice": {"/home/alice", ""},
+	} {
+		accounts[name] = hostsetup.Account{Name: name, UID: uid, GID: gid, Home: a[0], GECOS: a[1], Shell: "/usr/sbin/nologin"}
 	}
 	e.cfg = hostsetup.Config{
-		Operator: "alice", Components: hostsetup.Components{Deploy: true},
+		Operator: "alice", Components: hostsetup.Components{Deploy: true}, Backup: &hostsetup.Backup{Dir: "/var/backups/lcm"},
 		Runtimes: map[string]string{"node24": "/home/alice/.local/node"},
 		Services: map[string]hostsetup.ServiceGrant{"web": {Port: 3200, Runtimes: []string{"node24"}, Inputs: map[string]string{"assets": input}}},
 	}
@@ -296,7 +301,11 @@ func TestBuildInstallActivate(t *testing.T) {
 		"--property=ReadWritePaths=" + dir + "/src", "--property=ReadWritePaths=/var/cache/lcm-build/web",
 		"--property=TemporaryFileSystem=/run/lcm-build:ro", "--property=BindReadOnlyPaths=" + input + ":/run/lcm-build/inputs/assets",
 		"--property=RuntimeMaxSec=600", "--property=MemoryMax=4G", "--property=CapabilityBoundingSet=",
-		"--property=InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power",
+		"--property=InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm",
+		"--property=TemporaryFileSystem=/var/lib/lcm-build:ro", "--property=TemporaryFileSystem=/var/cache/lcm-build:ro",
+		"--property=BindPaths=" + dir + "/src", "--property=BindPaths=" + dir + "/home", "--property=BindPaths=/var/cache/lcm-build/web",
+		"--property=BindReadOnlyPaths=" + dir + "/build.sh", "--property=ProtectProc=invisible", "--property=ProcSubset=pid",
+		"--property=IPAddressDeny=localhost",
 	} {
 		if !slices.Contains(argv, want) {
 			t.Errorf("build argv lacks %q: %q", want, argv)
@@ -306,6 +315,10 @@ func TestBuildInstallActivate(t *testing.T) {
 		t.Errorf("build command %q", tail)
 	}
 	for _, a := range argv {
+		if (strings.HasPrefix(a, "--property=ReadWritePaths=") || strings.HasPrefix(a, "--property=BindPaths=")) &&
+			!strings.Contains(a, "="+dir+"/") && !strings.HasSuffix(a, "=/var/cache/lcm-build/web") {
+			t.Errorf("argv exposes more than this build: %q", a)
+		}
 		if strings.Contains(a, "npm ci") || strings.Contains(a, "SECRET") {
 			t.Errorf("argv carries the command or a secret: %q", a)
 		}
@@ -339,7 +352,8 @@ func TestBuildInstallActivate(t *testing.T) {
 		"\nEnvironmentFile=/etc/web/env\nEnvironment=PORT=3200 HOST=127.0.0.1\nEnvironment=PATH=/opt/lcm/runtimes/node24/bin:" + systemPath + "\n",
 		"\nNoNewPrivileges=yes\n", "\nProtectSystem=strict\n", "\nProtectHome=yes\n", "\nPrivateTmp=yes\n", "\nPrivateDevices=yes\n",
 		"\nRestrictSUIDSGID=yes\n", "\nCapabilityBoundingSet=\n", "\nReadWritePaths=/var/lib/web\n",
-		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\n[Install]\nWantedBy=multi-user.target\n",
+		"\nInaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm\n",
+		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\nProtectProc=invisible\n", "\n[Install]\nWantedBy=multi-user.target\n",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q:\n%s", want, unit)
@@ -481,8 +495,9 @@ func TestConfinedCopies(t *testing.T) {
 			if name == "lcm" {
 				uid++
 			}
-			home := map[string]string{"lcm": hostsetup.DataDir, "lcm-build": hostsetup.BuildDir, "web": "/var/lib/web"}[name]
-			return hostsetup.Account{Name: name, UID: uid, GID: os.Getgid(), Home: home, Shell: "/usr/sbin/nologin"}, true, nil
+			home := map[string]string{"lcm": hostsetup.DataDir, "lcmb-web": "/var/lib/lcm-build/web", "web": "/var/lib/web"}[name]
+			comment := map[string]string{"lcmb-web": "LCM build web", "web": "LCM service web"}[name]
+			return hostsetup.Account{Name: name, UID: uid, GID: os.Getgid(), Home: home, GECOS: comment, Shell: "/usr/sbin/nologin"}, true, nil
 		}
 		e.refused(buildReq(commit1), CodeFailed, "is owned by user")
 	})

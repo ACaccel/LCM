@@ -27,8 +27,8 @@ type Account struct {
 	UID  int
 	GID  int
 	Home string
-	// Shell is the login shell.
-	Shell string
+	// GECOS is the comment field; Shell is the login shell.
+	GECOS, Shell string
 }
 
 // Command is one program run by host setup.
@@ -267,5 +267,5 @@ func lookupAccount(ctx context.Context, r Runner, name string) (Account, bool, e
 	if err1 != nil || err2 != nil || uid < 0 || gid < 0 || !filepath.IsAbs(f[5]) {
 		return Account{}, false, fmt.Errorf("getent passwd %s: unexpected output", name)
 	}
-	return Account{Name: name, UID: uid, GID: gid, Home: filepath.Clean(f[5]), Shell: f[6]}, true, nil
+	return Account{Name: name, UID: uid, GID: gid, Home: filepath.Clean(f[5]), GECOS: f[4], Shell: f[6]}, true, nil
 }
