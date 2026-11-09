@@ -15,6 +15,8 @@ import (
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/deployhelper"
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/hostsetup"
+	"github.com/ACaccel/lcm/internal/model"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
@@ -216,6 +218,19 @@ func TestManagedServiceWithoutHelper(t *testing.T) {
 	for _, c := range h.runner.Calls() {
 		if strings.Contains(c.Display(), "lcm-deploy") {
 			t.Fatalf("the helper was called: %q", c.Display())
+		}
+	}
+}
+
+// TestManagedNameLimitMatchesTheHelper keeps the document limit equal to the
+// names host allow and the deploy helper accept, so that a valid document
+// never names a service that can never be granted.
+func TestManagedNameLimitMatchesTheHelper(t *testing.T) {
+	for n := model.MaxManagedName - 1; n <= model.MaxManagedName+1; n++ {
+		name := "s" + strings.Repeat("a", n-1)
+		granted := hostsetup.ValidServiceName(name) == nil
+		if want := n <= model.MaxManagedName; granted != want {
+			t.Errorf("a %d-character name: host allow accepts = %v, model limit %d", n, granted, model.MaxManagedName)
 		}
 	}
 }

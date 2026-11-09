@@ -470,7 +470,7 @@ func TestManagedService(t *testing.T) {
 		{"keepReleases", "keepReleases: 5", "keepReleases: 1", "spec.config.keepReleases", "between 2 and 20"},
 		{"status", "    keepReleases: 5\n", "    keepReleases: 5\n    status: 'true'\n", "spec.config.status", "not valid for adapter managed"},
 		{"unit", "    keepReleases: 5\n", "    keepReleases: 5\n    unit: app.service\n", "spec.config.unit", "not valid for adapter managed"},
-		{"long name", "name: app,", "name: " + strings.Repeat("a", 32) + ",", "metadata.name", "at most 31"},
+		{"long name", "name: app,", "name: " + strings.Repeat("a", 28) + ",", "metadata.name", "at most 27"},
 		{"lcm name", "name: app,", "name: lcm-web,", "metadata.name", `must not start with "lcm"`},
 	}
 	for _, tt := range bad {

@@ -291,7 +291,7 @@ func validateRuntime(r Runtime, base string, is *Issues) {
 const (
 	// MaxManagedName bounds the name of a managed service, which becomes
 	// its account, unit and directories.
-	MaxManagedName = 31
+	MaxManagedName = 27
 	// DefaultKeepReleases is the number of releases kept when keepReleases
 	// is not set.
 	DefaultKeepReleases = 3

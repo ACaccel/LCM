@@ -51,7 +51,7 @@ LCM's own service uses a `command` runtime with only `status`, because it must n
 A managed service needs no deployment code in its repository: the restricted [deploy helper](operations.md#deploy-helper) builds it as `lcm-build`, installs the artifact as a root-owned release under `/opt/<name>/releases`, and runs it as its own account from a unit of a built-in template. The host's administrator grants the service first (`sudo bin/lcm host allow <name> --port N`, [service grants](operations.md#service-grants)); its port, runtimes, build inputs and directories come only from `/etc/lcm/host.json`, never from the document.
 
 ```yaml
-metadata: { name: web }           # at most 31 characters, not starting with "lcm": the account, unit and directories
+metadata: { name: web }           # at most 27 characters, not starting with "lcm": the account, unit and directories
 spec:
   type: service
   adapter: managed
