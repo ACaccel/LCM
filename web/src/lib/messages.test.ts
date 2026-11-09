@@ -16,6 +16,18 @@ describe("server messages", () => {
     );
   });
 
+  it("translates the deploy helper steps of managed services", () => {
+    expect(translate({ code: "step.stop", params: { runtime: "managed", name: "web", scope: "" }, message: "stop …" })).toBe(
+      "停止 managed 服務 web（透過 deploy helper）",
+    );
+    expect(
+      translate({ code: "step.helperActivate", params: { service: "web", start: "server.mjs", migrate: "node migrate.mjs" }, message: "run …" }),
+    ).toBe("執行 migration node migrate.mjs，再將 web 切換到新 release，以 server.mjs 重啟");
+    expect(translate({ code: "step.helperActivate", params: { service: "web", start: "server.mjs", migrate: "" }, message: "switch …" })).toBe(
+      "將 web 切換到新 release，以 server.mjs 重啟",
+    );
+  });
+
   it("labels enumerated parameters it knows and shows unknown ones as they are", () => {
     expect(translate({ code: "operation.state", params: { state: "observing" }, message: "observing" })).toBe("觀測中");
     expect(translate({ code: "operation.state", params: { state: "brand-new" }, message: "brand-new" })).toBe("brand-new");

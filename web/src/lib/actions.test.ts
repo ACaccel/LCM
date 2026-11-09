@@ -9,6 +9,7 @@ describe("reasonText", () => {
     expect(reasonText({ ...base, reason: "" }, "running")).toBe("");
     expect(reasonText({ ...base, reason: "busy" }, "running")).toBe("正在執行其他動作");
     expect(reasonText({ ...base, reason: "invalidState" }, "stopped")).toContain("已停止");
+    expect(reasonText({ ...base, reason: "helperUnavailable" }, "running")).toContain("sudo lcm host apply");
   });
 
   it("translates the coded reasons of machines and routers", () => {

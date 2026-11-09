@@ -394,6 +394,7 @@ export const s = {
       unsupported: "這個資源的 adapter 無法執行此動作（external 服務，或 command adapter 未設定對應指令）",
       invalidState: (state: string) => `目前狀態「${state}」不能執行此動作`,
       notConfigured: "設定缺少此動作需要的項目",
+      helperUnavailable: "這台主機尚未安裝 deploy helper：管理員需在 /etc/lcm/host.json 啟用 components.deploy，並執行 sudo lcm host apply",
       notManaged: "資源不在納管中",
       busy: "正在執行其他動作",
       notOffered: "這個資源不提供此動作",
@@ -1138,6 +1139,8 @@ const runtimeTarget = (p: Params) => {
       return `Compose 專案 ${p.name}`;
     case "command":
       return "服務（使用設定的指令）";
+    case "managed":
+      return `managed 服務 ${p.name}（透過 deploy helper）`;
     default:
       return `${p.runtime} 服務`;
   }
@@ -1256,6 +1259,11 @@ export const msg: Record<string, (p: Params) => string> = {
   "step.build": (p) => `建置：${p.command}`,
   "step.install": (p) => `安裝：${p.command}`,
   "step.skipRestart": () => "略過重啟：runtime 無法重啟這個服務，必須由安裝步驟套用新版本",
+  "step.helperBuild": (p) => `由 deploy helper 在沙箱中以 lcm-build 建置${p.runtime ? `（runtime ${p.runtime}）` : ""}：${p.command}`,
+  "step.helperInstall": (p) => `把建置結果的 ${p.artifact} 安裝為 ${p.service} 的新 release`,
+  "step.helperActivate": (p) =>
+    `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}將 ${p.service} 切換到新 release，以 ${p.start} 重啟`,
+  "step.helperActivatePrevious": (p) => `將 ${p.service} 切回已安裝的 release ${p.release}（commit ${p.commit}）並重啟，不執行 migration`,
   "timeline.configSaved": (p) => `${p.actor} 儲存了設定版本 ${p.version}`,
   "timeline.configRestored": (p) => `${p.actor} 將版本 ${p.from} 還原為設定版本 ${p.version}`,
   "timeline.phase": (p) =>

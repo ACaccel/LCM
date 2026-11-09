@@ -13,6 +13,8 @@ export function reasonText(a: Pick<ResourceAction, "reason" | "reasonMessage">, 
       return s.action.unavailable.unsupported;
     case "notConfigured":
       return s.action.unavailable.notConfigured;
+    case "helperUnavailable":
+      return s.action.unavailable.helperUnavailable;
     case "notManaged":
       return s.action.unavailable.notManaged;
     case "busy":

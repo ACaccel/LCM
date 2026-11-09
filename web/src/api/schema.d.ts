@@ -3382,7 +3382,7 @@ export interface components {
             /** @description Action, operation or phase change, such as `restart`, `reboot` or `retire`. */
             name: string;
             available: boolean;
-            /** @description Why the action is unavailable now; empty when available. Services use the codes notConfigured, unsupported, invalidState, notManaged or busy, and the shared text reasons of every type otherwise (`release Git ownership first` when a config source owns a service to unmanage). */
+            /** @description Why the action is unavailable now; empty when available. Services use the codes notConfigured, unsupported, helperUnavailable (a managed service on a host without the deploy helper), invalidState, notManaged or busy, and the shared text reasons of every type otherwise (`release Git ownership first` when a config source owns a service to unmanage). */
             reason: string;
             /** @description `reason` with a code for translation (`action.*`, `capability.*`); the services' own reason codes have none. */
             reasonMessage: components["schemas"]["Message"];
@@ -3420,7 +3420,7 @@ export interface components {
             metadata: components["schemas"]["Metadata"];
             spec: {
                 type: components["schemas"]["ResourceTypeName"];
-                /** @description service: systemd, docker, compose, command or external; machine: local; router: xiaomi. See `GET /resource-types`. */
+                /** @description service: systemd, docker, compose, command, external or managed; machine: local; router: xiaomi. See `GET /resource-types`. */
                 adapter: string;
                 /** @description Name of a host-configured connection; only for adapters that need one. */
                 connection?: string;
@@ -3428,7 +3428,9 @@ export interface components {
                  * @description Typed by `type` and `adapter` and validated strictly by the server (unknown
                  *     fields are refused). service: the runtime fields valid for the adapter
                  *     (`unit`, `scope`, `container`, `project`, `file`, `start`, `stop`,
-                 *     `restart`, `status`) plus `source`, `backup` and `jobs`. machine:
+                 *     `restart`, `status`; managed: `artifact`, `start`, `startArgs`, `runtime`,
+                 *     `migrate`, `keepReleases`, and a required `source` with `build` and no
+                 *     `install`) plus `source`, `backup` and `jobs`. machine:
                  *     `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
                  *     `thresholds`. router: `interval`, `staleAfter`, `thresholds`
                  *     (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).
