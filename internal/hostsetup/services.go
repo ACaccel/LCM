@@ -204,8 +204,8 @@ var unitSearchPath = []string{UnitDir, "/run/systemd/system", "/usr/local/lib/sy
 
 // UnitConflict describes another unit that the unit of service name would
 // replace or override, or returns "". Only a unit that the deploy helper
-// wrote may be replaced.
-func UnitConflict(fsys FS, name string) (string, error) {
+// wrote, owned by rootUID (0 on a host), may be replaced.
+func UnitConflict(fsys FS, name string, rootUID int) (string, error) {
 	for _, dir := range unitSearchPath {
 		p := dir + "/" + name + ".service"
 		info, err := fsys.Lstat(p)
@@ -216,7 +216,7 @@ func UnitConflict(fsys FS, name string) (string, error) {
 			return "", err
 		case dir != UnitDir:
 			return fmt.Sprintf("the unit %s exists; a service of that name would override it", p), nil
-		case !info.IsRegular() || info.UID != 0:
+		case !info.IsRegular() || info.UID != rootUID:
 			return fmt.Sprintf("%s is not a root-owned regular file", p), nil
 		}
 		data, err := readAll(fsys, p)
@@ -274,7 +274,7 @@ func (a *applier) checkGrant(ctx context.Context, name string, g ServiceGrant, u
 		}
 	}
 	if st.problem == "" {
-		if st.problem, err = UnitConflict(a.h.FS, name); err != nil {
+		if st.problem, err = UnitConflict(a.h.FS, name, 0); err != nil {
 			return grantState{}, err
 		}
 	}
