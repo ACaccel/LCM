@@ -24,7 +24,9 @@ type Change struct {
 //   - A transient state (deploying, updating, rolling_back) with no action
 //     running means the process died mid-action: running if the runtime is
 //     active, failed otherwise. Deployments left running are marked
-//     interrupted.
+//     interrupted, unless the helper's ledger proves that the deployment's
+//     last operation, an activate, succeeded: it is then finished as
+//     succeeded.
 //   - running while the runtime is inactive or failed becomes failed: the
 //     process died without LCM stopping it.
 //   - stopped or registered while the runtime is active becomes running,
@@ -124,9 +126,20 @@ func (m *Manager) interruptDeployments(ctx context.Context) error {
 		}
 		msg := "interrupted by a restart of LCM"
 		// A managed service's deployment says what became of the helper
-		// operation it was waiting for; it stays interrupted either way.
-		if op := m.describeInterrupted(ctx, d); op != "" {
-			msg += "; " + op
+		// operation it was waiting for.
+		in := m.inspectInterrupted(ctx, d)
+		if in.activated != nil {
+			// The root ledger proves that LCM's activate succeeded, so the
+			// release is current: a rollback must see this deployment.
+			if err := m.cat.FinishDeployment(ctx, d.ID, OutcomeSucceeded, "", confirmedLog(d.LogExcerpt, in.activated)); err != nil {
+				return err
+			}
+			m.recordAudit(ctx, "reconcile", d.Resource, audit.OutcomeOK,
+				map[string]any{"deployment": d.ID, "outcome": OutcomeSucceeded, "release": in.activated.ReleaseID})
+			continue
+		}
+		if in.text != "" {
+			msg += "; " + in.text
 		}
 		if err := m.cat.FinishDeployment(ctx, d.ID, OutcomeInterrupted, msg, d.LogExcerpt); err != nil {
 			return err

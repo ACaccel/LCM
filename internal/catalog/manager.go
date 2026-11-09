@@ -210,6 +210,8 @@ type session struct {
 	adapter rt.Adapter
 	release func(context.Context) error
 	cur     State
+	// act tracks how far the activate request of a managed deployment got.
+	act activation
 
 	// renewMu guards renewal against close: once closed is set no renewal
 	// runs or is scheduled.

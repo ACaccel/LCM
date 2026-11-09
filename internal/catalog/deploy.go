@@ -66,7 +66,7 @@ func (m *Manager) Rollback(ctx context.Context, name string, opts ActionOptions)
 			return ErrNoRollbackTarget
 		}
 		if s.rt.Type == model.RuntimeManaged {
-			release, err := m.rollbackRelease(ctx, name, deps, target)
+			release, err := m.rollbackRelease(ctx, name, s.cfg, deps, target)
 			if err != nil {
 				return err
 			}
@@ -203,7 +203,9 @@ func (s *session) record(ctx context.Context, res *ActionResult, version, previo
 		if err := s.m.cat.FinishDeployment(fctx, id, OutcomeFailed, perr.Error(), log.b.String()); err != nil {
 			s.m.log.Error("finish deployment failed", "service", s.name, "error", err)
 		}
-		s.settle(ctx, true)
+		// A managed service the failed deployment certainly did not touch
+		// keeps running; the helper's other failures leave it failed.
+		s.settle(ctx, s.rt.Type != model.RuntimeManaged || !s.leavesServiceAlone(perr))
 		return perr
 	}
 	if err := s.m.cat.SetDeploymentVersions(fctx, id, sha, previous); err != nil {

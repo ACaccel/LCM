@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ACaccel/lcm/internal/deployhelper"
@@ -68,6 +70,35 @@ func lastOperation(log string) (op, id string, ok bool) {
 	return last[1], last[2], true
 }
 
+// activation records how far the activate request of a deployment got, to
+// tell a failure that left the running service alone from one that did not.
+type activation struct {
+	// sent is set once the request may have reached the helper.
+	sent bool
+	// switched is set when the helper reported that the links moved.
+	switched bool
+}
+
+// leavesServiceAlone reports whether a failed managed deployment certainly
+// changed nothing about the running service: the failure came before the
+// activate request, a build or install failed (they only add files to the
+// helper's directories), or activate was answered with an error before it
+// switched the release. An unknown outcome, and a failure after the
+// switch, may have changed it.
+func (s *session) leavesServiceAlone(err error) bool {
+	var he *rt.HelperError
+	if errors.As(err, &he) {
+		switch {
+		case he.Unknown:
+			return false
+		case he.Op != deployhelper.OpActivate:
+			return true
+		}
+		return !s.act.switched
+	}
+	return !s.act.sent
+}
+
 // helperStep calls the helper for one pipeline step. The operation ID is
 // in the stored log before the request is sent; without that record the
 // request is not sent.
@@ -78,7 +109,13 @@ func (s *session) helperStep(ctx context.Context, step string, req deployhelper.
 		log.note("error: %v", err)
 		return deployhelper.Response{}, &StepError{Step: step, Err: err}
 	}
+	if req.Op == deployhelper.OpActivate {
+		s.act.sent = true
+	}
 	resp, err := rt.CallHelper(ctx, s.m.deploy, req)
+	if a := resp.Activate; a != nil && a.Switched {
+		s.act.switched = true
+	}
 	log.helperOutput(resp.Log)
 	if err != nil {
 		log.note("error: %v", err)
@@ -179,7 +216,7 @@ func (s *session) activateRelease(ctx context.Context, res *ActionResult, target
 // release recorded by the newest successful deployment of target, else the
 // newest release built from target. It is empty when the helper keeps
 // neither, and the rollback rebuilds the commit.
-func (m *Manager) rollbackRelease(ctx context.Context, name string, deps []Deployment, target string) (string, error) {
+func (m *Manager) rollbackRelease(ctx context.Context, name string, cfg *model.ServiceConfig, deps []Deployment, target string) (string, error) {
 	resp, err := rt.CallHelper(ctx, m.deploy, deployhelper.Request{Op: deployhelper.OpReleases, Service: name, OperationID: rt.NewOperationID()})
 	var he *rt.HelperError
 	if errors.As(err, &he) && he.Code == deployhelper.CodeNotFound {
@@ -188,8 +225,10 @@ func (m *Manager) rollbackRelease(ctx context.Context, name string, deps []Deplo
 	if err != nil {
 		return "", fmt.Errorf("list the releases of %s: %w", name, err)
 	}
+	// The old release is started with the current start settings, so it
+	// must have been installed the way the current document installs.
 	built := func(r deployhelper.Release) bool {
-		return r.Manifest != nil && strings.EqualFold(r.Manifest.Commit, target)
+		return releaseFits(r.Manifest, cfg) && strings.EqualFold(r.Manifest.Commit, target)
 	}
 	recorded := ""
 	for _, d := range deps {
@@ -199,7 +238,7 @@ func (m *Manager) rollbackRelease(ctx context.Context, name string, deps []Deplo
 		}
 	}
 	for _, r := range resp.Releases {
-		if r.ReleaseID == recorded && (r.Manifest == nil || built(r)) {
+		if r.ReleaseID == recorded && releaseFits(r.Manifest, cfg) {
 			return r.ReleaseID, nil
 		}
 	}
@@ -211,25 +250,68 @@ func (m *Manager) rollbackRelease(ctx context.Context, name string, deps []Deplo
 	return "", nil
 }
 
-// describeInterrupted explains what became of the last helper operation of
-// a deployment that was running when LCM stopped.
-func (m *Manager) describeInterrupted(ctx context.Context, d Deployment) string {
+// releaseFits reports whether an installed release was built for what the
+// document says now: the same artifact directory and the same runtime.
+func releaseFits(m *deployhelper.Manifest, cfg *model.ServiceConfig) bool {
+	if m == nil || path.Clean(m.Artifact) != path.Clean(cfg.Artifact) {
+		return false
+	}
+	if cfg.RuntimeName == "" {
+		return len(m.Runtimes) == 0
+	}
+	return slices.Equal(m.Runtimes, []string{cfg.RuntimeName})
+}
+
+// interrupted is what the ledger says about the last helper operation of a
+// deployment that was running when LCM stopped.
+type interrupted struct {
+	// text is the explanation for the deployment's error; empty when the
+	// log names no helper operation.
+	text string
+	// activated is set when the ledger confirms that the operation was a
+	// successful activate of the deployment's release.
+	activated *deployhelper.ActivateResult
+}
+
+// inspectInterrupted looks up the last helper operation of d.
+func (m *Manager) inspectInterrupted(ctx context.Context, d Deployment) interrupted {
 	op, opID, ok := lastOperation(d.LogExcerpt)
 	if !ok {
-		return ""
+		return interrupted{}
 	}
 	resp, err := rt.CallHelper(ctx, m.deploy, deployhelper.Request{Op: deployhelper.OpQuery, OperationID: opID})
+	var he *rt.HelperError
 	switch {
+	case errors.As(err, &he) && he.Code == deployhelper.CodeNotFound:
+		return interrupted{text: fmt.Sprintf("deploy helper %s operation %s was not carried out: the helper has no record of it", op, opID)}
 	case err != nil:
-		return fmt.Sprintf("deploy helper %s operation %s: outcome unknown, query %s (%v)", op, opID, opID, err)
-	case resp.State == deployhelper.StateSucceeded && resp.Activate != nil:
-		return fmt.Sprintf("deploy helper %s operation %s succeeded: release %s is current", op, opID, resp.Activate.ReleaseID)
+		return interrupted{text: fmt.Sprintf("deploy helper %s operation %s: outcome unknown, query %s (%v)", op, opID, opID, err)}
+	case resp.State == deployhelper.StateSucceeded && resp.Op == deployhelper.OpActivate && op == string(deployhelper.OpActivate) && resp.Activate != nil:
+		return interrupted{
+			text:      fmt.Sprintf("deploy helper %s operation %s succeeded: it activated release %s", op, opID, resp.Activate.ReleaseID),
+			activated: resp.Activate,
+		}
 	case resp.State == deployhelper.StateSucceeded:
-		return fmt.Sprintf("deploy helper %s operation %s succeeded", op, opID)
+		return interrupted{text: fmt.Sprintf("deploy helper %s operation %s succeeded", op, opID)}
 	case resp.State == deployhelper.StateFailed:
-		return fmt.Sprintf("deploy helper %s operation %s failed: %s", op, opID, resp.Message)
+		return interrupted{text: fmt.Sprintf("deploy helper %s operation %s failed: %s", op, opID, resp.Message)}
 	}
-	return fmt.Sprintf("deploy helper %s operation %s: outcome unknown (%s), query %s", op, opID, resp.State, opID)
+	return interrupted{text: fmt.Sprintf("deploy helper %s operation %s: outcome unknown (%s), query %s", op, opID, resp.State, opID)}
+}
+
+// confirmedLog is the log of a deployment that the helper's ledger proves
+// succeeded after LCM lost track of it, ending in the release line a
+// rollback reads.
+func confirmedLog(log string, a *deployhelper.ActivateResult) string {
+	var l stepLog
+	l.b.WriteString(strings.TrimRight(log, "\n"))
+	l.b.WriteByte('\n')
+	l.note("outcome confirmed from the helper ledger after a restart of LCM")
+	if a.Previous != "" {
+		l.note("previous release %s", a.Previous)
+	}
+	l.note("installed release %s", a.ReleaseID)
+	return l.b.String()
 }
 
 // managedRollbackSteps returns the steps of a rollback that activates an
@@ -243,7 +325,7 @@ func (m *Manager) managedRollbackSteps(ctx context.Context, rec *Record) ([]mess
 	if !ok {
 		return nil, ErrNoRollbackTarget
 	}
-	release, err := m.rollbackRelease(ctx, rec.Name, deps, target)
+	release, err := m.rollbackRelease(ctx, rec.Name, rec.Config, deps, target)
 	if err != nil || release == "" {
 		return nil, err
 	}

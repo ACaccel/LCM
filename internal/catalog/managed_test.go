@@ -29,6 +29,7 @@ type simHelper struct {
 	mu       sync.Mutex
 	n        int
 	builds   map[string]string
+	runtimes map[string][]string
 	releases []deployhelper.Release
 	current  string
 	previous string
@@ -47,7 +48,7 @@ type simHelper struct {
 }
 
 func newSimHelper() *simHelper {
-	s := &simHelper{builds: map[string]string{}, ledger: map[string]deployhelper.Response{},
+	s := &simHelper{builds: map[string]string{}, runtimes: map[string][]string{}, ledger: map[string]deployhelper.Response{},
 		lose: map[deployhelper.Op]bool{}, hang: map[deployhelper.Op]bool{}, refuse: map[deployhelper.Op]deployhelper.Code{}}
 	s.Handle = s.handle
 	return s
@@ -127,7 +128,7 @@ func (s *simHelper) perform(req deployhelper.Request) deployhelper.Response {
 	switch req.Op {
 	case deployhelper.OpBuild:
 		id := s.id()
-		s.builds[id] = req.Commit
+		s.builds[id], s.runtimes[id] = req.Commit, req.Runtimes
 		resp.Build, resp.Log = &deployhelper.BuildResult{BuildID: id, Commit: req.Commit}, "built "+req.Commit
 	case deployhelper.OpInstall:
 		commit, ok := s.builds[req.BuildID]
@@ -135,7 +136,7 @@ func (s *simHelper) perform(req deployhelper.Request) deployhelper.Response {
 			return fail(deployhelper.CodeNotFound, "no build "+req.BuildID)
 		}
 		id := s.id()
-		m := deployhelper.Manifest{Version: 1, Service: req.Service, ReleaseID: id, BuildID: req.BuildID, Commit: commit, Artifact: req.Artifact}
+		m := deployhelper.Manifest{Version: 1, Service: req.Service, ReleaseID: id, BuildID: req.BuildID, Commit: commit, Artifact: req.Artifact, Runtimes: s.runtimes[req.BuildID]}
 		s.releases = append([]deployhelper.Release{{ReleaseID: id, Manifest: &m}}, s.releases...)
 		resp.Install = &deployhelper.InstallResult{ReleaseID: id, Manifest: m}
 	case deployhelper.OpActivate:
@@ -329,11 +330,11 @@ func TestManagedDeployFailures(t *testing.T) {
 		err   string
 	}{
 		{"build refused", func(h *simHelper) { h.refuse[deployhelper.OpBuild] = deployhelper.CodeRefused },
-			[]deployhelper.Op{deployhelper.OpBuild}, "refused: build was refused"},
+			[]deployhelper.Op{deployhelper.OpBuild, deployhelper.OpStatus}, "refused: build was refused"},
 		{"install failed", func(h *simHelper) { h.refuse[deployhelper.OpInstall] = deployhelper.CodeFailed },
-			[]deployhelper.Op{deployhelper.OpBuild, deployhelper.OpInstall}, "failed: install was refused"},
+			[]deployhelper.Op{deployhelper.OpBuild, deployhelper.OpInstall, deployhelper.OpStatus}, "failed: install was refused"},
 		{"activate busy", func(h *simHelper) { h.refuse[deployhelper.OpActivate] = deployhelper.CodeBusy },
-			[]deployhelper.Op{deployhelper.OpBuild, deployhelper.OpInstall, deployhelper.OpActivate}, "busy"},
+			[]deployhelper.Op{deployhelper.OpBuild, deployhelper.OpInstall, deployhelper.OpActivate, deployhelper.OpStatus}, "busy"},
 		{"activate still running", func(h *simHelper) { h.hang[deployhelper.OpActivate] = true },
 			[]deployhelper.Op{deployhelper.OpBuild, deployhelper.OpInstall, deployhelper.OpActivate, deployhelper.OpQuery},
 			"outcome unknown, query "},
@@ -344,7 +345,7 @@ func TestManagedDeployFailures(t *testing.T) {
 				}
 				return deployhelper.Response{}, nil, false
 			}
-		}, []deployhelper.Op{deployhelper.OpBuild, deployhelper.OpQuery}, "not carried out"},
+		}, []deployhelper.Op{deployhelper.OpBuild, deployhelper.OpQuery, deployhelper.OpStatus}, "not carried out"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -523,19 +524,31 @@ func TestManagedWithoutHelper(t *testing.T) {
 }
 
 // TestManagedInterruptedDeployment: after a restart the deployment is
-// closed as interrupted with what the ledger says about its last helper
-// operation.
+// closed with what the ledger says about its last helper operation. Only an
+// activate the ledger proves succeeded makes it succeeded.
 func TestManagedInterruptedDeployment(t *testing.T) {
 	e, _, h := managedEnv(t)
 	ctx := context.Background()
-	opID := rt.NewOperationID()
-	h.ledger[opID] = deployhelper.Response{Version: deployhelper.Version, Op: deployhelper.OpActivate, OperationID: opID,
-		State: deployhelper.StateSucceeded, Activate: &deployhelper.ActivateResult{ReleaseID: "20261101T120000Z-0000abcd", Switched: true}}
-	running := rt.NewOperationID()
-	h.ledger[running] = deployhelper.Response{Version: deployhelper.Version, Op: deployhelper.OpBuild, OperationID: running, State: deployhelper.StateRunning}
+	const release = "20261101T120000Z-0000abcd"
+	record := func(op deployhelper.Op, state deployhelper.State, mutate func(*deployhelper.Response)) string {
+		id := rt.NewOperationID()
+		resp := deployhelper.Response{Version: deployhelper.Version, Op: op, OperationID: id, State: state}
+		if mutate != nil {
+			mutate(&resp)
+		}
+		h.ledger[id] = resp
+		return id
+	}
+	activated := record(deployhelper.OpActivate, deployhelper.StateSucceeded, func(r *deployhelper.Response) {
+		r.Activate = &deployhelper.ActivateResult{ReleaseID: release, Previous: "20261001T000000Z-00000001", Switched: true}
+	})
+	built := record(deployhelper.OpBuild, deployhelper.StateSucceeded, nil)
+	running := record(deployhelper.OpBuild, deployhelper.StateRunning, nil)
+	failed := record(deployhelper.OpActivate, deployhelper.StateFailed, func(r *deployhelper.Response) { r.Message = "restart failed" })
+	unrecorded := rt.NewOperationID()
 
-	begin := func(log string) int64 {
-		id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "app", Action: "deploy", Actor: alice})
+	begin := func(version, log string) int64 {
+		id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "app", Action: "deploy", Version: version, Actor: alice})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -544,56 +557,222 @@ func TestManagedInterruptedDeployment(t *testing.T) {
 		}
 		return id
 	}
-	begin("deploy helper build operation " + rt.NewOperationID() + "\nbuilt x\ndeploy helper activate operation " + opID + "\n")
-	begin("deploy helper build operation " + running + "\n")
+	op := func(kind string, id string) string { return "deploy helper " + kind + " operation " + id + "\n" }
+	begin("v-activated", op("build", rt.NewOperationID())+"built x\n"+op("activate", activated))
+	begin("v-built", op("build", built))
+	begin("v-running", op("build", running))
+	begin("v-failed", op("activate", failed))
+	begin("v-unrecorded", op("install", unrecorded))
+	if _, err := e.mgr.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	byVersion := map[string]catalog.Deployment{}
+	for _, d := range deployments(t, e, "app") {
+		byVersion[d.Version] = d
+	}
+
+	d := byVersion["v-activated"]
+	if d.Outcome != catalog.OutcomeSucceeded || d.Error != "" || lastLine(d.LogExcerpt) != "installed release "+release ||
+		!strings.Contains(d.LogExcerpt, "outcome confirmed from the helper ledger after a restart of LCM") ||
+		!strings.Contains(d.LogExcerpt, "previous release 20261001T000000Z-00000001") {
+		t.Fatalf("confirmed activate = %+v", d)
+	}
+	for version, want := range map[string]string{
+		"v-built":      "build operation " + built + " succeeded",
+		"v-running":    "outcome unknown (running), query " + running,
+		"v-failed":     "activate operation " + failed + " failed: restart failed",
+		"v-unrecorded": "install operation " + unrecorded + " was not carried out",
+	} {
+		if d := byVersion[version]; d.Outcome != catalog.OutcomeInterrupted || !strings.Contains(d.Error, want) {
+			t.Errorf("%s = %+v, want %q", version, d, want)
+		}
+	}
+	if byVersion["v-unrecorded"].Error == "" || strings.Contains(byVersion["v-unrecorded"].Error, "outcome unknown") {
+		t.Errorf("a request the helper never recorded is not an unknown outcome: %q", byVersion["v-unrecorded"].Error)
+	}
+	if strings.Contains(byVersion["v-activated"].Error, "is current") {
+		t.Error("the activation is reported as it was, not as the current release")
+	}
+}
+
+// TestManagedInterruptedActivateCountsForRollback: a deployment the ledger
+// confirmed is the release a later rollback and deploy start from.
+func TestManagedInterruptedActivateCountsForRollback(t *testing.T) {
+	e, g, h := managedEnv(t)
+	ctx := context.Background()
+	v1 := g.tip()
+	if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	g.commit("v2")
+	v2 := g.tip()
+	// The second deployment's activate completed, but LCM died before it
+	// could say so.
+	id, err := e.cat.BeginDeployment(ctx, catalog.Deployment{Resource: "app", Action: "deploy", Version: v2, PreviousVersion: v1, Actor: alice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := h.Call(ctx, deployhelper.Request{Version: deployhelper.Version, Op: deployhelper.OpBuild, Service: "app", OperationID: rt.NewOperationID(),
+		Commit: strings.ToLower(v2), Command: managedBuild, TimeoutSec: 60, Runtimes: []string{"node24"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := h.Call(ctx, deployhelper.Request{Version: deployhelper.Version, Op: deployhelper.OpInstall, Service: "app", OperationID: rt.NewOperationID(),
+		BuildID: b.Build.BuildID, Artifact: "dist"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actID := rt.NewOperationID()
+	if _, err := h.Call(ctx, deployhelper.Request{Version: deployhelper.Version, Op: deployhelper.OpActivate, Service: "app", OperationID: actID,
+		ReleaseID: in.Install.ReleaseID, Start: []string{"server/main.mjs"}, Runtime: "node24", KeepReleases: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.cat.NoteDeployment(ctx, id, "deploy helper activate operation "+actID+"\n"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := e.mgr.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	deps := deployments(t, e, "app")
-	if deps[1].Outcome != catalog.OutcomeInterrupted ||
-		!strings.Contains(deps[1].Error, "deploy helper activate operation "+opID+" succeeded: release 20261101T120000Z-0000abcd is current") {
-		t.Fatalf("deployment = %+v", deps[1])
-	}
-	if deps[0].Outcome != catalog.OutcomeInterrupted || !strings.Contains(deps[0].Error, "outcome unknown (running), query "+running) {
+	if deps[0].Outcome != catalog.OutcomeSucceeded || deps[0].Version != v2 {
 		t.Fatalf("deployment = %+v", deps[0])
+	}
+	e.setState("app", catalog.StateRunning)
+	res, err := e.mgr.Rollback(e.ctx, "app", catalog.ActionOptions{})
+	if err != nil || res.Version != v1 {
+		t.Fatalf("rollback = %+v, %v", res, err)
+	}
+	g.commit("v3")
+	if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+		t.Fatal(err)
 	}
 }
 
-// TestHelperUnavailableNamesItsCause: the message of a helperUnavailable
-// reason says which of the helper's checks failed.
-func TestHelperUnavailableNamesItsCause(t *testing.T) {
-	e, _, _ := managedEnv(t)
-	rec, err := e.cat.Get(context.Background(), "app")
-	if err != nil {
-		t.Fatal(err)
+// TestManagedFailureSettling: a deployment the helper certainly did not
+// apply leaves a running service running; anything that may have changed it
+// leaves the service failed.
+func TestManagedFailureSettling(t *testing.T) {
+	failAt := func(op deployhelper.Op, code deployhelper.Code, switched *bool) func(h *simHelper) {
+		return func(h *simHelper) {
+			h.intercept = func(req deployhelper.Request) (deployhelper.Response, error, bool) {
+				if req.Op != op {
+					return deployhelper.Response{}, nil, false
+				}
+				resp := helperReply(req)
+				resp.State = deployhelper.StateFailed
+				if switched != nil {
+					resp.Activate = &deployhelper.ActivateResult{ReleaseID: req.ReleaseID, Switched: *switched}
+				}
+				resp, err := refusal(resp, code, string(op)+" did not work")
+				return resp, err, true
+			}
+		}
 	}
+	yes, no := true, false
 	cases := []struct {
-		ready  error
-		code   string
-		params map[string]string
+		name   string
+		setup  func(h *simHelper)
+		failed bool
 	}{
-		{rt.ErrHelperUnavailable, "action.helperNotInstalled", nil},
-		{&rt.UnavailableError{Cause: rt.CauseNotInstalled, Params: map[string]string{"path": "/w"}, Detail: "/w is missing"}, "action.helperNotInstalled", map[string]string{"path": "/w"}},
-		{&rt.UnavailableError{Cause: rt.CauseUntrusted, Params: map[string]string{"path": "/w"}, Detail: "/w is writable"}, "action.helperUntrusted", map[string]string{"path": "/w"}},
-		{&rt.UnavailableError{Cause: rt.CauseWorkDir, Params: map[string]string{"expected": "/a", "actual": "/b"}, Detail: "elsewhere"}, "action.helperWorkDir", map[string]string{"expected": "/a", "actual": "/b"}},
+		{"build failed", failAt(deployhelper.OpBuild, deployhelper.CodeFailed, nil), false},
+		{"build refused", failAt(deployhelper.OpBuild, deployhelper.CodeRefused, nil), false},
+		{"install failed", failAt(deployhelper.OpInstall, deployhelper.CodeFailed, nil), false},
+		{"activate refused", failAt(deployhelper.OpActivate, deployhelper.CodeRefused, nil), false},
+		{"activate busy", failAt(deployhelper.OpActivate, deployhelper.CodeBusy, nil), false},
+		{"activate not found", failAt(deployhelper.OpActivate, deployhelper.CodeNotFound, nil), false},
+		{"activate failed before the migration finished", failAt(deployhelper.OpActivate, deployhelper.CodeFailed, nil), false},
+		{"activate failed but not switched", failAt(deployhelper.OpActivate, deployhelper.CodeFailed, &no), false},
+		{"activate failed after the switch", failAt(deployhelper.OpActivate, deployhelper.CodeFailed, &yes), true},
+		{"build outcome unknown", func(h *simHelper) { h.hang[deployhelper.OpBuild] = true }, true},
+		{"activate outcome unknown", func(h *simHelper) { h.hang[deployhelper.OpActivate] = true }, true},
 	}
-	for _, c := range cases {
-		var got *catalog.Availability
-		for _, a := range catalog.AvailableActions(rec, c.ready) {
-			if a.Action == catalog.ActionDeploy {
-				got = &a
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			e, g, h := managedEnv(t)
+			if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+				t.Fatal(err)
 			}
-		}
-		if got == nil || got.Reason != catalog.ReasonHelperUnavailable || got.Message == nil || got.Message.Code != c.code {
-			t.Fatalf("%v: %+v", c.ready, got)
-		}
-		for k, v := range c.params {
-			if got.Message.Params[k] != v {
-				t.Errorf("%v: params = %v", c.ready, got.Message.Params)
+			g.commit("v2")
+			tt.setup(h)
+			if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); !errors.Is(err, catalog.ErrDeployFailed) {
+				t.Fatalf("err = %v", err)
 			}
+			want := catalog.StateRunning
+			if tt.failed {
+				want = catalog.StateFailed
+			}
+			if got := e.state("app"); got != want {
+				t.Fatalf("state = %s, want %s", got, want)
+			}
+		})
+	}
+
+	t.Run("checkout fails before the helper is called", func(t *testing.T) {
+		e, g, h := managedEnv(t)
+		if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+			t.Fatal(err)
 		}
-		if !errors.Is(c.ready, rt.ErrHelperUnavailable) {
-			t.Errorf("%v does not match ErrHelperUnavailable", c.ready)
+		before := len(h.Requests())
+		g.commit("v2")
+		if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{Version: "deadbeefdeadbeef"}); err == nil {
+			t.Fatal("deploying an unknown commit must fail")
 		}
+		// Only the status that settles the state follows.
+		if got := h.ops()[before:]; !slices.Equal(got, []deployhelper.Op{deployhelper.OpStatus}) || e.state("app") != catalog.StateRunning {
+			t.Fatalf("requests %v, state %s", got, e.state("app"))
+		}
+	})
+}
+
+// TestManagedRollbackOnlyReusesMatchingReleases: the old release is started
+// with the current start settings, so a release installed with another
+// artifact or runtime is rebuilt instead.
+func TestManagedRollbackOnlyReusesMatchingReleases(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		change func(doc string) string
+		reuse  bool
+	}{
+		{"same document", func(d string) string { return d }, true},
+		{"artifact changed", func(d string) string { return strings.Replace(d, "artifact: dist/", "artifact: out/", 1) }, false},
+		{"runtime changed", func(d string) string { return strings.Replace(d, "runtime: node24", "runtime: node22", 1) }, false},
+		{"runtime removed", func(d string) string { return strings.Replace(d, "    runtime: node24\n", "", 1) }, false},
+		{"start changed", func(d string) string {
+			return strings.Replace(d, "start: server/main.mjs", "start: server/other.mjs", 1)
+		}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e, g, h := managedEnv(t)
+			if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			r1 := h.Requests()[2].ReleaseID
+			g.commit("v2")
+			if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			e.put(tt.change(managedDoc(g.remote)), 1)
+
+			p, err := e.mgr.Plan(e.ctx, "app", catalog.ActionRollback, catalog.ActionOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reused := p.StepMessages[len(p.StepMessages)-1].Code == "step.helperActivatePrevious"
+			if reused != tt.reuse {
+				t.Fatalf("plan reuses the release = %v, want %v: %v", reused, tt.reuse, p.Steps)
+			}
+			before := len(h.Requests())
+			if _, err := e.mgr.Rollback(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			ops := h.ops()[before:]
+			if tt.reuse {
+				if reqs := h.Requests()[before:]; reqs[len(reqs)-1].ReleaseID != r1 || slices.Contains(ops, deployhelper.OpBuild) {
+					t.Fatalf("requests = %+v", reqs)
+				}
+			} else if !slices.Contains(ops, deployhelper.OpBuild) {
+				t.Fatalf("ops = %v, want a rebuild", ops)
+			}
+		})
 	}
 }
