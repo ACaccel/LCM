@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,7 @@ import (
 	"github.com/ACaccel/lcm/internal/secret"
 	"github.com/ACaccel/lcm/internal/security"
 	"github.com/ACaccel/lcm/internal/securityhost"
+	"github.com/ACaccel/lcm/internal/selfbackup"
 	"github.com/ACaccel/lcm/internal/signal"
 	"github.com/ACaccel/lcm/internal/state"
 	"github.com/ACaccel/lcm/internal/store"
@@ -69,6 +71,7 @@ type options struct {
 	machineObserver machine.Observer
 	machinePower    machine.PowerBackend
 	deployHelper    rt.DeployHelper
+	restoreSettle   time.Duration
 	routerHTTP      *http.Client
 	clock           clock.Clock
 	log             *slog.Logger
@@ -107,6 +110,10 @@ func WithMachinePower(backend machine.PowerBackend) Option {
 func WithDeployHelper(h rt.DeployHelper) Option {
 	return func(o *options) { o.deployHelper = h }
 }
+
+// WithRestoreSettle sets how long a restored service gets to become active
+// before the restore is undone; negative checks at once. Tests use it.
+func WithRestoreSettle(d time.Duration) Option { return func(o *options) { o.restoreSettle = d } }
 
 // WithRouterHTTPClient replaces the HTTP client that router clients use to
 // reach router web interfaces.
@@ -171,7 +178,10 @@ type App struct {
 	// Retention bounds document versions, finished operations and
 	// failed-login audit entries across components.
 	Retention *retention.Pruner
-	Clock     clock.Clock
+	// SelfBackup backs up LCM's own database and secrets; nil when
+	// self-backup-keep is 0.
+	SelfBackup *selfbackup.Backuper
+	Clock      clock.Clock
 
 	log      *slog.Logger
 	listener net.Listener
@@ -390,7 +400,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Manager, err = catalog.NewManager(catalog.ManagerConfig{
 		Catalog: a.Catalog, Runtimes: a.Runtimes, Runner: o.runner, Locker: lockAdapter{m: a.Locks},
 		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git, WorkDir: workDir, Monitor: a.Monitor,
-		Deploy: helper,
+		Deploy: helper, RestoreSettle: o.restoreSettle,
 	})
 	if err != nil {
 		return nil, err
@@ -402,6 +412,14 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Resources.RegisterHooks(model.ResourceRouter, a.Routers.Hooks())
 	a.follower = a.Catalog.FollowSignals(a.ctx, a.Bus)
 	ready("catalog", "work", workDir)
+	if cfg.SelfBackupKeep > 0 {
+		if a.SelfBackup, err = selfbackup.New(selfbackup.Config{
+			DB: a.DB, Dir: filepath.Join(cfg.DataDir, selfBackupDirName), SecretsDir: cfg.SecretsPath(), Keep: cfg.SelfBackupKeep,
+			MinInterval: selfBackupInterval, Recorder: a.Catalog, Audit: a.Audit, Clock: clk, Log: log.With("component", "selfbackup"),
+		}); err != nil {
+			return nil, err
+		}
+	}
 
 	if err = a.Machines.Reconcile(ctx); err != nil {
 		return nil, fmt.Errorf("machine recovery: %w", err)

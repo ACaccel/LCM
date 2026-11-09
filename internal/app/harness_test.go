@@ -86,7 +86,7 @@ func (h *harness) open(o testOpts) *app.App {
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(h.ctx, cfg,
 		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower), app.WithHostStatus(o.hostStatus),
-		app.WithDeployHelper(o.deployHelper),
+		app.WithDeployHelper(o.deployHelper), app.WithRestoreSettle(-1),
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client),
 		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git), app.WithConnectionsTrust(trustTestFile))
 	if err != nil {
