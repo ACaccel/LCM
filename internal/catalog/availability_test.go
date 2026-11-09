@@ -100,7 +100,7 @@ func TestAvailableActions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := catalog.AvailableActions(rec)
+		got := catalog.AvailableActions(rec, nil)
 		if len(got) != len(catalog.Actions) {
 			t.Fatalf("%s: %d entries, want %d", name, len(got), len(catalog.Actions))
 		}

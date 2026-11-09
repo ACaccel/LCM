@@ -50,6 +50,9 @@ var (
 	ErrNoBackup         = precondition("catalog: service has no backup command")
 	ErrUnknownJob       = precondition("catalog: service has no such job")
 	ErrUnsupported      = precondition("catalog: the service's runtime cannot perform this action")
+	// ErrHelperUnavailable refuses the actions of a managed service while
+	// the deploy helper is not installed.
+	ErrHelperUnavailable = precondition("catalog: the deploy helper of managed services is not available")
 	// ErrNotManaged refuses actions on a retired service: it must be
 	// resumed first.
 	ErrNotManaged = precondition("catalog: the service is retired; resume it before acting on it")
@@ -93,6 +96,9 @@ type ManagerConfig struct {
 	// Monitor, when set, forgets a service as soon as it leaves the managed
 	// phase, so that no read after ChangePhase sees its health.
 	Monitor Forgetter
+	// Deploy is the deploy helper that builds, installs and runs managed
+	// services; nil when it is not installed, which refuses their actions.
+	Deploy rt.DeployHelper
 }
 
 // Forgetter drops the monitor state of a resource; *monitor.Monitor
@@ -112,6 +118,7 @@ type Manager struct {
 	git      string
 	workDir  string
 	monitor  Forgetter
+	deploy   rt.DeployHelper
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -127,7 +134,8 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	}
 	m := &Manager{
 		cat: cfg.Catalog, runtimes: cfg.Runtimes, runner: cfg.Runner, locker: cfg.Locker,
-		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, monitor: cfg.Monitor, inflight: map[string]struct{}{},
+		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, monitor: cfg.Monitor, deploy: cfg.Deploy,
+		inflight: map[string]struct{}{},
 	}
 	if m.log == nil {
 		m.log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -306,22 +314,35 @@ func (s *session) prepare(ctx context.Context) error {
 		s.close()
 		return err
 	}
-	if err := checkAction(s.action, s.rec); err != nil {
+	if err := s.m.checkAction(s.action, s.rec); err != nil {
 		s.close()
 		return err
 	}
 	return nil
 }
 
-// checkAction refuses an action the phase, state or runtime does not allow.
-func checkAction(action string, rec *Record) error {
+// checkAction refuses an action the phase, state or runtime does not allow,
+// and the actions of a managed service while its helper is unavailable.
+func (m *Manager) checkAction(action string, rec *Record) error {
 	if rec.Phase != resource.PhaseManaged {
 		return ErrNotManaged
 	}
 	if !CanAct(action, rec.State) {
 		return &StateError{Resource: rec.Name, Action: action, State: rec.State}
 	}
-	return checkRuntime(action, rec.Runtime())
+	if err := checkRuntime(action, rec.Runtime()); err != nil {
+		return err
+	}
+	return checkHelper(action, rec.Runtime(), m.helperReady())
+}
+
+// helperReady returns nil when the deploy helper can be called, otherwise
+// why not.
+func (m *Manager) helperReady() error {
+	if m.deploy == nil {
+		return rt.ErrHelperUnavailable
+	}
+	return m.deploy.Ready()
 }
 
 // detached returns a context for bookkeeping that must finish even when the

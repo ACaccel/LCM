@@ -80,6 +80,31 @@ func (c *Catalog) SetDeploymentVersions(ctx context.Context, id int64, version, 
 	return nil
 }
 
+// NoteDeployment stores the log of a running deployment so far. The deploy
+// pipeline of managed services writes it before each deploy helper call,
+// so that the operation IDs it is about to use survive a restart.
+func (c *Catalog) NoteDeployment(ctx context.Context, id int64, log string) error {
+	err := c.db.Write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE deployments SET log = ? WHERE id = ? AND outcome = ?`,
+			tailCap(log, maxDeploymentLog), id, OutcomeRunning)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("deployment %d is not running", id)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("catalog: record deployment log: %w", err)
+	}
+	return nil
+}
+
 // FinishDeployment closes a deployment with its outcome. Only running
 // deployments can be finished.
 func (c *Catalog) FinishDeployment(ctx context.Context, id int64, outcome, errMsg, log string) error {

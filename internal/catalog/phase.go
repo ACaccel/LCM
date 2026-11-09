@@ -210,7 +210,7 @@ func (t serviceType) Actions(ctx context.Context, rec resource.Record) []resourc
 	}
 	busy := t.m.isBusy(rec.Name)
 	var out []resource.Action
-	for _, a := range AvailableActions(r) {
+	for _, a := range AvailableActions(r, t.m.helperReady()) {
 		reason := a.Reason
 		if a.Allowed && busy {
 			reason = ReasonBusy

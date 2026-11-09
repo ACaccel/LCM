@@ -34,7 +34,7 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 	if err != nil {
 		return Plan{}, err
 	}
-	if err := checkAction(action, rec); err != nil {
+	if err := m.checkAction(action, rec); err != nil {
 		return Plan{}, err
 	}
 	cfg := rec.Config
@@ -80,6 +80,11 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 }
 
 func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version string) ([]message.Message, error) {
+	if action == ActionRollback && rec.Runtime().Type == model.RuntimeManaged {
+		if steps, err := m.managedRollbackSteps(ctx, rec); err != nil || steps != nil {
+			return steps, err
+		}
+	}
 	src := rec.Config.Source
 	if src == nil {
 		return nil, ErrNoSource
@@ -135,6 +140,9 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 		steps = append(steps, message.New("step.resolveHead", fmt.Sprintf("resolve head of %s/%s", remote, src.Branch), "remote", remote, "branch", src.Branch))
 	}
 	steps = append(steps, message.New("step.checkout", "git checkout --detach <commit>"))
+	if rec.Runtime().Type == model.RuntimeManaged {
+		return append(steps, managedDeploySteps(rec, action)...), nil
+	}
 	if src.Build != "" {
 		steps = append(steps, message.New("step.build", "build: "+src.Build, "command", src.Build))
 	}
@@ -164,6 +172,9 @@ func runtimeStep(r model.Runtime) func(code, verb string) message.Message {
 		text = "compose project " + r.Project
 	case model.RuntimeCommand:
 		text = "service via configured commands"
+	case model.RuntimeManaged:
+		name = r.Service
+		text = fmt.Sprintf("managed service %s via the deploy helper", r.Service)
 	default:
 		text = string(r.Type) + " service"
 	}

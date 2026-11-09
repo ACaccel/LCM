@@ -107,8 +107,15 @@ type Record struct {
 	Config *model.ServiceConfig
 }
 
-// Runtime returns the runtime the adapters consume.
-func (r *Record) Runtime() model.Runtime { return r.Config.Runtime(r.Adapter) }
+// Runtime returns the runtime the adapters consume. A managed service is
+// known to the deploy helper by its resource name.
+func (r *Record) Runtime() model.Runtime {
+	rt := r.Config.Runtime(r.Adapter)
+	if rt.Type == model.RuntimeManaged {
+		rt.Service = r.Name
+	}
+	return rt
+}
 
 var systemActor = auth.Actor{Kind: auth.KindSystem, ID: "lcm", Name: "lcm"}
 

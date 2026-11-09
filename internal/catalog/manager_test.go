@@ -136,7 +136,7 @@ func TestRefusesRetiredServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range catalog.AvailableActions(rec) {
+	for _, a := range catalog.AvailableActions(rec, nil) {
 		if a.Allowed || a.Reason != catalog.ReasonNotManaged {
 			t.Errorf("availability on retired = %+v", a)
 		}

@@ -16,6 +16,9 @@ const (
 	ReasonNotConfigured = "notConfigured"
 	// ReasonUnsupported: the runtime cannot perform the action.
 	ReasonUnsupported = "unsupported"
+	// ReasonHelperUnavailable: the service is managed and the host's deploy
+	// helper, which performs the action, is not installed.
+	ReasonHelperUnavailable = "helperUnavailable"
 	// ReasonInvalidState: the action may not start in the current state.
 	ReasonInvalidState = "invalidState"
 	// ReasonNotManaged: the service is retired.
@@ -38,10 +41,11 @@ type Availability struct {
 }
 
 // AvailableActions reports for every action whether it can start on rec,
-// from the phase, the document, the runtime's capabilities and the state. Deployment
-// history is not consulted, so an available rollback may still find no
-// target; Plan gives the definitive answer.
-func AvailableActions(rec *Record) []Availability {
+// from the phase, the document, the runtime's capabilities, the deploy
+// helper (helper is nil when it can be called; only managed services use
+// it) and the state. Deployment history is not consulted, so an available
+// rollback may still find no target; Plan gives the definitive answer.
+func AvailableActions(rec *Record, helper error) []Availability {
 	out := make([]Availability, 0, len(Actions))
 	for _, a := range Actions {
 		reason := ""
@@ -52,6 +56,8 @@ func AvailableActions(rec *Record) []Availability {
 			reason = ReasonNotConfigured
 		case checkRuntime(a, rec.Runtime()) != nil:
 			reason = ReasonUnsupported
+		case checkHelper(a, rec.Runtime(), helper) != nil:
+			reason = ReasonHelperUnavailable
 		case !CanAct(a, rec.State):
 			reason = ReasonInvalidState
 		}
@@ -89,6 +95,20 @@ func checkRuntime(action string, r model.Runtime) error {
 	}
 	if !ok {
 		return fmt.Errorf("%w: %s on a %s runtime", ErrUnsupported, action, r.Type)
+	}
+	return nil
+}
+
+// checkHelper refuses the actions the deploy helper performs for a managed
+// service while the helper cannot be called (ready says why), before
+// anything is recorded.
+func checkHelper(action string, r model.Runtime, ready error) error {
+	if r.Type != model.RuntimeManaged || ready == nil {
+		return nil
+	}
+	switch action {
+	case ActionStart, ActionStop, ActionRestart, ActionDeploy, ActionRollback:
+		return fmt.Errorf("%w: %w", ErrHelperUnavailable, ready)
 	}
 	return nil
 }

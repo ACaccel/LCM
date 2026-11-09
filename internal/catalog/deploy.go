@@ -41,7 +41,9 @@ var shaRe = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 // tracked files and its origin is set to source.url before fetching. It is
 // detached at the target commit, built, installed and the service
 // restarted. A runtime that cannot restart the service leaves applying the
-// new version to the install step. There is no automatic rollback.
+// new version to the install step. A managed service is built, installed and
+// restarted by the deploy helper instead (see managedPipeline). There is no
+// automatic rollback.
 func (m *Manager) Deploy(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionDeploy, opts, func(ctx context.Context, s *session, res *ActionResult) error {
 		return s.deploy(ctx, res, opts.Version)
@@ -50,7 +52,9 @@ func (m *Manager) Deploy(ctx context.Context, name string, opts ActionOptions) (
 
 // Rollback redeploys the previous successful version. After a failed
 // deployment that is the last version that worked; after a successful one
-// it is the version that deployment replaced.
+// it is the version that deployment replaced. A managed service switches
+// back to the release that version installed while the helper still keeps
+// it, and is rebuilt otherwise.
 func (m *Manager) Rollback(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionRollback, opts, func(ctx context.Context, s *session, res *ActionResult) error {
 		deps, err := m.cat.Deployments(ctx, name, 100, 0)
@@ -60,6 +64,15 @@ func (m *Manager) Rollback(ctx context.Context, name string, opts ActionOptions)
 		target, ok := rollbackTarget(deps)
 		if !ok {
 			return ErrNoRollbackTarget
+		}
+		if s.rt.Type == model.RuntimeManaged {
+			release, err := m.rollbackRelease(ctx, name, deps, target)
+			if err != nil {
+				return err
+			}
+			if release != "" {
+				return s.activateRelease(ctx, res, target, release, lastSuccessful(deps))
+			}
 		}
 		return s.deploy(ctx, res, target)
 	})
@@ -145,8 +158,17 @@ func (s *session) deploy(ctx context.Context, res *ActionResult, version string)
 	if err != nil {
 		return err
 	}
-	previous := lastSuccessful(deps)
+	return s.record(ctx, res, version, lastSuccessful(deps), func(log *stepLog, id int64, previous *string) (string, error) {
+		return s.pipeline(ctx, src, checkout{dir: dir, clone: clone}, log, version, previous, id)
+	})
+}
 
+// record moves the service to its transient state, records a deployment of
+// version, runs body and records its outcome. body returns the commit it
+// targeted as soon as that is known, even on failure, and may correct
+// previous.
+func (s *session) record(ctx context.Context, res *ActionResult, version, previous string,
+	body func(log *stepLog, id int64, previous *string) (string, error)) error {
 	transient := StateDeploying
 	switch {
 	case s.action == ActionRollback:
@@ -168,7 +190,7 @@ func (s *session) deploy(ctx context.Context, res *ActionResult, version string)
 	res.DeploymentID = id
 
 	log := &stepLog{}
-	sha, perr := s.pipeline(ctx, src, checkout{dir: dir, clone: clone}, log, version, &previous, id)
+	sha, perr := body(log, id, &previous)
 	res.Version, res.PreviousVersion = sha, previous
 
 	// Bookkeeping must complete even when the action context was cancelled.
@@ -263,6 +285,9 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, co checkout, 
 
 	if _, err := run("checkout", s.git(co.dir, timeout, "checkout", "--detach", sha)); err != nil {
 		return sha, err
+	}
+	if s.rt.Type == model.RuntimeManaged {
+		return sha, s.managedPipeline(ctx, sha, log, id)
 	}
 	for _, step := range []struct{ name, script string }{{"build", src.Build}, {"install", src.Install}} {
 		if step.script == "" {

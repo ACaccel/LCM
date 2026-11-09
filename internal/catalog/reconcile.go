@@ -122,7 +122,13 @@ func (m *Manager) interruptDeployments(ctx context.Context) error {
 		if m.isBusy(d.Resource) {
 			continue
 		}
-		if err := m.cat.FinishDeployment(ctx, d.ID, OutcomeInterrupted, "interrupted by a restart of LCM", d.LogExcerpt); err != nil {
+		msg := "interrupted by a restart of LCM"
+		// A managed service's deployment says what became of the helper
+		// operation it was waiting for; it stays interrupted either way.
+		if op := m.describeInterrupted(ctx, d); op != "" {
+			msg += "; " + op
+		}
+		if err := m.cat.FinishDeployment(ctx, d.ID, OutcomeInterrupted, msg, d.LogExcerpt); err != nil {
 			return err
 		}
 	}
