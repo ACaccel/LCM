@@ -24,8 +24,8 @@ const (
 	DeploySudoers = "/etc/sudoers.d/lcm-deploy"
 	// DeployLedger is the helper's root-only operation ledger.
 	DeployLedger = "/var/lib/lcm-deploy"
-	// BuildAccount runs builds; it owns only build trees and caches.
-	BuildAccount  = "lcm-build"
+	// BuildDir and BuildCacheDir hold one root-owned directory per service,
+	// for the builds and the build cache of that service's build account.
 	BuildDir      = "/var/lib/lcm-build"
 	BuildCacheDir = "/var/cache/lcm-build"
 	RuntimesDir   = OptDir + "/runtimes"
@@ -47,6 +47,20 @@ func ServiceEtcDir(name string) string   { return "/etc/" + name }
 func ServiceEnvFile(name string) string  { return "/etc/" + name + "/env" }
 func ServiceUnit(name string) string     { return UnitDir + "/" + name + ".service" }
 func ServiceCheckout(name string) string { return WorkDir + "/" + name }
+func ServiceBuildDir(name string) string { return BuildDir + "/" + name }
+func ServiceCacheDir(name string) string { return BuildCacheDir + "/" + name }
+
+// BuildAccount is the account that builds service name: every service has
+// its own, so that one service's build cannot read or change another's.
+// Service names are short enough for it to stay within the 32 characters of
+// a user name.
+func BuildAccount(name string) string { return "lcmb-" + name }
+
+// ServiceComment and BuildComment are the comments (GECOS) of the accounts
+// host setup creates for a service; an existing account without its comment
+// was not made by LCM and is never used.
+func ServiceComment(name string) string { return "LCM service " + name }
+func BuildComment(name string) string   { return "LCM build " + name }
 
 var deployFiles = []rootFile{
 	{path: DeployWrapper, perm: 0o755, asset: "lcm-deploy"},
@@ -55,7 +69,7 @@ var deployFiles = []rootFile{
 }
 
 var (
-	serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+	serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,26}$`)
 	runtimeName = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
 	// safeHostPath excludes what systemd unit properties would split or
 	// expand (spaces, quotes, ':', '%', '$', '\').
@@ -63,7 +77,8 @@ var (
 )
 
 // ValidServiceName checks the name of a managed service. Names starting with
-// "lcm" are LCM's own accounts and directories.
+// "lcm" are LCM's own accounts and directories; at most 27 characters leave
+// room for the build account's prefix.
 func ValidServiceName(name string) error {
 	if !serviceName.MatchString(name) || strings.HasPrefix(name, "lcm") {
 		return fmt.Errorf("service names must match %s and must not start with \"lcm\" (got %q)", serviceName, name)
@@ -156,7 +171,7 @@ type namedStep struct {
 
 // grantState is what preflight found out about one service grant.
 type grantState struct {
-	acc *Account
+	acc, build *Account
 	// problem, when set, needs an administrator; the service's steps are
 	// skipped.
 	problem string
@@ -166,9 +181,11 @@ type grantState struct {
 var nologinShells = []string{"/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false"}
 
 // systemAccountProblem describes why acc cannot be the dedicated system
-// account with home directory home, or returns "".
-func systemAccountProblem(acc Account, home string, uidMin int) string {
+// account with home directory home and the given comment, or returns "".
+func systemAccountProblem(acc Account, home, comment string, uidMin int) string {
 	switch {
+	case acc.GECOS != comment:
+		return fmt.Sprintf("account %s exists and was not created by LCM (its comment is not %q)", acc.Name, comment)
 	case acc.UID <= 0 || acc.UID >= uidMin:
 		return fmt.Sprintf("account %s exists and is not a system account (user ID %d)", acc.Name, acc.UID)
 	case !slices.Contains(nologinShells, acc.Shell):
@@ -198,15 +215,25 @@ func uidMin(fsys FS) int {
 	return 1000
 }
 
-// unitSearchPath are the directories systemd loads system units from; a
-// unit in /etc/systemd/system would override one of the others.
-var unitSearchPath = []string{UnitDir, "/run/systemd/system", "/usr/local/lib/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"}
+// unitSearchPath are the directories systemd loads system units and their
+// drop-ins from, including generated, transient and runtime-control ones.
+var unitSearchPath = []string{
+	"/etc/systemd/system.control", "/run/systemd/system.control", "/run/systemd/transient", "/run/systemd/generator.early",
+	UnitDir, "/run/systemd/system", "/run/systemd/generator", "/usr/local/lib/systemd/system", "/usr/lib/systemd/system",
+	"/lib/systemd/system", "/run/systemd/generator.late",
+}
 
-// UnitConflict describes another unit that the unit of service name would
-// replace or override, or returns "". Only a unit that the deploy helper
-// wrote, owned by rootUID (0 on a host), may be replaced.
+// UnitConflict describes another unit or drop-in that would replace,
+// override or change the unit of service name, or returns "". Only a unit
+// that the deploy helper wrote, owned by rootUID (0 on a host), may be
+// replaced, and no drop-in may exist for it.
 func UnitConflict(fsys FS, name string, rootUID int) (string, error) {
 	for _, dir := range unitSearchPath {
+		if _, err := fsys.Lstat(dir + "/" + name + ".service.d"); err == nil {
+			return fmt.Sprintf("the drop-in directory %s/%s.service.d exists; it would change the service's unit", dir, name), nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
 		p := dir + "/" + name + ".service"
 		info, err := fsys.Lstat(p)
 		switch {
@@ -257,27 +284,39 @@ func (a *applier) checkGrant(ctx context.Context, name string, g ServiceGrant, u
 			return grantState{}, fmt.Errorf("services.%s.inputs.%s: %s is not a directory", name, in, p)
 		}
 	}
-	acc, ok, err := lookupAccount(ctx, a.h.Runner, name)
-	if err != nil {
-		return grantState{}, err
-	}
 	var st grantState
-	if ok {
-		st.acc = &acc
-		st.problem = systemAccountProblem(acc, ServiceDataDir(name), uidMin)
-	} else {
-		for _, d := range []string{ServiceOptDir(name), ServiceDataDir(name), ServiceEtcDir(name)} {
+	for _, want := range []struct {
+		acc        **Account
+		name, home string
+		comment    string
+		dirs       []string
+	}{
+		{&st.acc, name, ServiceDataDir(name), ServiceComment(name), []string{ServiceOptDir(name), ServiceDataDir(name), ServiceEtcDir(name)}},
+		{&st.build, BuildAccount(name), ServiceBuildDir(name), BuildComment(name), []string{ServiceBuildDir(name), ServiceCacheDir(name)}},
+	} {
+		acc, ok, err := lookupAccount(ctx, a.h.Runner, want.name)
+		if err != nil {
+			return grantState{}, err
+		}
+		if ok {
+			*want.acc = &acc
+			if st.problem = systemAccountProblem(acc, want.home, want.comment, uidMin); st.problem != "" {
+				return st, nil
+			}
+			continue
+		}
+		for _, d := range want.dirs {
 			if _, err := a.h.FS.Lstat(d); err == nil {
-				st.problem = fmt.Sprintf("%s exists but the account %s does not; review what it belongs to", d, name)
-				break
+				st.problem = fmt.Sprintf("%s exists but the account %s does not; review what it belongs to", d, want.name)
+				return st, nil
 			}
 		}
 	}
-	if st.problem == "" {
-		if st.problem, err = UnitConflict(a.h.FS, name, 0); err != nil {
-			return grantState{}, err
-		}
+	problem, err := UnitConflict(a.h.FS, name, 0)
+	if err != nil {
+		return grantState{}, err
 	}
+	st.problem = problem
 	return st, nil
 }
 
@@ -313,16 +352,6 @@ func (a *applier) preflightDeploy(ctx context.Context) error {
 			if info, err := fsys.Lstat(f.path); err == nil && info.IsDir() {
 				return fmt.Errorf("%s exists but is not a regular file; move it away", f.path)
 			}
-		}
-		acc, ok, err := lookupAccount(ctx, a.h.Runner, BuildAccount)
-		if err != nil {
-			return err
-		}
-		if ok {
-			if p := systemAccountProblem(acc, BuildDir, min); p != "" {
-				return errors.New(p)
-			}
-			a.build = &acc
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(a.cfg.Runtimes)) {
@@ -364,14 +393,6 @@ func (a *applier) deploySteps() []namedStep {
 	return append(out, namedStep{"services", a.removedGrants})
 }
 
-// buildIDs returns the build account's IDs, or -1 while it does not exist.
-func (a *applier) buildIDs() (int, int) {
-	if a.build == nil {
-		return -1, -1
-	}
-	return a.build.UID, a.build.GID
-}
-
 func (a *applier) deployComponent(ctx context.Context, s *step) error {
 	if !a.cfg.Components.Deploy {
 		if a.present(deployFiles) {
@@ -385,27 +406,11 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 	if _, err := a.ensureFile(s, DeployHelper, a.exe, 0o755); err != nil {
 		return err
 	}
-	if a.build == nil {
-		if err := s.change("create the system account "+BuildAccount+" (home "+BuildDir+", no login shell)", func() error {
-			acc, err := a.addSystemAccount(ctx, BuildAccount, BuildDir)
-			a.build = acc
-			return err
-		}); err != nil {
-			return err
-		}
-	}
-	_, gid := a.buildIDs()
 	for _, d := range []struct {
 		path string
 		perm fs.FileMode
-		gid  int
-		desc string
-	}{
-		{BuildDir, 0o750, gid, "root:" + BuildAccount},
-		{BuildCacheDir, 0o750, gid, "root:" + BuildAccount},
-		{DeployLedger, 0o700, 0, "root:root"},
-	} {
-		if err := a.ensureDir(s, d.path, d.perm, 0, d.gid, d.desc); err != nil {
+	}{{BuildDir, 0o755}, {BuildCacheDir, 0o755}, {DeployLedger, 0o700}} {
+		if err := a.ensureDir(s, d.path, d.perm, 0, 0, "root:root"); err != nil {
 			return err
 		}
 	}
@@ -414,11 +419,12 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 	return a.ensureGrant(ctx, s, DeploySudoers, asset("lcm-deploy-sudoers"))
 }
 
-// addSystemAccount creates a system account with its own group, no home
-// directory of its own making and no login shell.
-func (a *applier) addSystemAccount(ctx context.Context, name, home string) (*Account, error) {
+// addSystemAccount creates a system account with its own group, the comment
+// that marks it as LCM's, no home directory of its own making and no login
+// shell.
+func (a *applier) addSystemAccount(ctx context.Context, name, home, comment string) (*Account, error) {
 	if _, err := a.run(ctx, Command{Path: "useradd", Args: []string{
-		"--system", "--user-group", "--home-dir", home, "--no-create-home", "--shell", "/usr/sbin/nologin", name,
+		"--system", "--user-group", "--comment", comment, "--home-dir", home, "--no-create-home", "--shell", "/usr/sbin/nologin", name,
 	}}); err != nil {
 		return nil, err
 	}
@@ -429,7 +435,7 @@ func (a *applier) addSystemAccount(ctx context.Context, name, home string) (*Acc
 	if !ok {
 		return nil, fmt.Errorf("useradd did not create the account %s", name)
 	}
-	if p := systemAccountProblem(acc, home, a.uidMin); p != "" {
+	if p := systemAccountProblem(acc, home, comment, a.uidMin); p != "" {
 		return nil, errors.New("useradd did not create the expected account: " + p)
 	}
 	return &acc, nil
@@ -493,19 +499,33 @@ func (a *applier) grant(ctx context.Context, s *step, name string) error {
 		s.manual(st.problem)
 		return nil
 	}
-	if st.acc == nil {
-		if err := s.change("create the system account "+name+" (home "+ServiceDataDir(name)+", no login shell)", func() error {
-			acc, err := a.addSystemAccount(ctx, name, ServiceDataDir(name))
-			st.acc = acc
+	for _, acc := range []struct {
+		p                   **Account
+		name, home, comment string
+	}{
+		{&st.acc, name, ServiceDataDir(name), ServiceComment(name)},
+		{&st.build, BuildAccount(name), ServiceBuildDir(name), BuildComment(name)},
+	} {
+		if *acc.p != nil {
+			continue
+		}
+		if err := s.change("create the system account "+acc.name+" (home "+acc.home+", no login shell)", func() error {
+			made, err := a.addSystemAccount(ctx, acc.name, acc.home, acc.comment)
+			*acc.p = made
 			return err
 		}); err != nil {
 			return err
 		}
 	}
-	uid, gid := -1, -1
-	if st.acc != nil {
-		uid, gid = st.acc.UID, st.acc.GID
+	ids := func(acc *Account) (int, int) {
+		if acc == nil {
+			return -1, -1
+		}
+		return acc.UID, acc.GID
 	}
+	uid, gid := ids(st.acc)
+	buid, bgid := ids(st.build)
+	builder := BuildAccount(name)
 	for _, d := range []struct {
 		path     string
 		perm     fs.FileMode
@@ -516,6 +536,8 @@ func (a *applier) grant(ctx context.Context, s *step, name string) error {
 		{ServiceReleases(name), 0o755, 0, 0, "root:root"},
 		{ServiceDataDir(name), 0o750, uid, gid, name + ":" + name},
 		{ServiceEtcDir(name), 0o750, 0, gid, "root:" + name},
+		{ServiceBuildDir(name), 0o750, 0, bgid, "root:" + builder},
+		{ServiceCacheDir(name), 0o750, buid, bgid, builder + ":" + builder},
 	} {
 		info, err := a.h.FS.Lstat(d.path)
 		if err == nil && info.IsDir() && !info.IsLink() && (info.UID != d.uid || info.GID != d.gid) {

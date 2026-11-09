@@ -29,12 +29,36 @@ const (
 	shell          = "/bin/sh"
 )
 
-// Command timeouts.
+// Command timeouts. The run margins bound how long systemd-run may outlast
+// the unit's own RuntimeMaxSec.
 const (
 	systemctlTimeout = 3 * time.Minute
 	migrateTimeout   = 10 * time.Minute
 	analyzeTimeout   = time.Minute
+	buildRunMargin   = 2 * time.Minute
+	migrateRunMargin = time.Minute
 )
+
+// budget is the longest the commands the helper runs for req may take
+// together, in its worst case; copying trees comes on top. The client's
+// timeout is derived from it, so that it never gives up on a helper that is
+// still within its own limits.
+func budget(req Request) time.Duration {
+	switch req.Op {
+	case OpBuild:
+		// The build, then stopping its unit (by the watcher or after a
+		// timeout).
+		return time.Duration(req.TimeoutSec)*time.Second + buildRunMargin + 2*systemctlTimeout
+	case OpActivate:
+		// The migration and stopping its unit, the unit verification, the
+		// reload check, reload and reload after a restore, is-enabled,
+		// enable and restart.
+		return migrateTimeout + migrateRunMargin + analyzeTimeout + 7*systemctlTimeout
+	case OpStart, OpStop, OpRestart, OpStatus:
+		return systemctlTimeout
+	}
+	return 0
+}
 
 // commandEnv is added to the fixed environment of every command.
 var commandEnv = []string{"LC_ALL=C", "SYSTEMD_PAGER=cat", "SYSTEMD_COLORS=0", "SYSTEMD_LOG_COLOR=0"}
@@ -54,6 +78,11 @@ type Host struct {
 	// RootUID owns every directory and file the helper trusts, and RootUID
 	// and RootGID own what it writes: 0 on a host.
 	RootUID, RootGID int
+	// Free reports the free bytes and inodes of the file system holding a
+	// host path; nil checks nothing.
+	Free func(p string) (bytes, inodes uint64, err error)
+	// Limits bound builds.
+	Limits Limits
 }
 
 // Helper serves deploy helper requests.
@@ -138,27 +167,46 @@ func (h *Helper) read(ctx context.Context, req Request) Response {
 	return h.releases(req)
 }
 
-// change carries out a changing operation once per operationId, under the
-// service's lock, with its outcome recorded before the reply.
+// lockName is the lock a changing operation holds. A service's builds have
+// their own, so that a long build never keeps its unit from being stopped or
+// restarted; install, activate and the unit actions share the service's.
+// Service names contain no ".".
+func lockName(service string, op Op) string {
+	if op == OpBuild {
+		return service + ".build"
+	}
+	return service
+}
+
+// change carries out a changing operation once per operationId, under its
+// lock, with its outcome recorded before the reply.
 func (h *Helper) change(ctx context.Context, req Request) Response {
-	unlock, err := h.Ledger.Lock(req.Service)
+	now := h.Clock.Now()
+	rec := record{Version: Version, OperationID: req.OperationID, Service: req.Service, Op: req.Op,
+		RequestHash: req.Hash(), State: StateRunning, StartedAt: now.UnixMilli()}
+	// A finished operation is answered from the ledger whatever host.json
+	// says now; a running one needs its lock to be judged.
+	if old, found, err := h.Ledger.get(req.OperationID); err != nil || found && old.State != StateRunning {
+		return h.recorded(req, rec, old, err)
+	}
+	// The grant comes before the lock, so that only granted services ever
+	// get a lock file.
+	cfg, g, refused := h.grant(req)
+	if refused != nil {
+		return *refused
+	}
+	unlock, err := h.Ledger.Lock(lockName(req.Service, req.Op))
 	if errors.Is(err, ErrBusy) {
-		return refuse(reply(req), CodeBusy, "another operation of %s is running", req.Service)
+		what := "another operation"
+		if req.Op == OpBuild {
+			what = "another build"
+		}
+		return refuse(reply(req), CodeBusy, "%s of %s is running", what, req.Service)
 	}
 	if err != nil {
 		return refuse(reply(req), CodeFailed, "the ledger cannot be used: %v", err)
 	}
 	defer unlock()
-	now := h.Clock.Now()
-	rec := record{Version: Version, OperationID: req.OperationID, Service: req.Service, Op: req.Op,
-		RequestHash: req.Hash(), State: StateRunning, StartedAt: now.UnixMilli()}
-	if old, found, err := h.Ledger.get(req.OperationID); err != nil || found {
-		return h.recorded(req, rec, old, err)
-	}
-	cfg, g, refused := h.grant(req)
-	if refused != nil {
-		return *refused
-	}
 	if old, found, err := h.Ledger.begin(rec); err != nil || found {
 		return h.recorded(req, rec, old, err)
 	}
@@ -171,13 +219,13 @@ func (h *Helper) change(ctx context.Context, req Request) Response {
 	if err := h.Ledger.put(rec); err != nil {
 		resp.Message = strings.TrimSpace(resp.Message + " (the outcome could not be recorded; a query will report the operation as interrupted)")
 	}
-	h.Ledger.prune(h.Clock.Now().Add(-ledgerRetention), 100)
+	h.Ledger.maybePrune(h.Clock.Now())
 	return resp
 }
 
 // recorded answers a request whose operationId the ledger already holds.
-// The caller holds the service's lock, so a running record is one whose
-// helper stopped.
+// A running record reaches it only while the caller holds the record's
+// lock, so it is one whose helper stopped.
 func (h *Helper) recorded(req Request, want, old record, err error) Response {
 	switch {
 	case err != nil:
@@ -211,7 +259,7 @@ func (h *Helper) query(req Request) Response {
 	case r.State != StateRunning:
 		return *r.Response
 	}
-	unlock, err := h.Ledger.Lock(r.Service)
+	unlock, err := h.Ledger.Lock(lockName(r.Service, r.Op))
 	if errors.Is(err, ErrBusy) {
 		return Response{Version: Version, Op: r.Op, OperationID: r.OperationID, State: StateRunning}
 	}
@@ -229,14 +277,15 @@ func (h *Helper) perform(ctx context.Context, req Request, cfg hostsetup.Config,
 	case OpInstall:
 		return h.install(ctx, req)
 	case OpActivate:
-		return h.activate(ctx, req, g)
+		return h.activate(ctx, req, cfg, g)
 	}
 	return h.unitAction(ctx, req)
 }
 
 // account reads an account; with home set it must be the dedicated system
-// account that host setup creates, without a login shell.
-func (h *Helper) account(ctx context.Context, name, home string) (hostsetup.Account, error) {
+// account that host setup creates, with its comment and without a login
+// shell.
+func (h *Helper) account(ctx context.Context, name, home, comment string) (hostsetup.Account, error) {
 	acc, ok, err := h.Lookup(ctx, name)
 	if err != nil {
 		return acc, err
@@ -248,7 +297,7 @@ func (h *Helper) account(ctx context.Context, name, home string) (hostsetup.Acco
 		return acc, fmt.Errorf("account %s has user ID 0", name)
 	}
 	if home != "" {
-		if p := hostsetup.SystemAccountProblem(h.FS, acc, home); p != "" {
+		if p := hostsetup.SystemAccountProblem(h.FS, acc, home, comment); p != "" {
 			return acc, errors.New(p)
 		}
 	}

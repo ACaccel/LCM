@@ -92,21 +92,32 @@
 // the same request gets the recorded reply, a different one "conflict". So
 // after a lost reply or a timeout LCM sends query (or the same request) and
 // learns the outcome instead of guessing. Records of finished operations
-// are removed 90 days after they finished; status, releases and query are
-// not recorded.
+// are removed 90 days after they finished, and the oldest finished ones
+// beyond 10,000 records; the ledger is listed for that at most once an
+// hour. status, releases and query are not recorded.
 //
-// locks/<service> is locked (flock) for the whole of a changing operation
-// of that service; a second one gets "busy" at once. A "running" record
-// whose service lock is free belongs to a helper that stopped, so query
-// marks it "interrupted".
+// locks/<service>.build is locked (flock) for the whole of a build of that
+// service, and locks/<service> for the whole of its other changing
+// operations; a second operation that needs a held lock gets "busy" at
+// once, so a long build never blocks stop or restart. A "running" record
+// whose lock is free belongs to a helper that stopped, so query marks it
+// "interrupted". Lock files exist only for services that host.json grants.
 //
 // # Effects
 //
-// build copies the lcm-owned checkout /var/lib/lcm/work/<service>, whose
-// HEAD (read from .git without running git as root) must be the commit,
-// into /var/lib/lcm-build/<service>/<buildId>/src owned by lcm-build, and
-// runs the command there with systemd-run as lcm-build in a sandbox (see
-// buildArgs). It keeps the last 3 builds of a service. install copies the
+// build copies the lcm-owned checkout /var/lib/lcm/work/<service> without
+// its .git directory (the build gets the commit as LCM_COMMIT and must not
+// rely on git metadata); HEAD (read from .git without running git as root)
+// must be the commit. The copy goes to
+// /var/lib/lcm-build/<service>/<buildId>/src, owned by the service's
+// own build account lcmb-<service>, and runs the command there with
+// systemd-run as that account in a sandbox (see buildArgs). It keeps the
+// last 3 builds of a service. A build does not start with less than 2 GiB
+// or 100,000 inodes free, empties a cache above 4 GiB first, and is stopped
+// when its source, home and cache together exceed 16 GiB or 2,000,000
+// entries, or when less than 512 MiB or 20,000 inodes remain free (see
+// Limits; measured every 10 seconds). install first removes the oldest releases
+// beyond 20 that are neither current nor previous, then copies the
 // artifact directory of a successful build to
 // /opt/<service>/releases/<releaseId>, root-owned, directories 0755 and
 // files 0644 or 0755, refusing links that leave it, and writes the
@@ -149,8 +160,9 @@ const (
 	// MaxTimeoutSec bounds a build.
 	MaxTimeoutSec = 7200
 	// DefaultKeepReleases is the number of releases activate keeps when the
-	// request does not say.
+	// request does not say; MaxKeepReleases is the most it may keep.
 	DefaultKeepReleases = 3
+	MaxKeepReleases     = 20
 	maxArgs             = 32
 )
 
@@ -455,8 +467,8 @@ func (r Request) validateActivate() error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
-	if r.KeepReleases != 0 && (r.KeepReleases < 2 || r.KeepReleases > 20) {
-		return errors.New("keepReleases must be between 2 and 20")
+	if r.KeepReleases != 0 && (r.KeepReleases < 2 || r.KeepReleases > MaxKeepReleases) {
+		return fmt.Errorf("keepReleases must be between 2 and %d", MaxKeepReleases)
 	}
 	return nil
 }

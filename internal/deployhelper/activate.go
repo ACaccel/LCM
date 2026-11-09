@@ -1,7 +1,6 @@
 package deployhelper
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ACaccel/lcm/internal/hostsetup"
 )
@@ -23,17 +21,26 @@ var interpreters = []string{"node", "python3"}
 func unitName(svc string) string { return svc + ".service" }
 
 // serviceSandbox is the hardening of a service's unit and migration: it
-// runs as its own account, can write only its data directory, and sees
-// neither LCM's data nor the build trees.
-func serviceSandbox(svc string) []string {
-	props := sandbox("0027")
-	props = append(props, "ReadWritePaths="+hostsetup.ServiceDataDir(svc))
+// runs as its own account, can write only its data directory, sees neither
+// LCM's data, the backups nor the build trees, may bind no port but its
+// own, uses only IP and Unix sockets and has its own IPC namespace. It may
+// still connect anywhere, and the kernel does not stop it from binding its
+// port on another address than HOST: systemd has no per-address bind
+// rule, and IPAddressAllow= would also block its outbound connections.
+func serviceSandbox(svc string, port int, backup string) []string {
+	props := sandbox("0027", backup)
+	props = append(props,
+		"SocketBindAllow=tcp:"+strconv.Itoa(port),
+		"SocketBindDeny=any",
+		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+		"PrivateIPC=yes",
+		"ReadWritePaths="+hostsetup.ServiceDataDir(svc))
 	return append(props, "InaccessiblePaths=-"+hostsetup.BuildDir+" -"+hostsetup.BuildCacheDir)
 }
 
 // renderUnit is the built-in unit template. Every value in it is checked
 // to need no quoting or escaping.
-func renderUnit(svc string, port int, execStart []string, rtBin string) string {
+func renderUnit(svc string, port int, execStart []string, rtBin, backup string) string {
 	lines := []string{
 		hostsetup.ServiceUnitMarker,
 		"[Unit]",
@@ -53,7 +60,7 @@ func renderUnit(svc string, port int, execStart []string, rtBin string) string {
 		lines = append(lines, "Environment=PATH="+rtBin+":"+systemPath)
 	}
 	lines = append(lines, "Restart=on-failure", "RestartSec=5")
-	lines = append(lines, serviceSandbox(svc)...)
+	lines = append(lines, serviceSandbox(svc, port, backup)...)
 	lines = append(lines, "", "[Install]", "WantedBy=multi-user.target")
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -61,7 +68,7 @@ func renderUnit(svc string, port int, execStart []string, rtBin string) string {
 // activate makes a release current and (re)starts the service with a unit
 // from the built-in template. The optional migration runs first, in the new
 // release; when it fails nothing is switched.
-func (h *Helper) activate(ctx context.Context, req Request, g hostsetup.ServiceGrant) Response {
+func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config, g hostsetup.ServiceGrant) Response {
 	resp, svc := reply(req), req.Service
 	releases := hostsetup.ServiceReleases(svc)
 	if _, err := h.trustedPath(releases, false); err != nil {
@@ -77,7 +84,7 @@ func (h *Helper) activate(ctx context.Context, req Request, g hostsetup.ServiceG
 	if _, err := h.trustedPath(relDir, false); err != nil || m.Service != svc || m.ReleaseID != req.ReleaseID {
 		return refuse(resp, CodeFailed, "release %s is incomplete or not this service's", req.ReleaseID)
 	}
-	acc, err := h.account(ctx, svc, hostsetup.ServiceDataDir(svc))
+	acc, err := h.account(ctx, svc, hostsetup.ServiceDataDir(svc), hostsetup.ServiceComment(svc))
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
 	}
@@ -110,19 +117,20 @@ func (h *Helper) activate(ctx context.Context, req Request, g hostsetup.ServiceG
 			return refuse(resp, CodeRefused, "%v", err)
 		}
 		unit := "lcm-migrate-" + svc + "-" + req.OperationID[:8]
-		res, err := h.run(ctx, migrateTimeout+time.Minute, migrateArgs(unit, svc, acc, relDir, g.Port, rtBin, argv)...)
+		res, err := h.run(ctx, migrateTimeout+migrateRunMargin, migrateArgs(unit, svc, acc, relDir, g.Port, rtBin, backupDir(cfg), argv)...)
 		resp.Log = sanitizeLog(res.Output)
 		if err != nil {
 			h.stopUnit(ctx, unit, err)
 			return refuse(resp, CodeFailed, "%s; nothing was switched", commandFailure("the migration", err))
 		}
 	}
-	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin))
+	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin, backupDir(cfg)))
 }
 
 // switchAndRestart installs the unit, switches the current and previous
-// links, reloads systemd when the unit changed and restarts the service. A
-// unit that does not verify is put back together with the links.
+// links, reloads systemd when the unit changed or systemd reports an
+// outdated copy, and restarts the service. A unit that does not verify or
+// load is put back together with the links.
 func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Response, unit string) Response {
 	svc, id := req.Service, req.ReleaseID
 	opt := hostsetup.ServiceOptDir(svc)
@@ -189,9 +197,25 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 			}
 			return refuse(resp, CodeFailed, "the unit does not verify; the previous unit and release were restored")
 		}
+	}
+	// systemd may also hold an older copy of an unchanged unit, for example
+	// after an earlier reload failed.
+	reload := result.UnitChanged
+	if !reload {
+		res, err := h.run(ctx, systemctlTimeout, systemctl, "show", "--property=NeedDaemonReload", "--value", unitName(svc))
+		reload = err != nil || strings.TrimSpace(res.Output) != "no"
+	}
+	if reload {
 		if res, err := h.run(ctx, systemctlTimeout, systemctl, "daemon-reload"); err != nil {
 			resp.Log = sanitizeLog(res.Output)
-			return refuse(resp, CodeFailed, "%s", commandFailure("systemctl daemon-reload", err))
+			rerr := restore()
+			if rerr == nil {
+				_, rerr = h.run(ctx, systemctlTimeout, systemctl, "daemon-reload")
+			}
+			if rerr != nil {
+				return refuse(resp, CodeFailed, "%s, and restoring the previous unit and release failed: %v", commandFailure("systemctl daemon-reload", err), rerr)
+			}
+			return refuse(resp, CodeFailed, "%s; the previous unit and release were restored", commandFailure("systemctl daemon-reload", err))
 		}
 	}
 	if res, _ := h.run(ctx, systemctlTimeout, systemctl, "is-enabled", unitName(svc)); strings.TrimSpace(res.Output) != "enabled" {
@@ -223,20 +247,46 @@ func (h *Helper) checkServiceFiles(svc string, acc hostsetup.Account) error {
 	if err != nil {
 		return err
 	}
-	sc := bufio.NewScanner(strings.NewReader(string(data)))
-	for sc.Scan() {
-		line := strings.TrimPrefix(strings.TrimSpace(sc.Text()), "export ")
-		for _, key := range []string{"PORT", "HOST"} {
-			if strings.HasPrefix(strings.TrimSpace(line), key+"=") {
-				return fmt.Errorf("%s sets %s, which comes from host.json; remove it", env, key)
-			}
-		}
+	if key := envSets(string(data), "PORT", "HOST"); key != "" {
+		return fmt.Errorf("%s sets %s, which comes from host.json; remove it", env, key)
 	}
 	info, err := h.FS.Lstat(hostsetup.ServiceDataDir(svc))
 	if err != nil || !info.IsDir() || info.UID != acc.UID {
 		return fmt.Errorf("%s is not a directory of the account %s", hostsetup.ServiceDataDir(svc), svc)
 	}
 	return nil
+}
+
+// envSets returns the first of keys that an environment file may assign,
+// or "". It errs on the side of finding one: every physical line and every
+// line joined by backslash continuations is read the way systemd reads an
+// assignment (whitespace around the key, an "export" prefix, a quoted key),
+// keys are compared without regard to case, and comments are skipped only
+// where they start a line.
+func envSets(data string, keys ...string) string {
+	data = strings.ReplaceAll(data, "\r", "\n")
+	physical := strings.Split(data, "\n")
+	logical := strings.Split(strings.ReplaceAll(data, "\\\n", ""), "\n")
+	for _, line := range append(physical, logical...) {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && strings.TrimLeft(rest, " \t") != rest {
+			line = strings.TrimSpace(rest)
+		}
+		key, _, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.Trim(strings.TrimSpace(key), `"'`)
+		for _, k := range keys {
+			if strings.EqualFold(strings.TrimSpace(key), k) {
+				return k
+			}
+		}
+	}
+	return ""
 }
 
 // startCommand is ExecStart: the runtime's interpreter with a release file,
@@ -282,7 +332,7 @@ func (h *Helper) migrateCommand(relDir string, migrate []string, rtBin string) (
 
 // migrateArgs runs a migration like the service would run: as its account,
 // in the new release, with its env file and sandbox.
-func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port int, rtBin string, argv []string) []string {
+func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port int, rtBin, backup string, argv []string) []string {
 	args := []string{
 		systemdRun, "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec",
 		"--unit=" + unit,
@@ -293,7 +343,7 @@ func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port in
 	if rtBin != "" {
 		args = append(args, "--setenv=PATH="+rtBin+":"+systemPath)
 	}
-	props := append(serviceSandbox(svc), "EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
+	props := append(serviceSandbox(svc, port, backup), "EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
 		"RuntimeMaxSec="+strconv.Itoa(int(migrateTimeout.Seconds())))
 	for _, p := range props {
 		args = append(args, "--property="+p)
@@ -349,13 +399,19 @@ func (h *Helper) restoreLink(p, id string) error {
 	return h.setLink(p, "releases/"+id)
 }
 
+// readFile reads a file of at most 1 MiB; a larger one is refused rather
+// than read in part.
 func (h *Helper) readFile(p string) ([]byte, error) {
 	f, err := h.FS.Open(p)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(f, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
+	if err == nil && len(data) > 1<<20 {
+		err = fmt.Errorf("%s is larger than 1 MiB", p)
+	}
+	return data, err
 }
 
 // pruneReleases keeps the newest keep releases and always current and

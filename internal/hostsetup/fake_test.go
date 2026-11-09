@@ -470,13 +470,24 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		if shell == "" {
 			shell = "/bin/sh"
 		}
-		return fmt.Appendf(nil, "%s:x:%d:%d::%s:%s\n", acc.Name, acc.UID, acc.GID, acc.Home, shell), nil
+		return fmt.Appendf(nil, "%s:x:%d:%d:%s:%s:%s\n", acc.Name, acc.UID, acc.GID, acc.GECOS, acc.Home, shell), nil
 	case c.Path == "useradd":
 		name, uid := a[len(a)-1], 900+len(r.accounts)
 		if name == ServiceAccount {
 			uid = 990
 		}
-		r.accounts[name] = Account{Name: name, UID: uid, GID: uid, Home: a[3], Shell: a[6]}
+		acc := Account{Name: name, UID: uid, GID: uid}
+		for i := 0; i+1 < len(a); i++ {
+			switch a[i] {
+			case "--home-dir":
+				acc.Home = a[i+1]
+			case "--shell":
+				acc.Shell = a[i+1]
+			case "--comment":
+				acc.GECOS = a[i+1]
+			}
+		}
+		r.accounts[name] = acc
 		return nil, nil
 	case strings.HasPrefix(c.Path, "/tmp/") && arg(0) == "version":
 		if c.As == nil || c.As.Name != "nobody" {

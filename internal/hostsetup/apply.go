@@ -69,10 +69,7 @@ type applier struct {
 	operator Account
 	nobody   Account
 	// lcm is the service account; nil until it exists.
-	lcm *Account
-	// build is the build account of the deploy component; nil until it
-	// exists.
-	build  *Account
+	lcm    *Account
 	grants map[string]grantState
 	uidMin int
 

@@ -88,7 +88,7 @@ func TestAllow(t *testing.T) {
 	if !strings.Contains(out, "components.deploy is false, so the deploy helper is not installed; the runtime node24 is not copied yet; complete it with: sudo bin/lcm host apply") {
 		t.Errorf("no next step:\n%s", out)
 	}
-	if len(th.r.called("useradd")) != 1 || len(th.r.called("systemctl")) != 0 {
+	if len(th.r.called("useradd")) != 2 || len(th.r.called("systemctl")) != 0 {
 		t.Errorf("commands: %v", th.r.calls)
 	}
 
@@ -118,7 +118,7 @@ func TestAllowRefusals(t *testing.T) {
 		"reserved name":   {nil, "lcm-web", grant, `must not start with "lcm"`},
 		"login account": {func(th *testHost) {
 			th.r.accounts["web"] = Account{Name: "web", UID: 1001, GID: 1001, Home: "/home/web", Shell: "/bin/bash"}
-		}, "web", grant, "cannot allow web: account web exists and is not a system account"},
+		}, "web", grant, "cannot allow web: account web exists and was not created by LCM"},
 		"vendor unit":          {func(th *testHost) { th.fs.file("/lib/systemd/system/web.service", "x", 0o644, 0, 0) }, "web", grant, "cannot allow web: the unit /lib/systemd/system/web.service exists"},
 		"untrusted input":      {func(th *testHost) { th.fs.dir("/tmp/in", 0o777, 0, 0) }, "web", ServiceGrant{Port: 3200, Inputs: map[string]string{"in": "/tmp/in"}}, "/tmp is writable by others"},
 		"invalid config":       {func(th *testHost) { th.fs.file(ConfigPath, `{"operator":"alice"}`, 0o644, 0, 0) }, "web", grant, "fix it first"},

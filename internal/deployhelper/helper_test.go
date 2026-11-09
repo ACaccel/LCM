@@ -40,6 +40,8 @@ type env struct {
 	build      func(src string) (string, int)
 	migrate    func(argv []string) (string, int)
 	analyze    int
+	reloadFail int
+	needReload bool
 	enabled    bool
 	opCounter  int
 	systemctls []string
@@ -59,6 +61,8 @@ func newEnv(t *testing.T) *env {
 		e.mkdir(d, 0o755)
 	}
 	e.mkdir("/var/lib/lcm-deploy", 0o700)
+	e.mkdir("/var/lib/lcm-build/web", 0o750)
+	e.mkdir("/var/cache/lcm-build/web", 0o750)
 	e.write("/etc/login.defs", "UID_MIN 100000\n", 0o644)
 	e.write("/etc/web/env", "SECRET=1\n", 0o640)
 	e.write("/opt/lcm/runtimes/node24/bin/node", "node", 0o755)
@@ -69,11 +73,14 @@ func newEnv(t *testing.T) *env {
 
 	uid, gid := os.Getuid(), os.Getgid()
 	accounts := map[string]hostsetup.Account{}
-	for name, home := range map[string]string{"lcm": hostsetup.DataDir, "lcm-build": hostsetup.BuildDir, "web": "/var/lib/web", "alice": "/home/alice"} {
-		accounts[name] = hostsetup.Account{Name: name, UID: uid, GID: gid, Home: home, Shell: "/usr/sbin/nologin"}
+	for name, a := range map[string][2]string{
+		"lcm": {hostsetup.DataDir, ""}, "lcmb-web": {"/var/lib/lcm-build/web", "LCM build web"},
+		"web": {"/var/lib/web", "LCM service web"}, "alice": {"/home/alice", ""},
+	} {
+		accounts[name] = hostsetup.Account{Name: name, UID: uid, GID: gid, Home: a[0], GECOS: a[1], Shell: "/usr/sbin/nologin"}
 	}
 	e.cfg = hostsetup.Config{
-		Operator: "alice", Components: hostsetup.Components{Deploy: true},
+		Operator: "alice", Components: hostsetup.Components{Deploy: true}, Backup: &hostsetup.Backup{Dir: "/var/backups/lcm"},
 		Runtimes: map[string]string{"node24": "/home/alice/.local/node"},
 		Services: map[string]hostsetup.ServiceGrant{"web": {Port: 3200, Runtimes: []string{"node24"}, Inputs: map[string]string{"assets": input}}},
 	}
@@ -179,13 +186,19 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		}
 		return execx.Result{Output: out}, nil
 	}
-	switch c.Argv[0] {
-	case systemdRun:
+	if c.Argv[0] == systemdRun {
+		// The fake build runs unlocked: it may advance the clock, and the
+		// build watcher then runs systemctl.
+		build, migrate := e.build, e.migrate
+		e.mu.Unlock()
+		defer e.mu.Lock()
 		if strings.HasPrefix(arg(c, "--unit="), "lcm-build-") {
-			return result(e.build(e.real(arg(c, "--working-directory="))))
+			return result(build(e.real(arg(c, "--working-directory="))))
 		}
 		i := slices.Index(c.Argv, "--")
-		return result(e.migrate(c.Argv[i+1:]))
+		return result(migrate(c.Argv[i+1:]))
+	}
+	switch c.Argv[0] {
 	case systemdAnalyze:
 		return result("bad unit\n", e.analyze)
 	case systemctl:
@@ -199,7 +212,16 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 			return result("enabled\n", 0)
 		case "enable":
 			e.enabled = true
+		case "daemon-reload":
+			if e.reloadFail > 0 {
+				e.reloadFail--
+				return result("Failed to reload daemon\n", 1)
+			}
+			e.needReload = false
 		case "show":
+			if c.Argv[2] == "--property=NeedDaemonReload" {
+				return result(map[bool]string{true: "yes\n", false: "no\n"}[e.needReload], 0)
+			}
 			return result("LoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=4242\n", 0)
 		}
 		return result("", 0)
@@ -276,8 +298,11 @@ func TestBuildInstallActivate(t *testing.T) {
 		t.Errorf("log not sanitized: %q", b.Log)
 	}
 	dir := "/var/lib/lcm-build/web/" + id
-	if e.read(dir+"/src/package.json") != "{}" || e.read(dir+"/src/.git/HEAD") == "" || e.read(dir+"/build.sh") != "npm ci && npm run build\n" {
+	if e.read(dir+"/src/package.json") != "{}" || e.read(dir+"/src/src/app.js") != "app" || e.read(dir+"/build.sh") != "npm ci && npm run build\n" {
 		t.Errorf("build tree incomplete")
+	}
+	if e.exists(dir + "/src/.git") {
+		t.Error("the build got the checkout's .git")
 	}
 	var rec buildRecord
 	if err := json.Unmarshal([]byte(e.read(dir+"/build.json")), &rec); err != nil || rec.State != StateSucceeded || rec.Commit != commit1 {
@@ -296,7 +321,11 @@ func TestBuildInstallActivate(t *testing.T) {
 		"--property=ReadWritePaths=" + dir + "/src", "--property=ReadWritePaths=/var/cache/lcm-build/web",
 		"--property=TemporaryFileSystem=/run/lcm-build:ro", "--property=BindReadOnlyPaths=" + input + ":/run/lcm-build/inputs/assets",
 		"--property=RuntimeMaxSec=600", "--property=MemoryMax=4G", "--property=CapabilityBoundingSet=",
-		"--property=InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power",
+		"--property=InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm",
+		"--property=TemporaryFileSystem=/var/lib/lcm-build:ro", "--property=TemporaryFileSystem=/var/cache/lcm-build:ro",
+		"--property=BindPaths=" + dir + "/src", "--property=BindPaths=" + dir + "/home", "--property=BindPaths=/var/cache/lcm-build/web",
+		"--property=BindReadOnlyPaths=" + dir + "/build.sh", "--property=ProtectProc=invisible", "--property=ProcSubset=pid",
+		"--property=IPAddressDeny=localhost",
 	} {
 		if !slices.Contains(argv, want) {
 			t.Errorf("build argv lacks %q: %q", want, argv)
@@ -306,6 +335,10 @@ func TestBuildInstallActivate(t *testing.T) {
 		t.Errorf("build command %q", tail)
 	}
 	for _, a := range argv {
+		if (strings.HasPrefix(a, "--property=ReadWritePaths=") || strings.HasPrefix(a, "--property=BindPaths=")) &&
+			!strings.Contains(a, "="+dir+"/") && !strings.HasSuffix(a, "=/var/cache/lcm-build/web") {
+			t.Errorf("argv exposes more than this build: %q", a)
+		}
 		if strings.Contains(a, "npm ci") || strings.Contains(a, "SECRET") {
 			t.Errorf("argv carries the command or a secret: %q", a)
 		}
@@ -339,7 +372,9 @@ func TestBuildInstallActivate(t *testing.T) {
 		"\nEnvironmentFile=/etc/web/env\nEnvironment=PORT=3200 HOST=127.0.0.1\nEnvironment=PATH=/opt/lcm/runtimes/node24/bin:" + systemPath + "\n",
 		"\nNoNewPrivileges=yes\n", "\nProtectSystem=strict\n", "\nProtectHome=yes\n", "\nPrivateTmp=yes\n", "\nPrivateDevices=yes\n",
 		"\nRestrictSUIDSGID=yes\n", "\nCapabilityBoundingSet=\n", "\nReadWritePaths=/var/lib/web\n",
-		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\n[Install]\nWantedBy=multi-user.target\n",
+		"\nInaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm\n",
+		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\nProtectProc=invisible\n",
+		"\nSocketBindAllow=tcp:3200\nSocketBindDeny=any\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nPrivateIPC=yes\n", "\n[Install]\nWantedBy=multi-user.target\n",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q:\n%s", want, unit)
@@ -378,6 +413,45 @@ func TestBuildInstallActivate(t *testing.T) {
 	if got := e.systemctlCalls(); !slices.Equal(got[len(got)-4:], []string{"show --property=LoadState,ActiveState,SubState,UnitFileState,MainPID web.service", "stop web.service", "start web.service", "restart web.service"}) {
 		t.Errorf("systemctl %q", got)
 	}
+}
+
+func TestBuildLimits(t *testing.T) {
+	e := newEnv(t)
+	free := uint64(10 << 30)
+	e.h.Free = func(p string) (uint64, uint64, error) {
+		if p != "/var/lib/lcm-build/web" {
+			t.Errorf("measured %s", p)
+		}
+		return free, 1 << 20, nil
+	}
+	e.h.Limits = Limits{MaxBytes: 1000, CacheBytes: 100, Interval: time.Second}
+
+	// A cache that grew too large is emptied before the build.
+	e.write("/var/cache/lcm-build/web/npm/big", strings.Repeat("x", 200), 0o644)
+	e.ok(buildReq(commit1))
+	if e.exists("/var/cache/lcm-build/web/npm") {
+		t.Error("the oversized cache was kept")
+	}
+
+	// A build that writes too much is stopped.
+	e.build = func(src string) (string, int) {
+		e.writeReal(filepath.Join(src, "huge"), strings.Repeat("x", 2000), 0o644)
+		e.clock.Advance(time.Second)
+		return "killed\n", 143
+	}
+	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: its files exceed 1000 bytes")
+	if got := e.systemctlCalls(); len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "stop lcm-build-web-") {
+		t.Errorf("systemctl %q", got)
+	}
+
+	// So is one that fills the file system, and none starts without room.
+	e.build = func(string) (string, int) {
+		free = 1 << 20
+		e.clock.Advance(time.Second)
+		return "", 143
+	}
+	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the build file system has only 1048576 bytes")
+	e.refused(buildReq(commit1), CodeRefused, "not enough room for a build")
 }
 
 func TestPruning(t *testing.T) {
@@ -481,8 +555,9 @@ func TestConfinedCopies(t *testing.T) {
 			if name == "lcm" {
 				uid++
 			}
-			home := map[string]string{"lcm": hostsetup.DataDir, "lcm-build": hostsetup.BuildDir, "web": "/var/lib/web"}[name]
-			return hostsetup.Account{Name: name, UID: uid, GID: os.Getgid(), Home: home, Shell: "/usr/sbin/nologin"}, true, nil
+			home := map[string]string{"lcm": hostsetup.DataDir, "lcmb-web": "/var/lib/lcm-build/web", "web": "/var/lib/web"}[name]
+			comment := map[string]string{"lcmb-web": "LCM build web", "web": "LCM service web"}[name]
+			return hostsetup.Account{Name: name, UID: uid, GID: os.Getgid(), Home: home, GECOS: comment, Shell: "/usr/sbin/nologin"}, true, nil
 		}
 		e.refused(buildReq(commit1), CodeFailed, "is owned by user")
 	})
@@ -579,6 +654,30 @@ func TestActivateFailures(t *testing.T) {
 		t.Errorf("activate %+v\n%s", r.Activate, e.read("/etc/systemd/system/web.service"))
 	}
 
+	// An unchanged unit is reloaded when systemd holds an outdated copy.
+	e.needReload = true
+	n := len(e.systemctlCalls())
+	e.ok(Request{Op: OpActivate, Service: "web", ReleaseID: rel2, Start: []string{"bin/server", "--listen"}})
+	if got := e.systemctlCalls()[n:]; !slices.Equal(got[:2], []string{"show --property=NeedDaemonReload --value web.service", "daemon-reload"}) {
+		t.Errorf("systemctl %q", got)
+	}
+
+	// A reload that fails puts back the previous unit and release.
+	unit2 := e.read("/etc/systemd/system/web.service")
+	e.reloadFail = 1
+	r = e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel1, Start: []string{"index.js"}, Runtime: "node24"},
+		CodeFailed, "systemctl daemon-reload exited with status 1; the previous unit and release were restored")
+	if e.read("/etc/systemd/system/web.service") != unit2 || r.Activate.Switched {
+		t.Errorf("not restored: %+v", r.Activate)
+	}
+	if target, _ := os.Readlink(e.real("/opt/web/current")); target != "releases/"+rel2 {
+		t.Errorf("current -> %q after a failed reload", target)
+	}
+	// The restored unit is loaded again, and the service is not restarted.
+	if got := e.systemctlCalls(); !slices.Equal(got[len(got)-2:], []string{"daemon-reload", "daemon-reload"}) {
+		t.Errorf("systemctl %q", got)
+	}
+
 	// A unit the helper did not write is never replaced.
 	e.write("/etc/systemd/system/web.service", "[Service]\nExecStart=/bin/true\n", 0o644)
 	e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel2, Start: []string{"bin/server"}}, CodeRefused, "was not written by the deploy helper")
@@ -614,13 +713,26 @@ func TestLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.refused(Request{Op: OpStart, Service: "web"}, CodeBusy, "another operation of web is running")
+	// A build has its own lock: it neither waits for unit actions nor
+	// blocks them.
+	e.ok(buildReq(commit1))
+	unlockBuild, err := e.h.Ledger.Lock("web.build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.refused(buildReq(commit1), CodeBusy, "another build of web is running")
+	unlockBuild()
+	// Ungranted services never get a lock file.
+	if e.exists("/var/lib/lcm-deploy/locks/other") {
+		t.Error("a lock file was created for a service host.json does not grant")
+	}
 	// A running record is reported as running while its lock is held, and
 	// as interrupted once it is free.
 	runningID := "33333333-2222-4333-8444-555555555555"
-	if err := e.h.Ledger.put(record{Version: Version, OperationID: runningID, Service: "web", Op: OpBuild, RequestHash: "x", State: StateRunning, StartedAt: 1}); err != nil {
+	if err := e.h.Ledger.put(record{Version: Version, OperationID: runningID, Service: "web", Op: OpRestart, RequestHash: "x", State: StateRunning, StartedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if q := e.call(Request{Op: OpQuery, OperationID: runningID}); q.State != StateRunning || q.Op != OpBuild || q.Code != "" {
+	if q := e.call(Request{Op: OpQuery, OperationID: runningID}); q.State != StateRunning || q.Op != OpRestart || q.Code != "" {
 		t.Errorf("query while running %+v", q)
 	}
 	unlock()
@@ -642,15 +754,91 @@ func TestLedger(t *testing.T) {
 	}
 	e.refused(Request{Op: OpQuery, OperationID: id}, CodeFailed, "must be a regular file with mode 0600")
 
-	// Finished records are removed after the retention period.
-	e.clock.Advance(ledgerRetention + time.Hour)
-	old := time.Now().Add(-ledgerRetention - 2*time.Hour)
+	// Finished records are removed after the retention period, by the first
+	// request after an hour; the times are the clock's.
+	start := e.clock.Now()
+	for _, f := range e.records() {
+		if err := os.Chtimes(f, start, start); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(e.real("/var/lib/lcm-deploy/prune-stamp"), start, start); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Advance(ledgerRetention + time.Minute)
+	old := start.Add(-time.Hour)
 	if err := os.Chtimes(e.real("/var/lib/lcm-deploy/ops/"+runningID+".json"), old, old); err != nil {
 		t.Fatal(err)
 	}
 	e.ok(Request{Op: OpRestart, Service: "web"})
 	if e.exists("/var/lib/lcm-deploy/ops/" + runningID + ".json") {
 		t.Error("an expired record was kept")
+	}
+}
+
+// records returns the real paths of the ledger's records.
+func (e *env) records() []string {
+	e.t.Helper()
+	files, err := filepath.Glob(e.real("/var/lib/lcm-deploy/ops/*.json"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return files
+}
+
+func TestLedgerIsBounded(t *testing.T) {
+	e := newEnv(t)
+	e.deploy(commit1)
+	e.h.Ledger.maxRecords = 3
+	for range 3 {
+		e.ok(Request{Op: OpRestart, Service: "web"})
+	}
+	// Within the hour the ledger is not listed again.
+	if n := len(e.records()); n != 6 {
+		t.Fatalf("%d records", n)
+	}
+	// Then the oldest finished records go first, and a running one stays.
+	for i, f := range e.records() {
+		at := e.clock.Now().Add(time.Duration(i-10) * time.Minute)
+		if err := os.Chtimes(f, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := "44444444-2222-4333-8444-555555555555"
+	if err := e.h.Ledger.put(record{Version: Version, OperationID: running, Service: "web", Op: OpStart, RequestHash: "x", State: StateRunning, StartedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	old := e.clock.Now().Add(-time.Hour)
+	if err := os.Chtimes(e.real("/var/lib/lcm-deploy/ops/"+running+".json"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Advance(pruneEvery + time.Minute)
+	last := e.ok(Request{Op: OpRestart, Service: "web"}).OperationID
+	files := e.records()
+	if len(files) != 3 || !e.exists("/var/lib/lcm-deploy/ops/"+running+".json") || !e.exists("/var/lib/lcm-deploy/ops/"+last+".json") {
+		t.Errorf("kept %v", files)
+	}
+}
+
+func TestInstallKeepsReleasesBounded(t *testing.T) {
+	e := newEnv(t)
+	b := e.ok(buildReq(commit1)).Build.BuildID
+	for range MaxKeepReleases + 3 {
+		e.ok(Request{Op: OpInstall, Service: "web", BuildID: b, Artifact: "dist"})
+		e.clock.Advance(time.Second)
+	}
+	names, err := os.ReadDir(e.real("/opt/web/releases"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := 0
+	for _, n := range names {
+		if n.IsDir() {
+			dirs++
+		}
+	}
+	if dirs != MaxKeepReleases || len(names) != 2*MaxKeepReleases {
+		t.Errorf("%d release directories, %d entries", dirs, len(names))
 	}
 }
 

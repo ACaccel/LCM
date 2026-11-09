@@ -53,6 +53,7 @@ func ServeLocal(ctx context.Context, in io.Reader, out io.Writer) error {
 		Lookup: func(ctx context.Context, name string) (hostsetup.Account, bool, error) {
 			return lookup(ctx, runner, name)
 		},
+		Free: statfsFree,
 	}
 	h := &Helper{Host: host}
 	ledger, err := openTrustedLedger(h, "")

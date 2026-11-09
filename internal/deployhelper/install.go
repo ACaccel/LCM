@@ -24,9 +24,10 @@ func releasePerm(info hostsetup.Info) fs.FileMode {
 }
 
 // install copies the artifact directory of a successful build into a new
-// root-owned release. The build tree belongs to lcm-build, whose build ran
-// third-party code, so the copy is confined to it, accepts only entries
-// that lcm-build owns and refuses links that leave the release.
+// root-owned release. The build tree belongs to the service's build
+// account, whose build ran third-party code, so the copy is confined to it,
+// accepts only entries that account owns and refuses links that leave the
+// release.
 func (h *Helper) install(ctx context.Context, req Request) Response {
 	resp, svc := reply(req), req.Service
 	dir := serviceBuilds(svc) + "/" + req.BuildID
@@ -42,13 +43,26 @@ func (h *Helper) install(ctx context.Context, req Request) Response {
 	case rec.State != StateSucceeded:
 		return refuse(resp, CodeRefused, "build %s did not succeed", req.BuildID)
 	}
-	builder, err := h.account(ctx, hostsetup.BuildAccount, hostsetup.BuildDir)
+	builder, err := h.builder(ctx, svc)
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
 	}
 	releases := hostsetup.ServiceReleases(svc)
 	if _, err := h.trustedPath(releases, false); err != nil {
 		return refuse(resp, CodeRefused, "%v; run sudo bin/lcm host allow or host apply", err)
+	}
+	// Installs that are never activated must not fill the disk: keep at most
+	// as many releases as activate may keep, and current and previous.
+	opt := hostsetup.ServiceOptDir(svc)
+	current, err := h.linkTarget(opt + "/current")
+	if err == nil {
+		var previous string
+		if previous, err = h.linkTarget(opt + "/previous"); err == nil {
+			h.pruneReleases(svc, MaxKeepReleases-1, current, previous)
+		}
+	}
+	if err != nil {
+		return refuse(resp, CodeFailed, "%v", err)
 	}
 	id := h.newID()
 	dst := releases + "/" + id
