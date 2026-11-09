@@ -53,6 +53,22 @@ while (($#)); do
 	esac
 done
 
+# Only a build of a reviewed checkout may run as root. lcm host refuses the
+# self-deployed binary as well, but that check runs inside the binary it
+# judges, so it is made here before the binary runs.
+real=$(realpath -m -- "$binary")
+case $real in
+/usr/local/bin/lcm | /usr/local/bin/lcm.* | /var/lib/lcm/*)
+	die "refusing $binary ($real): it is the self-deployed binary or a copy of it; run 'make build' in a reviewed checkout"
+	;;
+esac
+for installed in /usr/local/bin/lcm /usr/local/bin/lcm.prev /usr/local/bin/lcm.failed; do
+	[[ ! $real -ef $installed ]] || die "refusing $binary: it is the same file as $installed; run 'make build' in a reviewed checkout"
+done
+lcm_uid=$(id -u lcm 2>/dev/null || true)
+if [[ -n $lcm_uid && -e $real && $(stat -c %u -- "$real") == "$lcm_uid" ]]; then
+	die "refusing $binary: it is owned by lcm, which self-deploy controls; run 'make build' in a reviewed checkout"
+fi
 ((EUID == 0)) || die "run as root: sudo deploy/bootstrap.sh"
 [[ -f $binary && ! -L $binary && -x $binary ]] || die "no binary at $binary; run 'make build' first"
 if [[ -n $ts_host ]]; then

@@ -89,6 +89,17 @@ func TestBootstrapWrapper(t *testing.T) {
 	if code, out := run("--operator", "alice"); code != 1 || !strings.Contains(out, "run as root") {
 		t.Errorf("as a normal user: %d\n%s", code, out)
 	}
+	// The self-deployed binary is refused before anything runs it, also
+	// through a link.
+	link := filepath.Join(t.TempDir(), "lcm")
+	if err := os.Symlink("/usr/local/bin/lcm.prev", link); err != nil {
+		t.Fatal(err)
+	}
+	for _, binary := range []string{"/usr/local/bin/lcm", link} {
+		if code, out := run("--binary", binary); code != 1 || !strings.Contains(out, "it is the self-deployed binary") {
+			t.Errorf("--binary %s: %d\n%s", binary, code, out)
+		}
+	}
 	script := string(readDeploy(t, "bootstrap.sh"))
 	for _, want := range []string{`"$binary" host init --config "$config"`, `exec "$binary" host apply --config "$config"`} {
 		if !strings.Contains(script, want) {
