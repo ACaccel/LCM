@@ -706,3 +706,25 @@ func TestTheRunningExecutableIsInstalled(t *testing.T) {
 		t.Fatalf("wrote %v", w)
 	}
 }
+
+func TestOlderBuildIsWarnedAbout(t *testing.T) {
+	th := converged(t)
+	if _, out, _ := th.apply(Options{Check: true}); strings.Contains(out, "warning:") {
+		t.Fatalf("warning for the same build:\n%s", out)
+	}
+	th.r.installedVersion = "lcm v2 (def) 2026-11-08T00:00:00Z\n"
+	th.fs.file(Unit, "[Unit]\n", 0o644, 0, 0)
+	for _, check := range []bool{true, false} {
+		res, out, err := th.apply(Options{Check: check})
+		if err != nil || res.Changes == 0 {
+			t.Fatalf("check=%v: %+v %v\n%s", check, res, err, out)
+		}
+		if !strings.HasPrefix(out, "warning: the installed /usr/local/bin/lcm (lcm v2 (def) 2026-11-08T00:00:00Z) is newer than this build") ||
+			!strings.Contains(out, "lcm.service (from a build older than the installed binary)") {
+			t.Errorf("check=%v:\n%s", check, out)
+		}
+	}
+	if _, ok := buildTime("lcm dev"); ok {
+		t.Error("a version without a time was parsed")
+	}
+}

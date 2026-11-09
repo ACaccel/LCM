@@ -375,7 +375,7 @@ type fakeRunner struct {
 
 	failVisudo, failVisudoStaged, failAnalyze bool
 	visudoHook                                func() error
-	versionOutput                             string
+	versionOutput, installedVersion           string
 	installPy                                 []string
 }
 
@@ -463,7 +463,15 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		if r.versionOutput != "" {
 			return []byte(r.versionOutput), nil
 		}
-		return []byte("lcm v1 (abc) now\n"), nil
+		return []byte("lcm v1 (abc) 2026-11-05T00:00:00Z\n"), nil
+	case c.Path == Binary && arg(0) == "version":
+		if c.As == nil || c.As.Name != "nobody" {
+			return nil, errors.New("the installed binary must run as nobody")
+		}
+		if r.installedVersion != "" {
+			return []byte(r.installedVersion), nil
+		}
+		return []byte("lcm v1 (abc) 2026-11-05T00:00:00Z\n"), nil
 	case c.Path == "visudo" && arg(0) == "-cf":
 		if r.fs.get(arg(1)) == nil {
 			return nil, errors.New("visudo: no such file")

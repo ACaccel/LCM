@@ -84,6 +84,39 @@ type applier struct {
 	// planned holds the directories check mode reported as created, so
 	// that their children do not report them again.
 	planned map[string]bool
+	// downgrade, when set, warns that this build is older than the
+	// installed binary.
+	downgrade string
+}
+
+// checkDowngrade compares the commit times that "lcm version" reports for
+// this build and for the installed binary, which runs as nobody. Applying
+// an older build replaces newer host files, so it warns, but it does not
+// block: the administrator may mean it.
+func (a *applier) checkDowngrade(ctx context.Context, running string) {
+	if _, err := a.h.FS.Lstat(Binary); err != nil {
+		return
+	}
+	out, err := a.run(ctx, Command{Path: Binary, Args: []string{"version"}, As: &a.nobody, Timeout: 10 * time.Second})
+	if err != nil {
+		return
+	}
+	installed := strings.TrimSpace(string(out))
+	ti, ok1 := buildTime(installed)
+	tr, ok2 := buildTime(running)
+	if ok1 && ok2 && ti.After(tr) {
+		a.downgrade = fmt.Sprintf("the installed %s (%s) is newer than this build (%s); its embedded files replace newer ones and --replace-binary downgrades the binary; use a build of the current reviewed checkout unless that is intended", Binary, installed, running)
+	}
+}
+
+// buildTime is the commit time at the end of an "lcm version" line.
+func buildTime(version string) (time.Time, bool) {
+	f := strings.Fields(version)
+	if len(f) < 3 || f[0] != "lcm" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, f[len(f)-1])
+	return t, err == nil
 }
 
 type securityState struct {
@@ -133,6 +166,9 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 		{"admin password", a.adminPassword},
 		{"token", a.token},
 		{"tailscale serve", a.tailscaleServe},
+	}
+	if a.downgrade != "" {
+		_, _ = fmt.Fprintf(o.Out, "warning: %s\n", a.downgrade)
 	}
 	for _, st := range steps {
 		s := &step{a: a, name: st.name}
@@ -551,6 +587,7 @@ func (a *applier) preflightStage(ctx context.Context) error {
 	if !bytes.HasPrefix(out, []byte("lcm ")) {
 		return fmt.Errorf("%s does not look like an lcm binary", a.h.Executable)
 	}
+	a.checkDowngrade(ctx, strings.TrimSpace(string(out)))
 	rules := map[string]string{"sudoers": stage + "/sudoers"}
 	if a.cfg.Components.MachinePower {
 		rules["machine-power-sudoers"] = stage + "/machine-power-sudoers"
@@ -678,6 +715,9 @@ func (a *applier) ensureFile(s *step, p string, c Content, perm fs.FileMode) (bo
 		return true, s.change(fmt.Sprintf("set the mode of %s to %04o (was %04o)", p, perm, info.Mode.Perm()), func() error {
 			return fsys.Chmod(p, perm)
 		})
+	}
+	if a.downgrade != "" {
+		what += " (from a build older than the installed binary)"
 	}
 	return true, s.change(what, func() error { return a.writeContent(p, c, perm, 0, 0) })
 }
