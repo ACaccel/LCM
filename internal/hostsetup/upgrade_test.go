@@ -60,10 +60,15 @@ type upRunner struct {
 
 	// What systemd reports about the unit.
 	pid, restarts int
-	badCgroup     bool
-	churnPID      bool
-	notActive     bool
-	envOverride   string
+	// shows counts property reads since the last start; the main process
+	// is replaced at pidChangeAt (when non-zero).
+	shows, pidChangeAt int
+	foreignListener    bool
+	extraListener      bool
+	badCgroup          bool
+	churnPID           bool
+	notActive          bool
+	envOverride        string
 }
 
 func (r *upRunner) LookPath(name string) (string, error) {
@@ -175,15 +180,19 @@ func (r *upRunner) systemctl(a []string) ([]byte, error) {
 			}
 			return []byte("\n"), nil
 		}
-		if r.churnPID && r.active {
+		r.shows++
+		if (r.churnPID || (r.pidChangeAt != 0 && r.shows == r.pidChangeAt)) && r.active {
 			r.pid++
-			r.fs.file(fmt.Sprintf("/proc/%d/cgroup", r.pid), "0::/system.slice/lcm.service\n", 0o444, 0, 0)
+			if r.pidChangeAt != 0 {
+				r.restarts++ // systemd restarted the process
+			}
+			r.publish()
 		}
 		state, pid := "inactive", 0
 		if r.active && !r.notActive {
 			state, pid = "active", r.pid
 		}
-		return fmt.Appendf(nil, "ActiveState=%s\nMainPID=%d\nNRestarts=%d\nControlGroup=/system.slice/lcm.service\n", state, pid, r.restarts), nil
+		return fmt.Appendf(nil, "ActiveState=%s\nMainPID=%d\nNRestarts=%d\nControlGroup=/system.slice/lcm.service\nRestartUSec=5s\n", state, pid, r.restarts), nil
 	case "reset-failed":
 	case "start", "restart":
 		r.startedOff = append(r.startedOff, r.loadOff)
@@ -200,16 +209,38 @@ func (r *upRunner) systemctl(a []string) ([]byte, error) {
 			err = r.onStart(len(r.startedOff))
 		}
 		r.pid++
-		cg := "0::/system.slice/lcm.service\n"
-		if r.badCgroup {
-			cg = "0::/user.slice/impostor.service\n"
-		}
-		r.fs.file(fmt.Sprintf("/proc/%d/cgroup", r.pid), cg, 0o444, 0, 0)
+		r.shows = 0
+		r.publish()
 		return nil, err
 	default:
 		return nil, fmt.Errorf("fake systemctl: unexpected %v", a)
 	}
 	return nil, nil
+}
+
+// publish writes what /proc shows for the current main process: its cgroup,
+// the socket it holds, and the listening sockets on the health port.
+func (r *upRunner) publish() {
+	cg := "0::/system.slice/lcm.service\n"
+	if r.badCgroup {
+		cg = "0::/user.slice/impostor.service\n"
+	}
+	r.fs.file(fmt.Sprintf("/proc/%d/cgroup", r.pid), cg, 0o444, 0, 0)
+	inode := 5000 + r.pid
+	tcp := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n" +
+		"   0: 0100007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 111 1 0 100 0 0 10 0\n" +
+		fmt.Sprintf("   1: 0100007F:1E78 00000000:0000 0A 00000000:00000000 00:00000000 00000000   990        0 %d 1 0 100 0 0 10 0\n", inode) +
+		fmt.Sprintf("   2: 0100007F:1E78 0100007F:9999 01 00000000:00000000 00:00000000 00000000   990        0 %d 1 0 100 0 0 10 0\n", 777)
+	if r.extraListener {
+		tcp += "   3: 00000000:1E78 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 4242 1 0 100 0 0 10 0\n"
+	}
+	r.fs.file("/proc/net/tcp", tcp, 0o444, 0, 0)
+	r.fs.remove(fmt.Sprintf("/proc/%d/fd", r.pid))
+	r.fs.dir(fmt.Sprintf("/proc/%d/fd", r.pid), 0o500, 0, 0)
+	r.fs.link(fmt.Sprintf("/proc/%d/fd/0", r.pid), "/dev/null", 0, 0)
+	if !r.foreignListener {
+		r.fs.link(fmt.Sprintf("/proc/%d/fd/7", r.pid), fmt.Sprintf("socket:[%d]", inode), 0, 0)
+	}
 }
 
 // failWriteFS fails chosen writes.
@@ -237,6 +268,8 @@ type upTest struct {
 	// lock stands in for self-install's lock; locks counts the holders.
 	lock  func() (func(), error)
 	locks int
+	// stamp names the backup set; the clock moves on while the upgrade waits.
+	stamp string
 }
 
 func newUpTest(t *testing.T) *upTest {
@@ -259,12 +292,14 @@ func newUpTest(t *testing.T) *upTest {
 	m.file(EnvFile, "LCM_DATA_DIR=/var/lib/lcm\nLCM_LISTEN=127.0.0.1:7800\n", 0o640, 0, 990)
 	m.dir("/var/backups", 0o755, 0, 0)
 	m.dir("/run/systemd/system", 0o755, 0, 0)
-	m.file("/proc/100/cgroup", "0::/system.slice/lcm.service\n", 0o444, 0, 0)
+	r.publish()
 	u := &upTest{t: t, th: th, r: r, fs: m, free: func(string) (uint64, error) { return 1 << 40, nil }}
 	u.lock = func() (func(), error) {
 		u.locks++
 		return func() { u.locks-- }, nil
 	}
+	u.stamp = th.clock.Now().UTC().Format("20060102T150405Z")
+	u.advanceClock()
 	return u
 }
 
@@ -309,7 +344,7 @@ func (u *upTest) upgradeCtx(ctx context.Context, o UpgradeOptions) (Result, stri
 
 // setName is the backup set the fake clock produces.
 func (u *upTest) setName() string {
-	return BackupRoot + "/upgrade-" + u.th.clock.Now().UTC().Format("20060102T150405Z")
+	return BackupRoot + "/upgrade-" + u.stamp
 }
 
 // order checks that the substrings occur in the operation log in this order.
@@ -656,7 +691,7 @@ func TestUpgradeFailureBeforeInstallStartsOldAgain(t *testing.T) {
 				return nil
 			}
 		}, "Access denied"},
-		{"service never stops", func(u *upTest) { u.r.stuck = true; u.advanceClock() }, "still active after 1m0s"},
+		{"service never stops", func(u *upTest) { u.r.stuck = true }, "still active after 1m0s"},
 		{"backup of the binary fails", func(u *upTest) {
 			u.th.host.FS = failWriteFS{memFS: u.fs, fail: func(p string) error {
 				if strings.HasSuffix(p, "/bin/lcm") {
@@ -734,7 +769,6 @@ func TestUpgradeFailureAfterInstallRestores(t *testing.T) {
 			}
 		}, "exited with status 1", "[true false]"},
 		{"never reports the new version", func(u *upTest) {
-			u.advanceClock()
 			u.healthOverride = func(running string) (string, error) {
 				if running == "v2" {
 					return "", errors.New("connection refused")
@@ -743,7 +777,6 @@ func TestUpgradeFailureAfterInstallRestores(t *testing.T) {
 			}
 		}, "within 2m0s", "[true false]"},
 		{"reports another version", func(u *upTest) {
-			u.advanceClock()
 			u.healthOverride = func(running string) (string, error) {
 				if running == "v2" {
 					return "v9", nil
@@ -761,7 +794,6 @@ func TestUpgradeFailureAfterInstallRestores(t *testing.T) {
 			}
 		}, "exited with status 1", "[true false false]"},
 		{"normal restart never healthy", func(u *upTest) {
-			u.advanceClock()
 			u.healthOverride = func(running string) (string, error) {
 				if running == "v2" && len(u.r.startedOff) >= 2 {
 					return "", errors.New("connection refused")
@@ -881,7 +913,6 @@ func TestUpgradeRollbackRefusesATamperedBackup(t *testing.T) {
 
 func TestUpgradeRollbackReportsAnUnhealthyOldBinary(t *testing.T) {
 	u := newUpTest(t)
-	u.advanceClock()
 	u.r.onStart = func(n int) error {
 		if n == 1 {
 			return exit(1)
@@ -903,7 +934,6 @@ func TestUpgradeRollbackReportsAnUnhealthyOldBinary(t *testing.T) {
 
 func TestUpgradeRollbackWhenStopCannotBeConfirmed(t *testing.T) {
 	u := newUpTest(t)
-	u.advanceClock()
 	u.r.onStart = func(n int) error {
 		if n == 1 {
 			u.r.stuck = true
@@ -991,7 +1021,6 @@ func TestUpgradeKeepsAllSetsOnFailure(t *testing.T) {
 
 func TestUpgradeOutputIsSanitized(t *testing.T) {
 	u := newUpTest(t)
-	u.advanceClock()
 	u.healthOverride = func(running string) (string, error) {
 		if running == "v2" {
 			return "\x1b[2Jv2\u202e", nil

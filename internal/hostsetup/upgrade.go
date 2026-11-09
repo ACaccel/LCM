@@ -1,6 +1,7 @@
 package hostsetup
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -43,6 +44,8 @@ const (
 
 	selfInstallPending = "/run/lcm-self-install.pending"
 	selfInstallLock    = "/run/lcm-self-install.lock"
+	// healthPort is the port of HealthURL.
+	healthPort = 7800
 	// selfInstallVerify is how long self-install treats an update as still
 	// being verified.
 	selfInstallVerify = 10 * time.Minute
@@ -54,6 +57,8 @@ const (
 	// themselves; backupMargin is what must stay free while copying.
 	backupSlack  = 16 << 20
 	backupMargin = 8 << 20
+	// treeMargin is how much a copied tree may exceed its preflight size.
+	treeMargin = 1 << 20
 )
 
 const dropInContent = "# Written by lcm host upgrade for the validation start; removed when it ends.\n[Service]\nEnvironment=LCM_AUTOMATION=off\n"
@@ -299,6 +304,24 @@ func (u *upgrader) preflightInstallation() error {
 			return err
 		case !info.IsRegular():
 			return fmt.Errorf("%s is not a regular file", f.path)
+		}
+	}
+	// A file of another owner is not what LCM or the install wrote; it is
+	// refused rather than copied into the set and later restored.
+	owned := []struct {
+		path string
+		uid  int
+	}{{Binary, 0}, {DatabaseFile, u.a.lcm.UID}, {DatabaseFile + "-wal", u.a.lcm.UID}, {DatabaseFile + "-shm", u.a.lcm.UID}}
+	for _, f := range owned {
+		info, err := fsys.Lstat(f.path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.IsRegular() && info.UID != f.uid {
+			return fmt.Errorf("%s is owned by user %d, not %d; review it by hand", f.path, info.UID, f.uid)
 		}
 	}
 	if _, err := fsys.Lstat(UpgradeDropIn); err == nil {
@@ -744,14 +767,14 @@ func (u *upgrader) writeBackup(_ context.Context) error {
 		if _, err := fsys.Lstat(DataDir + "/" + name); errors.Is(err, fs.ErrNotExist) && name != "lcm.db" {
 			continue
 		}
-		if err := u.backupFile(DataDir, name, "database/"+name); err != nil {
+		if err := u.backupFile(DataDir, name, "database/"+name, u.a.lcm.UID); err != nil {
 			return err
 		}
 	}
 	if err := fsys.Mkdir(u.set+"/bin", 0o700, 0, 0); err != nil {
 		return err
 	}
-	if err := u.backupFile(path.Dir(Binary), path.Base(Binary), "bin/lcm"); err != nil {
+	if err := u.backupFile(path.Dir(Binary), path.Base(Binary), "bin/lcm", 0); err != nil {
 		return err
 	}
 	owners := map[int]bool{0: true, u.a.lcm.UID: true}
@@ -784,7 +807,7 @@ func (u *upgrader) writeBackup(_ context.Context) error {
 // from the opened descriptor, which must be the file that was looked at
 // first: a file swapped in meanwhile is refused, not copied with the
 // metadata of another.
-func (u *upgrader) backupFile(dir, name, rel string) error {
+func (u *upgrader) backupFile(dir, name, rel string, owner int) error {
 	fsys := u.h.FS
 	src := dir + "/" + name
 	t, err := openSource(fsys, dir)
@@ -806,6 +829,9 @@ func (u *upgrader) backupFile(dir, name, rel string) error {
 	defer func() { _ = r.Close() }()
 	if !info.IsRegular() || !sameFile(before, info) {
 		return fmt.Errorf("%s changed while it was opened; nothing was copied", src)
+	}
+	if info.UID != owner {
+		return fmt.Errorf("%s is owned by user %d, not %d; nothing was copied", src, info.UID, owner)
 	}
 	if err := u.ensureRoom(info.Size); err != nil {
 		return err
@@ -851,7 +877,9 @@ func (u *upgrader) backupTree(src, rel string, owners map[int]bool, size int64) 
 	if err != nil {
 		return err
 	}
-	c := &copier{src: t, fsys: fsys, owners: owners}
+	// The tree was sized in the preflight: files that appeared since, or
+	// grew, do not get past a small margin, and each file needs room first.
+	c := &copier{src: t, fsys: fsys, owners: owners, maxBytes: size + treeMargin, beforeFile: u.ensureRoom}
 	if err := c.dir(".", u.set+"/"+rel, root); err != nil {
 		return fmt.Errorf("copy %s: %w", src, err)
 	}
@@ -936,10 +964,12 @@ type unitState struct {
 	mainPID  int
 	restarts int
 	cgroup   string
+	// restartDelay is the unit's RestartSec; zero when unknown.
+	restartDelay time.Duration
 }
 
 func (u *upgrader) unitState(ctx context.Context) (unitState, error) {
-	out, err := u.systemctl(ctx, "show", "--property=ActiveState,MainPID,NRestarts,ControlGroup", UnitName)
+	out, err := u.systemctl(ctx, "show", "--property=ActiveState,MainPID,NRestarts,ControlGroup,RestartUSec", UnitName)
 	if err != nil {
 		return unitState{}, err
 	}
@@ -955,6 +985,8 @@ func (u *upgrader) unitState(ctx context.Context) (unitState, error) {
 			st.restarts, _ = strconv.Atoi(v)
 		case "ControlGroup":
 			st.cgroup = v
+		case "RestartUSec":
+			st.restartDelay, _ = parseSystemdSpan(v)
 		}
 	}
 	return st, nil
@@ -978,39 +1010,150 @@ func (u *upgrader) inCgroup(pid int, cg string) bool {
 	return false
 }
 
+// parseSystemdSpan reads a time span as "systemctl show" prints it, such as
+// "5s", "100ms" or "1min 30s".
+func parseSystemdSpan(v string) (time.Duration, bool) {
+	units := map[string]time.Duration{
+		"us": time.Microsecond, "ms": time.Millisecond, "s": time.Second,
+		"min": time.Minute, "h": time.Hour, "d": 24 * time.Hour,
+	}
+	fields := strings.Fields(v)
+	var total time.Duration
+	for _, f := range fields {
+		i := 0
+		for i < len(f) && f[i] >= '0' && f[i] <= '9' {
+			i++
+		}
+		n, err := strconv.Atoi(f[:i])
+		unit, ok := units[f[i:]]
+		if err != nil || !ok || i == 0 {
+			return 0, false
+		}
+		total += time.Duration(n) * unit
+	}
+	return total, len(fields) > 0
+}
+
+// listenersOwnedBy checks that every IPv4 socket listening on the health
+// port, and at least one, is a socket that process pid holds open. LCM
+// opens its listener before the database, so another process that already
+// held the port would otherwise answer for a new LCM that then exits.
+func (u *upgrader) listenersOwnedBy(pid int) error {
+	f, err := u.h.FS.Open("/proc/net/tcp")
+	if err != nil {
+		return fmt.Errorf("read /proc/net/tcp: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	var inodes []string
+	sc := bufio.NewScanner(io.LimitReader(f, 64<<20))
+	sc.Buffer(make([]byte, 0, 4096), 1<<20)
+	for sc.Scan() {
+		// sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 10 || fields[3] != "0A" {
+			continue
+		}
+		if _, port, ok := strings.Cut(fields[1], ":"); ok && strings.EqualFold(port, fmt.Sprintf("%04X", healthPort)) {
+			inodes = append(inodes, fields[9])
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	if len(inodes) == 0 {
+		return fmt.Errorf("nothing listens on port %d", healthPort)
+	}
+	dir := "/proc/" + strconv.Itoa(pid) + "/fd"
+	names, err := u.h.FS.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+	held := map[string]bool{}
+	for _, n := range names {
+		if target, err := u.h.FS.Readlink(dir + "/" + n); err == nil {
+			if inode, ok := strings.CutPrefix(target, "socket:["); ok {
+				held[strings.TrimSuffix(inode, "]")] = true
+			}
+		}
+	}
+	for _, inode := range inodes {
+		if !held[inode] {
+			return fmt.Errorf("a socket listening on port %d (inode %s) does not belong to process %d of %s", healthPort, printable(inode, 20), pid, UnitName)
+		}
+	}
+	return nil
+}
+
+// settleDelay is how long the unit must stay as it is after it first looks
+// healthy: longer than its RestartSec, so that a process that exits right
+// after it started (and is restarted by systemd) is caught.
+func settleDelay(st unitState) time.Duration {
+	d := st.restartDelay
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	return d + time.Second
+}
+
 // confirmUnit checks that the health answer comes from the unit's own
 // process: the unit is active, its main process belongs to its control
-// group, and neither the process nor the restart count change while the
-// version is read twice. Any other process that listens on the health port
-// therefore cannot stand in for it.
-func (u *upgrader) confirmUnit(ctx context.Context, want string, baseRestarts int) error {
+// group and holds the socket that listens on the health port, and neither
+// the process nor the restart count change while the version is read twice.
+// Any other process that listens on the health port therefore cannot stand
+// in for it. It returns the state it saw.
+func (u *upgrader) confirmUnit(ctx context.Context, want string, baseRestarts int) (unitState, error) {
 	first, err := u.unitState(ctx)
 	if err != nil {
-		return err
+		return first, err
 	}
 	switch {
 	case first.active != "active":
-		return fmt.Errorf("%s is %q, not active", UnitName, printable(first.active, 32))
+		return first, fmt.Errorf("%s is %q, not active", UnitName, printable(first.active, 32))
 	case first.mainPID <= 0:
-		return fmt.Errorf("%s has no main process", UnitName)
+		return first, fmt.Errorf("%s has no main process", UnitName)
 	case first.restarts != baseRestarts:
-		return fmt.Errorf("%s was restarted by systemd %d time(s) since the start", UnitName, first.restarts-baseRestarts)
+		return first, fmt.Errorf("%s was restarted by systemd %d time(s) since the start", UnitName, first.restarts-baseRestarts)
 	case !u.inCgroup(first.mainPID, first.cgroup):
-		return fmt.Errorf("process %d is not in the control group of %s", first.mainPID, UnitName)
+		return first, fmt.Errorf("process %d is not in the control group of %s", first.mainPID, UnitName)
+	}
+	if err := u.listenersOwnedBy(first.mainPID); err != nil {
+		return first, err
 	}
 	v, err := u.o.HealthVersion(ctx)
 	if err != nil {
-		return err
+		return first, err
 	}
 	if v != want {
-		return fmt.Errorf("health reports version %q, not %q", printable(v, 64), want)
+		return first, fmt.Errorf("health reports version %q, not %q", printable(v, 64), want)
 	}
 	second, err := u.unitState(ctx)
 	if err != nil {
-		return err
+		return first, err
 	}
 	if second.active != "active" || second.mainPID != first.mainPID || second.restarts != first.restarts {
-		return fmt.Errorf("%s changed its main process while it was checked", UnitName)
+		return first, fmt.Errorf("%s changed its main process while it was checked", UnitName)
+	}
+	return first, nil
+}
+
+// settled confirms the unit, waits longer than its RestartSec on the host
+// clock and confirms it again: it must be the same process with the same
+// restart count, so a process that exits soon after it answered (and is
+// restarted, or replaced by an impostor) does not pass.
+func (u *upgrader) settled(ctx context.Context, want string, baseRestarts int) error {
+	first, err := u.confirmUnit(ctx, want, baseRestarts)
+	if err != nil {
+		return err
+	}
+	if err := sleep(ctx, u.h.Clock, settleDelay(first)); err != nil {
+		return err
+	}
+	second, err := u.confirmUnit(ctx, want, baseRestarts)
+	if err != nil {
+		return err
+	}
+	if second.mainPID != first.mainPID {
+		return fmt.Errorf("%s changed its main process while it settled", UnitName)
 	}
 	return nil
 }
@@ -1035,7 +1178,7 @@ func (u *upgrader) waitVersion(ctx context.Context, want string, baseRestarts in
 	for {
 		v, err := u.o.HealthVersion(ctx)
 		if err == nil && v == want {
-			err = u.confirmUnit(ctx, want, baseRestarts)
+			err = u.settled(ctx, want, baseRestarts)
 			if err == nil {
 				return nil
 			}

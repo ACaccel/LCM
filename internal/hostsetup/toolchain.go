@@ -232,6 +232,11 @@ type copier struct {
 	owners   map[int]bool
 	uid, gid int
 	budget
+	// maxBytes, when set, replaces the default byte bound of the tree, and
+	// beforeFile, when set, runs with each file's size before it is
+	// written; either can refuse the copy.
+	maxBytes   int64
+	beforeFile func(size int64) error
 }
 
 func (c *copier) owned(rel string, info Info) error {
@@ -309,6 +314,14 @@ func (c *copier) file(rel, dst string, want Info) error {
 	}
 	if err := c.add(info.Size); err != nil {
 		return err
+	}
+	if c.maxBytes > 0 && c.bytes > c.maxBytes {
+		return fmt.Errorf("%s: the tree is larger than the %d bytes it was sized at", rel, c.maxBytes)
+	}
+	if c.beforeFile != nil {
+		if err := c.beforeFile(info.Size); err != nil {
+			return err
+		}
 	}
 	return c.fsys.WriteFile(dst, io.LimitReader(f, info.Size), copyPerm(info.Mode), c.uid, c.gid)
 }

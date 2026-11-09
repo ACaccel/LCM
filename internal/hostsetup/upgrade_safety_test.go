@@ -194,12 +194,12 @@ func TestUpgradeBackupFileMustBeTheFileThatWasChecked(t *testing.T) {
 
 func TestUpgradeBackupTakesMetadataFromTheOpenedFile(t *testing.T) {
 	u := newUpTest(t)
-	u.th.host.FS = descriptorSwapFS{memFS: u.fs, swap: descriptorSwapTree{mode: 0o640, uid: 777}}
+	u.th.host.FS = descriptorSwapFS{memFS: u.fs, swap: descriptorSwapTree{mode: 0o640, uid: 990}}
 	if _, out, err := u.upgrade(UpgradeOptions{}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !strings.Contains(u.fs.content(u.setName()+"/manifest.json"), `"uid": 777`) {
-		t.Errorf("the manifest does not carry the descriptor's owner:\n%s", u.fs.content(u.setName()+"/manifest.json"))
+	if !strings.Contains(u.fs.content(u.setName()+"/manifest.json"), `"mode": 416`) {
+		t.Errorf("the manifest does not carry the descriptor's mode:\n%s", u.fs.content(u.setName()+"/manifest.json"))
 	}
 }
 
@@ -219,7 +219,6 @@ func TestUpgradeChecksTheUnitBehindTheHealthAnswer(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			u := newUpTest(t)
-			u.advanceClock()
 			u.r.onStart = func(n int) error {
 				// The rollback's own start (n == 2) is a healthy unit again.
 				u.r.notActive, u.r.badCgroup, u.r.churnPID = false, false, false
@@ -240,7 +239,6 @@ func TestUpgradeChecksTheUnitBehindTheHealthAnswer(t *testing.T) {
 
 func TestUpgradeChecksTheUnitAfterTheNormalRestartToo(t *testing.T) {
 	u := newUpTest(t)
-	u.advanceClock()
 	u.r.onStart = func(n int) error {
 		u.r.badCgroup = n == 2
 		return nil
@@ -254,7 +252,6 @@ func TestUpgradeChecksTheUnitAfterTheNormalRestartToo(t *testing.T) {
 
 func TestUpgradeRollbackChecksTheOldUnit(t *testing.T) {
 	u := newUpTest(t)
-	u.advanceClock()
 	u.r.onStart = func(n int) error {
 		switch n {
 		case 1:
