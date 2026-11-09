@@ -478,7 +478,8 @@ func (e *selfEnv) firstDeploy() {
 	policy := e.replace("deploy/lcm-auto-deploy.yaml", string(readDeploy(e.t, "lcm-auto-deploy.yaml")),
 		"repo: https://github.com/ACaccel/LCM.git", "repo: "+e.origin,
 		"requireCI: true", "requireCI: false",
-		"notifyUrl: http://127.0.0.1:4100/notifications/lcm-deploy", "notifyUrl: "+e.relay.URL+"/notifications/lcm-deploy",
+		`notifyUrl: ""`, "notifyUrl: "+e.relay.URL+"/notifications/lcm-deploy",
+		`notifyTokenSecret: ""`, "notifyTokenSecret: konata-notify-key",
 		"healthTimeout: 3m", "healthTimeout: 90s")
 	e.lcm("apply", "-f", e.writeDoc("policy.yaml", policy))
 	// The git trigger records the first head it sees without starting a run.

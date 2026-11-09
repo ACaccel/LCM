@@ -1,0 +1,14 @@
+# Local inventory of monitoring-only services for deploy/seed.sh.
+# Copy to ~/.config/lcm/seed-inventory (or point LCM_SEED_INVENTORY at it) and
+# edit. One entry per line; blank lines and # comments are ignored.
+#
+#   service   NAME  UNIT_REGEX  [HTTP_URL]
+#   container NAME  CONTAINER   [HTTP_URL]
+#
+# NAME is the resource name (lowercase letters, digits and hyphens, at most 63
+# characters; "lcm" is reserved). UNIT_REGEX matches systemd service unit
+# names. HTTP_URL adds an http check when it answers at seed time and must not
+# contain credentials. LCM only monitors these services; it never acts on them.
+
+service web ^web(-.+)?\.service$ http://127.0.0.1:8080/health
+container cache cache

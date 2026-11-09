@@ -33,8 +33,8 @@ spec:
     healthTimeout: 3m
     notifyTarget: konata
     notifySecret: ""
-    notifyUrl: http://127.0.0.1:4100/notifications/lcm-deploy
-    notifyTokenSecret: konata-notify-key
+    notifyUrl: ""
+    notifyTokenSecret: ""
   nodes:
     - id: push
       type: trigger.git
