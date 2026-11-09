@@ -70,6 +70,11 @@ type applier struct {
 	nobody   Account
 	// lcm is the service account; nil until it exists.
 	lcm *Account
+	// build is the build account of the deploy component; nil until it
+	// exists.
+	build  *Account
+	grants map[string]grantState
+	uidMin int
 
 	exe         Content
 	stage       string
@@ -163,10 +168,7 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 	if err := a.preflight(ctx); err != nil {
 		return a.res, safeError{err}
 	}
-	steps := []struct {
-		name string
-		fn   func(context.Context, *step) error
-	}{
+	steps := []namedStep{
 		{"account", a.account},
 		{"directories", a.directories},
 		{"lcm.env", a.envFile},
@@ -184,10 +186,13 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 		{"health", a.health},
 		{ComponentMachinePower, a.machinePower},
 		{ComponentSecurityHost, a.securityHost},
+	}
+	steps = append(steps, a.deploySteps()...)
+	steps = append(steps, []namedStep{
 		{"admin password", a.adminPassword},
 		{"token", a.token},
 		{"tailscale serve", a.tailscaleServe},
-	}
+	}...)
 	if a.downgrade != "" {
 		_, _ = fmt.Fprintf(o.Out, "warning: %s\n", a.downgrade)
 	}
@@ -312,6 +317,9 @@ func (a *applier) preflight(ctx context.Context) error {
 		return err
 	}
 	if err := a.preflightToolchains(); err != nil {
+		return err
+	}
+	if err := a.preflightDeploy(ctx); err != nil {
 		return err
 	}
 	if err := a.preflightTailscale(ctx); err != nil {
@@ -616,6 +624,9 @@ func (a *applier) preflightStage(ctx context.Context) error {
 	rules := map[string]string{"sudoers": stage + "/sudoers"}
 	if a.cfg.Components.MachinePower {
 		rules["machine-power-sudoers"] = stage + "/machine-power-sudoers"
+	}
+	if a.cfg.Components.Deploy {
+		rules["lcm-deploy-sudoers"] = stage + "/lcm-deploy-sudoers"
 	}
 	for name, p := range rules {
 		if err := a.writeContent(p, bytesContent(asset(name)), 0o440, 0, 0); err != nil {

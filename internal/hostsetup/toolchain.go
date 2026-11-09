@@ -231,12 +231,21 @@ type copier struct {
 	// operator, so that a hard link to another user's file is refused.
 	owners   map[int]bool
 	uid, gid int
+	// perm, when set, replaces copyPerm.
+	perm func(Info) fs.FileMode
 	budget
 	// maxBytes, when set, replaces the default byte bound of the tree, and
 	// beforeFile, when set, runs with each file's size before it is
 	// written; either can refuse the copy.
 	maxBytes   int64
 	beforeFile func(size int64) error
+}
+
+func (c *copier) modeOf(info Info) fs.FileMode {
+	if c.perm != nil {
+		return c.perm(info)
+	}
+	return copyPerm(info.Mode)
 }
 
 func (c *copier) owned(rel string, info Info) error {
@@ -296,7 +305,7 @@ func (c *copier) dir(rel, dst string, want Info) error {
 	if err != nil {
 		return err
 	}
-	return c.fsys.Chmod(dst, made, copyPerm(info.Mode))
+	return c.fsys.Chmod(dst, made, c.modeOf(info))
 }
 
 // file copies the regular file rel, which must still be the file want.
@@ -323,21 +332,31 @@ func (c *copier) file(rel, dst string, want Info) error {
 			return err
 		}
 	}
-	return c.fsys.WriteFile(dst, io.LimitReader(f, info.Size), copyPerm(info.Mode), c.uid, c.gid)
+	return c.fsys.WriteFile(dst, io.LimitReader(f, info.Size), c.modeOf(info), c.uid, c.gid)
 }
 
 // copyToolchain replaces dst with a checked copy of src, owned by uid:gid.
 // The copy is made next to dst; its links are checked and verify runs on
 // it before it is swapped in. Any failure removes the partial copy.
 func copyToolchain(fsys FS, src, dst string, owners map[int]bool, uid, gid int, verify func(dir string) error) error {
+	return copySubtree(fsys, src, ".", dst, &copier{owners: owners, uid: uid, gid: gid}, verify)
+}
+
+// copySubtree is copyToolchain for the directory rel of the tree src, which
+// c describes apart from its source and filesystem. Names below src resolve
+// inside src only.
+func copySubtree(fsys FS, src, rel, dst string, c *copier, verify func(dir string) error) error {
 	t, err := openSource(fsys, src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = t.Close() }()
-	root, err := t.Root()
+	root, err := t.Lstat(rel)
 	if err != nil {
 		return err
+	}
+	if !root.IsDir() {
+		return fmt.Errorf("%s is not a directory", path.Join(src, rel))
 	}
 	next, old := dst+".new", dst+".old"
 	for _, p := range []string{next, old} {
@@ -345,8 +364,8 @@ func copyToolchain(fsys FS, src, dst string, owners map[int]bool, uid, gid int, 
 			return err
 		}
 	}
-	c := &copier{src: t, fsys: fsys, owners: owners, uid: uid, gid: gid}
-	err = c.dir(".", next, root)
+	c.src, c.fsys = t, fsys
+	err = c.dir(rel, next, root)
 	if err == nil {
 		err = checkLinks(fsTree{fs: fsys, root: next}, next)
 	}

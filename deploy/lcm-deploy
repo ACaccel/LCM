@@ -1,0 +1,13 @@
+#!/bin/sh
+# Installed by "lcm host apply" at /usr/local/libexec/lcm-deploy as
+# root:root 0755. The wrapper, the pinned helper binary and their ancestors
+# must be unwritable by other users. The helper is a copy of the reviewed
+# build that ran "host apply", never the self-deployed binary.
+set -eu
+
+if [ "$#" -ne 0 ]; then
+	printf '%s\n' 'lcm-deploy accepts no arguments' >&2
+	exit 2
+fi
+
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C /usr/local/libexec/lcm-deploy-helper deploy-helper

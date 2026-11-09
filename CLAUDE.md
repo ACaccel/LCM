@@ -31,7 +31,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 
 | Path | Contents |
 |---|---|
-| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper`, root `host init`/`host apply`/`host upgrade` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
+| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper` and `deploy-helper`, root `host init`/`host apply`/`host allow`/`host upgrade` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
 | `internal/app/` | Composition root: builds every component in dependency order, registers resource types, adapters (lock -> catalog, execx -> monitor), the `resource` expression variable, monitor sync, retention jobs, `Run`/`Close` |
 | `internal/config/` | Env and flag configuration, validation, slog setup |
 | `internal/store/` | SQLite handles (writer + reader pool), migrator (including the Go part of the v2 resource migration, `migrate_resources.go`), `storetest.Open(t)` test helper |
@@ -52,6 +52,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |
 | `internal/security/` | Bounded security incidents and traffic, operator handling, notification settings and durable Konata outbox |
 | `internal/securityhost/` | Typed preview/apply/query client and durable intent for the independently installed restricted security helper |
+| `internal/deployhelper/` | Restricted root deploy helper (`lcm deploy-helper`: build, install, activate, unit control, ledger) and its sudo client and fake; the protocol reference is `protocol.go` |
 | `internal/monitor/` | Health checks, history, rollups, health aggregation combining checks with native machine/router health, alert ingestion; `alert/` parses Alertmanager, Uptime Kuma, Gatus and generic payloads |
 | `internal/machine/` | Machine resource type: identity, snapshots/minute points, health transitions, journal checkpoints, maintenance and durable operations; `observe/` contains bounded native probes, `power/` the restricted privileged protocol and independent receipts |
 | `internal/router/` | Router resource type: observation loops, native health, durable reboot operations; `xiaomi/` the allowlisted Xiaomi router web API client (`xiaomitest/` simulator) |

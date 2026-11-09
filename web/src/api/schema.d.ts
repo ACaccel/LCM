@@ -858,12 +858,12 @@ export interface paths {
         /**
          * Host components compared with this build
          * @description Compares the root-owned files that `lcm host apply` installs (`core`,
-         *     `machine-power`, `security-host`) with the versions embedded in the running
+         *     `machine-power`, `security-host`, `deploy`) with the versions embedded in the running
          *     binary. The server only reads them as its own unprivileged account: files it
          *     cannot read are `unknown`, and nothing is ever changed through the API. An
          *     administrator brings an `outdated` or `missing` component up to date with
-         *     `sudo bin/lcm host apply` from a reviewed build. The pinned machine helper has
-         *     no embedded version and is compared only by owner and mode. The answer is
+         *     `sudo bin/lcm host apply` from a reviewed build. The pinned machine and deploy
+         *     helpers have no embedded version and are compared only by owner and mode. The answer is
          *     cached for 30 seconds. An empty list means the host cannot be inspected.
          */
         get: operations["listHostComponents"];
@@ -3789,7 +3789,7 @@ export interface components {
         };
         HostComponent: {
             /** @enum {string} */
-            name: "core" | "machine-power" | "security-host";
+            name: "core" | "machine-power" | "security-host" | "deploy";
             state: components["schemas"]["HostComponentState"];
             files: components["schemas"]["HostFile"][];
         };

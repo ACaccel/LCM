@@ -32,6 +32,29 @@ type Config struct {
 	Toolchains Toolchains `json:"toolchains"`
 	Tailscale  Tailscale  `json:"tailscale"`
 	Components Components `json:"components"`
+	// Runtimes are the named execution environments that managed services
+	// may use, by name, with the directory host setup copies to
+	// /opt/lcm/runtimes/<name>.
+	Runtimes map[string]string `json:"runtimes,omitempty"`
+	Backup   *Backup           `json:"backup,omitempty"`
+	// Services is the allowlist of the deploy helper: only services named
+	// here can be built, installed and run, with what their grant says.
+	Services map[string]ServiceGrant `json:"services,omitempty"`
+}
+
+// Backup configures where service backups are kept.
+type Backup struct {
+	Dir string `json:"dir"`
+}
+
+// ServiceGrant is what one managed service may use. Documents name a
+// service but can never widen its grant.
+type ServiceGrant struct {
+	Port     int      `json:"port"`
+	Runtimes []string `json:"runtimes,omitempty"`
+	// Inputs are read-only directories outside the repository that a build
+	// may read, by name.
+	Inputs map[string]string `json:"inputs,omitempty"`
 }
 
 // Toolchains are the Go and Node.js installations that self-deploy builds
@@ -51,6 +74,9 @@ type Tailscale struct {
 type Components struct {
 	MachinePower bool          `json:"machinePower"`
 	SecurityHost *SecurityHost `json:"securityHost"`
+	// Deploy installs the deploy helper, its sudoers rule and the build
+	// account.
+	Deploy bool `json:"deploy"`
 }
 
 // SecurityHost enables the restricted security host helper.
@@ -85,6 +111,7 @@ func (c Config) Validate() error {
 	if sh := c.Components.SecurityHost; sh != nil && !machineID.MatchString(sh.MachineID) {
 		errs = append(errs, fmt.Errorf("components.securityHost.machineId must be the Machine's immutable ID (got %q)", sh.MachineID))
 	}
+	errs = append(errs, c.validateDeploy()...)
 	return errors.Join(errs...)
 }
 
@@ -103,7 +130,29 @@ var configKeys = keys{
 	"repository": nil,
 	"toolchains": {"go": nil, "node": nil},
 	"tailscale":  {"port": nil},
-	"components": {"machinePower": nil, "securityHost": {"machineId": nil}},
+	"components": {"machinePower": nil, "securityHost": {"machineId": nil}, "deploy": nil},
+	"runtimes":   {anyKey: nil},
+	"backup":     {"dir": nil},
+	"services": {anyKey: {
+		"port": nil, "runtimes": nil, "inputs": {anyKey: nil},
+		"route": reservedKey, "extraPaths": reservedKey,
+	}},
+}
+
+// anyKey in a layout accepts every key of a map-like object; its names are
+// validated with the values.
+const anyKey = "*"
+
+// reservedKey marks a key that a later version will accept, so that it is
+// refused with a message that says so rather than as a mistyped key.
+var reservedKey = keys{reservedMark: nil}
+
+// reservedMark is not a valid JSON object key of any layout.
+const reservedMark = "\x00reserved"
+
+func isReserved(k keys) bool {
+	_, ok := k[reservedMark]
+	return ok
 }
 
 // ParseConfig decodes and validates a configuration. Decoding is strict:
@@ -151,9 +200,14 @@ func checkKeys(dec *json.Decoder, want keys, at string) error {
 		key, _ := tok.(string)
 		name := strings.TrimPrefix(at+"."+key, ".")
 		sub, known := want[key]
+		if !known {
+			sub, known = want[anyKey]
+		}
 		switch {
 		case !known:
 			return fmt.Errorf("unknown key %q", name)
+		case isReserved(sub):
+			return fmt.Errorf("%q is reserved for the ingress component of a later version; remove it", name)
 		case seen[key]:
 			return fmt.Errorf("duplicate key %q", name)
 		}

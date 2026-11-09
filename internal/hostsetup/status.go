@@ -48,6 +48,7 @@ func Status(h Host) ([]ComponentStatus, error) {
 		{ComponentCore, coreFiles},
 		{ComponentMachinePower, powerFiles},
 		{ComponentSecurityHost, securityFiles},
+		{ComponentDeploy, deployFiles},
 	} {
 		cs := ComponentStatus{Name: c.name}
 		for _, f := range c.files {

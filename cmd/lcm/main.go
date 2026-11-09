@@ -31,6 +31,9 @@ Commands:
   host init --operator <user> Write the host configuration /etc/lcm/host.json (root)
   host apply [--check]        Install or converge LCM's host components (root)
   host upgrade [--check]      Upgrade a schema-changing build with backup and rollback (root)
+  host allow <service> --port N [--runtime R] [--input NAME=PATH] [--check]
+                              Add a service to the deploy allowlist and create
+                              its account and directories (root)
   host status                 Compare installed host files with this build
 
 Commands that talk to a running server (see the README):
@@ -140,6 +143,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.resource(ctx, rest)
 	case "machine-helper":
 		return a.machineHelper(ctx, rest)
+	case "deploy-helper":
+		return a.deployHelper(ctx, rest)
 	case "host":
 		return a.host(ctx, rest)
 	case "version", "--version":

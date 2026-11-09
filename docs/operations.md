@@ -4,7 +4,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 ## Install
 
-`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power and the security host helper are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls)).
+`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security host helper and the deploy helper are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls), [deploy helper](#deploy-helper)).
 
 | Path | Owner, mode | Contents |
 |---|---|---|
@@ -42,6 +42,10 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 | `tailscale.port` | `--ts-port` (`9443`) | HTTPS port of `tailscale serve` |
 | `components.machinePower` | `--machine-power` (`false`) | Install the [machine power helper](#local-machine-power-helper) |
 | `components.securityHost` | `--security-host-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>"}` installs the [security host helper](#security-console-host-controls) |
+| `components.deploy` | (`false`) | Install the [deploy helper](#deploy-helper) and the build account |
+| `runtimes` | (none) | Named [runtimes](#runtimes) that managed services may use: `{"node24": "/home/alice/.local/node"}`; names `^[a-z][a-z0-9]{0,15}$`, directories checked like `toolchains` and copied to `/opt/lcm/runtimes/<name>` |
+| `backup.dir` | (none) | Where service backups will be kept (typed backups, a later version); absolute, not under `/var/lib/lcm` |
+| `services` | `lcm host allow` | The [deploy allowlist](#service-grants): `{"web": {"port": 3200, "runtimes": ["node24"], "inputs": {"assets": "/srv/inputs/web/assets"}}}`; `route` and `extraPaths` are reserved for the ingress component and refused |
 
 ### Procedure
 
@@ -84,7 +88,7 @@ A build with another storage schema is installed by [`lcm host upgrade`](#lcm-ho
 - Older builds: when the installed `/usr/local/bin/lcm` reports a later commit time (`lcm version`) than the build running `apply`, `apply` and `--check` print a warning first and mark each file they would replace; they do not stop.
 - What it keeps: an existing `lcm.env` (reported when it differs from the embedded one; one owned by someone other than root needs manual action), the installed `/usr/local/bin/lcm` (self-deploy keeps it current), and components switched off in `host.json`, which are reported as `installed but disabled` and never removed.
 - Root runs only a build of a reviewed checkout, because whoever can push to `main` controls the self-deployed binary. `bootstrap.sh` refuses a `--binary` that resolves to `/usr/local/bin/lcm` or its `.prev`/`.failed` copies, lies under `/var/lib/lcm` or is owned by `lcm`, before running it. `host init` and `host apply` refuse to run as root from those paths too; that check catches mistakes, but it runs inside the binary it judges, so it cannot stop an untrusted one.
-- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security-host`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine helper has no embedded version: status checks only its owner and mode and shows its digest, and `host apply` replaces it with the reviewed build it runs from.
+- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security-host`, `deploy`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine and deploy helpers have no embedded version: status checks only their owner and mode and shows their digest, and `host apply` replaces them with the reviewed build it runs from.
 - The console shows the same comparison on the machine's Overview tab (`GET /api/v1/host/components`, read as the `lcm` account and cached for 30 s). It warns only about `outdated` or `missing` files and names the update command; a component that is not installed is silent, and so are files the account cannot read (the sudoers rules and the security host helper are root-only by design; `sudo bin/lcm host status` compares them).
 - Helper updates: LCM never changes root files itself. When a self-deployed commit changes a host file, `lcm host status` shows `outdated`; review the change, then run `make build && sudo bin/lcm host apply` in the updated reviewed checkout. An installed security host helper is the exception: it needs its [reviewed upgrade](#security-console-host-controls).
 
@@ -141,6 +145,53 @@ Provision the last two by hand, once: `lcm host apply` reports them as not provi
 The ledger permanently retains IDs, refuses new receipts at 10,000 entries and fails closed if a write exceeds 16 MiB. It has no automatic pruning; arrange a reviewed capacity/migration procedure before those limits. Disabling new power submissions must still permit receipt queries for recovery; `recoveryReady=false` blocks control while preserving queries against valid existing configuration/storage. Controller queries also remain available with `LCM_MACHINE_POWER=false`.
 
 Before enabling control, independently validate Linux/systemd/logind compatibility, enabled `lcm.service` autostart, startup gates and manual recovery. The helper refuses login sessions and inhibitors; a power request enters maintenance itself and is confirmed with a reason and the machine name. Journal permissions are a separate deployment choice: basic snapshots remain available when journal access is restricted. Do not run LCM as root or automatically add broad log-reading privileges. Deployment and hardware acceptance for the initial workstation is recorded in the [validation record](machine-validation.md); each new installation still requires these checks. Protocol/fake-command tests do not establish those host deployment properties.
+
+### Deploy helper
+
+With `components.deploy: true`, `lcm host apply` installs what managed services are built, installed and run with. LCM never gets a general root command: it can only send requests to one restricted helper, and the helper does only what the [`services` allowlist](#service-grants) of `host.json` grants.
+
+| Path | Owner, mode | Contents |
+|---|---|---|
+| `/usr/local/libexec/lcm-deploy` | root 0755 | Wrapper [`deploy/lcm-deploy`](../deploy/lcm-deploy): no arguments, a cleared environment, executes only the pinned helper's `deploy-helper` command |
+| `/usr/local/libexec/lcm-deploy-helper` | root 0755 | Pinned helper: a copy of the reviewed build that ran `host apply` (status `pinned`), never the self-deployed binary |
+| `/etc/sudoers.d/lcm-deploy` | root 0440 | [`deploy/lcm-deploy-sudoers`](../deploy/lcm-deploy-sudoers): `lcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm-deploy ""`; installed last and checked with `visudo` (staged, then the whole configuration; the previous rule is restored, or the new one removed, when that fails) |
+| `/var/lib/lcm-deploy/` | root 0700 | The helper's operation ledger and locks; `apply` creates the directory, the helper refuses to run without it |
+| `lcm-build` | system account | Runs builds; no login shell, home `/var/lib/lcm-build` |
+| `/var/lib/lcm-build/` | root:lcm-build 0750 | Builds: `<service>/<buildId>/` (root:lcm-build 0750) with `src/` and `home/` owned by `lcm-build`, `build.sh` and `build.json`; the last 3 per service are kept |
+| `/var/cache/lcm-build/` | root:lcm-build 0750 | `<service>/` (lcm-build 0750): the build cache, also the npm and Go caches |
+| `/opt/lcm/runtimes/<name>/` | root | [Runtime](#runtimes) copies |
+
+The protocol (operations, fields, replies, error codes, ledger) is documented in [`internal/deployhelper/protocol.go`](../internal/deployhelper/protocol.go). LCM calls `sudo -n -- /usr/local/libexec/lcm-deploy` with one JSON request on stdin; the helper reads `/etc/lcm/host.json` itself, with the same trust checks as `host apply`, and refuses every service, runtime or input it does not grant.
+
+**Trust boundary.**
+
+- The helper is a pinned copy of a reviewed build; updating it takes `sudo bin/lcm host apply` from a reviewed checkout. Whoever can push to LCM's `main` controls the `lcm` account, not the helper.
+- Documents and requests cannot widen the allowlist: ports, runtimes, build inputs and data directories come only from `host.json`, which only root writes (`lcm host allow`).
+- Builds run third-party code as `lcm-build`, which owns nothing but build trees and caches: no LCM data, tokens or secrets, no service's env file or data. Whoever can push to a service's deployed branch controls that service's account, never root or the `lcm` account.
+- Root copies other accounts' trees (the `lcm`-owned checkout, the `lcm-build`-owned artifact) only through descriptors confined to the tree, accepting entries of their owner only, bounded in entries and size, and refusing links that leave the copy. A release is root-owned, so a service cannot change its own code.
+- The helper never replaces a unit it did not write: `/etc/systemd/system/<service>.service` must be absent or start with its marker line, and a unit of that name elsewhere in the systemd search path is refused.
+- Every changing request carries an operation ID that LCM chooses. The helper records the operation before and after it runs it, so after a lost reply or timeout LCM queries the ledger instead of guessing, and a repeated ID never runs twice. Records of finished operations are removed after 90 days.
+
+**Build sandbox.** `build` runs `sh build.sh` (the command, written to a root-owned file so that systemd expands nothing) with `systemd-run --wait --pipe --collect` as `lcm-build` in the build's `src/`, with `ProtectSystem=strict` (writable only: `src/`, `home/`, the service's cache), `ProtectHome=yes`, `PrivateTmp=yes`, `PrivateDevices=yes`, `NoNewPrivileges=yes`, no capabilities, `RestrictSUIDSGID=yes`, the kernel, clock and hostname protections, `InaccessiblePaths=` LCM's data, `/etc/lcm` and the helper ledgers, `RuntimeMaxSec=` the request's timeout, `MemoryMax=4G` and `TasksMax=4096`. It has network access for dependencies. The environment is fixed: `PATH` (the requested runtimes' `bin` first), `HOME` (the build's `home/`), `LANG`, `LCM_COMMIT`, `LCM_CACHE_DIR`, `XDG_CACHE_HOME`, `npm_config_cache`, `GOCACHE`, `GOMODCACHE` and, with inputs, `LCM_INPUTS_DIR=/run/lcm-build/inputs`: each input is bound read-only at `/run/lcm-build/inputs/<name>` (on a read-only tmpfs); `lcm-build` needs read permission on its files. The checkout's `HEAD` must be the requested commit (read from `.git`, git does not run as root).
+
+**Service units.** `activate` writes `/etc/systemd/system/<service>.service` from the built-in template: `User=`/`Group=` the service account, `WorkingDirectory=/opt/<service>/current`, `ExecStart=` the runtime's `node` or `python3` with the release file, or the release's own executable, plus the start arguments, `EnvironmentFile=/etc/<service>/env`, `Environment=PORT=<port> HOST=127.0.0.1` (and `PATH` with the runtime), `Restart=on-failure`, `ReadWritePaths=/var/lib/<service>` and the build sandbox's hardening with `UMask=0027`, also hiding the build trees. The env file must not set `PORT` or `HOST`, which come from `host.json`. An optional migration runs first, as the service account in the new release with the same sandbox and env file; when it fails nothing is switched. Then the `current` and `previous` links switch atomically, a changed unit is checked with `systemd-analyze verify` (the previous unit and links are put back when it fails) and loaded, the unit is enabled and restarted, and releases beyond `keepReleases` (default 3) are removed, never the current or previous one. Health checks and switching back on failure are LCM's.
+
+#### Runtimes
+
+`runtimes` names the execution environments that services may use, so that documents refer to `node24` rather than to a path. `host apply` copies each one to `/opt/lcm/runtimes/<name>` like the toolchains (read without leaving the source, entries of root or the operator only, links must stay inside), and checks the copy as `nobody` by running `bin/node --version`, `bin/python3 --version` or `bin/go version` when present; a copy without one of them is not run. The copy is root-owned, so neither LCM nor a service can change it.
+
+#### Service grants
+
+```sh
+sudo bin/lcm host allow web --port 3200 --runtime node24 --input assets=/srv/inputs/web/assets [--check]
+```
+
+`host allow` adds or updates `services.<name>` in `host.json`: it validates the whole configuration, rewrites the file atomically keeping the order and values of everything else (refusing when the file changed after it was read), and creates the service's account and directories with the same steps as `apply`. It does not copy runtimes or install the deploy helper; it names `sudo bin/lcm host apply` when those are missing. `--check` changes nothing and exits 3 while changes are pending.
+
+- Names match `^[a-z][a-z0-9-]{0,30}$` and do not start with `lcm`. Ports are 1024-65535, unique, and neither 7800 nor `tailscale.port`; they are not checked against other listeners. Runtimes must be in `runtimes`. Inputs are absolute directories outside LCM's data, owned by root or the operator and writable by no one else, like the toolchains.
+- For each service, `apply` creates a system account `<name>` (no login shell, home `/var/lib/<name>`), `/opt/<name>` and `/opt/<name>/releases` (root 0755), `/var/lib/<name>` (`<name>:<name>` 0750), `/etc/<name>` (root:`<name>` 0750) and an empty `/etc/<name>/env` (root:`<name>` 0640, never replaced; put the service's secrets there).
+- An existing account must already be such a system account with that home, and existing directories must already have the owners above; otherwise, and when a unit of that name exists that the helper did not write, `apply` reports a manual action and `allow` refuses. Nothing is taken over.
+- A service removed from `services` is reported by `apply`; its account, directories, releases and unit are kept.
 
 ## Uninstall
 
