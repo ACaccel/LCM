@@ -23,7 +23,8 @@ func unitName(svc string) string { return svc + ".service" }
 // serviceSandbox is the hardening of a service's unit and migration: it
 // runs as its own account, can write only its data directory, sees neither
 // LCM's data, the backups nor the build trees, may bind no port but its
-// own, uses only IP and Unix sockets and has its own IPC namespace. It may
+// own, uses only IP, Unix and netlink sockets (Node reads its network
+// interfaces over netlink) and has its own IPC namespace. It may
 // still connect anywhere, and the kernel does not stop it from binding its
 // port on another address than HOST: systemd has no per-address bind
 // rule, and IPAddressAllow= would also block its outbound connections.
@@ -32,7 +33,7 @@ func serviceSandbox(svc string, port int, backup string) []string {
 	props = append(props,
 		"SocketBindAllow=tcp:"+strconv.Itoa(port),
 		"SocketBindDeny=any",
-		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
 		"PrivateIPC=yes",
 		"ReadWritePaths="+hostsetup.ServiceDataDir(svc))
 	return append(props, "InaccessiblePaths=-"+hostsetup.BuildDir+" -"+hostsetup.BuildCacheDir)

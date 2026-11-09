@@ -324,11 +324,16 @@ func TestBuildInstallActivate(t *testing.T) {
 		"--property=InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm",
 		"--property=TemporaryFileSystem=/var/lib/lcm-build:ro", "--property=TemporaryFileSystem=/var/cache/lcm-build:ro",
 		"--property=BindPaths=" + dir + "/src", "--property=BindPaths=" + dir + "/home", "--property=BindPaths=/var/cache/lcm-build/web",
-		"--property=BindReadOnlyPaths=" + dir + "/build.sh", "--property=ProtectProc=invisible", "--property=ProcSubset=pid",
+		"--property=BindReadOnlyPaths=" + dir + "/build.sh", "--property=ProtectProc=invisible",
 		"--property=IPAddressDeny=localhost",
 	} {
 		if !slices.Contains(argv, want) {
 			t.Errorf("build argv lacks %q: %q", want, argv)
+		}
+	}
+	for _, a := range argv {
+		if strings.Contains(a, "ProcSubset") {
+			t.Errorf("build argv hides the system-wide /proc files: %q", a)
 		}
 	}
 	if tail := argv[len(argv)-3:]; !slices.Equal(tail, []string{"--", "/bin/sh", dir + "/build.sh"}) {
@@ -374,7 +379,7 @@ func TestBuildInstallActivate(t *testing.T) {
 		"\nRestrictSUIDSGID=yes\n", "\nCapabilityBoundingSet=\n", "\nReadWritePaths=/var/lib/web\n",
 		"\nInaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm\n",
 		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\nProtectProc=invisible\n",
-		"\nSocketBindAllow=tcp:3200\nSocketBindDeny=any\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nPrivateIPC=yes\n", "\n[Install]\nWantedBy=multi-user.target\n",
+		"\nSocketBindAllow=tcp:3200\nSocketBindDeny=any\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK\nPrivateIPC=yes\n", "\n[Install]\nWantedBy=multi-user.target\n",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q:\n%s", want, unit)
@@ -450,7 +455,7 @@ func TestBuildLimits(t *testing.T) {
 		e.clock.Advance(time.Second)
 		return "", 143
 	}
-	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the build file system has only 1048576 bytes")
+	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the file system of /var/lib/lcm-build/web has only 1048576 bytes")
 	e.refused(buildReq(commit1), CodeRefused, "not enough room for a build")
 }
 
