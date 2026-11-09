@@ -386,7 +386,6 @@ func (a *applier) preflightAccounts(ctx context.Context) error {
 }
 
 func (a *applier) preflightToolchains() error {
-	fsys := a.h.FS
 	for _, tc := range []struct {
 		key, dir string
 		bins     []string
@@ -394,26 +393,65 @@ func (a *applier) preflightToolchains() error {
 		{"toolchains.go", a.cfg.Toolchains.Go, []string{"bin/go"}},
 		{"toolchains.node", a.cfg.Toolchains.Node, []string{"bin/node"}},
 	} {
-		info, err := fsys.Lstat(tc.dir)
-		if err != nil || !info.IsDir() {
-			return fmt.Errorf("%s: %s is not a directory (name the target of a symbolic link)", tc.key, tc.dir)
-		}
-		for _, b := range tc.bins {
-			bi, err := fsys.Lstat(path.Join(tc.dir, b))
-			if err != nil || !bi.IsRegular() || bi.Mode.Perm()&0o111 == 0 {
-				return fmt.Errorf("%s: no executable %s in %s", tc.key, b, tc.dir)
-			}
-		}
-		if tc.key == "toolchains.node" {
-			if _, err := fsys.Lstat(path.Join(tc.dir, "bin/npm")); err != nil {
-				return fmt.Errorf("%s: no bin/npm in %s", tc.key, tc.dir)
-			}
-		}
-		if err := checkLinks(fsys, tc.dir); err != nil {
+		if err := a.checkToolchain(tc.dir, tc.bins, tc.key == "toolchains.node"); err != nil {
 			return fmt.Errorf("%s: %w", tc.key, err)
 		}
 	}
 	return nil
+}
+
+func (a *applier) checkToolchain(dir string, bins []string, npm bool) error {
+	if err := a.trustedSource(dir); err != nil {
+		return err
+	}
+	t, err := openSource(a.h.FS, dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = t.Close() }()
+	for _, b := range bins {
+		bi, err := t.Lstat(b)
+		if err != nil || !bi.IsRegular() || bi.Mode.Perm()&0o111 == 0 {
+			return fmt.Errorf("no executable %s in %s", b, dir)
+		}
+	}
+	if npm {
+		if _, err := t.Lstat("bin/npm"); err != nil {
+			return fmt.Errorf("no bin/npm in %s", dir)
+		}
+	}
+	return checkLinks(t, dir)
+}
+
+// trustedSource requires a toolchain directory and each of its ancestors
+// to be owned by root or the operator, not to be symbolic links and not to
+// be writable by others (or by a group other than root's and the
+// operator's), so that no third account, such as lcm, can change what is
+// copied.
+func (a *applier) trustedSource(dir string) error {
+	for _, p := range ancestry(dir) {
+		info, err := a.h.FS.Lstat(p)
+		if err != nil {
+			return err
+		}
+		perm := info.Mode.Perm()
+		switch {
+		case info.IsLink():
+			return fmt.Errorf("%s is a symbolic link; name the resolved path", p)
+		case info.UID != 0 && info.UID != a.operator.UID:
+			return fmt.Errorf("%s is owned by user %d, not root or the operator", p, info.UID)
+		case perm&0o002 != 0:
+			return fmt.Errorf("%s is writable by others", p)
+		case perm&0o020 != 0 && info.GID != 0 && info.GID != a.operator.GID:
+			return fmt.Errorf("%s is writable by group %d", p, info.GID)
+		}
+	}
+	return nil
+}
+
+// sourceOwners are the accepted owners of toolchain entries.
+func (a *applier) sourceOwners() map[int]bool {
+	return map[int]bool{0: true, a.operator.UID: true}
 }
 
 func (a *applier) preflightTailscale(ctx context.Context) error {
@@ -757,54 +795,37 @@ func (a *applier) envFile(_ context.Context, s *step) error {
 func (a *applier) toolchain(ctx context.Context, s *step, name, src string) error {
 	fsys := a.h.FS
 	dst := ToolchainDir + "/" + name
-	diff, err := treeDiff(fsys, src, dst)
+	t, err := openSource(fsys, src)
+	if err != nil {
+		return err
+	}
+	diff, err := treeDiff(t, fsys, dst, 0, 0)
+	_ = t.Close()
 	if err != nil || diff == "" {
 		return err
 	}
+	var version string
+	verify := func(dir string) error {
+		bin, args := dir+"/bin/go", []string{"version"}
+		if name == "node" {
+			bin, args = dir+"/bin/node", []string{"--version"}
+		}
+		out, err := a.run(ctx, Command{Path: bin, Args: args, As: a.lcm, Timeout: 30 * time.Second})
+		if err != nil {
+			return fmt.Errorf("the copied %s does not run as lcm: %w", name, err)
+		}
+		version = strings.TrimSpace(string(out))
+		return nil
+	}
 	if err := s.change(fmt.Sprintf("copy %s to %s (%s)", src, dst, diff), func() error {
-		return a.copyToolchain(src, dst)
-	}); err != nil || a.o.Check {
+		return copyToolchain(fsys, src, dst, a.sourceOwners(), 0, 0, verify)
+	}); err != nil {
 		return err
 	}
-	bin, args := dst+"/bin/go", []string{"version"}
-	if name == "node" {
-		bin, args = dst+"/bin/node", []string{"--version"}
+	if version != "" {
+		s.note(version)
 	}
-	out, err := a.run(ctx, Command{Path: bin, Args: args, As: a.lcm, Timeout: 30 * time.Second})
-	if err != nil {
-		return fmt.Errorf("the copied %s does not run as lcm: %w", name, err)
-	}
-	s.note(strings.TrimSpace(string(out)))
 	return nil
-}
-
-// copyToolchain replaces dst with a checked copy of src. The copy is made
-// next to dst and swapped in only after its links have been checked.
-func (a *applier) copyToolchain(src, dst string) error {
-	fsys := a.h.FS
-	next, old := dst+".new", dst+".old"
-	for _, p := range []string{next, old} {
-		if err := fsys.RemoveAll(p); err != nil {
-			return err
-		}
-	}
-	if err := copyTree(fsys, src, next); err != nil {
-		_ = fsys.RemoveAll(next)
-		return err
-	}
-	if err := checkLinks(fsys, next); err != nil {
-		_ = fsys.RemoveAll(next)
-		return err
-	}
-	if _, err := fsys.Lstat(dst); err == nil {
-		if err := fsys.Rename(dst, old); err != nil {
-			return err
-		}
-	}
-	if err := fsys.Rename(next, dst); err != nil {
-		return err
-	}
-	return fsys.RemoveAll(old)
 }
 
 func (a *applier) binary(_ context.Context, s *step) error {

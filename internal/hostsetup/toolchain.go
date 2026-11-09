@@ -12,16 +12,74 @@ import (
 
 // The toolchain copies are root-owned and not writable by group or others,
 // and their links must stay inside the copy, so that the operator who owns
-// the source cannot redirect what lcm executes. Nothing from the source is
-// executed as root.
+// the source cannot redirect what lcm executes. The source is read through
+// a Tree, so that links or directories swapped in while it is read cannot
+// make root copy anything from outside it, and every entry's mode and size
+// come from the descriptor its content is read from. Nothing from the
+// source is executed as root.
+
+// Bounds of one toolchain tree; the Go and Node.js toolchains are far below
+// them.
+const (
+	maxTreeEntries = 200_000
+	maxTreeBytes   = 4 << 30
+	maxLinkHops    = 40
+)
 
 // copyPerm is the mode of a copied toolchain entry: the source permissions
 // without group/other write and without setuid, setgid or sticky bits.
 func copyPerm(m fs.FileMode) fs.FileMode { return m.Perm() &^ 0o022 }
 
-// treeDiff returns where dst differs from a copy of src, or "" when it does
-// not.
-func treeDiff(fsys FS, src, dst string) (string, error) {
+// budget bounds a walk over a tree.
+type budget struct {
+	entries int
+	bytes   int64
+}
+
+func (b *budget) entry() error {
+	if b.entries++; b.entries > maxTreeEntries {
+		return fmt.Errorf("more than %d entries", maxTreeEntries)
+	}
+	return nil
+}
+
+func (b *budget) add(n int64) error {
+	if b.bytes += n; b.bytes > maxTreeBytes {
+		return fmt.Errorf("more than %d bytes", int64(maxTreeBytes))
+	}
+	return nil
+}
+
+func sameFile(a, b Info) bool { return a.Dev == b.Dev && a.Ino == b.Ino }
+
+// openSource opens a toolchain source: src must be a directory, not a
+// symbolic link, and the opened root must be that same directory.
+func openSource(fsys FS, src string) (Tree, error) {
+	before, err := fsys.Lstat(src)
+	if err != nil {
+		return nil, err
+	}
+	if !before.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory (name the target of a symbolic link)", src)
+	}
+	t, err := fsys.OpenTree(src)
+	if err != nil {
+		return nil, err
+	}
+	after, err := t.Root()
+	if err == nil && !sameFile(before, after) {
+		err = fmt.Errorf("%s changed while it was opened", src)
+	}
+	if err != nil {
+		_ = t.Close()
+		return nil, err
+	}
+	return t, nil
+}
+
+// treeDiff returns where dst differs from a copy of src owned by uid:gid,
+// or "" when it does not.
+func treeDiff(src Tree, fsys FS, dst string, uid, gid int) (string, error) {
 	di, err := fsys.Lstat(dst)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "missing", nil
@@ -32,11 +90,11 @@ func treeDiff(fsys FS, src, dst string) (string, error) {
 	if !di.IsDir() {
 		return dst + " is not a directory", nil
 	}
-	return dirDiff(fsys, src, dst, ".")
+	return dirDiff(src, fsys, dst, ".", uid, gid, &budget{})
 }
 
-func dirDiff(fsys FS, src, dst, rel string) (string, error) {
-	srcNames, err := fsys.ReadDir(path.Join(src, rel))
+func dirDiff(src Tree, fsys FS, dst, rel string, uid, gid int, b *budget) (string, error) {
+	srcNames, _, err := src.ReadDir(rel)
 	if err != nil {
 		return "", err
 	}
@@ -47,22 +105,25 @@ func dirDiff(fsys FS, src, dst, rel string) (string, error) {
 	if !equalStrings(srcNames, dstNames) {
 		return "entries of " + rel + " differ", nil
 	}
-	if d, err := entryDiff(fsys, src, dst, rel); d != "" || err != nil {
+	if d, err := entryDiff(src, fsys, dst, rel, uid, gid); d != "" || err != nil {
 		return d, err
 	}
 	for _, name := range srcNames {
+		if err := b.entry(); err != nil {
+			return "", err
+		}
 		p := path.Join(rel, name)
-		si, err := fsys.Lstat(path.Join(src, p))
+		si, err := src.Lstat(p)
 		if err != nil {
 			return "", err
 		}
 		if si.IsDir() {
-			if d, err := dirDiff(fsys, src, dst, p); d != "" || err != nil {
+			if d, err := dirDiff(src, fsys, dst, p, uid, gid, b); d != "" || err != nil {
 				return d, err
 			}
 			continue
 		}
-		if d, err := entryDiff(fsys, src, dst, p); d != "" || err != nil {
+		if d, err := entryDiff(src, fsys, dst, p, uid, gid); d != "" || err != nil {
 			return d, err
 		}
 	}
@@ -70,9 +131,9 @@ func dirDiff(fsys FS, src, dst, rel string) (string, error) {
 }
 
 // entryDiff compares one entry of the two trees, without descending.
-func entryDiff(fsys FS, src, dst, rel string) (string, error) {
-	s, d := path.Join(src, rel), path.Join(dst, rel)
-	si, err := fsys.Lstat(s)
+func entryDiff(src Tree, fsys FS, dst, rel string, uid, gid int) (string, error) {
+	d := path.Join(dst, rel)
+	si, err := src.Lstat(rel)
 	if err != nil {
 		return "", err
 	}
@@ -83,12 +144,12 @@ func entryDiff(fsys FS, src, dst, rel string) (string, error) {
 	if si.Mode.Type() != di.Mode.Type() {
 		return rel + " changed type", nil
 	}
-	if di.UID != 0 || di.GID != 0 {
-		return rel + " is not owned by root", nil
+	if di.UID != uid || di.GID != gid {
+		return rel + " has another owner", nil
 	}
 	switch {
 	case si.IsLink():
-		st, err := fsys.Readlink(s)
+		st, err := src.Readlink(rel)
 		if err != nil {
 			return "", err
 		}
@@ -102,7 +163,7 @@ func entryDiff(fsys FS, src, dst, rel string) (string, error) {
 		return "", nil
 	case si.IsDir(), si.IsRegular():
 	default:
-		return "", fmt.Errorf("%s is not a file, directory or symbolic link", s)
+		return "", fmt.Errorf("%s is not a file, directory or symbolic link", rel)
 	}
 	if di.Mode.Perm() != copyPerm(si.Mode) || di.Mode&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0 {
 		return rel + " has another mode", nil
@@ -111,7 +172,7 @@ func entryDiff(fsys FS, src, dst, rel string) (string, error) {
 		if si.Size != di.Size {
 			return rel + " differs", nil
 		}
-		same, err := sameContent(fsys, s, d)
+		same, err := sameContent(src, rel, fsys, d)
 		if err != nil || !same {
 			return rel + " differs", err
 		}
@@ -119,13 +180,13 @@ func entryDiff(fsys FS, src, dst, rel string) (string, error) {
 	return "", nil
 }
 
-func sameContent(fsys FS, a, b string) (bool, error) {
-	fa, err := fsys.Open(a)
+func sameContent(src Tree, rel string, fsys FS, d string) (bool, error) {
+	fa, _, err := src.Open(rel)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = fa.Close() }()
-	fb, err := fsys.Open(b)
+	fb, err := fsys.Open(d)
 	if err != nil {
 		return false, err
 	}
@@ -162,37 +223,63 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// copyTree copies src to the new directory dst, owned by root.
-func copyTree(fsys FS, src, dst string) error {
-	si, err := fsys.Lstat(src)
+// copier copies a source tree into new directories owned by uid:gid.
+type copier struct {
+	src  Tree
+	fsys FS
+	// owners are the accepted owners of source entries: root and the
+	// operator, so that a hard link to another user's file is refused.
+	owners   map[int]bool
+	uid, gid int
+	budget
+}
+
+func (c *copier) owned(rel string, info Info) error {
+	if !c.owners[info.UID] {
+		return fmt.Errorf("%s is owned by user %d, not root or the operator", rel, info.UID)
+	}
+	return nil
+}
+
+// dir copies the directory rel, which must still be the directory want.
+func (c *copier) dir(rel, dst string, want Info) error {
+	names, info, err := c.src.ReadDir(rel)
 	if err != nil {
 		return err
 	}
-	if err := fsys.Mkdir(dst, 0o700, 0, 0); err != nil {
+	if !sameFile(info, want) {
+		return fmt.Errorf("%s changed while it was copied", rel)
+	}
+	if err := c.owned(rel, info); err != nil {
 		return err
 	}
-	names, err := fsys.ReadDir(src)
-	if err != nil {
+	if err := c.fsys.Mkdir(dst, 0o700, c.uid, c.gid); err != nil {
 		return err
 	}
 	for _, name := range names {
-		s, d := path.Join(src, name), path.Join(dst, name)
-		info, err := fsys.Lstat(s)
+		if err := c.entry(); err != nil {
+			return err
+		}
+		r, d := path.Join(rel, name), path.Join(dst, name)
+		li, err := c.src.Lstat(r)
 		if err != nil {
 			return err
 		}
+		if err := c.owned(r, li); err != nil {
+			return err
+		}
 		switch {
-		case info.IsDir():
-			err = copyTree(fsys, s, d)
-		case info.IsLink():
+		case li.IsDir():
+			err = c.dir(r, d, li)
+		case li.IsLink():
 			var target string
-			if target, err = fsys.Readlink(s); err == nil {
-				err = fsys.Symlink(target, d, 0, 0)
+			if target, err = c.src.Readlink(r); err == nil {
+				err = c.fsys.Symlink(target, d, c.uid, c.gid)
 			}
-		case info.IsRegular():
-			err = copyFile(fsys, s, d, copyPerm(info.Mode))
+		case li.IsRegular():
+			err = c.file(r, d, li)
 		default:
-			err = fmt.Errorf("%s is not a file, directory or symbolic link", s)
+			err = fmt.Errorf("%s is not a file, directory or symbolic link", r)
 		}
 		if err != nil {
 			return err
@@ -200,47 +287,104 @@ func copyTree(fsys FS, src, dst string) error {
 	}
 	// The final mode last, so that a read-only source directory can still
 	// be filled.
-	return fsys.Chmod(dst, copyPerm(si.Mode))
+	return c.fsys.Chmod(dst, copyPerm(info.Mode))
 }
 
-func copyFile(fsys FS, src, dst string, perm fs.FileMode) error {
-	f, err := fsys.Open(src)
+// file copies the regular file rel, which must still be the file want.
+func (c *copier) file(rel, dst string, want Info) error {
+	f, info, err := c.src.Open(rel)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	return fsys.WriteFile(dst, f, perm, 0, 0)
+	if !sameFile(info, want) {
+		return fmt.Errorf("%s changed while it was copied", rel)
+	}
+	if err := c.owned(rel, info); err != nil {
+		return err
+	}
+	if err := c.add(info.Size); err != nil {
+		return err
+	}
+	return c.fsys.WriteFile(dst, io.LimitReader(f, info.Size), copyPerm(info.Mode), c.uid, c.gid)
 }
 
-// maxLinkHops bounds the links followed while resolving one link.
-const maxLinkHops = 40
-
-// checkLinks refuses a tree with a symbolic link that leads outside it,
-// directly or through other links, or with an entry that is not a file,
-// directory or link.
-func checkLinks(fsys FS, root string) error {
-	return walkLinks(fsys, root, nil)
-}
-
-func walkLinks(fsys FS, root string, rel []string) error {
-	dir := path.Join(append([]string{root}, rel...)...)
-	names, err := fsys.ReadDir(dir)
+// copyToolchain replaces dst with a checked copy of src, owned by uid:gid.
+// The copy is made next to dst; its links are checked and verify runs on
+// it before it is swapped in. Any failure removes the partial copy.
+func copyToolchain(fsys FS, src, dst string, owners map[int]bool, uid, gid int, verify func(dir string) error) error {
+	t, err := openSource(fsys, src)
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		p := append(append([]string{}, rel...), name)
-		info, err := fsys.Lstat(path.Join(dir, name))
+	defer func() { _ = t.Close() }()
+	root, err := t.Root()
+	if err != nil {
+		return err
+	}
+	next, old := dst+".new", dst+".old"
+	for _, p := range []string{next, old} {
+		if err := fsys.RemoveAll(p); err != nil {
+			return err
+		}
+	}
+	c := &copier{src: t, fsys: fsys, owners: owners, uid: uid, gid: gid}
+	err = c.dir(".", next, root)
+	if err == nil {
+		err = checkLinks(fsTree{fs: fsys, root: next}, next)
+	}
+	if err == nil && verify != nil {
+		err = verify(next)
+	}
+	if err != nil {
+		return errors.Join(err, fsys.RemoveAll(next))
+	}
+	if _, err := fsys.Lstat(dst); err == nil {
+		if err := fsys.Rename(dst, old); err != nil {
+			return errors.Join(err, fsys.RemoveAll(next))
+		}
+	}
+	if err := fsys.Rename(next, dst); err != nil {
+		return err
+	}
+	return fsys.RemoveAll(old)
+}
+
+// checkLinks refuses a tree with a symbolic link that leads outside it,
+// directly or through other links, or with an entry that is not a file,
+// directory or link. name names the tree in errors.
+func checkLinks(t Tree, name string) error {
+	return walkLinks(t, name, nil, &budget{})
+}
+
+func relPath(parts []string) string {
+	if len(parts) == 0 {
+		return "."
+	}
+	return path.Join(parts...)
+}
+
+func walkLinks(t Tree, name string, rel []string, b *budget) error {
+	names, _, err := t.ReadDir(relPath(rel))
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if err := b.entry(); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		p := append(append([]string{}, rel...), n)
+		info, err := t.Lstat(relPath(p))
 		if err != nil {
 			return err
 		}
 		switch {
 		case info.IsDir():
-			err = walkLinks(fsys, root, p)
+			err = walkLinks(t, name, p, b)
 		case info.IsLink():
-			err = resolveInside(fsys, root, p)
+			err = resolveInside(t, name, p)
 		case !info.IsRegular():
-			err = fmt.Errorf("%s is not a file, directory or symbolic link", path.Join(dir, name))
+			err = fmt.Errorf("%s/%s is not a file, directory or symbolic link", name, relPath(p))
 		}
 		if err != nil {
 			return err
@@ -249,20 +393,20 @@ func walkLinks(fsys FS, root string, rel []string) error {
 	return nil
 }
 
-// resolveInside follows the link at root/link component by component, the
-// way the kernel would, and fails as soon as the path would leave root.
+// resolveInside follows the link at link component by component, the way
+// the kernel would, and fails as soon as the path would leave the tree.
 // Missing components are taken literally, like realpath -m.
-func resolveInside(fsys FS, root string, link []string) error {
-	where := path.Join(append([]string{root}, link...)...)
-	escape := func(target string) error {
-		return fmt.Errorf("link %s -> %s points outside %s", where, target, root)
-	}
-	target, err := fsys.Readlink(where)
+func resolveInside(t Tree, name string, link []string) error {
+	where := relPath(link)
+	target, err := t.Readlink(where)
 	if err != nil {
 		return err
 	}
+	escape := func() error {
+		return fmt.Errorf("link %s/%s -> %s points outside %s", name, where, target, name)
+	}
 	if path.IsAbs(target) {
-		return escape(target)
+		return escape()
 	}
 	cur := append([]string{}, link[:len(link)-1]...)
 	pending := strings.Split(target, "/")
@@ -274,13 +418,13 @@ func resolveInside(fsys FS, root string, link []string) error {
 			continue
 		case "..":
 			if len(cur) == 0 {
-				return escape(target)
+				return escape()
 			}
 			cur = cur[:len(cur)-1]
 			continue
 		}
 		next := append(append([]string{}, cur...), c)
-		info, err := fsys.Lstat(path.Join(append([]string{root}, next...)...))
+		info, err := t.Lstat(relPath(next))
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			cur = next
@@ -288,16 +432,16 @@ func resolveInside(fsys FS, root string, link []string) error {
 			return err
 		case info.IsLink():
 			if hops++; hops > maxLinkHops {
-				return fmt.Errorf("link %s: too many levels of links", where)
+				return fmt.Errorf("link %s/%s: too many levels of links", name, where)
 			}
-			t, err := fsys.Readlink(path.Join(append([]string{root}, next...)...))
+			l, err := t.Readlink(relPath(next))
 			if err != nil {
 				return err
 			}
-			if path.IsAbs(t) {
-				return escape(target)
+			if path.IsAbs(l) {
+				return escape()
 			}
-			pending = append(strings.Split(t, "/"), pending...)
+			pending = append(strings.Split(l, "/"), pending...)
 		default:
 			cur = next
 		}

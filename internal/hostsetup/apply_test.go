@@ -45,7 +45,7 @@ func TestFreshInstall(t *testing.T) {
 	// The documented order: the account first, grants after the files they
 	// grant, the service after its unit and checkout, the token after
 	// health, tailscale serve last.
-	order := []string{"useradd", "[lcm] /opt/lcm/toolchain/go/bin/go version", "visudo -c", "systemd-analyze verify",
+	order := []string{"useradd", "[lcm] /opt/lcm/toolchain/go.new/bin/go version", "visudo -c", "systemd-analyze verify",
 		"[lcm] git clone", "systemctl daemon-reload", "systemctl enable", "systemctl start",
 		"[lcm] /usr/local/bin/lcm admin set-password", "[lcm] /usr/local/bin/lcm token create", "[alice] sh -c", "tailscale serve --bg"}
 	last := -1
@@ -168,13 +168,13 @@ func TestDriftIsDetectedAndFixed(t *testing.T) {
 			"would change: set the mode of /opt/lcm to 0755 (was 0700)", nil},
 		{"toolchain copy edited", func(th *testHost) { th.fs.file(ToolchainDir+"/go/bin/go", "evil", 0o755, 0, 0) },
 			"toolchain go:    would change: copy /home/alice/.local/go to /opt/lcm/toolchain/go (bin/go differs)",
-			[]string{"[lcm] /opt/lcm/toolchain/go/bin/go version"}},
+			[]string{"[lcm] /opt/lcm/toolchain/go.new/bin/go version"}},
 		{"toolchain copy writable", func(th *testHost) { th.fs.get(ToolchainDir + "/go/bin/go").mode = 0o777 },
 			"(bin/go has another mode)", nil},
 		{"toolchain source updated", func(th *testHost) {
 			th.fs.file("/home/alice/.local/node/lib/new.js", "x", 0o644, aliceUID, aliceUID)
 		}, "toolchain node:  would change: copy /home/alice/.local/node to /opt/lcm/toolchain/node (entries of lib differ)",
-			[]string{"[lcm] /opt/lcm/toolchain/node/bin/node --version"}},
+			[]string{"[lcm] /opt/lcm/toolchain/node.new/bin/node --version"}},
 		{"checkout missing", func(th *testHost) { th.fs.remove(Checkout) },
 			"checkout:        would change: clone", []string{"[lcm] git clone"}},
 		{"service disabled", func(th *testHost) { th.r.enabled = false },
@@ -287,7 +287,17 @@ func TestRefusedBeforeAnyWrite(t *testing.T) {
 		{"toolchain is a link", func(th *testHost) {
 			th.fs.remove("/home/alice/.local/go")
 			th.fs.link("/home/alice/.local/go", "go1.26", aliceUID, aliceUID)
-		}, "toolchains.go: /home/alice/.local/go is not a directory"},
+		}, "toolchains.go: /home/alice/.local/go is a symbolic link"},
+		{"toolchain in a directory of lcm", func(th *testHost) {
+			th.fs.get("/home/alice/.local").uid = 990
+		}, "toolchains.go: /home/alice/.local is owned by user 990, not root or the operator"},
+		{"toolchain writable by others", func(th *testHost) {
+			th.fs.get("/home/alice/.local/node").mode = fs.ModeDir | 0o777
+		}, "toolchains.node: /home/alice/.local/node is writable by others"},
+		{"toolchain writable by another group", func(th *testHost) {
+			th.fs.get("/home/alice/.local/go").gid = 990
+			th.fs.get("/home/alice/.local/go").mode = fs.ModeDir | 0o775
+		}, "toolchains.go: /home/alice/.local/go is writable by group 990"},
 		{"not signed in", func(th *testHost) { th.r.dns = "" }, "tailscale reports no tailnet name"},
 		{"port taken", func(th *testHost) {
 			th.r.serve = `{"TCP":{"9443":{"HTTPS":true}},"Web":{"host.example.ts.net:9443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}}}`
@@ -433,12 +443,12 @@ func TestResolveInside(t *testing.T) {
 		m.link(p, target, 0, 0)
 	}
 	for _, ok := range []string{"ok", "a/up", "dangling", "self", "viaself", "a/rel"} {
-		if err := resolveInside(m, "/t", strings.Split(ok, "/")); err != nil {
+		if err := resolveInside(fsTree{fs: m, root: "/t"}, "/t", strings.Split(ok, "/")); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
 	for _, bad := range []string{"loop1", "esc"} {
-		if err := resolveInside(m, "/t", strings.Split(bad, "/")); err == nil {
+		if err := resolveInside(fsTree{fs: m, root: "/t"}, "/t", strings.Split(bad, "/")); err == nil {
 			t.Errorf("%s: no error", bad)
 		}
 	}
@@ -466,6 +476,8 @@ type swapFS struct {
 	at    string
 	reads int
 }
+
+func (s *swapFS) OpenTree(root string) (Tree, error) { return fsTree{fs: s, root: root}, nil }
 
 func (s *swapFS) Readlink(p string) (string, error) {
 	if p == s.at {
@@ -605,5 +617,34 @@ func TestSelfDeployed(t *testing.T) {
 		if got := SelfDeployed(exe); got != want {
 			t.Errorf("%s: %v", exe, got)
 		}
+	}
+}
+
+func TestToolchainEntryOfAnotherOwnerIsRefused(t *testing.T) {
+	th := newTestHost(t)
+	th.fs.file("/home/alice/.local/go/src/linked", "someone else's file", 0o644, 2000, 2000)
+	_, out, err := th.apply(Options{})
+	if err == nil || !strings.Contains(err.Error(), "src/linked is owned by user 2000, not root or the operator") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if th.fs.get(ToolchainDir+"/go.new") != nil || th.fs.get(ToolchainDir+"/go") != nil {
+		t.Fatal("the refused copy was kept")
+	}
+}
+
+func TestTreeBudget(t *testing.T) {
+	b := &budget{entries: maxTreeEntries - 1}
+	if err := b.entry(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.entry(); err == nil {
+		t.Fatal("no error beyond the entry bound")
+	}
+	b = &budget{}
+	if err := b.add(maxTreeBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.add(1); err == nil {
+		t.Fatal("no error beyond the size bound")
 	}
 }

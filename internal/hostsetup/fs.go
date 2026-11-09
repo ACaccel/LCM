@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,6 +19,10 @@ type Info struct {
 	UID  int
 	GID  int
 	Size int64
+	// Dev and Ino identify the file, so that a file can be recognized
+	// after it was opened.
+	Dev uint64
+	Ino uint64
 }
 
 // IsDir, IsRegular and IsLink report the file type.
@@ -51,6 +56,36 @@ type FS interface {
 	// MkdirTemp creates a new directory, mode 0700 and owned by the calling
 	// process, in dir and returns its name.
 	MkdirTemp(dir, pattern string) (string, error)
+	// OpenTree opens the directory root for reading a tree that someone
+	// else may change meanwhile.
+	OpenTree(root string) (Tree, error)
+}
+
+// Tree reads a directory tree confined to its root: no name resolves
+// outside the root, whatever links the tree contains or gains while it is
+// read. Names are slash-separated and relative to the root, "." being the
+// root itself.
+type Tree interface {
+	// Root describes the opened root directory.
+	Root() (Info, error)
+	Lstat(rel string) (Info, error)
+	Readlink(rel string) (string, error)
+	// ReadDir returns the sorted names in a directory and the description
+	// of the directory that was opened to read them.
+	ReadDir(rel string) ([]string, Info, error)
+	// Open opens a regular file. The description comes from the opened
+	// file, so it belongs to the content read.
+	Open(rel string) (io.ReadCloser, Info, error)
+	Close() error
+}
+
+func infoOf(fi fs.FileInfo) Info {
+	info := Info{Mode: fi.Mode(), Size: fi.Size(), UID: -1, GID: -1}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		info.UID, info.GID = int(st.Uid), int(st.Gid)
+		info.Dev, info.Ino = uint64(st.Dev), st.Ino //nolint:gosec,unconvert // Dev is unsigned on Linux; the conversion keeps other layouts building
+	}
+	return info
 }
 
 // OS is the real filesystem. A non-empty Root is prefixed to every name, so
@@ -79,11 +114,7 @@ func (o OS) Lstat(name string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	info := Info{Mode: fi.Mode(), Size: fi.Size(), UID: -1, GID: -1}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		info.UID, info.GID = int(st.Uid), int(st.Gid)
-	}
-	return info, nil
+	return infoOf(fi), nil
 }
 
 // Open implements FS.
@@ -328,3 +359,117 @@ func (o OS) MkdirTemp(dir, pattern string) (string, error) {
 	}
 	return strings.TrimPrefix(made, o.Root), nil
 }
+
+// OpenTree implements FS with os.Root, which resolves every name below the
+// root one component at a time without leaving it.
+func (o OS) OpenTree(root string) (Tree, error) {
+	p, err := o.path(root)
+	if err != nil {
+		return nil, err
+	}
+	r, err := os.OpenRoot(p)
+	if err != nil {
+		return nil, err
+	}
+	return osTree{r: r}, nil
+}
+
+type osTree struct{ r *os.Root }
+
+// treeOpenFlags never block on a FIFO and never acquire a terminal.
+const treeOpenFlags = os.O_RDONLY | syscall.O_NONBLOCK | syscall.O_NOCTTY
+
+func (t osTree) Root() (Info, error) {
+	fi, err := t.r.Stat(".")
+	if err != nil {
+		return Info{}, err
+	}
+	return infoOf(fi), nil
+}
+
+func (t osTree) Lstat(rel string) (Info, error) {
+	fi, err := t.r.Lstat(rel)
+	if err != nil {
+		return Info{}, err
+	}
+	return infoOf(fi), nil
+}
+
+func (t osTree) Readlink(rel string) (string, error) { return t.r.Readlink(rel) }
+
+func (t osTree) ReadDir(rel string) ([]string, Info, error) {
+	f, err := t.r.OpenFile(rel, treeOpenFlags|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, Info{}, err
+	}
+	if !fi.IsDir() {
+		return nil, Info{}, fmt.Errorf("%s is not a directory", rel)
+	}
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	sort.Strings(names)
+	return names, infoOf(fi), nil
+}
+
+func (t osTree) Open(rel string) (io.ReadCloser, Info, error) {
+	f, err := t.r.OpenFile(rel, treeOpenFlags, 0)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = fmt.Errorf("%s is not a regular file", rel)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, Info{}, err
+	}
+	return f, infoOf(fi), nil
+}
+
+func (t osTree) Close() error { return t.r.Close() }
+
+// fsTree is a Tree over FS paths, for trees that only root can change, such
+// as a fresh toolchain copy, and for filesystems without descriptors.
+type fsTree struct {
+	fs   FS
+	root string
+}
+
+func (t fsTree) name(rel string) string { return path.Join(t.root, rel) }
+
+func (t fsTree) Root() (Info, error) { return t.fs.Lstat(t.root) }
+
+func (t fsTree) Lstat(rel string) (Info, error) { return t.fs.Lstat(t.name(rel)) }
+
+func (t fsTree) Readlink(rel string) (string, error) { return t.fs.Readlink(t.name(rel)) }
+
+func (t fsTree) ReadDir(rel string) ([]string, Info, error) {
+	info, err := t.fs.Lstat(t.name(rel))
+	if err != nil {
+		return nil, Info{}, err
+	}
+	if !info.IsDir() {
+		return nil, Info{}, fmt.Errorf("%s is not a directory", t.name(rel))
+	}
+	names, err := t.fs.ReadDir(t.name(rel))
+	return names, info, err
+}
+
+func (t fsTree) Open(rel string) (io.ReadCloser, Info, error) {
+	info, err := t.fs.Lstat(t.name(rel))
+	if err != nil {
+		return nil, Info{}, err
+	}
+	f, err := t.fs.Open(t.name(rel))
+	return f, info, err
+}
+
+func (t fsTree) Close() error { return nil }

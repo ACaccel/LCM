@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,10 +35,22 @@ type memNode struct {
 	uid, gid int
 	data     []byte
 	target   string
+	ino      uint64
 }
 
+var inodes atomic.Uint64
+
+// node returns a new node with its own inode number.
+func node(mode fs.FileMode, uid, gid int) *memNode {
+	return &memNode{mode: mode, uid: uid, gid: gid, ino: inodes.Add(1)}
+}
+
+// OpenTree implements FS; paths are taken literally, so the in-memory tree
+// needs no confinement.
+func (m *memFS) OpenTree(root string) (Tree, error) { return fsTree{fs: m, root: root}, nil }
+
 func newMemFS() *memFS {
-	return &memFS{nodes: map[string]*memNode{"/": {mode: fs.ModeDir | 0o755}}, denied: map[string]bool{}}
+	return &memFS{nodes: map[string]*memNode{"/": node(fs.ModeDir|0o755, 0, 0)}, denied: map[string]bool{}}
 }
 
 func notExist(op, p string) error { return &fs.PathError{Op: op, Path: p, Err: fs.ErrNotExist} }
@@ -70,21 +83,25 @@ func (m *memFS) dir(p string, perm fs.FileMode, uid, gid int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mkdirAll(path.Dir(p))
-	m.nodes[p] = &memNode{mode: fs.ModeDir | perm, uid: uid, gid: gid}
+	m.nodes[p] = node(fs.ModeDir|perm, uid, gid)
 }
 
 func (m *memFS) file(p, data string, perm fs.FileMode, uid, gid int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mkdirAll(path.Dir(p))
-	m.nodes[p] = &memNode{mode: perm, uid: uid, gid: gid, data: []byte(data)}
+	n := node(perm, uid, gid)
+	n.data = []byte(data)
+	m.nodes[p] = n
 }
 
 func (m *memFS) link(p, target string, uid, gid int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mkdirAll(path.Dir(p))
-	m.nodes[p] = &memNode{mode: fs.ModeSymlink | 0o777, uid: uid, gid: gid, target: target}
+	n := node(fs.ModeSymlink|0o777, uid, gid)
+	n.target = target
+	m.nodes[p] = n
 }
 
 func (m *memFS) mkdirAll(p string) {
@@ -92,7 +109,7 @@ func (m *memFS) mkdirAll(p string) {
 		return
 	}
 	m.mkdirAll(path.Dir(p))
-	m.nodes[p] = &memNode{mode: fs.ModeDir | 0o755}
+	m.nodes[p] = node(fs.ModeDir|0o755, 0, 0)
 }
 
 func (m *memFS) get(p string) *memNode {
@@ -128,7 +145,7 @@ func (m *memFS) Lstat(p string) (Info, error) {
 	if !ok {
 		return Info{}, notExist("lstat", p)
 	}
-	return Info{Mode: n.mode, UID: n.uid, GID: n.gid, Size: int64(len(n.data))}, nil
+	return Info{Mode: n.mode, UID: n.uid, GID: n.gid, Size: int64(len(n.data)), Ino: n.ino}, nil
 }
 
 func (m *memFS) Open(p string) (io.ReadCloser, error) {
@@ -200,7 +217,7 @@ func (m *memFS) Mkdir(p string, perm fs.FileMode, uid, gid int) error {
 		return &fs.PathError{Op: "mkdir", Path: p, Err: fs.ErrExist}
 	}
 	m.log("mkdir", p)
-	m.nodes[p] = &memNode{mode: fs.ModeDir | perm, uid: uid, gid: gid}
+	m.nodes[p] = node(fs.ModeDir|perm, uid, gid)
 	return nil
 }
 
@@ -218,7 +235,9 @@ func (m *memFS) WriteFile(p string, r io.Reader, perm fs.FileMode, uid, gid int)
 		return fmt.Errorf("write %s: is a directory", p)
 	}
 	m.log("write", p)
-	m.nodes[p] = &memNode{mode: perm, uid: uid, gid: gid, data: data}
+	n := node(perm, uid, gid)
+	n.data = data
+	m.nodes[p] = n
 	return nil
 }
 
@@ -232,7 +251,9 @@ func (m *memFS) Symlink(target, p string, uid, gid int) error {
 		return &fs.PathError{Op: "symlink", Path: p, Err: fs.ErrExist}
 	}
 	m.log("symlink", p)
-	m.nodes[p] = &memNode{mode: fs.ModeSymlink | 0o777, uid: uid, gid: gid, target: target}
+	n := node(fs.ModeSymlink|0o777, uid, gid)
+	n.target = target
+	m.nodes[p] = n
 	return nil
 }
 
@@ -332,7 +353,7 @@ func (m *memFS) MkdirTemp(dir, pattern string) (string, error) {
 		return "", err
 	}
 	m.log("mkdir", p)
-	m.nodes[p] = &memNode{mode: fs.ModeDir | 0o700}
+	m.nodes[p] = node(fs.ModeDir|0o700, 0, 0)
 	return p, nil
 }
 
