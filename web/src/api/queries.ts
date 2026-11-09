@@ -54,6 +54,7 @@ export const qk = {
   ownership: () => ["ownership"] as const,
   locks: () => ["locks"] as const,
   connections: () => ["connections"] as const,
+  hostComponents: () => ["host-components"] as const,
   action: (id: string) => ["action", id] as const,
 };
 
@@ -356,7 +357,16 @@ export const connectionsQuery = () =>
     queryFn: () => fetchAll((cursor) => unwrap(client.GET("/connections", { params: { query: { limit: 500, cursor } } }))),
   });
 
-export const actionQuery = (id: string) =>
+/** Host files against this build; changes only when an administrator runs host apply, so it is read rarely. */
+export const hostComponentsQuery = () =>
+  queryOptions({
+    queryKey: qk.hostComponents(),
+    queryFn: async () => (await unwrap(client.GET("/host/components"))).items,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+export const actionQuery =(id: string) =>
   queryOptions({
     queryKey: qk.action(id),
     queryFn: () => unwrap(client.GET("/actions/{id}", { params: { path: { id } } })),

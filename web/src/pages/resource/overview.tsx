@@ -10,6 +10,7 @@ import { formatDateTime, formatUptime, shortVersion } from "../../lib/format";
 import { bucketUptime, mergeSeries } from "../../lib/series";
 import { checkView } from "../../lib/status";
 import { s } from "../../strings";
+import { HostDriftNotice } from "./machine/host-drift";
 import { MachineOverview } from "./machine/monitoring";
 import { OperationCard } from "./operations";
 import { RouterOverview } from "./router";
@@ -98,6 +99,7 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
           <LatestDeployment detail={detail} />
         </div>
       )}
+      {detail.type === "machine" && <HostDriftNotice />}
       {detail.type === "machine" && <MachineOverview resource={detail} selector={selector} />}
       {detail.type === "router" && <RouterOverview resource={detail} selector={selector} />}
       <div className="two">

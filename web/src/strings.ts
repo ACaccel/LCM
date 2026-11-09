@@ -761,6 +761,15 @@ export const s = {
     viewPolicy: "開啟 policy",
     legend: "圖例",
   },
+  hostDrift: {
+    title: "主機上的 helper 檔案與這個 LCM 版本不一致",
+    help: "LCM 不會自行以 root 更新這些檔案。請檢視更新內容，然後在已審閱的 checkout 執行：",
+    command: "make build && sudo bin/lcm host apply",
+    warning: "不要執行 sudo lcm host apply；以 root 執行自部署的 binary 會被拒絕。",
+    docs: "更新步驟說明",
+    unknownHint: "以下檔案 lcm 帳號無法讀取，無法比對（root 專屬的 sudoers 規則通常如此）：",
+    states: { outdated: "與內建版本不同", missing: "缺少", unknown: "無法讀取" } as Record<string, string>,
+  },
   machine: {
     trend: "CPU 與記憶體使用率趨勢",
     trendNote: "依所選時間範圍取樣顯示；缺值留空，不補值或連接觀測缺口。",
