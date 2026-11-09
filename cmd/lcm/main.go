@@ -31,6 +31,7 @@ Commands:
   convert -f <file|dir>       Print lcm/v1 documents converted to lcm/v2 (offline)
   host init --operator <user> Write the host configuration /etc/lcm/host.json (root)
   host apply [--check]        Install or converge LCM's host components (root)
+  host upgrade [--check]      Upgrade a schema-changing build with backup and rollback (root)
   host status                 Compare installed host files with this build
 
 Commands that talk to a running server (see the README):
@@ -47,7 +48,7 @@ Configuration is read from LCM_* environment variables; flags override them.
 The server commands use LCM_SERVER (default http://127.0.0.1:7800) and an API
 token from LCM_TOKEN, or from the file named by --token-file or LCM_TOKEN_FILE.
 Exit status: 0 success, 1 error, 2 usage, 3 documents with problems or,
-for host apply --check, pending changes.
+for host apply|upgrade --check, pending changes.
 `
 
 // usageError marks mistakes in the command line, which exit with status 2.
