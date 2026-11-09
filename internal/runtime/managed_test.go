@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -209,5 +210,89 @@ func TestCallHelperQueriesUnknownOutcomes(t *testing.T) {
 	bad.OperationID, bad.Artifact = rt.NewOperationID(), "../etc"
 	if _, err := rt.CallHelper(ctx, h, bad); err == nil || len(h.Requests()) != 0 {
 		t.Fatalf("invalid request: %v, %d requests", err, len(h.Requests()))
+	}
+}
+
+// TestCallHelperNeedsSucceededState: a changing operation's reply without a
+// code is success only when it says so.
+func TestCallHelperNeedsSucceededState(t *testing.T) {
+	ctx := context.Background()
+	restart := deployhelper.Request{Op: deployhelper.OpRestart, Service: "web"}
+	var he *rt.HelperError
+
+	stateless := &fakeHelper{Fake: deployhelper.Fake{Handle: func(req deployhelper.Request) (deployhelper.Response, error) {
+		if req.Op == deployhelper.OpQuery {
+			resp := reply(req)
+			resp.Op, resp.State = deployhelper.OpRestart, deployhelper.StateRunning
+			return resp, nil
+		}
+		return reply(req), nil
+	}}}
+	restart.OperationID = rt.NewOperationID()
+	if _, err := rt.CallHelper(ctx, stateless, restart); !errors.As(err, &he) || !he.Unknown {
+		t.Fatalf("a reply without state: %v", err)
+	}
+	if ops := stateless.Requests(); len(ops) != 2 || ops[1].Op != deployhelper.OpQuery || ops[1].OperationID != restart.OperationID {
+		t.Fatalf("the ledger must be asked: %+v", ops)
+	}
+
+	// The ledger confirming success settles it.
+	confirmed := &fakeHelper{Fake: deployhelper.Fake{Handle: func(req deployhelper.Request) (deployhelper.Response, error) {
+		resp := reply(req)
+		if req.Op == deployhelper.OpQuery {
+			resp.Op, resp.State = deployhelper.OpRestart, deployhelper.StateSucceeded
+		}
+		return resp, nil
+	}}}
+	restart.OperationID = rt.NewOperationID()
+	if _, err := rt.CallHelper(ctx, confirmed, restart); err != nil {
+		t.Fatalf("confirmed: %v", err)
+	}
+
+	// A reply that exists contradicts "no record": unknown, not "not carried out".
+	contradicting := &fakeHelper{Fake: deployhelper.Fake{Handle: func(req deployhelper.Request) (deployhelper.Response, error) {
+		resp := reply(req)
+		if req.Op == deployhelper.OpQuery {
+			resp.Code = deployhelper.CodeNotFound
+			return resp, &deployhelper.Error{Code: resp.Code}
+		}
+		return resp, nil
+	}}}
+	restart.OperationID = rt.NewOperationID()
+	if _, err := rt.CallHelper(ctx, contradicting, restart); !errors.As(err, &he) || !he.Unknown {
+		t.Fatalf("contradicting: %v", err)
+	}
+}
+
+// TestCallHelperCutShortIsUnknown: the root helper outlives a cancelled or
+// timed-out call, so a missing record proves nothing.
+func TestCallHelperCutShortIsUnknown(t *testing.T) {
+	noRecord := func(callErr error) *fakeHelper {
+		return &fakeHelper{Fake: deployhelper.Fake{Handle: func(req deployhelper.Request) (deployhelper.Response, error) {
+			if req.Op != deployhelper.OpQuery {
+				return deployhelper.Response{}, callErr
+			}
+			resp := reply(req)
+			resp.Code = deployhelper.CodeNotFound
+			return resp, &deployhelper.Error{Code: resp.Code, Message: "no operation is recorded"}
+		}}}
+	}
+	req := func() deployhelper.Request {
+		return deployhelper.Request{Op: deployhelper.OpRestart, Service: "web", OperationID: rt.NewOperationID()}
+	}
+	var he *rt.HelperError
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := rt.CallHelper(cancelled, noRecord(nil), req()); !errors.As(err, &he) || !he.Unknown {
+		t.Fatalf("cancelled: %v", err)
+	}
+	timedOut := fmt.Errorf("%w: no reply (%w)", deployhelper.ErrOutcomeUnknown, execx.ErrTimeout)
+	if _, err := rt.CallHelper(context.Background(), noRecord(timedOut), req()); !errors.As(err, &he) || !he.Unknown {
+		t.Fatalf("timed out: %v", err)
+	}
+	lost := fmt.Errorf("%w: no reply", deployhelper.ErrOutcomeUnknown)
+	if _, err := rt.CallHelper(context.Background(), noRecord(lost), req()); !errors.As(err, &he) || he.Unknown {
+		t.Fatalf("lost reply without a record: %v", err)
 	}
 }

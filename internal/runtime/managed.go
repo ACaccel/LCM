@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/ACaccel/lcm/internal/deployhelper"
+	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
 )
 
@@ -80,7 +81,11 @@ func CallHelper(ctx context.Context, h DeployHelper, req deployhelper.Request) (
 	}
 	resp, err := h.Call(ctx, req)
 	if err == nil {
-		return resp, nil
+		if !req.Op.Changes() || resp.State == deployhelper.StateSucceeded {
+			return resp, nil
+		}
+		// A reply that does not say "succeeded" is no proof of a change.
+		return queryOutcome(ctx, h, req, fmt.Errorf("the reply reports state %q instead of succeeded", resp.State), true)
 	}
 	if code := deployhelper.CodeOf(err); code != "" {
 		return resp, &HelperError{Op: req.Op, OperationID: req.OperationID, Code: code, Message: resp.Message, Log: resp.Log}
@@ -88,12 +93,17 @@ func CallHelper(ctx context.Context, h DeployHelper, req deployhelper.Request) (
 	if !req.Op.Changes() {
 		return resp, fmt.Errorf("deploy helper %s: %w", req.Op, err)
 	}
-	return queryOutcome(ctx, h, req, err)
+	// After a cancellation or timeout the root helper keeps running, and
+	// may not have recorded the operation yet.
+	cut := ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, execx.ErrTimeout)
+	return queryOutcome(ctx, h, req, err, cut)
 }
 
 // queryOutcome asks the ledger what became of req after callErr left its
-// outcome unknown.
-func queryOutcome(ctx context.Context, h DeployHelper, req deployhelper.Request, callErr error) (deployhelper.Response, error) {
+// outcome unknown. Without a record, req was not carried out unless
+// mayStillRun: the call was cut short, or the helper did reply, so the
+// record may only be missing because the helper has not written it yet.
+func queryOutcome(ctx context.Context, h DeployHelper, req deployhelper.Request, callErr error, mayStillRun bool) (deployhelper.Response, error) {
 	unknown := func(msg string) error {
 		return &HelperError{Op: req.Op, OperationID: req.OperationID, Unknown: true, Message: msg}
 	}
@@ -103,6 +113,8 @@ func queryOutcome(ctx context.Context, h DeployHelper, req deployhelper.Request,
 	defer cancel()
 	q, err := h.Call(qctx, deployhelper.Request{Version: deployhelper.Version, Op: deployhelper.OpQuery, OperationID: req.OperationID})
 	switch {
+	case deployhelper.CodeOf(err) == deployhelper.CodeNotFound && mayStillRun:
+		return deployhelper.Response{}, unknown(fmt.Sprintf("%v; the helper has no record yet, but it may still be starting the operation", callErr))
 	case deployhelper.CodeOf(err) == deployhelper.CodeNotFound:
 		return deployhelper.Response{}, &HelperError{Op: req.Op, OperationID: req.OperationID, Code: deployhelper.CodeFailed,
 			Message: fmt.Sprintf("the helper has no record of the operation, so it was not carried out (%v)", callErr)}
