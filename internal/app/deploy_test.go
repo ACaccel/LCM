@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ACaccel/lcm/deploy"
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/templates"
@@ -27,6 +28,35 @@ func readDeploy(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// TestDeployEmbedsTheDeployFiles keeps the files "lcm host apply" installs
+// identical to the reviewed files in deploy/.
+func TestDeployEmbedsTheDeployFiles(t *testing.T) {
+	names := []string{"lcm.service", "lcm.env", "sudoers", "self-install", "machine-power",
+		"machine-power-sudoers", "security-host/helper.py", "security-host/install.py"}
+	for _, name := range names {
+		got, err := fs.ReadFile(deploy.Files, name)
+		if err != nil {
+			t.Errorf("%s is not embedded: %v", name, err)
+			continue
+		}
+		if !bytes.Equal(got, readDeploy(t, name)) {
+			t.Errorf("embedded %s differs from deploy/%s", name, name)
+		}
+	}
+	n := 0
+	if err := fs.WalkDir(deploy.Files, ".", func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			n++
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n != len(names) {
+		t.Errorf("deploy.Files holds %d files, want exactly %v", n, names)
+	}
 }
 
 // deployPolicyParams are the auto-deploy template parameters of

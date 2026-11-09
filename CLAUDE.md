@@ -79,7 +79,7 @@ See the README status for planned capabilities; export is currently the way back
 
 ## Repo rules
 
-- All code lives under `internal/` except `cmd/` and `examples/examples.go`, which only embeds the example documents; there is no public Go API.
+- All code lives under `internal/` except `cmd/`, `examples/examples.go` and `deploy/deploy.go`, which only embed the example documents and the installed host files; there is no public Go API.
 - Every state-changing action writes an audit entry through `audit.Log.Record` with the actor taken from the context (`auth.WithActor`). CLI commands use `auth.CLI`. Never put secrets in audit details or logs.
 - Writes go through `store.DB.Write`; reads use `store.DB.Reader()`. Times are stored as Unix milliseconds.
 - Code with expiry or time-window logic takes an injected clock (`internal/clock`); tests must not sleep.
