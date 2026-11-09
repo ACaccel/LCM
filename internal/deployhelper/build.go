@@ -188,8 +188,9 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 // by empty read-only file systems with only this build's directories bound
 // back; other processes are invisible in /proc; it gets no capabilities, no
 // new privileges, a private /tmp and /dev, a time limit and a memory limit.
-// It has the network, to download dependencies, but not the local host,
-// where LCM's API and the services listen. Its environment is fixed: PATH
+// It has the network, to download dependencies, except the loopback
+// addresses (IPAddressDeny=localhost); other addresses of the host, Unix
+// sockets and abstract sockets stay reachable. Its environment is fixed: PATH
 // (the runtimes' bin directories first), HOME, LANG, the commit, the cache
 // (also as the npm and Go caches) and, with inputs, where they are mounted
 // read-only. The command is run from a root-owned script file, so that
@@ -217,7 +218,6 @@ func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, 
 	}
 	props := sandbox("0022", backup)
 	props = append(props,
-		"ProcSubset=pid",
 		"IPAddressDeny=localhost",
 		"TemporaryFileSystem="+hostsetup.BuildDir+":ro",
 		"TemporaryFileSystem="+hostsetup.BuildCacheDir+":ro",
