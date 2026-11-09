@@ -775,6 +775,42 @@ func (s *swapOnChown) Chown(p string, want Info, uid, gid int) error {
 	return s.memFS.Chown(p, want, uid, gid)
 }
 
+func TestDirectoryReplacedByAFileIsNotChanged(t *testing.T) {
+	// A root-owned file hard-linked in for a directory after preflight is
+	// refused before its owner or mode is touched.
+	th := converged(t)
+	th.fs.get(WorkDir).uid = 0
+	fsys := &swapOnLstat{memFS: th.fs, at: WorkDir, after: 1}
+	th.host.FS = fsys
+	_, out, err := th.apply(Options{})
+	if err == nil || !strings.Contains(err.Error(), "is no longer a directory") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if n := th.fs.get(WorkDir); n.mode.IsDir() || n.uid != 0 || n.mode.Perm() != 0o440 {
+		t.Fatalf("the swapped-in file was changed: %+v", n)
+	}
+}
+
+// swapOnLstat replaces a directory by a root-owned regular file once the
+// path has been checked `after` times, as a hard link to such a file would.
+type swapOnLstat struct {
+	*memFS
+	at    string
+	after int
+	seen  int
+}
+
+func (s *swapOnLstat) Lstat(p string) (Info, error) {
+	if p == s.at {
+		if s.seen == s.after {
+			s.remove(p)
+			s.file(p, "root data", 0o440, 0, 0)
+		}
+		s.seen++
+	}
+	return s.memFS.Lstat(p)
+}
+
 func TestAdminPasswordIsCheckedBeforeItIsSent(t *testing.T) {
 	for password, want := range map[string]string{
 		"short":           "at least 8 characters",

@@ -810,6 +810,10 @@ func (a *applier) ensureDir(s *step, p string, perm fs.FileMode, uid, gid int, o
 		return s.change(fmt.Sprintf("create %s (%s %04o)", p, owner, perm), func() error { return fsys.Mkdir(p, perm, uid, gid) })
 	case err != nil:
 		return err
+	case !info.IsDir() || info.IsLink():
+		// Preflight saw a directory, so something replaced it since; a hard
+		// link to another file must never get the owner or mode meant here.
+		return fmt.Errorf("%s is no longer a directory; nothing was changed", p)
 	case info.UID != uid || info.GID != gid:
 		return s.change(fmt.Sprintf("set %s to %s %04o", p, owner, perm), func() error {
 			if err := fsys.Chown(p, info, uid, gid); err != nil {
