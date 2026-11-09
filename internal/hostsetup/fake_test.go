@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -385,6 +386,7 @@ type fakeRunner struct {
 	failVisudo, failVisudoStaged, failAnalyze bool
 	visudoHook                                func() error
 	versionOutput, installedVersion           string
+	passwordInput                             string
 	installPy                                 []string
 }
 
@@ -448,6 +450,9 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		line = "[" + c.As.Name + "] " + line
 	}
 	r.calls = append(r.calls, line)
+	if _, isFile := c.Stdin.(*os.File); isFile {
+		return nil, fmt.Errorf("fake runner: %s got a file as stdin", line)
+	}
 	a := c.Args
 	arg := func(i int) string {
 		if i < len(a) {
@@ -527,7 +532,9 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 	case c.Path == Binary && arg(0) == "token":
 		return []byte(testToken + "\n"), nil
 	case c.Path == Binary && arg(0) == "admin":
-		return nil, nil
+		data, _ := io.ReadAll(c.Stdin)
+		r.passwordInput = string(data)
+		return []byte("User \"admin\" created.\n"), nil
 	case c.Path == "sh":
 		data, _ := io.ReadAll(c.Stdin)
 		file := arg(3)

@@ -38,12 +38,11 @@ type Command struct {
 	As *Account
 	// Env is added to the fixed environment (PATH, LC_ALL and, with As,
 	// HOME).
-	Env   []string
+	Env []string
+	// Stdin is copied to the program through a pipe; nil reads
+	// /dev/null. Output is always captured, never connected to a
+	// terminal.
 	Stdin io.Reader
-	// Stdout and Stderr, when set, receive the output instead of it being
-	// captured; interactive programs use them.
-	Stdout io.Writer
-	Stderr io.Writer
 	// Timeout bounds the program; zero selects two minutes.
 	Timeout time.Duration
 }
@@ -131,17 +130,16 @@ func (r OSRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 	}
 	cmd.SysProcAttr = sysProcAttr(c)
 	cmd.Env = append(cmd.Env, c.Env...)
+	if _, isFile := c.Stdin.(*os.File); isFile {
+		// exec would pass the descriptor itself, which may be root's
+		// terminal.
+		return nil, fmt.Errorf("%s: stdin must not be a file", c)
+	}
 	cmd.Stdin = c.Stdin
 	cmd.WaitDelay = 5 * time.Second
 	stdout := &limitedBuffer{max: maxStdout}
 	stderr := &limitedBuffer{max: maxStderr}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if c.Stdout != nil {
-		cmd.Stdout = c.Stdout
-	}
-	if c.Stderr != nil {
-		cmd.Stderr = c.Stderr
-	}
 	err := cmd.Run()
 	var ee *exec.ExitError
 	switch {

@@ -5,8 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
+
+	"golang.org/x/term"
 
 	"github.com/ACaccel/lcm/internal/hostsetup"
 )
@@ -102,8 +107,8 @@ func (a *app) hostApply(ctx context.Context, fs *flag.FlagSet, args []string) er
 		return err
 	}
 	opts := hostsetup.Options{ConfigPath: *path, Check: *check, ReplaceBinary: *replace, Out: a.stdout}
-	if a.interactive() {
-		opts.Terminal = &hostsetup.Terminal{In: a.stdin, Out: a.stderr}
+	if f, ok := a.stdin.(*os.File); ok && a.interactive() {
+		opts.Password = func() (string, error) { return a.promptRestoring(f) }
 	}
 	res, err := hostsetup.Apply(ctx, h, opts)
 	if err != nil {
@@ -161,4 +166,32 @@ func (a *app) hostStatus(fs *flag.FlagSet, args []string) error {
 		_, err = fmt.Fprintln(a.stdout, "\nTo install the versions of this build: sudo bin/lcm host apply (from a reviewed checkout, after make build)")
 	}
 	return err
+}
+
+// promptRestoring asks for a new password with echo off, like admin
+// set-password, and puts the terminal back even when a signal ends the
+// command during the prompt.
+func (a *app) promptRestoring(f *os.File) (string, error) {
+	fd := int(f.Fd()) //nolint:gosec // file descriptors fit in int
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", fmt.Errorf("read the terminal state: %w", err)
+	}
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	done := make(chan struct{})
+	defer func() {
+		signal.Stop(sigs)
+		close(done)
+	}()
+	go func() {
+		select {
+		case <-sigs:
+			_ = term.Restore(fd, state)
+			_, _ = fmt.Fprintln(a.stderr)
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+	return a.promptPassword(f)
 }

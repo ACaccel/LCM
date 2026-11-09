@@ -36,9 +36,15 @@ func TestFreshInstall(t *testing.T) {
 	}
 
 	th.r.resetCalls()
-	res, out, err = th.apply(Options{Terminal: &Terminal{In: strings.NewReader(""), Out: &strings.Builder{}}})
+	res, out, err = th.apply(Options{Password: func() (string, error) { return "correct horse battery", nil }})
 	if err != nil || res.Changes == 0 {
 		t.Fatalf("apply: %+v %v\n%s", res, err, out)
+	}
+	if th.r.passwordInput != "correct horse battery\n" {
+		t.Errorf("set-password read %q from its pipe", th.r.passwordInput)
+	}
+	if strings.Contains(out, "correct horse") || strings.Contains(out, `User "admin"`) {
+		t.Errorf("the password or child output reached the terminal:\n%s", out)
 	}
 	if !strings.Contains(out, "LCM is running at https://host.example.ts.net:9443") {
 		t.Errorf("no final message:\n%s", out)
@@ -760,4 +766,20 @@ func (s *swapOnChown) Chown(p string, want Info, uid, gid int) error {
 		s.file(p, "root data", 0o440, 0, 0)
 	}
 	return s.memFS.Chown(p, want, uid, gid)
+}
+
+func TestAdminPasswordIsCheckedBeforeItIsSent(t *testing.T) {
+	for password, want := range map[string]string{
+		"short":           "at least 8 characters",
+		"two\nlines long": "must be one line",
+	} {
+		th := newTestHost(t)
+		_, out, err := th.apply(Options{Password: func() (string, error) { return password, nil }})
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "set it later with") {
+			t.Errorf("%q: err = %v\n%s", password, err, out)
+		}
+		if len(th.r.called("[lcm] /usr/local/bin/lcm admin")) != 0 {
+			t.Errorf("%q was sent", password)
+		}
+	}
 }

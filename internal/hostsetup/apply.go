@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/auth"
 	"github.com/ACaccel/lcm/internal/clock"
 )
 
@@ -28,15 +29,11 @@ type Options struct {
 	ReplaceBinary bool
 	// Out receives one line per step result.
 	Out io.Writer
-	// Terminal, when set, is the terminal that answers the admin password
-	// prompt of a fresh installation.
-	Terminal *Terminal
-}
-
-// Terminal is an interactive terminal.
-type Terminal struct {
-	In  io.Reader
-	Out io.Writer
+	// Password, when set, asks the administrator for the web console's
+	// admin password of a fresh installation. Apply asks itself and hands
+	// the password over through a pipe, so that no process of another
+	// account ever gets root's terminal.
+	Password func() (string, error)
 }
 
 // Result counts what Apply found.
@@ -1175,14 +1172,24 @@ func (a *applier) adminPassword(ctx context.Context, s *step) error {
 		return nil
 	}
 	hint := "sudo -u lcm " + Binary + " admin set-password --data-dir " + DataDir
-	if a.o.Terminal == nil {
+	if a.o.Password == nil {
 		s.note("not a terminal; set it with: " + hint)
 		return nil
 	}
-	return s.change("set the web console's admin password (min 8 characters)", func() error {
-		_, err := a.run(ctx, Command{
+	return s.change(fmt.Sprintf("set the web console's admin password (min %d characters)", auth.MinPasswordLength), func() error {
+		password, err := a.o.Password()
+		switch {
+		case err != nil:
+			return fmt.Errorf("%w; set it later with: %s", err, hint)
+		case len(password) < auth.MinPasswordLength:
+			return fmt.Errorf("the password must be at least %d characters; set it later with: %s", auth.MinPasswordLength, hint)
+		case strings.ContainsAny(password, "\r\n"):
+			return fmt.Errorf("the password must be one line; set it later with: %s", hint)
+		}
+		// set-password reads one line from a stdin that is not a terminal.
+		_, err = a.run(ctx, Command{
 			Path: Binary, Args: []string{"admin", "set-password", "--data-dir", DataDir}, As: a.lcm,
-			Stdin: a.o.Terminal.In, Stdout: a.o.Terminal.Out, Stderr: a.o.Terminal.Out, Timeout: 10 * time.Minute,
+			Stdin: strings.NewReader(password + "\n"), Timeout: time.Minute,
 		})
 		if err != nil {
 			return fmt.Errorf("%w; set it later with: %s", err, hint)

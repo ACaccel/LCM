@@ -245,3 +245,10 @@ func TestOSRunner(t *testing.T) {
 		t.Error("a name with a slash was looked up")
 	}
 }
+
+func TestOSRunnerNeverPassesAFile(t *testing.T) {
+	_, err := OSRunner{}.Run(t.Context(), Command{Path: "true", As: &Account{Name: "lcm", UID: 990, GID: 990}, Stdin: os.Stdin})
+	if err == nil || !strings.Contains(err.Error(), "stdin must not be a file") {
+		t.Fatalf("err = %v", err)
+	}
+}
