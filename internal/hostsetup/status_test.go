@@ -185,3 +185,28 @@ func TestOSFSMetadataDoesNotFollowLinks(t *testing.T) {
 		t.Error("chmod accepted a FIFO")
 	}
 }
+
+func TestCommandsAsAnotherAccountLeaveTheTerminal(t *testing.T) {
+	if sysProcAttr(Command{Path: "true"}) != nil {
+		t.Error("a command as root changes its process attributes")
+	}
+	attr := sysProcAttr(Command{Path: "lcm", As: &Account{Name: "lcm", UID: 990, GID: 991}})
+	if attr == nil || !attr.Setsid || attr.Credential == nil || attr.Credential.Uid != 990 || attr.Credential.Gid != 991 ||
+		attr.Credential.Groups == nil || len(attr.Credential.Groups) != 0 {
+		t.Fatalf("attributes %+v", attr)
+	}
+}
+
+func TestOSRunner(t *testing.T) {
+	r := OSRunner{}
+	if _, err := r.LookPath("sh"); err != nil {
+		t.Skip("no sh:", err)
+	}
+	out, err := r.Run(t.Context(), Command{Path: "sh", Args: []string{"-c", "echo $PATH; echo oops >&2; exit 3"}})
+	if exitCode(err) != 3 || strings.TrimSpace(string(out)) != SafePath || !strings.Contains(err.Error(), "oops") {
+		t.Fatalf("out %q err %v", out, err)
+	}
+	if _, err := r.LookPath("a/b"); err == nil {
+		t.Error("a name with a slash was looked up")
+	}
+}

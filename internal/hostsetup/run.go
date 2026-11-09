@@ -32,8 +32,9 @@ type Command struct {
 	// Path is an absolute program path or a tool name looked up in SafePath.
 	Path string
 	Args []string
-	// As runs the program with this account's user and primary group and no
-	// supplementary groups; nil runs it as the calling process.
+	// As runs the program with this account's user and primary group, no
+	// supplementary groups and in a new session without a controlling
+	// terminal; nil runs it as the calling process.
 	As *Account
 	// Env is added to the fixed environment (PATH, LC_ALL and, with As,
 	// HOME).
@@ -127,10 +128,8 @@ func (r OSRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 	cmd.Env = []string{"PATH=" + SafePath, "LC_ALL=C"}
 	if c.As != nil {
 		cmd.Env = append(cmd.Env, "HOME="+c.As.Home)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{
-			Uid: uint32(c.As.UID), Gid: uint32(c.As.GID), Groups: []uint32{}, //nolint:gosec // account IDs come from getent and fit in uint32
-		}}
 	}
+	cmd.SysProcAttr = sysProcAttr(c)
 	cmd.Env = append(cmd.Env, c.Env...)
 	cmd.Stdin = c.Stdin
 	cmd.WaitDelay = 5 * time.Second
@@ -154,6 +153,19 @@ func (r OSRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 		return stdout.Bytes(), &ExitError{Command: c.String(), Code: ee.ExitCode(), Stderr: lastLine(stderr.String())}
 	}
 	return nil, fmt.Errorf("%s: %w", c, err)
+}
+
+// sysProcAttr switches to c.As in a new session. Without a controlling
+// terminal the program cannot open root's terminal through /dev/tty or
+// push input into it with TIOCSTI, and terminal signals do not reach it;
+// a terminal passed as Stdin still answers its prompts.
+func sysProcAttr(c Command) *syscall.SysProcAttr {
+	if c.As == nil {
+		return nil
+	}
+	return &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{
+		Uid: uint32(c.As.UID), Gid: uint32(c.As.GID), Groups: []uint32{}, //nolint:gosec // account IDs come from getent and fit in uint32
+	}}
 }
 
 // lastLine is the last non-empty line of a program's error output, which
