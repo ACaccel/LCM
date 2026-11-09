@@ -55,6 +55,7 @@ const (
 	EnvRunRetentionKeep          = "LCM_RUN_RETENTION_KEEP"
 	EnvRunRetentionAge           = "LCM_RUN_RETENTION_AGE"
 	EnvDeploymentKeep            = "LCM_DEPLOYMENT_RETENTION_KEEP"
+	EnvSelfBackupKeep            = "LCM_SELF_BACKUP_KEEP"
 	EnvVersionKeep               = "LCM_VERSION_RETENTION_KEEP"
 	EnvOperationRetention        = "LCM_OPERATION_RETENTION"
 	EnvFailedLoginKeep           = "LCM_FAILED_LOGIN_RETENTION_KEEP"
@@ -109,6 +110,7 @@ const (
 	DefaultRunRetentionKeep       = 200
 	DefaultRunRetentionAge        = 30 * 24 * time.Hour
 	DefaultDeploymentKeep         = 100
+	DefaultSelfBackupKeep         = 7
 	DefaultVersionKeep            = 50
 	DefaultOperationRetention     = 90 * 24 * time.Hour
 	DefaultFailedLoginKeep        = 10000
@@ -178,6 +180,9 @@ type Config struct {
 	RunRetentionAge  time.Duration
 	// DeploymentKeep is how many deployment records are kept per service.
 	DeploymentKeep int
+	// SelfBackupKeep is how many days of LCM's own database backups are
+	// kept in <data dir>/backups, one per day; 0 turns the backups off.
+	SelfBackupKeep int
 	// VersionKeep is how many versions of each Resource, Policy and Module
 	// document are kept; versions still in use are kept beyond it.
 	VersionKeep int
@@ -245,6 +250,7 @@ func Default() Config {
 		RunRetentionKeep:   DefaultRunRetentionKeep,
 		RunRetentionAge:    DefaultRunRetentionAge,
 		DeploymentKeep:     DefaultDeploymentKeep,
+		SelfBackupKeep:     DefaultSelfBackupKeep,
 		VersionKeep:        DefaultVersionKeep,
 		OperationRetention: DefaultOperationRetention,
 		FailedLoginKeep:    DefaultFailedLoginKeep,
@@ -369,6 +375,7 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	num(&c.RunRetentionKeep, EnvRunRetentionKeep)
 	dur(&c.RunRetentionAge, EnvRunRetentionAge)
 	num(&c.DeploymentKeep, EnvDeploymentKeep)
+	num(&c.SelfBackupKeep, EnvSelfBackupKeep)
 	num(&c.VersionKeep, EnvVersionKeep)
 	dur(&c.OperationRetention, EnvOperationRetention)
 	num(&c.FailedLoginKeep, EnvFailedLoginKeep)
@@ -458,6 +465,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.TimelineRetention, "timeline-retention", c.TimelineRetention, "how long timeline entries are kept ("+EnvTimelineRetention+")")
 	fs.IntVar(&c.RunRetentionKeep, "run-retention-keep", c.RunRetentionKeep, "finished runs kept per policy regardless of age ("+EnvRunRetentionKeep+")")
 	fs.IntVar(&c.DeploymentKeep, "deployment-retention-keep", c.DeploymentKeep, "deployment records kept per service ("+EnvDeploymentKeep+")")
+	fs.IntVar(&c.SelfBackupKeep, "self-backup-keep", c.SelfBackupKeep, "days of backups of LCM's own database kept in <data dir>/backups, 0 turns them off ("+EnvSelfBackupKeep+")")
 	fs.DurationVar(&c.RunRetentionAge, "run-retention-age", c.RunRetentionAge, "finished runs younger than this are kept ("+EnvRunRetentionAge+")")
 	fs.IntVar(&c.VersionKeep, "version-retention-keep", c.VersionKeep, "versions kept per Resource, Policy and Module document ("+EnvVersionKeep+")")
 	fs.DurationVar(&c.OperationRetention, "operation-retention", c.OperationRetention, "how long finished operations are kept ("+EnvOperationRetention+")")
@@ -543,6 +551,9 @@ func (c Config) validateComponents() []error {
 		errs = append(errs, fmt.Errorf("run retention keep %d: must be at least 1", c.RunRetentionKeep))
 	}
 	positive("run retention age", c.RunRetentionAge)
+	if c.SelfBackupKeep < 0 || c.SelfBackupKeep > 366 {
+		errs = append(errs, fmt.Errorf("self backup keep %d: must be between 0 and 366", c.SelfBackupKeep))
+	}
 	if c.DeploymentKeep < 1 {
 		errs = append(errs, fmt.Errorf("deployment retention keep %d: must be at least 1", c.DeploymentKeep))
 	}

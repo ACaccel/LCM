@@ -22,8 +22,9 @@ import (
 // serializes them in-process, while a separate pool serves concurrent reads
 // (WAL mode keeps readers from blocking the writer).
 type DB struct {
-	w *sql.DB
-	r *sql.DB
+	w    *sql.DB
+	r    *sql.DB
+	path string
 }
 
 // ErrSchemaMismatch means an existing database was migrated by another
@@ -158,7 +159,7 @@ func open(ctx context.Context, path string) (*DB, error) {
 	}
 	r.SetMaxOpenConns(max(2, min(runtime.NumCPU(), 8)))
 
-	db := &DB{w: w, r: r}
+	db := &DB{w: w, r: r, path: abs}
 	if err := db.connect(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -185,6 +186,24 @@ func (d *DB) Close() error {
 // Ping verifies that the database answers queries.
 func (d *DB) Ping(ctx context.Context) error {
 	return d.r.PingContext(ctx)
+}
+
+// Snapshot writes a consistent copy of the database to dest, a file that
+// must not exist, while the database stays in use. It reads through its own
+// read-only connection, since VACUUM INTO is refused on the reader pool
+// (query_only) and cannot run inside a write transaction.
+func (d *DB) Snapshot(ctx context.Context, dest string) error {
+	u := url.URL{Scheme: "file", Path: d.path, RawQuery: url.Values{"mode": {"ro"}, "_pragma": {"busy_timeout(30000)"}}.Encode()}
+	c, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return fmt.Errorf("store: open snapshot connection: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+	c.SetMaxOpenConns(1)
+	if _, err := c.ExecContext(ctx, "VACUUM INTO ?", dest); err != nil {
+		return fmt.Errorf("store: snapshot: %w", err)
+	}
+	return nil
 }
 
 // Reader returns the pool for read-only queries. Statements that modify data
