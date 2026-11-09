@@ -207,6 +207,9 @@ func ValidateResource(r *Resource) error {
 		} else {
 			sp.Config.validate(sp.Adapter, "spec.config", &is)
 		}
+		if sp.Type == ResourceService && sp.Adapter == string(RuntimeManaged) {
+			validateManagedName(r.Metadata.Name, &is)
+		}
 	}
 	validateChecks(sp.Checks, "spec.checks", &is)
 	validateRelations(sp.Relations, r.Metadata.Name, &is)

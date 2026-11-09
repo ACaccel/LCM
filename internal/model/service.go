@@ -3,6 +3,7 @@ package model
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +22,9 @@ const (
 	RuntimeCompose  RuntimeType = "compose"
 	RuntimeCommand  RuntimeType = "command"
 	RuntimeExternal RuntimeType = "external"
+	// RuntimeManaged runs a service that the deploy helper builds, installs
+	// and runs as its own account from releases under /opt/<name>.
+	RuntimeManaged RuntimeType = "managed"
 )
 
 // Systemd scopes.
@@ -48,11 +52,22 @@ type ServiceConfig struct {
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	File    string `yaml:"file,omitempty" json:"file,omitempty"`
 	// command: shell commands per action; each is optional and an action
-	// without one is not offered
+	// without one is not offered. managed: start is the release-relative
+	// file the service runs, see below.
 	Start   string `yaml:"start,omitempty" json:"start,omitempty"`
 	Stop    string `yaml:"stop,omitempty" json:"stop,omitempty"`
 	Restart string `yaml:"restart,omitempty" json:"restart,omitempty"`
 	Status  string `yaml:"status,omitempty" json:"status,omitempty"`
+	// managed: the build output directory installed as a release, the
+	// arguments of start, the runtime named in the host configuration, an
+	// optional migration run before the switch, and how many releases the
+	// helper keeps. Documents carry no privileges: the host configuration
+	// decides which runtimes, ports and inputs a service may use.
+	Artifact     string   `yaml:"artifact,omitempty" json:"artifact,omitempty"`
+	StartArgs    []string `yaml:"startArgs,omitempty" json:"startArgs,omitempty"`
+	RuntimeName  string   `yaml:"runtime,omitempty" json:"runtime,omitempty"`
+	Migrate      []string `yaml:"migrate,omitempty" json:"migrate,omitempty"`
+	KeepReleases int      `yaml:"keepReleases,omitempty" json:"keepReleases,omitempty"`
 
 	Source *Source            `yaml:"source,omitempty" json:"source,omitempty"`
 	Backup *Command           `yaml:"backup,omitempty" json:"backup,omitempty"`
@@ -62,7 +77,8 @@ type ServiceConfig struct {
 func (*ServiceConfig) resourceConfig() {}
 
 // Runtime returns the runtime value the adapters consume for the given
-// adapter name.
+// adapter name. Service, which only the managed runtime uses, is the
+// resource name and is left for the caller to set.
 func (c *ServiceConfig) Runtime(adapter string) Runtime {
 	return Runtime{
 		Type: RuntimeType(adapter),
@@ -90,6 +106,9 @@ type Runtime struct {
 	Stop    string `yaml:"stop,omitempty" json:"stop,omitempty"`
 	Restart string `yaml:"restart,omitempty" json:"restart,omitempty"`
 	Status  string `yaml:"status,omitempty" json:"status,omitempty"`
+	// managed: the service name the deploy helper knows, which is the
+	// resource name
+	Service string `yaml:"service,omitempty" json:"service,omitempty"`
 }
 
 // EffectiveScope returns the systemd scope, defaulting to system.
@@ -166,10 +185,15 @@ func (c *ServiceConfig) normalize(adapter string) {
 	if RuntimeType(adapter) == RuntimeSystemd && c.Scope == "" {
 		c.Scope = ScopeSystem
 	}
+	// "dist/" names the same directory as "dist".
+	if RuntimeType(adapter) == RuntimeManaged && len(c.Artifact) > 1 {
+		c.Artifact = strings.TrimSuffix(c.Artifact, "/")
+	}
 }
 
 func (c *ServiceConfig) validate(adapter string, base string, is *Issues) {
 	validateRuntime(c.Runtime(adapter), base, is)
+	validateManaged(c, RuntimeType(adapter), base, is)
 	if c.Source != nil {
 		validateSource(c.Source, base+".source", is)
 	}
@@ -249,6 +273,137 @@ func validateRuntime(r Runtime, base string, is *Issues) {
 		}
 	case RuntimeExternal:
 		forbid(merge(systemd, docker, compose, command))
+	case RuntimeManaged:
+		// start names the file the service runs; the helper's unit does
+		// the rest, so the other commands have no meaning.
+		forbid(merge(systemd, docker, compose, map[string]string{"stop": r.Stop, "restart": r.Restart, "status": r.Status}))
+		switch {
+		case r.Start == "":
+			is.addf(base+".start", "is required")
+		case !releasePath(r.Start) || r.Start == ".":
+			is.addf(base+".start", "must be a release-relative file: %s", releasePathRule)
+		}
+	}
+}
+
+// Limits of a managed service. They match the deploy helper's protocol
+// (internal/deployhelper), which checks every request again.
+const (
+	// MaxManagedName bounds the name of a managed service, which becomes
+	// its account, unit and directories.
+	MaxManagedName = 31
+	// DefaultKeepReleases is the number of releases kept when keepReleases
+	// is not set.
+	DefaultKeepReleases = 3
+	MinKeepReleases     = 2
+	MaxKeepReleases     = 20
+	// MaxManagedBuildTimeout bounds source.timeout, the build's limit.
+	MaxManagedBuildTimeout = Duration(2 * time.Hour)
+	maxManagedArgs         = 32
+	releasePathRule        = `letters, digits and ._-/ without ".." components, not absolute`
+)
+
+var (
+	releasePathRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,256}$`)
+	managedArgRe  = regexp.MustCompile(`^[A-Za-z0-9._/=:,@+-]{1,256}$`)
+	programNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+	runtimeNameRe = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
+)
+
+// releasePath accepts a clean relative path without ".." components.
+func releasePath(p string) bool {
+	if !releasePathRe.MatchString(p) || path.IsAbs(p) || path.Clean(p) != p {
+		return false
+	}
+	return !slices.Contains(strings.Split(p, "/"), "..")
+}
+
+// EffectiveKeepReleases returns keepReleases, defaulting to
+// DefaultKeepReleases.
+func (c *ServiceConfig) EffectiveKeepReleases() int {
+	if c.KeepReleases == 0 {
+		return DefaultKeepReleases
+	}
+	return c.KeepReleases
+}
+
+// validateManaged checks the fields only the managed runtime takes. Whether
+// the host grants the runtime, and everything else a service may use, is
+// the deploy helper's to check when the service is deployed.
+func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Issues) {
+	if adapter != RuntimeManaged {
+		for _, f := range []struct {
+			name string
+			set  bool
+		}{
+			{"artifact", c.Artifact != ""}, {"keepReleases", c.KeepReleases != 0}, {"migrate", c.Migrate != nil},
+			{"runtime", c.RuntimeName != ""}, {"startArgs", c.StartArgs != nil},
+		} {
+			if f.set {
+				is.addf(base+"."+f.name, "is not valid for adapter %s", adapter)
+			}
+		}
+		return
+	}
+	switch {
+	case c.Artifact == "":
+		is.addf(base+".artifact", "is required")
+	case !releasePath(c.Artifact):
+		is.addf(base+".artifact", `must be a directory of the build tree: %s ("." is the whole tree)`, releasePathRule)
+	}
+	validateArgs(c.StartArgs, base+".startArgs", is)
+	if c.RuntimeName != "" && !runtimeNameRe.MatchString(c.RuntimeName) {
+		is.addf(base+".runtime", "must be a runtime name of the host configuration: lowercase letters and digits, starting with a letter (max 16)")
+	}
+	if c.Migrate != nil {
+		switch {
+		case len(c.Migrate) == 0:
+			is.addf(base+".migrate", "must name a program; omit it to run no migration")
+		case !programNameRe.MatchString(c.Migrate[0]) && (!releasePath(c.Migrate[0]) || c.Migrate[0] == "."):
+			is.addf(base+".migrate", "must start with a release-relative executable or the name of a program of the runtime")
+		default:
+			validateArgs(c.Migrate[1:], base+".migrate", is)
+		}
+	}
+	if c.KeepReleases != 0 && (c.KeepReleases < MinKeepReleases || c.KeepReleases > MaxKeepReleases) {
+		is.addf(base+".keepReleases", "must be between %d and %d", MinKeepReleases, MaxKeepReleases)
+	}
+	src := c.Source
+	if src == nil {
+		is.addf(base+".source", "is required for adapter managed: it is what the service is built from")
+		return
+	}
+	switch {
+	case strings.TrimSpace(src.Build) == "":
+		is.addf(base+".source.build", "is required for adapter managed: the command that produces the artifact")
+	case strings.ContainsRune(src.Build, 0):
+		is.addf(base+".source.build", "must not contain NUL characters")
+	}
+	if src.Install != "" {
+		is.addf(base+".source.install", "is not valid for adapter managed: the deploy helper installs the artifact")
+	}
+	if src.Timeout > MaxManagedBuildTimeout {
+		is.addf(base+".source.timeout", "must be at most %s for adapter managed", MaxManagedBuildTimeout.D())
+	}
+}
+
+func validateArgs(args []string, p string, is *Issues) {
+	if len(args) > maxManagedArgs {
+		is.addf(p, "at most %d arguments are allowed", maxManagedArgs)
+		return
+	}
+	for _, a := range args {
+		if !managedArgRe.MatchString(a) {
+			is.addf(p, "argument %q may only contain letters, digits and ._/=:,@+- (1-256 characters)", a)
+		}
+	}
+}
+
+// validateManagedName checks the name of a managed service resource,
+// which names the service's account, unit and directories on the host.
+func validateManagedName(name string, is *Issues) {
+	if len(name) > MaxManagedName || strings.HasPrefix(name, "lcm") {
+		is.addf("metadata.name", `must be at most %d characters and must not start with "lcm" for adapter managed: it names the service's account, unit and directories`, MaxManagedName)
 	}
 }
 

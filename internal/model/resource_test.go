@@ -153,7 +153,8 @@ func TestDecodeServiceAdapters(t *testing.T) {
 	})
 	t.Run("v1 runtime block", func(t *testing.T) {
 		_, err := model.DecodeResource([]byte(head + "  adapter: systemd\n  config:\n    runtime: { type: systemd }\n"))
-		assertIssue(t, err, "", "field runtime not found")
+		// runtime is now the runtime name of a managed service.
+		assertIssue(t, err, "", "line 8: cannot unmarshal !!map into string")
 	})
 }
 
@@ -376,7 +377,7 @@ func TestResourceTypes(t *testing.T) {
 	if len(types) != 3 || types[0].Type != "service" || types[2].Type != "router" || !types[2].NeedsConnection || types[0].NeedsConnection {
 		t.Fatalf("types = %+v", types)
 	}
-	if len(types[0].Adapters) != 5 || types[1].Adapters[0] != "local" || types[2].Adapters[0] != "xiaomi" {
+	if len(types[0].Adapters) != 6 || types[1].Adapters[0] != "local" || types[2].Adapters[0] != "xiaomi" {
 		t.Fatalf("adapters = %+v", types)
 	}
 	types[0].Adapters[0] = "changed"
@@ -400,5 +401,93 @@ func TestEncodeYAML(t *testing.T) {
 	r2, err := model.DecodeResource(y)
 	if err != nil || !reflect.DeepEqual(r, r2) {
 		t.Fatalf("yaml round trip: %v", err)
+	}
+}
+
+const managedService = resourceHead + `spec:
+  type: service
+  adapter: managed
+  config:
+    source: { url: https://github.com/acme/app.git, branch: main, build: npm ci && npm run build, timeout: 30m }
+    artifact: dist/
+    runtime: node24
+    start: server/main.mjs
+    startArgs: [--port-from-env, mode=prod]
+    migrate: [node, scripts/migrate.mjs]
+    keepReleases: 5
+`
+
+func TestManagedService(t *testing.T) {
+	r, err := model.DecodeResource([]byte(managedService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := r.Service()
+	if cfg.Artifact != "dist" || cfg.RuntimeName != "node24" || cfg.Start != "server/main.mjs" ||
+		!reflect.DeepEqual(cfg.StartArgs, []string{"--port-from-env", "mode=prod"}) ||
+		!reflect.DeepEqual(cfg.Migrate, []string{"node", "scripts/migrate.mjs"}) || cfg.EffectiveKeepReleases() != 5 {
+		t.Fatalf("config = %+v", cfg)
+	}
+	if rt := cfg.Runtime(r.Spec.Adapter); rt.Type != model.RuntimeManaged || rt.Start != "server/main.mjs" {
+		t.Fatalf("runtime = %+v", rt)
+	}
+	b, err := model.Encode(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2, err := model.DecodeResource(b); err != nil || !reflect.DeepEqual(r, r2) {
+		t.Fatalf("round trip: %v\n%s", err, b)
+	}
+
+	minimal := strings.Replace(managedService, "    runtime: node24\n", "", 1)
+	minimal = strings.Replace(minimal, "    migrate: [node, scripts/migrate.mjs]\n    keepReleases: 5\n", "", 1)
+	r, err = model.DecodeResource([]byte(strings.Replace(minimal, "artifact: dist/", "artifact: .", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := r.Service(); cfg.EffectiveKeepReleases() != model.DefaultKeepReleases || cfg.Artifact != "." {
+		t.Fatalf("defaults = %+v", cfg)
+	}
+
+	many := "[" + strings.TrimSuffix(strings.Repeat("a,", 33), ",") + "]"
+	bad := []struct{ name, from, to, path, msg string }{
+		{"no source", "    source: { url: https://github.com/acme/app.git, branch: main, build: npm ci && npm run build, timeout: 30m }\n", "", "spec.config.source", "required for adapter managed"},
+		{"no build", "build: npm ci && npm run build, ", "", "spec.config.source.build", "required for adapter managed"},
+		{"install", "timeout: 30m }", "timeout: 30m, install: ./install.sh }", "spec.config.source.install", "helper installs"},
+		{"long timeout", "timeout: 30m", "timeout: 3h", "spec.config.source.timeout", "at most 2h0m0s"},
+		{"no artifact", "    artifact: dist/\n", "", "spec.config.artifact", "required"},
+		{"absolute artifact", "artifact: dist/", "artifact: /srv/dist", "spec.config.artifact", "not absolute"},
+		{"dotdot artifact", "artifact: dist/", "artifact: a/../../b", "spec.config.artifact", "build tree"},
+		{"spaced artifact", "artifact: dist/", "artifact: 'my dist'", "spec.config.artifact", "build tree"},
+		{"no start", "    start: server/main.mjs\n", "", "spec.config.start", "required"},
+		{"dot start", "start: server/main.mjs", "start: .", "spec.config.start", "release-relative"},
+		{"command start", "start: server/main.mjs", "start: 'node server.js'", "spec.config.start", "release-relative"},
+		{"start arg", "mode=prod", "'$(id)'", "spec.config.startArgs", "may only contain"},
+		{"many start args", "[--port-from-env, mode=prod]", many, "spec.config.startArgs", "at most 32"},
+		{"runtime name", "runtime: node24", "runtime: Node", "spec.config.runtime", "runtime name"},
+		{"empty migrate", "[node, scripts/migrate.mjs]", "[]", "spec.config.migrate", "must name a program"},
+		{"migrate program", "[node, scripts/migrate.mjs]", "['/usr/bin/node', x]", "spec.config.migrate", "must start with"},
+		{"keepReleases", "keepReleases: 5", "keepReleases: 1", "spec.config.keepReleases", "between 2 and 20"},
+		{"status", "    keepReleases: 5\n", "    keepReleases: 5\n    status: 'true'\n", "spec.config.status", "not valid for adapter managed"},
+		{"unit", "    keepReleases: 5\n", "    keepReleases: 5\n    unit: app.service\n", "spec.config.unit", "not valid for adapter managed"},
+		{"long name", "name: app,", "name: " + strings.Repeat("a", 32) + ",", "metadata.name", "at most 31"},
+		{"lcm name", "name: app,", "name: lcm-web,", "metadata.name", `must not start with "lcm"`},
+	}
+	for _, tt := range bad {
+		t.Run(tt.name, func(t *testing.T) {
+			if !strings.Contains(managedService, tt.from) {
+				t.Fatalf("fixture lacks %q", tt.from)
+			}
+			_, err := model.DecodeResource([]byte(strings.Replace(managedService, tt.from, tt.to, 1)))
+			assertIssue(t, err, tt.path, tt.msg)
+		})
+	}
+
+	// The managed fields belong to the managed adapter only.
+	for _, field := range []string{"artifact: dist", "startArgs: [a]", "runtime: node24", "migrate: [node]", "keepReleases: 3"} {
+		name, _, _ := strings.Cut(field, ":")
+		doc := resourceHead + "spec:\n  type: service\n  adapter: systemd\n  config: { unit: app.service, " + field + " }\n"
+		_, err := model.DecodeResource([]byte(doc))
+		assertIssue(t, err, "spec.config."+name, "not valid for adapter systemd")
 	}
 }

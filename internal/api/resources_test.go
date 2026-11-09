@@ -152,7 +152,7 @@ func TestResourceTypes(t *testing.T) {
 		byType[ty["type"].(string)] = ty
 	}
 	svc, mach, router := byType["service"], byType["machine"], byType["router"]
-	if svc == nil || mach == nil || router == nil || router["needsConnection"] != true || len(svc["adapters"].([]any)) != 5 {
+	if svc == nil || mach == nil || router == nil || router["needsConnection"] != true || len(svc["adapters"].([]any)) != 6 {
 		t.Fatalf("types = %v", types)
 	}
 	names := func(ty map[string]any) string {

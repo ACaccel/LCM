@@ -45,9 +45,9 @@ var resourceTypes = []resourceType{
 			Type: ResourceService,
 			Adapters: []string{
 				string(RuntimeSystemd), string(RuntimeDocker), string(RuntimeCompose),
-				string(RuntimeCommand), string(RuntimeExternal),
+				string(RuntimeCommand), string(RuntimeExternal), string(RuntimeManaged),
 			},
-			Description: "A process on this host controlled through a runtime adapter, with optional source, backup and jobs.",
+			Description: "A process on this host controlled through a runtime adapter, with optional source, backup and jobs; the deploy helper builds, installs and runs managed services.",
 		},
 		codec: codec[ServiceConfig, *ServiceConfig]{},
 	},
