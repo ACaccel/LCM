@@ -35,11 +35,11 @@ How to run LCM on a host. Build and general configuration reference: [README](..
    deploy/seed.sh
    ```
 
-   It applies monitoring-only services for the host's existing units (below), applies the self-deploy service [`deploy/lcm-self.service.yaml`](../deploy/lcm-self.service.yaml), records a first deployment of the current `main` if there is none (a rollback needs one), and applies the policy [`deploy/lcm-auto-deploy.yaml`](../deploy/lcm-auto-deploy.yaml). It can be rerun; unchanged documents stay unchanged.
+   It applies the optional monitoring-only services of a local inventory (below), applies the self-deploy service [`deploy/lcm-self.service.yaml`](../deploy/lcm-self.service.yaml), records a first deployment of the current `main` if there is none (a rollback needs one), and applies the policy [`deploy/lcm-auto-deploy.yaml`](../deploy/lcm-auto-deploy.yaml), which sends no notifications unless you [configure them](#self-deploy). It can be rerun; unchanged documents stay unchanged.
 
 Later admin password changes: `sudo -u lcm /usr/local/bin/lcm admin set-password --data-dir /var/lib/lcm`. Run the `lcm` CLI's database commands as `lcm` (`sudo -u lcm`), never as root: the binary is replaced by self-deploy.
 
-**Monitoring-only services.** `seed.sh` lists the systemd units of `card-together*`, `personal-quant-desk*`, `pleiades@*` and `mongodb-pleiades` that exist, and registers one service resource per application with adapter `external` (LCM only monitors them, so their start, stop and restart are disabled; see [runtimes](services.md#runtime)) and no policies. Long-running units get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. `http` checks are added only for URLs that answer at seed time (card-together `/health`, metube). The docker check for `metube` is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
+**Monitoring-only services (optional).** `seed.sh` reads `${LCM_SEED_INVENTORY:-$HOME/.config/lcm/seed-inventory}`; without that file it registers none. Copy [`deploy/seed-inventory.example`](../deploy/seed-inventory.example) and edit it: one entry per line, `service NAME UNIT_REGEX [HTTP_URL]` for systemd units or `container NAME CONTAINER [HTTP_URL]` for a docker container, `#` comments. `seed.sh` rejects an invalid name (`^[a-z0-9-]{1,63}$`, not `lcm`), a duplicate, an unknown kind, a bad regex, or a URL that is not `http(s)://` or has credentials, before it changes anything. Each entry becomes one service resource with adapter `external` (LCM only monitors it, so its start, stop and restart are disabled; see [runtimes](services.md#runtime)) and no policies. Long-running units matching the regex get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. An `http` check is added only when the URL answers at seed time. The docker check is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
 
 ### Self-deploy
 
@@ -63,14 +63,18 @@ systemctl list-units --failed 'lcm-self-update-*'      # rejected updates; clear
 
 - A manual binary-only rollback is appropriate only for a verified equal-schema update. For schema changes or unknown compatibility, follow [Upgrade](#upgrade) and restore the matching database and binary. After a safe equal-schema rollback, deploy the matching commit from the console or `lcm resource action lcm deploy --version <sha>` so that the catalog agrees.
 - To pause self-deploy, pause the policy `lcm-auto-deploy` in the console.
-- Progress goes to the BotFleet konata relay route `lcm-deploy`, one Discord message per deployment ([template notifications](policies.md#templates)). It needs the route in konata's `notificationRoutes` (installed settings and the deployer's build snapshot, then a konata restart; see BotFleet's notification relay docs) and konata's `NOTIFY_API_KEY` in the LCM secret `konata-notify-key`:
+- **Optional: deployment notifications.** The shipped policy sends none (`notifyUrl` and `notifyTokenSecret` are empty, and the notify nodes skip). To get one message per deployment ([template notifications](policies.md#templates)):
+  - konata relay (for example BotFleet's notification relay): define a route for LCM in the relay's configuration, store the relay's bearer key as an LCM secret from your own secret store, then seed with the route and the secret's name. `seed.sh` applies a rendered copy of the policy and leaves the tracked file unchanged; set both variables on every rerun, because a rerun without them applies the no-notification policy again.
 
-  ```sh
-  grep '^NOTIFY_API_KEY=' /var/lib/pleiades-deployer/inputs/konata.env | cut -d= -f2- \
-    | sudo -u lcm sh -c 'umask 077 && cat > /var/lib/lcm/secrets/konata-notify-key'
-  ```
+    ```sh
+    sudo -u lcm sh -c 'umask 077 && cat > /var/lib/lcm/secrets/<secret-name>'    # paste the key, then Ctrl-D
+    LCM_SEED_NOTIFY_URL=http://127.0.0.1:<port>/notifications/<route> \
+      LCM_SEED_NOTIFY_TOKEN_SECRET=<secret-name> deploy/seed.sh
+    ```
 
-  Without them the deployment still runs, but the run ends failed on its last notification.
+  - Discord: store a webhook URL as a secret and set `notifyTarget: discord` and `notifySecret: <secret-name>` in the policy's `spec.params`.
+
+  A configured destination whose secret is missing fails its notification node, and with it the run.
 - A manual `lcm resource action lcm deploy` has no policy to roll back: if the verification restores `lcm.prev`, the catalog still records the new commit, and the failing `version` check shows the mismatch until you deploy a good commit.
 - Verification restores only the binary; it does not restore the database. The schema-equality guard is therefore required, and the installed `self-install` script must itself include that guard. Existing deployments with an older script need an operator-reviewed script update before relying on this protection. It cannot make an older unguarded installation safe retroactively.
 

@@ -51,7 +51,7 @@ A typical loop: a health check fails, `monitor` publishes a `health.changed` sig
 | `internal/resource/operation` | Durable operation mechanics shared by machines and routers: creation under an idempotency key, compare-and-swap saves that write the change event and audit entry in the same transaction and skip unchanged rows, closing abandoned operations and resolve checks. Each type keeps its own submission and evidence. |
 | `internal/catalog` | The service type: lifecycle state machine, deployments, timeline, group actions; the `Manager` performs actions under a durable lock and reconciles states with the runtimes ([services](services.md#lifecycle-states-and-actions)). |
 | `internal/runtime` | Adapters that control processes (systemd, docker, compose, command, external) and declare which actions each configuration supports. |
-| `internal/security` | Bounded incident/traffic storage, operator handling, versioned notification preferences and durable Konata outbox. |
+| `internal/security` | Bounded incident/traffic storage, operator handling, versioned notification preferences and an optional durable Konata outbox. |
 | `internal/securityhost` | Typed preview/apply/query client for the independent root security helper; durable operator intent without generic privilege. |
 | `internal/monitor` | Health checks, history, rollups, health aggregation and alert ingestion. |
 | `internal/machine` | The machine type: snapshots, native health, journal checkpoints, history, maintenance and durable power operations; `observe/` provides bounded read-only probes, `power/` the restricted root helper protocol and independent receipt store. |

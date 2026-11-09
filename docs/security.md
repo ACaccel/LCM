@@ -2,7 +2,7 @@
 
 Security integration is disabled by default. Its observation pipeline reconciles
 persisted local Machine observations and existing Service health checks, accepts
-sanitized collector input, and persists incidents with bounded Konata delivery.
+sanitized collector input, and persists incidents with optional bounded Konata delivery.
 Observation and delivery perform no lifecycle or host changes. The optional
 [operator controls](#security-console-and-operator-controls) use a separate restricted
 helper for explicitly confirmed host changes.
@@ -19,8 +19,8 @@ LCM_SECURITY_TOKEN_SECRET=konata-notify-key
 ```
 
 Register the local machine resource (`type: machine`) first. Use its `id`,
-not its mutable display name. Configure the Konata route for the intended private
-Discord channel before enabling delivery. The token variable contains an LCM
+not its mutable display name. Delivery is optional; to enable it, configure a
+Konata route for the intended private Discord channel first. The token variable contains an LCM
 secret **name**; the relay bearer value stays in the existing secret directory.
 The destination must be a literal loopback HTTP address, with one notification
 route and no credentials, query or fragment. The adapter refuses redirects.
@@ -110,7 +110,7 @@ limit, with a separate measurement model:
 ```json
 {
   "machineId": "registered-immutable-machine-id",
-  "service": "card-together",
+  "service": "web",
   "windowStart": "2026-11-01T00:00:00Z",
   "windowEnd": "2026-11-01T00:01:00Z",
   "category": "auth",
@@ -172,7 +172,7 @@ The console groups the module into four tabs: *資安事件* (monitoring status 
 Schema migration 0011 is additive; follow the existing
 [upgrade and database recovery procedure](operations.md) before deployment.
 
-Konata, its MongoDB and LCM share the workstation's failure domain. This system
+A Konata relay (and its database) on the same workstation shares LCM's failure domain. This system
 cannot send while the host or network is down. Discord summaries are not complete
 off-host forensic logs, and editing a message does not guarantee a new phone push.
 

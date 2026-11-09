@@ -151,7 +151,7 @@ func TestPropsValidation(t *testing.T) {
 			t.Errorf("%s %v: accepted", tt.typ, tt.props)
 		}
 	}
-	if _, _, err := decode(t, r, "lifecycle.deploy", map[string]any{"resource": "card-together"}); err != nil {
+	if _, _, err := decode(t, r, "lifecycle.deploy", map[string]any{"resource": "web"}); err != nil {
 		t.Fatalf("version must be optional: %v", err)
 	}
 }
