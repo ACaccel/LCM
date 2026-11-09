@@ -399,7 +399,7 @@ export interface paths {
          *     Preconditions that can be checked up front (unknown resource, a type other
          *     than service (409 `unsupported`), wrong state, missing configuration, busy
          *     resource) fail synchronously. A disruptive action (stop, restart, deploy,
-         *     rollback, run-job) on a service other managed resources depend on or are
+         *     rollback, restore, run-job) on a service other managed resources depend on or are
          *     controlled through needs `acknowledgeImpact: true` in the body; without it the
          *     answer is 409 `impact_unacknowledged` with the impact in `error.details.impact`.
          *     With `dryRun=true` nothing is started and the plan, including the impact, is
@@ -493,6 +493,30 @@ export interface paths {
         };
         /** Deployment history of a service */
         get: operations["listDeployments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/resources/{resource}/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backup sets and restores of a service
+         * @description The records of typed backups (managed services, and LCM's own database under the
+         *     name `lcm`): one row per backup set, per pre-restore copy and per restore, newest
+         *     first. `restorable` says the set exists on the host and can be named by the
+         *     `restore` action. Retention removes old sets from the host; their rows stay for a
+         *     while with `prunedAt` set.
+         */
+        get: operations["listBackups"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2607,12 +2631,14 @@ export interface components {
         /** @enum {string} */
         Health: "unknown" | "healthy" | "degraded" | "down";
         /** @enum {string} */
-        ActionName: "deploy" | "rollback" | "start" | "stop" | "restart" | "backup" | "run-job";
+        ActionName: "deploy" | "rollback" | "start" | "stop" | "restart" | "backup" | "restore" | "run-job";
         ActionRequest: {
             /** @description Commit to deploy (7 to 64 hex digits); deploy only. The head of the configured branch when omitted. */
             version?: string;
             /** @description Name of the job; run-job only, and required there. */
             job?: string;
+            /** @description The backup set to restore (see `GET /resources/{resource}/backups`); restore only. The newest restorable set when omitted. */
+            backupId?: string;
             /** @description Accept the impact of a disruptive action; see the dry run's `impact`. */
             acknowledgeImpact?: boolean;
         };
@@ -2743,6 +2769,10 @@ export interface components {
             deploymentId?: number;
             /** Format: int64 */
             durationMs: number;
+            /** @description The set a backup made or a restore restored. */
+            backupId?: string;
+            /** @description The copy a restore took of the data it replaced; restoring it undoes the restore. */
+            preRestoreId?: string;
             /** @description Tail of a backup or job command's output. */
             output?: string;
             replayed?: boolean;
@@ -2756,6 +2786,7 @@ export interface components {
             actor: components["schemas"]["Actor"];
             version?: string;
             job?: string;
+            backupId?: string;
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */
@@ -2784,6 +2815,55 @@ export interface components {
         };
         DeploymentList: {
             items: components["schemas"]["Deployment"][];
+            nextCursor: string | null;
+        };
+        BackupSource: {
+            /** @enum {string} */
+            type: "files" | "sqlite" | "postgres" | "mongodb" | "command";
+            /** @description files, sqlite: a path below the service's data directory. */
+            path?: string;
+            /** @description postgres, mongodb. */
+            database?: string;
+            /** @description mongodb: also back up the admin database's users and roles. */
+            users?: boolean;
+            /** @description command: a program of the current release and its arguments. */
+            argv?: string[];
+        };
+        Backup: {
+            /** Format: int64 */
+            id: number;
+            resource: string;
+            /**
+             * @description A set made by the backup action; the copy a restore takes of the data it replaces; a backup of LCM's own database; or a restore, whose `backupId` is the set it restored.
+             * @enum {string}
+             */
+            kind: "backup" | "pre-restore" | "self" | "restore";
+            /** @description The set's ID on the host; empty while a backup runs or after it failed. */
+            backupId: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            /** @enum {string} */
+            outcome: "running" | "succeeded" | "failed" | "interrupted";
+            /**
+             * Format: int64
+             * @description Bytes of the set's artifacts.
+             */
+            size: number;
+            sources: components["schemas"]["BackupSource"][];
+            manifestSha256: string;
+            /** @description Entries of file sources (links */
+            skipped: number;
+            actor: components["schemas"]["Actor"];
+            runId: string;
+            error: string;
+            /** Format: date-time */
+            prunedAt: string | null;
+            restorable: boolean;
+        };
+        BackupList: {
+            items: components["schemas"]["Backup"][];
             nextCursor: string | null;
         };
         TimelineEntry: {
@@ -3430,7 +3510,8 @@ export interface components {
                  *     (`unit`, `scope`, `container`, `project`, `file`, `start`, `stop`,
                  *     `restart`, `status`; managed: `artifact`, `start`, `startArgs`, `runtime`,
                  *     `migrate`, `keepReleases`, and a required `source` with `build` and no
-                 *     `install`) plus `source`, `backup` and `jobs`. machine:
+                 *     `install`) plus `source`, `backup` (`command` and `timeout`; managed:
+                 *     `sources`, `mode`, `timeout`, `keep`) and `jobs`. machine:
                  *     `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
                  *     `thresholds`. router: `interval`, `staleAfter`, `thresholds`
                  *     (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).
@@ -4763,6 +4844,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listBackups: {
+        parameters: {
+            query?: {
+                /** @description Page size. */
+                limit?: components["parameters"]["Limit"];
+                /** @description The `nextCursor` of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Records of the resource's name, newest first; empty for services without typed backups. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupList"];
                 };
             };
             400: components["responses"]["BadRequest"];

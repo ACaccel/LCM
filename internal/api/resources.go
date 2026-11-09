@@ -963,6 +963,72 @@ func toDeploymentDTO(d catalog.Deployment) deploymentDTO {
 	}
 }
 
+func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	p, ok := pageParams(w, r)
+	if !ok {
+		return
+	}
+	before, ok := idCursor(w, p)
+	if !ok {
+		return
+	}
+	// Backups are keyed by name, like deployments.
+	rec, _, ok := s.resourceRef(w, r)
+	if !ok {
+		return
+	}
+	recs, err := s.catalog.Backups(r.Context(), rec.Name, p.limit+1, before)
+	if err != nil {
+		s.fail(w, r, err, nil)
+		return
+	}
+	var next *string
+	if len(recs) > p.limit {
+		recs = recs[:p.limit]
+		next = encodeCursor(int64String(recs[p.limit-1].ID))
+	}
+	items := make([]backupDTO, 0, len(recs))
+	for _, b := range recs {
+		items = append(items, toBackupDTO(b))
+	}
+	writeList(w, items, next)
+}
+
+type backupDTO struct {
+	ID       int64  `json:"id"`
+	Resource string `json:"resource"`
+	// Kind is backup, pre-restore, self or restore.
+	Kind string `json:"kind"`
+	// BackupID is the set's ID; for a restore, the set it restored.
+	BackupID   string     `json:"backupId"`
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt"`
+	// Outcome is running, succeeded, failed or interrupted.
+	Outcome        string               `json:"outcome"`
+	Size           int64                `json:"size"`
+	Sources        []model.BackupSource `json:"sources"`
+	ManifestSHA256 string               `json:"manifestSha256"`
+	Skipped        int                  `json:"skipped"`
+	Actor          actorDTO             `json:"actor"`
+	RunID          string               `json:"runId"`
+	Error          string               `json:"error"`
+	PrunedAt       *time.Time           `json:"prunedAt"`
+	// Restorable: the set exists and can be the target of a restore.
+	Restorable bool `json:"restorable"`
+}
+
+func toBackupDTO(b catalog.BackupRecord) backupDTO {
+	sources := b.Sources
+	if sources == nil {
+		sources = []model.BackupSource{}
+	}
+	return backupDTO{
+		ID: b.ID, Resource: b.Resource, Kind: b.Kind, BackupID: b.BackupID, StartedAt: b.StartedAt, FinishedAt: optTime(b.FinishedAt),
+		Outcome: b.Outcome, Size: b.Size, Sources: sources, ManifestSHA256: b.ManifestSHA256, Skipped: b.Skipped,
+		Actor: toActorDTO(b.Actor), RunID: b.RunID, Error: b.Error, PrunedAt: optTime(b.PrunedAt), Restorable: b.Restorable(),
+	}
+}
+
 func (s *Server) listTimeline(w http.ResponseWriter, r *http.Request, name string) {
 	p, ok := pageParams(w, r)
 	if !ok {

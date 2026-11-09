@@ -578,7 +578,7 @@ paths:
         Preconditions that can be checked up front (unknown resource, a type other
         than service (409 `unsupported`), wrong state, missing configuration, busy
         resource) fail synchronously. A disruptive action (stop, restart, deploy,
-        rollback, run-job) on a service other managed resources depend on or are
+        rollback, restore, run-job) on a service other managed resources depend on or are
         controlled through needs `acknowledgeImpact: true` in the body; without it the
         answer is 409 `impact_unacknowledged` with the impact in `error.details.impact`.
         With `dryRun=true` nothing is started and the plan, including the impact, is
@@ -717,6 +717,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeploymentList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /resources/{resource}/backups:
+    get:
+      tags: [Actions]
+      operationId: listBackups
+      summary: Backup sets and restores of a service
+      description: |
+        The records of typed backups (managed services, and LCM's own database under the
+        name `lcm`): one row per backup set, per pre-restore copy and per restore, newest
+        first. `restorable` says the set exists on the host and can be named by the
+        `restore` action. Retention removes old sets from the host; their rows stay for a
+        while with `prunedAt` set.
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Records of the resource's name, newest first; empty for services without typed backups.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupList" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -4572,7 +4597,7 @@ components:
       enum: [unknown, healthy, degraded, down]
     ActionName:
       type: string
-      enum: [deploy, rollback, start, stop, restart, backup, run-job]
+      enum: [deploy, rollback, start, stop, restart, backup, restore, run-job]
     ActionRequest:
       type: object
       additionalProperties: false
@@ -4583,6 +4608,9 @@ components:
         job:
           type: string
           description: Name of the job; run-job only, and required there.
+        backupId:
+          type: string
+          description: The backup set to restore (see `GET /resources/{resource}/backups`); restore only. The newest restorable set when omitted.
         acknowledgeImpact:
           type: boolean
           description: Accept the impact of a disruptive action; see the dry run's `impact`.
@@ -4749,6 +4777,8 @@ components:
         previousVersion: { type: string }
         deploymentId: { type: integer, format: int64 }
         durationMs: { type: integer, format: int64 }
+        backupId: { type: string, description: The set a backup made or a restore restored. }
+        preRestoreId: { type: string, description: The copy a restore took of the data it replaced; restoring it undoes the restore. }
         output: { type: string, description: Tail of a backup or job command's output. }
         replayed: { type: boolean }
     Action:
@@ -4762,6 +4792,7 @@ components:
         actor: { $ref: "#/components/schemas/Actor" }
         version: { type: string }
         job: { type: string }
+        backupId: { type: string }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: [string, "null"], format: date-time }
         result:
@@ -4792,6 +4823,48 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/Deployment" }
+        nextCursor: { type: [string, "null"] }
+    BackupSource:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [files, sqlite, postgres, mongodb, command] }
+        path: { type: string, description: "files, sqlite: a path below the service's data directory." }
+        database: { type: string, description: "postgres, mongodb." }
+        users: { type: boolean, description: "mongodb: also back up the admin database's users and roles." }
+        argv: { type: array, items: { type: string }, description: "command: a program of the current release and its arguments." }
+    Backup:
+      type: object
+      required: [id, resource, kind, backupId, startedAt, finishedAt, outcome, size, sources, manifestSha256, skipped, actor, runId, error, prunedAt, restorable]
+      properties:
+        id: { type: integer, format: int64 }
+        resource: { type: string }
+        kind:
+          type: string
+          enum: [backup, pre-restore, self, restore]
+          description: A set made by the backup action; the copy a restore takes of the data it replaces; a backup of LCM's own database; or a restore, whose `backupId` is the set it restored.
+        backupId: { type: string, description: The set's ID on the host; empty while a backup runs or after it failed. }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        outcome: { type: string, enum: [running, succeeded, failed, interrupted] }
+        size: { type: integer, format: int64, description: Bytes of the set's artifacts. }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/BackupSource" }
+        manifestSha256: { type: string }
+        skipped: { type: integer, description: Entries of file sources (links, devices, sockets, pipes) that are not in the set. }
+        actor: { $ref: "#/components/schemas/Actor" }
+        runId: { type: string }
+        error: { type: string }
+        prunedAt: { type: [string, "null"], format: date-time }
+        restorable: { type: boolean }
+    BackupList:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Backup" }
         nextCursor: { type: [string, "null"] }
     TimelineEntry:
       type: object
@@ -5652,7 +5725,8 @@ components:
                 (`unit`, `scope`, `container`, `project`, `file`, `start`, `stop`,
                 `restart`, `status`; managed: `artifact`, `start`, `startArgs`, `runtime`,
                 `migrate`, `keepReleases`, and a required `source` with `build` and no
-                `install`) plus `source`, `backup` and `jobs`. machine:
+                `install`) plus `source`, `backup` (`command` and `timeout`; managed:
+                `sources`, `mode`, `timeout`, `keep`) and `jobs`. machine:
                 `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
                 `thresholds`. router: `interval`, `staleAfter`, `thresholds`
                 (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).

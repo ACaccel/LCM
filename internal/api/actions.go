@@ -39,9 +39,10 @@ type actionDTO struct {
 	Action   string   `json:"action"`
 	Status   string   `json:"status"`
 	Actor    actorDTO `json:"actor"`
-	// Version and Job echo the request options.
+	// Version, Job and BackupID echo the request options.
 	Version    string                `json:"version,omitempty"`
 	Job        string                `json:"job,omitempty"`
+	BackupID   string                `json:"backupId,omitempty"`
 	StartedAt  time.Time             `json:"startedAt"`
 	FinishedAt *time.Time            `json:"finishedAt"`
 	Result     *catalog.ActionResult `json:"result"`
@@ -137,6 +138,7 @@ func (s *Server) publishAction(a actionDTO) {
 type actionRequest struct {
 	Version           string `json:"version"`
 	Job               string `json:"job"`
+	BackupID          string `json:"backupId"`
 	AcknowledgeImpact bool   `json:"acknowledgeImpact"`
 }
 
@@ -171,8 +173,14 @@ func (s *Server) handleResourceAction(w http.ResponseWriter, r *http.Request) {
 	case req.Job == "" && action == catalog.ActionRunJob:
 		writeFieldError(w, "job", "run-job needs the name of a job")
 		return
+	case req.BackupID != "" && action != catalog.ActionRestore:
+		writeFieldError(w, "backupId", "only restore accepts a backup ID")
+		return
+	case req.BackupID != "" && !catalog.ValidBackupID(req.BackupID):
+		writeFieldError(w, "backupId", "is not a backup ID")
+		return
 	}
-	opts := catalog.ActionOptions{Version: req.Version, Job: req.Job}
+	opts := catalog.ActionOptions{Version: req.Version, Job: req.Job, BackupID: req.BackupID}
 	rec, _, ok := s.writableRef(w, r)
 	if !ok {
 		return
@@ -220,7 +228,7 @@ func (s *Server) handleResourceAction(w http.ResponseWriter, r *http.Request) {
 
 	actor := actorOf(r)
 	started := s.actions.begin(actionDTO{
-		Resource: name, Action: action, Actor: toActorDTO(actor), Version: req.Version, Job: req.Job, StartedAt: s.now().UTC(),
+		Resource: name, Action: action, Actor: toActorDTO(actor), Version: req.Version, Job: req.Job, BackupID: req.BackupID, StartedAt: s.now().UTC(),
 	})
 	s.publishAction(started)
 	s.actions.wg.Add(1)
