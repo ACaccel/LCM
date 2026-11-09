@@ -1,7 +1,8 @@
 // Package runtime controls the process behind a service through adapters
-// for systemd, Docker, Docker Compose, operator-defined commands and
-// externally managed services. Every adapter talks to the system through
-// execx, never through a shell it did not receive from the operator.
+// for systemd, Docker, Docker Compose, operator-defined commands,
+// externally managed services and managed services, which the restricted
+// deploy helper runs. Every adapter talks to the system through execx,
+// never through a shell it did not receive from the operator.
 package runtime
 
 import (
@@ -90,6 +91,9 @@ type Options struct {
 	StatusTimeout time.Duration
 	// ActionTimeout bounds start, stop and restart; default 5m.
 	ActionTimeout time.Duration
+	// Deploy is the deploy helper of managed services; nil when it is not
+	// installed, which leaves their status unknown and refuses actions.
+	Deploy DeployHelper
 }
 
 func (o Options) withDefaults() Options {
@@ -125,6 +129,7 @@ func NewRegistry(runner execx.Runner, opts Options) *Registry {
 		model.RuntimeCompose:  &compose{run: runner, opts: opts},
 		model.RuntimeCommand:  &command{run: runner, opts: opts},
 		model.RuntimeExternal: external{},
+		model.RuntimeManaged:  &managed{helper: opts.Deploy, opts: opts},
 	}}
 }
 
