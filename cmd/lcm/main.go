@@ -32,6 +32,9 @@ Commands:
   convert -f <file|dir>       Print lcm/v1 documents converted to lcm/v2 (offline)
   host init --operator <user> Write the host configuration /etc/lcm/host.json (root)
   host apply [--check]        Install or converge LCM's host components (root)
+  host allow <service> --port N [--runtime R] [--input NAME=PATH] [--check]
+                              Add a service to the deploy allowlist and create
+                              its account and directories (root)
   host status                 Compare installed host files with this build
 
 Commands that talk to a running server (see the README):

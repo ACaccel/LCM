@@ -18,7 +18,7 @@ import (
 
 func (a *app) host(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usagef("host: expected subcommand init, apply or status")
+		return usagef("host: expected subcommand init, apply, allow or status")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("host "+sub, flag.ContinueOnError)
@@ -30,6 +30,8 @@ func (a *app) host(ctx context.Context, args []string) error {
 		return a.hostApply(ctx, fs, rest)
 	case "status":
 		return a.hostStatus(fs, rest)
+	case "allow":
+		return a.hostAllow(ctx, fs, rest)
 	}
 	return usagef("host: unknown subcommand %q", sub)
 }
