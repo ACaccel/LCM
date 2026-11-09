@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/buildinfo"
@@ -83,7 +82,8 @@ type app struct {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	protectHostChange(os.Args[1:])
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals(os.Args[1:])...)
 	defer stop()
 	a := &app{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr, getenv: os.Getenv}
 	os.Exit(a.run(ctx, os.Args[1:]))
