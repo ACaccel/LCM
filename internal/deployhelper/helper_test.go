@@ -455,7 +455,7 @@ func TestBuildLimits(t *testing.T) {
 		e.clock.Advance(time.Second)
 		return "", 143
 	}
-	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the build file system has only 1048576 bytes")
+	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the file system of /var/lib/lcm-build/web has only 1048576 bytes")
 	e.refused(buildReq(commit1), CodeRefused, "not enough room for a build")
 }
 

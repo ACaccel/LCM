@@ -109,12 +109,20 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 		}
 	}
 	lim := h.Limits.withDefaults()
-	if err := h.checkFree(builds, lim.MinFreeBytes, lim.MinFreeInodes); err != nil {
-		return refuse(resp, CodeRefused, "not enough room for a build: %v", err)
+	// The build and cache roots are usually one file system, but a host may
+	// mount them apart.
+	freePaths, err := h.freePaths(builds, cache)
+	if err != nil {
+		return refuse(resp, CodeFailed, "%v", err)
 	}
-	// A cache that grew too large is started afresh; no build of the
-	// service runs meanwhile.
-	if size, n, err := usage(h.FS, cache, lim.MaxEntries); err != nil || size > lim.CacheBytes || n > lim.MaxEntries/2 {
+	for _, p := range freePaths {
+		if err := h.checkFree(p, lim.MinFreeBytes, lim.MinFreeInodes); err != nil {
+			return refuse(resp, CodeRefused, "not enough room for a build: %v", err)
+		}
+	}
+	// A cache that grew too large, or is too deep or slow to measure, is
+	// started afresh; no build of the service runs meanwhile.
+	if m := h.usage(lim, cache); m.stopped != "" || m.bytes > lim.CacheBytes || m.entries > lim.MaxEntries/2 {
 		if err := h.emptyDir(cache); err != nil {
 			return refuse(resp, CodeFailed, "empty the build cache: %v", err)
 		}
@@ -167,7 +175,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 	}
 	unit := "lcm-build-" + svc + "-" + id
 	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs, backupDir(cfg))
-	stop := h.watchBuild(ctx, unit, []string{dir + "/src", dir + "/home", cache}, builds, lim)
+	stop := h.watchBuild(ctx, unit, []string{dir + "/src", dir + "/home", cache}, freePaths, lim)
 	res, err := h.run(ctx, time.Duration(req.TimeoutSec)*time.Second+buildRunMargin, argv...)
 	resp.Log = sanitizeLog(res.Output)
 	if why := stop(); why != "" {
@@ -430,6 +438,23 @@ func (h *Helper) readJSON(p string, v any) error {
 		return err
 	}
 	return decodeStrict(raw, MaxResponse, v)
+}
+
+// freePaths are the directories whose file systems must have room: the
+// builds, and the cache when it is on another file system.
+func (h *Helper) freePaths(builds, cache string) ([]string, error) {
+	b, err := h.FS.Lstat(builds)
+	if err != nil {
+		return nil, err
+	}
+	c, err := h.FS.Lstat(cache)
+	if err != nil {
+		return nil, err
+	}
+	if b.Dev == c.Dev {
+		return []string{builds}, nil
+	}
+	return []string{builds, cache}, nil
 }
 
 // pruneBuilds keeps the newest keepBuilds builds of a service, and always
