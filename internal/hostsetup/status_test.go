@@ -33,6 +33,7 @@ func TestStatus(t *testing.T) {
 	th = converged(t)
 	th.cfg.Components.MachinePower = true
 	th.cfg.Components.SecurityHost = &SecurityHost{MachineID: "m-1"}
+	th.cfg.Components.Deploy = true
 	th.writeConfig(th.cfg)
 	th.converge()
 	th.fs.resetOps()
@@ -47,6 +48,9 @@ func TestStatus(t *testing.T) {
 	}
 	if f := got[ComponentMachinePower].Files[1]; f.Path != PowerHelper || f.State != StateUpToDate || f.Installed != sha(exeData) || f.Embedded != "" || f.Detail != "pinned" {
 		t.Errorf("machine helper = %+v", f)
+	}
+	if f := got[ComponentDeploy].Files[1]; f.Path != DeployHelper || f.State != StateUpToDate || f.Installed != sha(exeData) || f.Detail != "pinned" {
+		t.Errorf("deploy helper = %+v", f)
 	}
 	// A self-deploy changes the running binary, not the pin.
 	th.fs.file(testExe, "a newer self-deployed build", 0o755, aliceUID, aliceUID)

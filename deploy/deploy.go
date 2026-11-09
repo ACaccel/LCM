@@ -8,5 +8,5 @@ import "embed"
 
 // Files holds the installed host files by their name in this directory.
 //
-//go:embed lcm.service lcm.env sudoers self-install machine-power machine-power-sudoers security-host/helper.py security-host/install.py
+//go:embed lcm.service lcm.env sudoers self-install machine-power machine-power-sudoers lcm-deploy lcm-deploy-sudoers security-host/helper.py security-host/install.py
 var Files embed.FS

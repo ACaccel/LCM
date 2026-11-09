@@ -1,0 +1,4 @@
+# Installed by "lcm host apply" at /etc/sudoers.d/lcm-deploy when
+# components.deploy is true. The final empty argument string restricts this
+# rule to no arguments; requests reach the helper on stdin only.
+lcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm-deploy ""
