@@ -302,8 +302,8 @@ func (a *applier) preflightPaths() error {
 		}
 	}
 	// Directories apply manages may have a mode it fixes, but never another
-	// owner: someone else could have prepared their content. The
-	// directories above them must be fully trusted.
+	// owner or group/other write access: someone else could have prepared
+	// their content. The directories above them must be fully trusted.
 	managed := map[string]bool{}
 	for _, d := range rootDirs {
 		managed[d] = true
@@ -319,6 +319,9 @@ func (a *applier) preflightPaths() error {
 			}
 			if managed[p] && info.UID != 0 {
 				return fmt.Errorf("%s is not owned by root; review its content by hand", p)
+			}
+			if managed[p] && info.Mode.Perm()&0o022 != 0 {
+				return fmt.Errorf("%s is writable by group or others; review its content by hand", p)
 			}
 			if !managed[p] {
 				if err := rootOwned(p, info); err != nil {
@@ -675,17 +678,41 @@ func (a *applier) ensureFile(s *step, p string, c Content, perm fs.FileMode) (bo
 // ensureGrant installs a sudoers rule. A rule that breaks the host's
 // sudoers configuration is removed again at once.
 func (a *applier) ensureGrant(ctx context.Context, s *step, p string, rule []byte) error {
+	fsys := a.h.FS
+	// A root-owned rule that is replaced is kept, so that a failure puts
+	// back the grant that worked instead of removing it.
+	var prev []byte
+	if info, err := fsys.Lstat(p); err == nil && info.IsRegular() && info.UID == 0 {
+		if prev, err = readAll(fsys, p); err != nil {
+			return err
+		}
+	}
 	changed, err := a.ensureFile(s, p, bytesContent(rule), 0o440)
 	if err != nil || !changed || a.o.Check {
 		return err
 	}
-	if _, err := a.run(ctx, Command{Path: "visudo", Args: []string{"-c"}, Timeout: 30 * time.Second}); err != nil {
-		if rerr := a.h.FS.Remove(p); rerr != nil {
-			return fmt.Errorf("sudoers no longer parses with %s, and removing it failed: %w", p, rerr)
-		}
-		return fmt.Errorf("sudoers no longer parses with %s; removed it: %w", p, err)
+	visudoCheck := func() error {
+		_, err := a.run(ctx, Command{Path: "visudo", Args: []string{"-c"}, Timeout: 30 * time.Second})
+		return err
 	}
-	return nil
+	err = visudoCheck()
+	if err == nil {
+		return nil
+	}
+	if prev != nil {
+		rerr := a.writeContent(p, bytesContent(prev), 0o440, 0, 0)
+		if rerr == nil {
+			rerr = visudoCheck()
+		}
+		if rerr == nil {
+			return fmt.Errorf("sudoers no longer parses with the new %s; restored the previous rule: %w", p, err)
+		}
+		err = errors.Join(err, rerr)
+	}
+	if rerr := fsys.Remove(p); rerr != nil {
+		return fmt.Errorf("sudoers no longer parses with %s, and removing it failed: %w", p, errors.Join(err, rerr))
+	}
+	return fmt.Errorf("sudoers no longer parses with %s; removed it: %w", p, err)
 }
 
 // ensureDir makes p a directory with the owner and mode given; missing
@@ -781,7 +808,13 @@ func (a *applier) envFile(_ context.Context, s *step) error {
 	if sum != want.Sum {
 		s.note("kept the existing file, which differs from the embedded lcm.env")
 	}
-	if info.UID != 0 || info.GID != gid || info.Mode.Perm() != 0o640 {
+	if info.UID != 0 {
+		// Its owner could have changed it; taking it over would make that
+		// content root's configuration.
+		s.manual(fmt.Sprintf("%s is owned by user %d; review its content, then make it root:lcm 0640", EnvFile, info.UID))
+		return nil
+	}
+	if info.GID != gid || info.Mode.Perm() != 0o640 {
 		return s.change("set "+EnvFile+" to root:lcm 0640", func() error {
 			if err := fsys.Chown(EnvFile, 0, gid); err != nil {
 				return err

@@ -374,6 +374,7 @@ type fakeRunner struct {
 	healthy                     bool
 
 	failVisudo, failVisudoStaged, failAnalyze bool
+	visudoHook                                func() error
 	versionOutput                             string
 	installPy                                 []string
 }
@@ -472,6 +473,9 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		}
 		return nil, nil
 	case c.Path == "visudo" && arg(0) == "-c":
+		if r.visudoHook != nil {
+			return nil, r.visudoHook()
+		}
 		if r.failVisudo {
 			return nil, &ExitError{Command: "visudo -c", Code: 1, Stderr: "parse error"}
 		}

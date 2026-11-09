@@ -275,6 +275,8 @@ func TestRefusedBeforeAnyWrite(t *testing.T) {
 		{"missing tool", func(th *testHost) { th.r.missingTools["visudo"] = true }, "missing required tools: visudo"},
 		{"untrusted directory", func(th *testHost) { th.fs.get("/usr/local/bin").uid = aliceUID }, "/usr/local/bin is not owned by root"},
 		{"libexec not root", func(th *testHost) { th.fs.dir(LibexecDir, 0o755, aliceUID, aliceUID) }, "/usr/local/libexec/lcm is not owned by root"},
+		{"toolchain directory writable", func(th *testHost) { th.fs.dir(ToolchainDir, 0o775, 0, 0) }, "/opt/lcm/toolchain is writable by group or others"},
+		{"libexec writable", func(th *testHost) { th.fs.dir(LibexecDir, 0o757, 0, 0) }, "/usr/local/libexec/lcm is writable by group or others"},
 		{"data directory is a link", func(th *testHost) { th.fs.link(DataDir, "/home/alice", 0, 0) }, "/var/lib/lcm exists but is not a directory"},
 		{"unit is a directory", func(th *testHost) { th.fs.dir(Unit, 0o755, 0, 0) }, "lcm.service exists but is not a regular file"},
 		{"no operator", func(th *testHost) { delete(th.r.accounts, "alice") }, "no such non-root account: alice"},
@@ -646,5 +648,38 @@ func TestTreeBudget(t *testing.T) {
 	}
 	if err := b.add(1); err == nil {
 		t.Fatal("no error beyond the size bound")
+	}
+}
+
+func TestSudoersUpdateFailureRestoresThePreviousRule(t *testing.T) {
+	th := converged(t)
+	previous := "# working rule\nlcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm\n"
+	th.fs.file(Sudoers, previous, 0o440, 0, 0)
+	fails := 1
+	th.r.visudoHook = func() error {
+		if fails > 0 {
+			fails--
+			return &ExitError{Command: "visudo -c", Code: 1, Stderr: "parse error"}
+		}
+		return nil
+	}
+	_, out, err := th.apply(Options{})
+	if err == nil || !strings.Contains(err.Error(), "restored the previous rule") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if n := th.fs.get(Sudoers); n == nil || string(n.data) != previous || n.mode != 0o440 || n.uid != 0 {
+		t.Fatalf("rule = %+v", n)
+	}
+}
+
+func TestEnvFileOfAnotherOwnerNeedsReview(t *testing.T) {
+	th := converged(t)
+	th.fs.file(EnvFile, string(asset("lcm.env")), 0o640, aliceUID, th.r.accounts["lcm"].GID)
+	res, out, err := th.apply(Options{})
+	if err != nil || res.Manual != 1 || !strings.Contains(out, "lcm.env:         needs manual action: /etc/lcm/lcm.env is owned by user 1000") {
+		t.Fatalf("%+v %v\n%s", res, err, out)
+	}
+	if n := th.fs.get(EnvFile); n.uid != aliceUID {
+		t.Fatal("apply took the file over")
 	}
 }
