@@ -147,7 +147,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 		if err := h.writeJSON(dir+"/build.json", rec); err != nil && r.Code == "" {
 			r = refuse(r, CodeFailed, "record the build: %v", err)
 		}
-		h.pruneBuilds(builds, id)
+		h.pruneBuilds(svc, builds, id)
 		return r
 	}
 	if err := h.writeJSON(dir+"/build.json", rec); err != nil {
@@ -458,8 +458,16 @@ func (h *Helper) freePaths(builds, cache string) ([]string, error) {
 }
 
 // pruneBuilds keeps the newest keepBuilds builds of a service, and always
-// the build keep.
-func (h *Helper) pruneBuilds(builds, keep string) {
+// the build keep. An install copies a build while it holds the service's
+// lock, so builds are removed only when that lock is free, and an install
+// cannot start meanwhile; when it is held the pruning waits for the next
+// build.
+func (h *Helper) pruneBuilds(svc, builds, keep string) {
+	unlock, err := h.Ledger.Lock(svc)
+	if err != nil {
+		return
+	}
+	defer unlock()
 	names, err := h.FS.ReadDir(builds)
 	if err != nil {
 		return

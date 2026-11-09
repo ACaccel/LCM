@@ -147,3 +147,33 @@ func TestBuildChecksCacheFileSystem(t *testing.T) {
 	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the file system of /var/cache/lcm-build/web has only 1048576 bytes")
 	e.refused(buildReq(commit1), CodeRefused, "/var/cache/lcm-build/web has 1048576 bytes free")
 }
+
+// A build is removed only while no install of the service can be copying it.
+func TestPruneWaitsForInstall(t *testing.T) {
+	e := newEnv(t)
+	var ids []string
+	build := func() {
+		e.clock.Advance(time.Second)
+		ids = append(ids, e.ok(buildReq(commit1)).Build.BuildID)
+	}
+	for range keepBuilds {
+		build()
+	}
+	unlock, err := e.h.Ledger.Lock("web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	build()
+	for _, id := range ids {
+		if !e.exists("/var/lib/lcm-build/web/" + id) {
+			t.Errorf("build %s was removed while the service lock was held", id)
+		}
+	}
+	unlock()
+	build()
+	for i, id := range ids {
+		if got := e.exists("/var/lib/lcm-build/web/" + id); got != (i >= len(ids)-keepBuilds) {
+			t.Errorf("build %d kept: %v", i, got)
+		}
+	}
+}
