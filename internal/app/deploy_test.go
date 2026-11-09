@@ -59,6 +59,44 @@ func TestDeployEmbedsTheDeployFiles(t *testing.T) {
 	}
 }
 
+// TestBootstrapWrapper checks the parts of deploy/bootstrap.sh that run
+// before it needs root: it only hands over to lcm host init and apply.
+func TestBootstrapWrapper(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("bootstrap.sh would act on the host as root")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not installed")
+	}
+	run := func(args ...string) (int, string) {
+		cmd := exec.Command("bash", append([]string{filepath.Join(deployDir, "bootstrap.sh")}, args...)...) //nolint:gosec // the script under test
+		out, err := cmd.CombinedOutput()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode(), string(out)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0, string(out)
+	}
+	if code, out := run("--help"); code != 0 || !strings.Contains(out, "--ts-host NAME") || !strings.Contains(out, "--check") {
+		t.Errorf("--help: %d\n%s", code, out)
+	}
+	if code, _ := run("--bogus"); code != 2 {
+		t.Errorf("unknown flag: exit %d", code)
+	}
+	if code, out := run("--operator", "alice"); code != 1 || !strings.Contains(out, "run as root") {
+		t.Errorf("as a normal user: %d\n%s", code, out)
+	}
+	script := string(readDeploy(t, "bootstrap.sh"))
+	for _, want := range []string{`"$binary" host init --config "$config"`, `exec "$binary" host apply --config "$config"`} {
+		if !strings.Contains(script, want) {
+			t.Errorf("bootstrap.sh does not run %s", want)
+		}
+	}
+}
+
 // deployPolicyParams are the auto-deploy template parameters of
 // deploy/lcm-auto-deploy.yaml.
 var deployPolicyParams = map[string]any{ //nolint:gosec // notifyTokenSecret is a secret name, not a value
