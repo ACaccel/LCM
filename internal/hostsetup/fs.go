@@ -41,6 +41,8 @@ type FS interface {
 	// mode.
 	WriteFile(name string, r io.Reader, perm fs.FileMode, uid, gid int) error
 	Symlink(target, name string, uid, gid int) error
+	// Chown and Chmod change a regular file or directory; they never
+	// follow a symbolic link.
 	Chown(name string, uid, gid int) error
 	Chmod(name string, perm fs.FileMode) error
 	Rename(from, to string) error
@@ -90,7 +92,7 @@ func (o OS) Open(name string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // host paths chosen by host setup, opened without following a final link
+	f, err := openNoFollow(p, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +134,9 @@ func (o OS) Readlink(name string) (string, error) {
 	return os.Readlink(p)
 }
 
-// Mkdir implements FS.
+// Mkdir implements FS. The directory is created private, whatever the
+// umask, and gets its owner and final mode through a descriptor, so that a
+// directory swapped in by whoever owns the parent is never changed.
 func (o OS) Mkdir(name string, perm fs.FileMode, uid, gid int) error {
 	p, err := o.path(name)
 	if err != nil {
@@ -141,10 +145,47 @@ func (o OS) Mkdir(name string, perm fs.FileMode, uid, gid int) error {
 	if err := os.Mkdir(p, 0o700); err != nil {
 		return err
 	}
-	if err := os.Lchown(p, uid, gid); err != nil {
+	f, err := openNoFollow(p, syscall.O_DIRECTORY)
+	if err != nil {
 		return err
 	}
-	return os.Chmod(p, perm)
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || !fi.IsDir() || int(st.Uid) != os.Geteuid() {
+		return fmt.Errorf("%s changed while it was created", name)
+	}
+	if err := f.Chown(uid, gid); err != nil {
+		return err
+	}
+	return f.Chmod(perm)
+}
+
+// openNoFollow opens p for reading without following a symbolic link in
+// its last component and without blocking on a FIFO; extra adds flags.
+func openNoFollow(p string, extra int) (*os.File, error) {
+	return os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_NOCTTY|extra, 0) //nolint:gosec // host paths chosen by host setup, opened without following a final link
+}
+
+// openForMetadata opens a regular file or directory to change its owner or
+// mode through the descriptor: a link or another file type swapped in for
+// it is refused rather than followed.
+func openForMetadata(name, p string) (*os.File, error) {
+	f, err := openNoFollow(p, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.IsDir() && !fi.Mode().IsRegular() {
+		err = fmt.Errorf("%s is not a regular file or directory", name)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 // WriteFile implements FS.
@@ -211,30 +252,34 @@ func (o OS) Symlink(target, name string, uid, gid int) error {
 	return os.Lchown(p, uid, gid)
 }
 
-// Chown implements FS; it changes a link itself, not its target.
+// Chown implements FS for regular files and directories; it refuses
+// symbolic links instead of following them.
 func (o OS) Chown(name string, uid, gid int) error {
 	p, err := o.path(name)
 	if err != nil {
 		return err
 	}
-	return os.Lchown(p, uid, gid)
+	f, err := openForMetadata(name, p)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Chown(uid, gid)
 }
 
-// Chmod implements FS; it refuses symbolic links, whose target it would
-// change.
+// Chmod implements FS for regular files and directories; it refuses
+// symbolic links instead of following them.
 func (o OS) Chmod(name string, perm fs.FileMode) error {
 	p, err := o.path(name)
 	if err != nil {
 		return err
 	}
-	fi, err := os.Lstat(p)
+	f, err := openForMetadata(name, p)
 	if err != nil {
 		return err
 	}
-	if fi.Mode()&fs.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symbolic link", name)
-	}
-	return os.Chmod(p, perm)
+	defer func() { _ = f.Close() }()
+	return f.Chmod(perm)
 }
 
 // Rename implements FS.

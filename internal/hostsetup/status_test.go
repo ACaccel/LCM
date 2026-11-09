@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func syscallMkfifo(p string) error { return syscall.Mkfifo(p, 0o600) }
 
 func statusOf(t *testing.T, th *testHost) map[string]ComponentStatus {
 	t.Helper()
@@ -141,5 +144,44 @@ func TestOSFS(t *testing.T) {
 	}
 	if err := fsys.Remove("/etc/l"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestOSFSMetadataDoesNotFollowLinks swaps a directory for a link to a file
+// the caller must not change, the race a service account that owns the
+// parent could attempt.
+func TestOSFSMetadataDoesNotFollowLinks(t *testing.T) {
+	root := t.TempDir()
+	fsys := OS{Root: root}
+	uid, gid := os.Getuid(), os.Getgid()
+	if err := fsys.Mkdir("/data", 0o775, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := fsys.Lstat("/data"); err != nil || info.Mode.Perm() != 0o775 {
+		t.Fatalf("mkdir mode: %+v %v (the umask must not apply)", info, err)
+	}
+	if err := fsys.WriteFile("/secret", strings.NewReader("s"), 0o600, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("secret", filepath.Join(root, "data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fsys.Chmod("/data", 0o755); err == nil {
+		t.Error("chmod followed the swapped link")
+	}
+	if err := fsys.Chown("/data", uid, gid); err == nil {
+		t.Error("chown followed the swapped link")
+	}
+	if info, _ := fsys.Lstat("/secret"); info.Mode.Perm() != 0o600 {
+		t.Errorf("the link target changed to %04o", info.Mode.Perm())
+	}
+	if err := syscallMkfifo(filepath.Join(root, "fifo")); err != nil {
+		t.Skip("no FIFOs:", err)
+	}
+	if err := fsys.Chmod("/fifo", 0o644); err == nil {
+		t.Error("chmod accepted a FIFO")
 	}
 }

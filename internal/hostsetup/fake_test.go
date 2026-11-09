@@ -243,6 +243,9 @@ func (m *memFS) Chown(p string, uid, gid int) error {
 	if !ok {
 		return notExist("chown", p)
 	}
+	if n.mode&fs.ModeSymlink != 0 {
+		return fmt.Errorf("chown %s: symbolic link", p)
+	}
 	m.log("chown", p)
 	n.uid, n.gid = uid, gid
 	return nil
