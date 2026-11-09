@@ -38,7 +38,10 @@
 //	status    service
 //	releases  service
 //	query     (operationId names the operation to look up)
-//	backup, restore, backups: reserved for a later version, always refused
+//	backup    service, sources, mode (optional), timeoutSec, runtime (optional)
+//	restore   service, backupId, manifestSha256 (optional)
+//	backups   service
+//	prune     service, keep
 //
 // Field formats: service as in host.json; commit is a full lower-case
 // SHA-1 or SHA-256 commit ID; command is a shell script (at most 16 KiB);
@@ -49,7 +52,8 @@
 // program followed by at most 32 arguments, the program being a
 // release-relative executable or the name of a program in the runtime's
 // bin directory. Paths use letters, digits and "._-/" without ".."
-// components; arguments also allow "=:,@+".
+// components; arguments also allow "=:,@+". The fields of backup, restore
+// and prune are described under "Backups".
 //
 // A reply carries "version", "op" and "operationId" of the request, and:
 //
@@ -70,8 +74,12 @@
 //   - one result object: "build" {buildId, commit}, "install" {releaseId,
 //     manifest}, "activate" {releaseId, previous, switched, unitChanged},
 //     "unit" (status) {loadState, activeState, subState, unitFileState,
-//     mainPid, release} or "releases" [{releaseId, current, previous,
-//     manifest}].
+//     mainPid, release}, "releases" [{releaseId, current, previous,
+//     manifest}], "backup" {backupId, manifestSha256, size, files, skipped,
+//     createdAt, releaseId}, "restore" {backupId, preRestoreId, restored,
+//     skipped, started}, "backups" [{backupId, kind, createdAt, size,
+//     manifestSha256, mode, releaseId, sources, skipped, restoredFrom,
+//     problem}] or "prune" {removed, kept}.
 //
 // A release manifest records the service, releaseId, buildId, commit,
 // build runtimes, artifact, the SHA-256 of the installed tree (over each
@@ -180,17 +188,18 @@ const (
 	OpStatus   Op = "status"
 	OpReleases Op = "releases"
 	OpQuery    Op = "query"
-	// Reserved for typed backups.
+	// Typed backups.
 	OpBackup  Op = "backup"
 	OpRestore Op = "restore"
 	OpBackups Op = "backups"
+	OpPrune   Op = "prune"
 )
 
 // Changes reports whether op changes the host and is recorded in the
 // ledger.
 func (op Op) Changes() bool {
 	switch op {
-	case OpBuild, OpInstall, OpActivate, OpStart, OpStop, OpRestart:
+	case OpBuild, OpInstall, OpActivate, OpStart, OpStop, OpRestart, OpBackup, OpRestore, OpPrune:
 		return true
 	}
 	return false
@@ -239,6 +248,14 @@ type Request struct {
 	Runtime      string   `json:"runtime,omitempty"`
 	Migrate      []string `json:"migrate,omitempty"`
 	KeepReleases int      `json:"keepReleases,omitempty"`
+	// backup (with timeoutSec and runtime)
+	Sources []BackupSource `json:"sources,omitempty"`
+	Mode    string         `json:"mode,omitempty"`
+	// restore
+	BackupID       string `json:"backupId,omitempty"`
+	ManifestSHA256 string `json:"manifestSha256,omitempty"`
+	// prune
+	Keep *Keep `json:"keep,omitempty"`
 }
 
 // Response is one helper reply.
@@ -256,6 +273,10 @@ type Response struct {
 	Activate *ActivateResult `json:"activate,omitempty"`
 	Unit     *UnitStatus     `json:"unit,omitempty"`
 	Releases []Release       `json:"releases,omitempty"`
+	Backup   *BackupResult   `json:"backup,omitempty"`
+	Restore  *RestoreResult  `json:"restore,omitempty"`
+	Backups  []BackupInfo    `json:"backups,omitempty"`
+	Prune    *PruneResult    `json:"prune,omitempty"`
 }
 
 // BuildResult is the result of build.
@@ -313,6 +334,95 @@ type Release struct {
 	Manifest  *Manifest `json:"manifest,omitempty"`
 }
 
+// Backup source types.
+const (
+	SourceFiles    = "files"
+	SourceSQLite   = "sqlite"
+	SourcePostgres = "postgres"
+	SourceMongoDB  = "mongodb"
+	SourceCommand  = "command"
+)
+
+// Backup modes.
+const (
+	ModeOnline  = "online"
+	ModeStopped = "stopped"
+)
+
+// Backup kinds.
+const (
+	KindBackup     = "backup"
+	KindPreRestore = "pre-restore"
+)
+
+// MaxSources bounds the sources of one backup.
+const MaxSources = 16
+
+// BackupSource is one thing to back up. Each type takes only its own
+// fields.
+type BackupSource struct {
+	Type     string   `json:"type"`
+	Path     string   `json:"path,omitempty"`
+	Database string   `json:"database,omitempty"`
+	Users    bool     `json:"users,omitempty"`
+	Argv     []string `json:"argv,omitempty"`
+}
+
+// Keep is the retention of backup sets: the number of days and ISO weeks
+// that keep their newest set.
+type Keep struct {
+	Daily  int `json:"daily"`
+	Weekly int `json:"weekly"`
+}
+
+// BackupResult is the result of backup.
+type BackupResult struct {
+	BackupID       string `json:"backupId"`
+	ManifestSHA256 string `json:"manifestSha256"`
+	Size           int64  `json:"size"`
+	Files          int    `json:"files"`
+	// Skipped counts the entries of file sources that are not regular
+	// files or directories and were left out.
+	Skipped   int    `json:"skipped"`
+	CreatedAt int64  `json:"createdAt"`
+	ReleaseID string `json:"releaseId,omitempty"`
+}
+
+// RestoreResult is the result of restore. Restored and Skipped name the
+// sources (type with path or database) that were restored and that cannot
+// be (command artifacts). Started reports that the unit was active before
+// and was started again.
+type RestoreResult struct {
+	BackupID     string   `json:"backupId"`
+	PreRestoreID string   `json:"preRestoreId,omitempty"`
+	Restored     []string `json:"restored"`
+	Skipped      []string `json:"skipped"`
+	Started      bool     `json:"started"`
+}
+
+// BackupInfo is one entry of backups. Problem is set instead of the other
+// details when the set's manifest cannot be used.
+type BackupInfo struct {
+	BackupID       string         `json:"backupId"`
+	Kind           string         `json:"kind"`
+	CreatedAt      int64          `json:"createdAt,omitempty"`
+	Size           int64          `json:"size,omitempty"`
+	ManifestSHA256 string         `json:"manifestSha256,omitempty"`
+	Mode           string         `json:"mode,omitempty"`
+	ReleaseID      string         `json:"releaseId,omitempty"`
+	Sources        []BackupSource `json:"sources,omitempty"`
+	Skipped        int            `json:"skipped,omitempty"`
+	RestoredFrom   string         `json:"restoredFrom,omitempty"`
+	Problem        string         `json:"problem,omitempty"`
+}
+
+// PruneResult is the result of prune: the removed set IDs and the number
+// of sets left.
+type PruneResult struct {
+	Removed []string `json:"removed"`
+	Kept    int      `json:"kept"`
+}
+
 var (
 	uuidPattern   = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	commitPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -320,6 +430,9 @@ var (
 	relPattern    = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,256}$`)
 	argPattern    = regexp.MustCompile(`^[A-Za-z0-9._/=:,@+-]{1,256}$`)
 	binPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+	backupPattern = regexp.MustCompile(`^(?:pre-restore-)?[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$`)
+	dbPattern     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,62}$`)
+	sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // relPath accepts a clean relative path without ".." components.
@@ -362,6 +475,11 @@ func (r Request) fields() []string {
 	add(r.Runtime != "", "runtime")
 	add(r.Migrate != nil, "migrate")
 	add(r.KeepReleases != 0, "keepReleases")
+	add(r.Sources != nil, "sources")
+	add(r.Mode != "", "mode")
+	add(r.BackupID != "", "backupId")
+	add(r.ManifestSHA256 != "", "manifestSha256")
+	add(r.Keep != nil, "keep")
 	return out
 }
 
@@ -376,13 +494,11 @@ var opFields = map[Op][]string{
 	OpStatus:   {"service"},
 	OpReleases: {"service"},
 	OpQuery:    {},
-	OpBackup:   nil,
-	OpRestore:  nil,
-	OpBackups:  nil,
+	OpBackup:   {"service", "sources", "mode", "timeoutSec", "runtime"},
+	OpRestore:  {"service", "backupId", "manifestSha256"},
+	OpBackups:  {"service"},
+	OpPrune:    {"service", "keep"},
 }
-
-// ErrReserved refuses the operations reserved for a later version.
-var ErrReserved = errors.New("this operation is reserved for a later version")
 
 // Validate checks a request's form; host.json decides what it may name.
 func (r Request) Validate() error {
@@ -393,8 +509,6 @@ func (r Request) Validate() error {
 	switch {
 	case !known:
 		return fmt.Errorf("unknown op %q", hostsetup.Printable(string(r.Op), 32))
-	case allowed == nil:
-		return ErrReserved
 	case !uuidPattern.MatchString(r.OperationID):
 		return errors.New("operationId must be a lower-case UUID")
 	}
@@ -421,9 +535,107 @@ func (r Request) Validate() error {
 		}
 	case OpActivate:
 		return r.validateActivate()
+	case OpBackup:
+		return r.validateBackup()
+	case OpRestore:
+		if !backupPattern.MatchString(r.BackupID) {
+			return errors.New("backupId is not a backup ID")
+		}
+		if r.ManifestSHA256 != "" && !sha256Pattern.MatchString(r.ManifestSHA256) {
+			return errors.New("manifestSha256 must be a lower-case hex SHA-256")
+		}
+	case OpPrune:
+		k := r.Keep
+		switch {
+		case k == nil:
+			return errors.New("keep is required")
+		case k.Daily < 0 || k.Daily > MaxKeepDaily || k.Weekly < 0 || k.Weekly > MaxKeepWeekly:
+			return fmt.Errorf("keep.daily must be at most %d and keep.weekly at most %d", MaxKeepDaily, MaxKeepWeekly)
+		case k.Daily+k.Weekly < 1:
+			return errors.New("keep must keep at least one day or week")
+		}
 	}
 	return nil
 }
+
+// Bounds of keep.
+const (
+	MaxKeepDaily  = 366
+	MaxKeepWeekly = 260
+)
+
+func (r Request) validateBackup() error {
+	switch r.Mode {
+	case "", ModeOnline, ModeStopped:
+	default:
+		return fmt.Errorf("mode must be %s or %s", ModeOnline, ModeStopped)
+	}
+	if r.TimeoutSec < 1 || r.TimeoutSec > MaxTimeoutSec {
+		return fmt.Errorf("timeoutSec must be between 1 and %d", MaxTimeoutSec)
+	}
+	if r.Runtime != "" && !hostsetup.ValidRuntimeName(r.Runtime) {
+		return errors.New("runtime is not a runtime name")
+	}
+	return ValidateSources(r.Sources)
+}
+
+// ValidateSources checks the form of backup sources: the fields each type
+// takes, clean relative paths, database names and that the paths of file
+// and SQLite sources do not overlap. host.json grants nothing about them;
+// the data directory is the service's own.
+func ValidateSources(sources []BackupSource) error {
+	if len(sources) < 1 || len(sources) > MaxSources {
+		return fmt.Errorf("sources must list between 1 and %d sources", MaxSources)
+	}
+	var paths []string
+	for i, src := range sources {
+		at := fmt.Sprintf("sources[%d]", i)
+		allowed := map[string]bool{}
+		switch src.Type {
+		case SourceFiles, SourceSQLite:
+			allowed["path"] = true
+			if !relPath(src.Path) || src.Path == "." || hasReservedSuffix(src.Path) {
+				return fmt.Errorf("%s.path must be a clean relative path below the data directory, not \".\" (letters, digits and ._-/)", at)
+			}
+			paths = append(paths, src.Path)
+		case SourcePostgres, SourceMongoDB:
+			allowed["database"] = true
+			if !dbPattern.MatchString(src.Database) {
+				return fmt.Errorf("%s.database must be a database name of letters, digits, _ and -", at)
+			}
+			if src.Type == SourceMongoDB {
+				allowed["users"] = true
+			}
+		case SourceCommand:
+			allowed["argv"] = true
+			if len(src.Argv) == 0 || !relPath(src.Argv[0]) || src.Argv[0] == "." {
+				return fmt.Errorf("%s.argv must begin with a release-relative executable", at)
+			}
+			if err := validArgs(src.Argv[1:]); err != nil {
+				return fmt.Errorf("%s.argv: %w", at, err)
+			}
+		default:
+			return fmt.Errorf("%s.type %q is not a source type", at, hostsetup.Printable(src.Type, 32))
+		}
+		for name, set := range map[string]bool{"path": src.Path != "", "database": src.Database != "", "users": src.Users, "argv": src.Argv != nil} {
+			if set && !allowed[name] {
+				return fmt.Errorf("%s: %s does not take %s", at, src.Type, name)
+			}
+		}
+	}
+	for i, a := range paths {
+		for _, b := range paths[i+1:] {
+			if a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
+				return fmt.Errorf("the paths %s and %s overlap", a, b)
+			}
+		}
+	}
+	return nil
+}
+
+// hasReservedSuffix reports a path whose last component ends with the
+// suffix of the worker's temporary names.
+func hasReservedSuffix(p string) bool { return strings.HasSuffix(path.Base(p), restoreSuffix) }
 
 func (r Request) validateBuild() error {
 	switch {
@@ -492,6 +704,7 @@ var requestKeys = map[string]bool{
 	"version": true, "op": true, "operationId": true, "service": true, "commit": true, "command": true,
 	"timeoutSec": true, "runtimes": true, "buildId": true, "artifact": true, "releaseId": true,
 	"start": true, "runtime": true, "migrate": true, "keepReleases": true,
+	"sources": true, "mode": true, "backupId": true, "manifestSha256": true, "keep": true,
 }
 
 // DecodeRequest decodes and validates one request.

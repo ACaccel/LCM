@@ -61,7 +61,8 @@ const (
 // it (budget) and a margin. A call that times out leaves the helper running
 // as root; its outcome is in the ledger.
 func Timeout(req Request) time.Duration {
-	if req.Op == OpBuild || req.Op == OpInstall {
+	switch req.Op {
+	case OpBuild, OpInstall, OpBackup, OpRestore, OpPrune:
 		return budget(req) + copyMargin
 	}
 	return budget(req) + replyMargin

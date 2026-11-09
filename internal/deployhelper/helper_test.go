@@ -43,6 +43,12 @@ type env struct {
 	reloadFail int
 	needReload bool
 	enabled    bool
+	active     bool
+	// workerWrap, when set, runs in place of the backup worker: it gets the
+	// worker's mode and a function that runs the real one.
+	workerWrap func(mode string, run func() (string, int)) (string, int)
+	// tools maps database tool names to test programs.
+	tools      map[string]string
 	opCounter  int
 	systemctls []string
 }
@@ -61,6 +67,7 @@ func newEnv(t *testing.T) *env {
 		e.mkdir(d, 0o755)
 	}
 	e.mkdir("/var/lib/lcm-deploy", 0o700)
+	e.mkdir("/var/backups/lcm", 0o700)
 	e.mkdir("/var/lib/lcm-build/web", 0o750)
 	e.mkdir("/var/cache/lcm-build/web", 0o750)
 	e.write("/etc/login.defs", "UID_MIN 100000\n", 0o644)
@@ -195,6 +202,9 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		if strings.HasPrefix(arg(c, "--unit="), "lcm-build-") {
 			return result(build(e.real(arg(c, "--working-directory="))))
 		}
+		if unit := arg(c, "--unit="); strings.HasPrefix(unit, "lcm-backup-") || strings.HasPrefix(unit, "lcm-restore-") {
+			return result(e.worker(c))
+		}
 		i := slices.Index(c.Argv, "--")
 		return result(migrate(c.Argv[i+1:]))
 	}
@@ -205,6 +215,15 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		line := strings.Join(c.Argv[1:], " ")
 		e.systemctls = append(e.systemctls, line)
 		switch c.Argv[1] {
+		case "is-active":
+			if e.active {
+				return result("active\n", 0)
+			}
+			return result("inactive\n", 3)
+		case "stop", "start":
+			if c.Argv[2] == "web.service" {
+				e.active = c.Argv[1] == "start"
+			}
 		case "is-enabled":
 			if !e.enabled {
 				return result("disabled\n", 1)
@@ -501,9 +520,6 @@ func TestRefusals(t *testing.T) {
 	e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel, Start: []string{"index.js"}}, CodeRefused, "index.js is not executable; name a runtime")
 	e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel, Start: []string{"nope.js"}, Runtime: "node24"}, CodeRefused, "nope.js is not a regular file")
 	e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel, Start: []string{"index.js"}, Runtime: "node24", Migrate: []string{"migrate.sh"}}, CodeRefused, "neither a program of the runtime")
-	for _, op := range []Op{OpBackup, OpRestore, OpBackups} {
-		e.refused(Request{Op: op}, CodeRefused, "reserved for a later version")
-	}
 
 	e.write("/etc/web/env", "export PORT=80\n", 0o640)
 	e.refused(act, CodeRefused, "/etc/web/env sets PORT, which comes from host.json")
