@@ -630,13 +630,26 @@ func TestLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.refused(Request{Op: OpStart, Service: "web"}, CodeBusy, "another operation of web is running")
+	// A build has its own lock: it neither waits for unit actions nor
+	// blocks them.
+	e.ok(buildReq(commit1))
+	unlockBuild, err := e.h.Ledger.Lock("web.build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.refused(buildReq(commit1), CodeBusy, "another build of web is running")
+	unlockBuild()
+	// Ungranted services never get a lock file.
+	if e.exists("/var/lib/lcm-deploy/locks/other") {
+		t.Error("a lock file was created for a service host.json does not grant")
+	}
 	// A running record is reported as running while its lock is held, and
 	// as interrupted once it is free.
 	runningID := "33333333-2222-4333-8444-555555555555"
-	if err := e.h.Ledger.put(record{Version: Version, OperationID: runningID, Service: "web", Op: OpBuild, RequestHash: "x", State: StateRunning, StartedAt: 1}); err != nil {
+	if err := e.h.Ledger.put(record{Version: Version, OperationID: runningID, Service: "web", Op: OpRestart, RequestHash: "x", State: StateRunning, StartedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if q := e.call(Request{Op: OpQuery, OperationID: runningID}); q.State != StateRunning || q.Op != OpBuild || q.Code != "" {
+	if q := e.call(Request{Op: OpQuery, OperationID: runningID}); q.State != StateRunning || q.Op != OpRestart || q.Code != "" {
 		t.Errorf("query while running %+v", q)
 	}
 	unlock()

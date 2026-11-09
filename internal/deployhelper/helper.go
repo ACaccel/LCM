@@ -138,27 +138,46 @@ func (h *Helper) read(ctx context.Context, req Request) Response {
 	return h.releases(req)
 }
 
-// change carries out a changing operation once per operationId, under the
-// service's lock, with its outcome recorded before the reply.
+// lockName is the lock a changing operation holds. A service's builds have
+// their own, so that a long build never keeps its unit from being stopped or
+// restarted; install, activate and the unit actions share the service's.
+// Service names contain no ".".
+func lockName(service string, op Op) string {
+	if op == OpBuild {
+		return service + ".build"
+	}
+	return service
+}
+
+// change carries out a changing operation once per operationId, under its
+// lock, with its outcome recorded before the reply.
 func (h *Helper) change(ctx context.Context, req Request) Response {
-	unlock, err := h.Ledger.Lock(req.Service)
+	now := h.Clock.Now()
+	rec := record{Version: Version, OperationID: req.OperationID, Service: req.Service, Op: req.Op,
+		RequestHash: req.Hash(), State: StateRunning, StartedAt: now.UnixMilli()}
+	// A finished operation is answered from the ledger whatever host.json
+	// says now; a running one needs its lock to be judged.
+	if old, found, err := h.Ledger.get(req.OperationID); err != nil || found && old.State != StateRunning {
+		return h.recorded(req, rec, old, err)
+	}
+	// The grant comes before the lock, so that only granted services ever
+	// get a lock file.
+	cfg, g, refused := h.grant(req)
+	if refused != nil {
+		return *refused
+	}
+	unlock, err := h.Ledger.Lock(lockName(req.Service, req.Op))
 	if errors.Is(err, ErrBusy) {
-		return refuse(reply(req), CodeBusy, "another operation of %s is running", req.Service)
+		what := "another operation"
+		if req.Op == OpBuild {
+			what = "another build"
+		}
+		return refuse(reply(req), CodeBusy, "%s of %s is running", what, req.Service)
 	}
 	if err != nil {
 		return refuse(reply(req), CodeFailed, "the ledger cannot be used: %v", err)
 	}
 	defer unlock()
-	now := h.Clock.Now()
-	rec := record{Version: Version, OperationID: req.OperationID, Service: req.Service, Op: req.Op,
-		RequestHash: req.Hash(), State: StateRunning, StartedAt: now.UnixMilli()}
-	if old, found, err := h.Ledger.get(req.OperationID); err != nil || found {
-		return h.recorded(req, rec, old, err)
-	}
-	cfg, g, refused := h.grant(req)
-	if refused != nil {
-		return *refused
-	}
 	if old, found, err := h.Ledger.begin(rec); err != nil || found {
 		return h.recorded(req, rec, old, err)
 	}
@@ -176,8 +195,8 @@ func (h *Helper) change(ctx context.Context, req Request) Response {
 }
 
 // recorded answers a request whose operationId the ledger already holds.
-// The caller holds the service's lock, so a running record is one whose
-// helper stopped.
+// A running record reaches it only while the caller holds the record's
+// lock, so it is one whose helper stopped.
 func (h *Helper) recorded(req Request, want, old record, err error) Response {
 	switch {
 	case err != nil:
@@ -211,7 +230,7 @@ func (h *Helper) query(req Request) Response {
 	case r.State != StateRunning:
 		return *r.Response
 	}
-	unlock, err := h.Ledger.Lock(r.Service)
+	unlock, err := h.Ledger.Lock(lockName(r.Service, r.Op))
 	if errors.Is(err, ErrBusy) {
 		return Response{Version: Version, Op: r.Op, OperationID: r.OperationID, State: StateRunning}
 	}

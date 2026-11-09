@@ -95,10 +95,12 @@
 // are removed 90 days after they finished; status, releases and query are
 // not recorded.
 //
-// locks/<service> is locked (flock) for the whole of a changing operation
-// of that service; a second one gets "busy" at once. A "running" record
-// whose service lock is free belongs to a helper that stopped, so query
-// marks it "interrupted".
+// locks/<service>.build is locked (flock) for the whole of a build of that
+// service, and locks/<service> for the whole of its other changing
+// operations; a second operation that needs a held lock gets "busy" at
+// once, so a long build never blocks stop or restart. A "running" record
+// whose lock is free belongs to a helper that stopped, so query marks it
+// "interrupted". Lock files exist only for services that host.json grants.
 //
 // # Effects
 //
