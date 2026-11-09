@@ -207,7 +207,10 @@ func convertService(data []byte) (*Resource, error) {
 		Container: rt.Container,
 		Project:   rt.Project, File: rt.File,
 		Start: rt.Start, Stop: rt.Stop, Restart: rt.Restart, Status: rt.Status,
-		Source: s.Spec.Source, Backup: s.Spec.Backup, Jobs: s.Spec.Jobs,
+		Source: s.Spec.Source, Jobs: s.Spec.Jobs,
+	}
+	if b := s.Spec.Backup; b != nil {
+		cfg.Backup = &Backup{Command: b.Command, Timeout: b.Timeout}
 	}
 	var rels []Relation
 	for _, d := range s.Spec.DependsOn {
