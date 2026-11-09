@@ -290,7 +290,7 @@ func TestRefusedBeforeAnyWrite(t *testing.T) {
 		{"no operator", func(th *testHost) { delete(th.r.accounts, "alice") }, "no such non-root account: alice"},
 		{"lcm with another home", func(th *testHost) {
 			th.r.accounts["lcm"] = Account{Name: "lcm", UID: 990, GID: 990, Home: "/home/lcm"}
-		}, "account lcm exists with home directory /home/lcm"},
+		}, `account lcm exists with home directory "/home/lcm"`},
 		{"no go", func(th *testHost) { th.fs.remove("/home/alice/.local/go/bin/go") }, "toolchains.go: no executable bin/go"},
 		{"go not executable", func(th *testHost) { th.fs.get("/home/alice/.local/go/bin/go").mode = 0o644 }, "toolchains.go: no executable bin/go"},
 		{"no npm", func(th *testHost) { th.fs.remove("/home/alice/.local/node/bin/npm") }, "toolchains.node: no bin/npm"},
@@ -321,7 +321,7 @@ func TestRefusedBeforeAnyWrite(t *testing.T) {
 			th.r.accounts["lcm"] = Account{Name: "lcm", UID: 990, GID: 990, Home: DataDir}
 			th.fs.dir(Checkout+"/.git", 0o755, 990, 990)
 			th.r.origin = "https://example.com/fork.git"
-		}, "tracks https://example.com/fork.git, not the configured repository"},
+		}, `tracks "https://example.com/fork.git", not the configured repository`},
 		{"checkout without git", func(th *testHost) { th.fs.dir(Checkout, 0o750, 990, 990) }, "is not a git checkout"},
 		{"no python for the security host", func(th *testHost) {
 			th.fs.remove(python3)
@@ -718,20 +718,27 @@ func TestOlderBuildIsWarnedAbout(t *testing.T) {
 	if _, out, _ := th.apply(Options{Check: true}); strings.Contains(out, "warning:") {
 		t.Fatalf("warning for the same build:\n%s", out)
 	}
-	th.r.installedVersion = "lcm v2 (def) 2026-11-08T00:00:00Z\n"
+	th.r.installedVersion = "lcm v2 (def0123) 2026-11-08T00:00:00Z\n"
 	th.fs.file(Unit, "[Unit]\n", 0o644, 0, 0)
 	for _, check := range []bool{true, false} {
 		res, out, err := th.apply(Options{Check: check})
 		if err != nil || res.Changes == 0 {
 			t.Fatalf("check=%v: %+v %v\n%s", check, res, err, out)
 		}
-		if !strings.HasPrefix(out, "warning: the installed /usr/local/bin/lcm (lcm v2 (def) 2026-11-08T00:00:00Z) is newer than this build") ||
+		if !strings.HasPrefix(out, "warning: the installed /usr/local/bin/lcm (v2, commit def0123, 2026-11-08T00:00:00Z) is newer than this build (v1, commit abc1234, 2026-11-05T00:00:00Z)") ||
 			!strings.Contains(out, "lcm.service (from a build older than the installed binary)") {
 			t.Errorf("check=%v:\n%s", check, out)
 		}
 	}
-	if _, ok := buildTime("lcm dev"); ok {
-		t.Error("a version without a time was parsed")
+	if strings.Contains(th.r.calls[0], "[nobody] /usr/local/bin/lcm") {
+		t.Error("the installed binary ran as nobody")
+	}
+	// Anything but one well-formed line gives no warning.
+	for _, v := range []string{"lcm dev\n", "lcm v2 (def0123) 2026-11-08T00:00:00Z\nmore\n",
+		"lcm v2\x1b[2J (def0123) 2026-11-08T00:00:00Z\n", "lcm v2 (DEF0123) 2026-11-08T00:00:00Z", "lcm v2 (def0123) 2026-11-08 00:00:00"} {
+		if _, ok := parseVersion([]byte(v)); ok {
+			t.Errorf("%q was parsed", v)
+		}
 	}
 }
 
@@ -781,5 +788,39 @@ func TestAdminPasswordIsCheckedBeforeItIsSent(t *testing.T) {
 		if len(th.r.called("[lcm] /usr/local/bin/lcm admin")) != 0 {
 			t.Errorf("%q was sent", password)
 		}
+	}
+}
+
+func TestChildOutputIsNotPrintedRaw(t *testing.T) {
+	th := newTestHost(t)
+	th.r.goVersion = "go version \x1b]0;owned\x07go1.26 \x1b[31mred\n"
+	_, out, err := th.apply(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(out, 0x1b) || strings.ContainsRune(out, 0x07) || !strings.Contains(out, "go version ?]0;owned?go1.26 ?[31mred") {
+		t.Errorf("toolchain output printed raw:\n%q", out)
+	}
+
+	th = converged(t)
+	th.r.failAnalyze = true
+	th.r.analyzeStderr = "first\n\x1b[2Jcleared the screen\x9b"
+	th.fs.file(Unit, "[Unit]\n", 0o644, 0, 0)
+	_, out, err = th.apply(Options{})
+	if err == nil || strings.ContainsRune(err.Error(), 0x1b) || !strings.Contains(err.Error(), "?[2Jcleared the screen?") {
+		t.Fatalf("err = %q", err)
+	}
+	var ee *ExitError
+	if !errors.As(err, &ee) {
+		t.Error("the sanitized error hides the exit error")
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("output: %q", out)
+	}
+	if got := printable("é漢字\u202e", 100); got != "é漢字?" {
+		t.Errorf("printable = %q", got)
+	}
+	if got := printable("abcdef", 3); got != "abc..." {
+		t.Errorf("printable = %q", got)
 	}
 }

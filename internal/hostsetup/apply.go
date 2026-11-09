@@ -87,33 +87,53 @@ type applier struct {
 }
 
 // checkDowngrade compares the commit times that "lcm version" reports for
-// this build and for the installed binary, which runs as nobody. Applying
-// an older build replaces newer host files, so it warns, but it does not
-// block: the administrator may mean it.
-func (a *applier) checkDowngrade(ctx context.Context, running string) {
-	if _, err := a.h.FS.Lstat(Binary); err != nil {
+// this build and for the installed binary. The installed binary is the
+// self-deployed one, so it runs as lcm, the account that already runs it,
+// and only a strictly formed version line is used. Applying an older build
+// replaces newer host files, so it warns, but it does not block: the
+// administrator may mean it.
+func (a *applier) checkDowngrade(ctx context.Context, running []byte) {
+	if a.lcm == nil {
 		return
 	}
-	out, err := a.run(ctx, Command{Path: Binary, Args: []string{"version"}, As: &a.nobody, Timeout: 10 * time.Second})
+	if info, err := a.h.FS.Lstat(Binary); err != nil || !info.IsRegular() {
+		return
+	}
+	out, err := a.run(ctx, Command{Path: Binary, Args: []string{"version"}, As: a.lcm, MaxOutput: 256, Timeout: 10 * time.Second})
 	if err != nil {
 		return
 	}
-	installed := strings.TrimSpace(string(out))
-	ti, ok1 := buildTime(installed)
-	tr, ok2 := buildTime(running)
-	if ok1 && ok2 && ti.After(tr) {
-		a.downgrade = fmt.Sprintf("the installed %s (%s) is newer than this build (%s); its embedded files replace newer ones and --replace-binary downgrades the binary; use a build of the current reviewed checkout unless that is intended", Binary, installed, running)
+	installed, ok1 := parseVersion(out)
+	this, ok2 := parseVersion(running)
+	if ok1 && ok2 && installed.time.After(this.time) {
+		a.downgrade = fmt.Sprintf("the installed %s (%s) is newer than this build (%s); its embedded files replace newer ones and --replace-binary downgrades the binary; use a build of the current reviewed checkout unless that is intended", Binary, installed, this)
 	}
 }
 
-// buildTime is the commit time at the end of an "lcm version" line.
-func buildTime(version string) (time.Time, bool) {
-	f := strings.Fields(version)
-	if len(f) < 3 || f[0] != "lcm" {
-		return time.Time{}, false
+// versionLine is the "lcm version" output of a release build: version,
+// abbreviated commit and commit time.
+var versionLine = regexp.MustCompile(`^lcm ([A-Za-z0-9][A-Za-z0-9._+-]{0,63}) \(([0-9a-f]{7,40})\) ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\n?$`)
+
+type buildVersion struct {
+	version, commit string
+	time            time.Time
+}
+
+func (v buildVersion) String() string {
+	return fmt.Sprintf("%s, commit %s, %s", v.version, v.commit, v.time.Format(time.RFC3339))
+}
+
+// parseVersion accepts exactly one well-formed version line.
+func parseVersion(out []byte) (buildVersion, bool) {
+	m := versionLine.FindSubmatch(out)
+	if m == nil {
+		return buildVersion{}, false
 	}
-	t, err := time.Parse(time.RFC3339, f[len(f)-1])
-	return t, err == nil
+	t, err := time.Parse(time.RFC3339, string(m[3]))
+	if err != nil {
+		return buildVersion{}, false
+	}
+	return buildVersion{version: string(m[1]), commit: string(m[2]), time: t}, true
 }
 
 type securityState struct {
@@ -134,10 +154,14 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 	if o.Out == nil {
 		o.Out = io.Discard
 	}
+	// Messages can carry names and output that the operator or lcm
+	// control, such as toolchain file names or a program's last error line;
+	// none of it may reach root's terminal as control sequences.
+	o.Out = safeWriter{w: o.Out}
 	a := &applier{h: h, o: o, planned: map[string]bool{}}
 	defer a.cleanup()
 	if err := a.preflight(ctx); err != nil {
-		return a.res, err
+		return a.res, safeError{err}
 	}
 	steps := []struct {
 		name string
@@ -170,7 +194,7 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 	for _, st := range steps {
 		s := &step{a: a, name: st.name}
 		if err := st.fn(ctx, s); err != nil {
-			return a.res, fmt.Errorf("%s: %w", st.name, err)
+			return a.res, safeError{fmt.Errorf("%s: %w", st.name, err)}
 		}
 		s.finish()
 	}
@@ -411,7 +435,7 @@ func (a *applier) preflightAccounts(ctx context.Context) error {
 	}
 	if ok {
 		if lcm.Home != DataDir {
-			return fmt.Errorf("account lcm exists with home directory %s, not %s", lcm.Home, DataDir)
+			return fmt.Errorf("account lcm exists with home directory %q, not %s", lcm.Home, DataDir)
 		}
 		if lcm.UID == 0 {
 			return errors.New("account lcm has user ID 0")
@@ -588,7 +612,7 @@ func (a *applier) preflightStage(ctx context.Context) error {
 	if !bytes.HasPrefix(out, []byte("lcm ")) {
 		return fmt.Errorf("%s does not look like an lcm binary", a.h.Executable)
 	}
-	a.checkDowngrade(ctx, strings.TrimSpace(string(out)))
+	a.checkDowngrade(ctx, out)
 	rules := map[string]string{"sudoers": stage + "/sudoers"}
 	if a.cfg.Components.MachinePower {
 		rules["machine-power-sudoers"] = stage + "/machine-power-sudoers"
@@ -627,7 +651,7 @@ func (a *applier) preflightCheckout(ctx context.Context) error {
 		return fmt.Errorf("read the origin of %s: %w", Checkout, err)
 	}
 	if origin := strings.TrimSpace(string(out)); origin != a.cfg.Repository {
-		return fmt.Errorf("%s tracks %s, not the configured repository %s", Checkout, origin, a.cfg.Repository)
+		return fmt.Errorf("%s tracks %q, not the configured repository %s", Checkout, printable(origin, 200), a.cfg.Repository)
 	}
 	return nil
 }
@@ -895,7 +919,7 @@ func (a *applier) toolchain(ctx context.Context, s *step, name, src string) erro
 		if err != nil {
 			return fmt.Errorf("the copied %s does not run as lcm: %w", name, err)
 		}
-		version = strings.TrimSpace(string(out))
+		version = printable(firstLine(string(out)), 100)
 		return nil
 	}
 	if err := s.change(fmt.Sprintf("copy %s to %s (%s)", src, dst, diff), func() error {

@@ -386,7 +386,7 @@ type fakeRunner struct {
 	failVisudo, failVisudoStaged, failAnalyze bool
 	visudoHook                                func() error
 	versionOutput, installedVersion           string
-	passwordInput                             string
+	passwordInput, goVersion, analyzeStderr   string
 	installPy                                 []string
 }
 
@@ -477,15 +477,15 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		if r.versionOutput != "" {
 			return []byte(r.versionOutput), nil
 		}
-		return []byte("lcm v1 (abc) 2026-11-05T00:00:00Z\n"), nil
+		return []byte("lcm v1 (abc1234) 2026-11-05T00:00:00Z\n"), nil
 	case c.Path == Binary && arg(0) == "version":
-		if c.As == nil || c.As.Name != "nobody" {
-			return nil, errors.New("the installed binary must run as nobody")
+		if c.As == nil || c.As.Name != "lcm" || c.MaxOutput == 0 || c.MaxOutput > 4096 {
+			return nil, errors.New("the installed binary must run as lcm with a bounded output")
 		}
 		if r.installedVersion != "" {
 			return []byte(r.installedVersion), nil
 		}
-		return []byte("lcm v1 (abc) 2026-11-05T00:00:00Z\n"), nil
+		return []byte("lcm v1 (abc1234) 2026-11-05T00:00:00Z\n"), nil
 	case c.Path == "visudo" && arg(0) == "-cf":
 		if r.fs.get(arg(1)) == nil {
 			return nil, errors.New("visudo: no such file")
@@ -520,12 +520,15 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		return nil, nil
 	case c.Path == "systemd-analyze":
 		if r.failAnalyze {
-			return nil, exit(1)
+			return nil, &ExitError{Command: "systemd-analyze verify", Code: 1, Stderr: lastLine(r.analyzeStderr)}
 		}
 		return nil, nil
 	case c.Path == "systemctl":
 		return r.systemctl(a)
 	case strings.HasSuffix(c.Path, "/bin/go"):
+		if r.goVersion != "" {
+			return []byte(r.goVersion), nil
+		}
 		return []byte("go version go1.26.0 linux/amd64\n"), nil
 	case strings.HasSuffix(c.Path, "/bin/node"):
 		return []byte("v24.0.0\n"), nil

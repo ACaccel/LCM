@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // SafePath is the PATH of every command host setup runs; nothing from the
@@ -43,6 +45,8 @@ type Command struct {
 	// /dev/null. Output is always captured, never connected to a
 	// terminal.
 	Stdin io.Reader
+	// MaxOutput bounds the captured stdout; zero selects 1 MiB.
+	MaxOutput int
 	// Timeout bounds the program; zero selects two minutes.
 	Timeout time.Duration
 }
@@ -138,6 +142,9 @@ func (r OSRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 	cmd.Stdin = c.Stdin
 	cmd.WaitDelay = 5 * time.Second
 	stdout := &limitedBuffer{max: maxStdout}
+	if c.MaxOutput > 0 {
+		stdout.max = c.MaxOutput
+	}
 	stderr := &limitedBuffer{max: maxStderr}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
@@ -167,11 +174,60 @@ func sysProcAttr(c Command) *syscall.SysProcAttr {
 }
 
 // lastLine is the last non-empty line of a program's error output, which
-// names the failure without repeating everything it printed.
+// names the failure without repeating everything it printed, made safe to
+// print: programs run as lcm or the operator choose what they write.
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(lines[len(lines)-1])
+	return printable(strings.TrimSpace(lines[len(lines)-1]), 200)
 }
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
+}
+
+// printable replaces control and format characters (escape sequence
+// introducers, bidirectional overrides) and invalid UTF-8 by "?", and
+// shortens s to at most max bytes.
+func printable(s string, max int) string {
+	s = strings.ToValidUTF8(s, "?")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return '?'
+		}
+		return r
+	}, s)
+	if len(s) > max {
+		cut := max
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "..."
+	}
+	return s
+}
+
+// safeWriter writes text with control characters other than newlines
+// replaced.
+type safeWriter struct{ w io.Writer }
+
+func (s safeWriter) Write(p []byte) (int, error) {
+	lines := strings.Split(string(p), "\n")
+	for i, l := range lines {
+		lines[i] = printable(l, len(l)+1)
+	}
+	if _, err := io.WriteString(s.w, strings.Join(lines, "\n")); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// safeError prints an error with control characters replaced; errors.Is
+// and errors.As still see the original.
+type safeError struct{ err error }
+
+func (e safeError) Error() string { return printable(e.err.Error(), 4096) }
+func (e safeError) Unwrap() error { return e.err }
 
 // limitedBuffer keeps the first max bytes written to it.
 type limitedBuffer struct {
