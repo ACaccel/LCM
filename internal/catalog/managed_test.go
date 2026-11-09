@@ -44,6 +44,13 @@ type simHelper struct {
 	hang map[deployhelper.Op]bool
 	// refuse answers the operations listed with the code.
 	refuse map[deployhelper.Op]deployhelper.Code
+	// sets are the backup sets, oldest first. pruneKeeps is how many sets a
+	// prune keeps. restoreActive holds, per restore, whether the service is
+	// active afterwards; restores beyond it leave it active.
+	sets          []deployhelper.BackupInfo
+	pruneKeeps    int
+	restoreActive []bool
+	restoreFails  bool
 }
 
 func newSimHelper() *simHelper {
@@ -158,6 +165,41 @@ func (s *simHelper) perform(req deployhelper.Request) deployhelper.Response {
 			state = "active"
 		}
 		resp.Unit = &deployhelper.UnitStatus{LoadState: "loaded", ActiveState: state, SubState: "running", Release: s.current}
+	case deployhelper.OpBackup:
+		id := s.id()
+		info := deployhelper.BackupInfo{BackupID: id, Kind: deployhelper.KindBackup, CreatedAt: int64(1000 + s.n), Size: 4096, ManifestSHA256: strings.Repeat("a", 63) + fmt.Sprint(s.n%10),
+			Mode: req.Mode, Sources: req.Sources, Skipped: 1}
+		s.sets = append(s.sets, info)
+		resp.Backup = &deployhelper.BackupResult{BackupID: id, ManifestSHA256: info.ManifestSHA256, Size: info.Size, Files: len(req.Sources), Skipped: 1, CreatedAt: info.CreatedAt}
+	case deployhelper.OpRestore:
+		i := slices.IndexFunc(s.sets, func(b deployhelper.BackupInfo) bool { return b.BackupID == req.BackupID })
+		if i < 0 {
+			return fail(deployhelper.CodeNotFound, "there is no backup "+req.BackupID)
+		}
+		if req.ManifestSHA256 != "" && req.ManifestSHA256 != s.sets[i].ManifestSHA256 {
+			return fail(deployhelper.CodeRefused, "the manifest does not match the checksum LCM recorded")
+		}
+		pre := "pre-restore-" + s.id()
+		s.sets = append(s.sets, deployhelper.BackupInfo{BackupID: pre, Kind: deployhelper.KindPreRestore, CreatedAt: int64(1000 + s.n), Size: 2048,
+			ManifestSHA256: strings.Repeat("b", 63) + fmt.Sprint(s.n%10), Sources: s.sets[i].Sources, RestoredFrom: req.BackupID})
+		resp.Restore = &deployhelper.RestoreResult{BackupID: req.BackupID, PreRestoreID: pre, Restored: []string{"files media"}, Skipped: []string{}, Started: s.active}
+		if s.restoreFails {
+			return fail(deployhelper.CodeFailed, "the restore failed: disk full; the previous data was put back")
+		}
+		s.active = true
+		if len(s.restoreActive) > 0 {
+			s.active, s.restoreActive = s.restoreActive[0], s.restoreActive[1:]
+		}
+	case deployhelper.OpBackups:
+		resp.Backups = slices.Clone(s.sets)
+		slices.Reverse(resp.Backups)
+	case deployhelper.OpPrune:
+		var removed []string
+		for len(s.sets) > s.pruneKeeps {
+			removed = append(removed, s.sets[0].BackupID)
+			s.sets = s.sets[1:]
+		}
+		resp.Prune = &deployhelper.PruneResult{Removed: append([]string{}, removed...), Kept: len(s.sets)}
 	case deployhelper.OpReleases:
 		for _, r := range s.releases {
 			r.Current, r.Previous = r.ReleaseID == s.current, r.ReleaseID == s.previous
@@ -202,17 +244,21 @@ func (r managedRuntimes) For(x model.Runtime) (rt.Adapter, error) {
 func withHelper(h rt.DeployHelper) envOption {
 	return func(e *env, cfg *catalog.ManagerConfig) {
 		cfg.Deploy = h
+		cfg.RestoreSettle = -1
 		cfg.Runtimes = managedRuntimes{fake: e.runtime, managed: rt.NewRegistry(&execx.Fake{}, rt.Options{Deploy: h})}
 	}
 }
 
 const managedBuild = "touch built-by-lcm; npm run build"
 
-func managedDoc(url string) string {
+func managedDoc(url string) string { return managedDocWith(url, "") }
+
+// managedDocWith adds lines of service config.
+func managedDocWith(url, extra string) string {
 	return serviceDoc("app", "managed", fmt.Sprintf(
 		"    source: { url: %s, branch: main, build: '%s', timeout: 20m }\n"+
 			"    artifact: dist/\n    runtime: node24\n    start: server/main.mjs\n    startArgs: [--quiet]\n"+
-			"    migrate: [node, scripts/migrate.mjs]\n", url, managedBuild), "")
+			"    migrate: [node, scripts/migrate.mjs]\n%s", url, managedBuild, extra), "")
 }
 
 // managedEnv is a managed service app whose source is a real git fixture
@@ -497,7 +543,7 @@ func TestManagedWithoutHelper(t *testing.T) {
 	for _, a := range catalog.AvailableActions(rec, h.Ready()) {
 		want := catalog.ReasonHelperUnavailable
 		switch a.Action {
-		case catalog.ActionBackup, catalog.ActionRunJob:
+		case catalog.ActionBackup, catalog.ActionRestore, catalog.ActionRunJob:
 			want = catalog.ReasonNotConfigured
 		}
 		if a.Reason != want {

@@ -95,6 +95,7 @@ var actionStates = map[string][]State{
 	ActionDeploy:   {StateRegistered, StateRunning, StateStopped, StateFailed},
 	ActionRollback: {StateRunning, StateStopped, StateFailed},
 	ActionBackup:   {StateRegistered, StateRunning, StateStopped, StateFailed},
+	ActionRestore:  {StateRegistered, StateRunning, StateStopped, StateFailed},
 	ActionRunJob:   {StateRegistered, StateRunning, StateStopped, StateFailed},
 }
 
@@ -106,6 +107,7 @@ const (
 	ActionStart    = "start"
 	ActionStop     = "stop"
 	ActionBackup   = "backup"
+	ActionRestore  = "restore"
 	ActionRunJob   = "run-job"
 )
 

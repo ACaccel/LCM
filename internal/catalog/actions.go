@@ -57,14 +57,19 @@ func (s *session) restartOrStart(ctx context.Context) error {
 	return s.adapter.Restart(ctx, s.rt)
 }
 
-// Backup runs the service's backup command. The state does not change.
+// Backup runs the service's backup: its command, or for a managed service
+// the typed backup that the deploy helper performs. The state does not
+// change.
 func (m *Manager) Backup(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
 	return m.exec(ctx, name, ActionBackup, opts, func(ctx context.Context, s *session, res *ActionResult) error {
 		b := s.cfg.Backup
 		if b == nil {
 			return ErrNoBackup
 		}
-		return s.runCommand(ctx, *b, res)
+		if b.Typed() {
+			return s.typedBackup(ctx, res)
+		}
+		return s.runCommand(ctx, model.Command{Command: b.Command, Timeout: b.Timeout}, res)
 	})
 }
 
