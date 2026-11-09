@@ -146,8 +146,12 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 		return finish(refuse(resp, CodeFailed, "record the build: %v", err))
 	}
 	// The copy is root's until it is complete, then handed over bottom-up.
+	// It leaves out .git: the repository's history and configuration are
+	// lcm's, and the build gets the commit as LCM_COMMIT.
+	gitDir := "work/" + svc + "/.git"
 	err = hostsetup.CopyTree(h.FS, hostsetup.DataDir, "work/"+svc, dir+"/src", hostsetup.CopyOptions{
 		Owners: map[int]bool{lcm.UID: true}, UID: h.RootUID, GID: h.RootGID,
+		Exclude: func(rel string) bool { return rel == gitDir },
 	})
 	if err == nil {
 		err = hostsetup.HandOver(h.FS, dir+"/src", builder.UID, builder.GID)

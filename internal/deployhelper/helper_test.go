@@ -298,8 +298,11 @@ func TestBuildInstallActivate(t *testing.T) {
 		t.Errorf("log not sanitized: %q", b.Log)
 	}
 	dir := "/var/lib/lcm-build/web/" + id
-	if e.read(dir+"/src/package.json") != "{}" || e.read(dir+"/src/.git/HEAD") == "" || e.read(dir+"/build.sh") != "npm ci && npm run build\n" {
+	if e.read(dir+"/src/package.json") != "{}" || e.read(dir+"/src/src/app.js") != "app" || e.read(dir+"/build.sh") != "npm ci && npm run build\n" {
 		t.Errorf("build tree incomplete")
+	}
+	if e.exists(dir + "/src/.git") {
+		t.Error("the build got the checkout's .git")
 	}
 	var rec buildRecord
 	if err := json.Unmarshal([]byte(e.read(dir+"/build.json")), &rec); err != nil || rec.State != StateSucceeded || rec.Commit != commit1 {

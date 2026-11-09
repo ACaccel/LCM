@@ -105,9 +105,11 @@
 //
 // # Effects
 //
-// build copies the lcm-owned checkout /var/lib/lcm/work/<service>, whose
-// HEAD (read from .git without running git as root) must be the commit,
-// into /var/lib/lcm-build/<service>/<buildId>/src owned by the service's
+// build copies the lcm-owned checkout /var/lib/lcm/work/<service> without
+// its .git directory (the build gets the commit as LCM_COMMIT and must not
+// rely on git metadata); HEAD (read from .git without running git as root)
+// must be the commit. The copy goes to
+// /var/lib/lcm-build/<service>/<buildId>/src, owned by the service's
 // own build account lcmb-<service>, and runs the command there with
 // systemd-run as that account in a sandbox (see buildArgs). It keeps the
 // last 3 builds of a service. A build does not start with less than 2 GiB
