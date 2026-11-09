@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ACaccel/lcm/internal/hostsetup"
 )
@@ -118,7 +117,7 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 			return refuse(resp, CodeRefused, "%v", err)
 		}
 		unit := "lcm-migrate-" + svc + "-" + req.OperationID[:8]
-		res, err := h.run(ctx, migrateTimeout+time.Minute, migrateArgs(unit, svc, acc, relDir, g.Port, rtBin, backupDir(cfg), argv)...)
+		res, err := h.run(ctx, migrateTimeout+migrateRunMargin, migrateArgs(unit, svc, acc, relDir, g.Port, rtBin, backupDir(cfg), argv)...)
 		resp.Log = sanitizeLog(res.Output)
 		if err != nil {
 			h.stopUnit(ctx, unit, err)

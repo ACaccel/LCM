@@ -50,21 +50,21 @@ func CodeOf(err error) Code {
 // request again) before deciding anything.
 var ErrOutcomeUnknown = errors.New("deploy helper outcome unknown; query the operation before retrying")
 
-// Timeout bounds one call: the helper's own work and a margin for copying
-// trees. A call that times out leaves the helper running as root; its
-// outcome is in the ledger.
+// Margins of a call beyond the helper's budget: copying trees, which only
+// their size bounds, and starting sudo and the helper.
+const (
+	copyMargin  = 15 * time.Minute
+	replyMargin = 2 * time.Minute
+)
+
+// Timeout bounds one call: the longest the helper's commands may take for
+// it (budget) and a margin. A call that times out leaves the helper running
+// as root; its outcome is in the ledger.
 func Timeout(req Request) time.Duration {
-	switch req.Op {
-	case OpBuild:
-		return time.Duration(req.TimeoutSec)*time.Second + 15*time.Minute
-	case OpInstall:
-		return 15 * time.Minute
-	case OpActivate:
-		return migrateTimeout + 10*time.Minute
-	case OpStart, OpStop, OpRestart:
-		return systemctlTimeout + time.Minute
+	if req.Op == OpBuild || req.Op == OpInstall {
+		return budget(req) + copyMargin
 	}
-	return time.Minute
+	return budget(req) + replyMargin
 }
 
 // Client runs the helper through sudo.

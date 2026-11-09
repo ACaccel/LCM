@@ -29,12 +29,36 @@ const (
 	shell          = "/bin/sh"
 )
 
-// Command timeouts.
+// Command timeouts. The run margins bound how long systemd-run may outlast
+// the unit's own RuntimeMaxSec.
 const (
 	systemctlTimeout = 3 * time.Minute
 	migrateTimeout   = 10 * time.Minute
 	analyzeTimeout   = time.Minute
+	buildRunMargin   = 2 * time.Minute
+	migrateRunMargin = time.Minute
 )
+
+// budget is the longest the commands the helper runs for req may take
+// together, in its worst case; copying trees comes on top. The client's
+// timeout is derived from it, so that it never gives up on a helper that is
+// still within its own limits.
+func budget(req Request) time.Duration {
+	switch req.Op {
+	case OpBuild:
+		// The build, then stopping its unit (by the watcher or after a
+		// timeout).
+		return time.Duration(req.TimeoutSec)*time.Second + buildRunMargin + 2*systemctlTimeout
+	case OpActivate:
+		// The migration and stopping its unit, the unit verification, the
+		// reload check, reload and reload after a restore, is-enabled,
+		// enable and restart.
+		return migrateTimeout + migrateRunMargin + analyzeTimeout + 7*systemctlTimeout
+	case OpStart, OpStop, OpRestart, OpStatus:
+		return systemctlTimeout
+	}
+	return 0
+}
 
 // commandEnv is added to the fixed environment of every command.
 var commandEnv = []string{"LC_ALL=C", "SYSTEMD_PAGER=cat", "SYSTEMD_COLORS=0", "SYSTEMD_LOG_COLOR=0"}

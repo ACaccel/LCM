@@ -132,7 +132,7 @@ func TestClient(t *testing.T) {
 	}
 	c := f.Calls()[0]
 	want := []string{"/usr/bin/sudo", "-n", "--", "/usr/local/libexec/lcm-deploy"}
-	if strings.Join(c.Argv, " ") != strings.Join(want, " ") || c.Timeout != 4*time.Minute || c.MaxOutput != MaxResponse+1 {
+	if strings.Join(c.Argv, " ") != strings.Join(want, " ") || c.Timeout != 5*time.Minute || c.MaxOutput != MaxResponse+1 {
 		t.Errorf("command %+v", c)
 	}
 	var sent Request
@@ -140,8 +140,18 @@ func TestClient(t *testing.T) {
 		t.Errorf("stdin %s", c.Stdin)
 	}
 	b := Request{Version: Version, Op: OpBuild, OperationID: req.OperationID, Service: "web", Commit: strings.Repeat("a", 40), Command: "make", TimeoutSec: 600}
-	if Timeout(b) != 25*time.Minute {
+	if Timeout(b) != 33*time.Minute {
 		t.Errorf("build timeout %s", Timeout(b))
+	}
+	a := Request{Version: Version, Op: OpActivate, OperationID: req.OperationID, Service: "web", ReleaseID: "20261109T120000Z-0a1b2c3d", Start: []string{"x"}}
+	if Timeout(a) != 35*time.Minute {
+		t.Errorf("activate timeout %s", Timeout(a))
+	}
+	for op := range opFields {
+		r := Request{Op: op, TimeoutSec: 60}
+		if Timeout(r) <= budget(r) {
+			t.Errorf("%s: timeout %s does not exceed the helper's budget %s", op, Timeout(r), budget(r))
+		}
 	}
 
 	for name, tc := range map[string]struct {

@@ -168,7 +168,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 	unit := "lcm-build-" + svc + "-" + id
 	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs, backupDir(cfg))
 	stop := h.watchBuild(ctx, unit, []string{dir + "/src", dir + "/home", cache}, builds, lim)
-	res, err := h.run(ctx, time.Duration(req.TimeoutSec)*time.Second+2*time.Minute, argv...)
+	res, err := h.run(ctx, time.Duration(req.TimeoutSec)*time.Second+buildRunMargin, argv...)
 	resp.Log = sanitizeLog(res.Output)
 	if why := stop(); why != "" {
 		return finish(refuse(resp, CodeFailed, "the build was stopped: %s", why))
