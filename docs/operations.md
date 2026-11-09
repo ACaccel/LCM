@@ -4,11 +4,12 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 ## Install
 
-`deploy/` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power permission is a separate, explicitly authorized installation described [below](#local-machine-power-helper).
+`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power and the security host helper are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls)).
 
 | Path | Owner, mode | Contents |
 |---|---|---|
 | `/var/lib/lcm/` | lcm 0750 | Data directory (`lcm.db`, `secrets/`, `sources/`), `work/` (build checkouts; `work/lcm` is LCM's own, used for self-deploy), `cache/` (Go and npm caches of its builds) |
+| `/etc/lcm/host.json` | root 0644 | [Host configuration](#host-configuration) of `lcm host apply` |
 | `/etc/lcm/lcm.env` | root:lcm 0640 | Server settings ([`deploy/lcm.env`](../deploy/lcm.env)); written only when missing |
 | `/opt/lcm/toolchain/{go,node}` | root | Copies of the Go and Node.js toolchains that self-deploy builds with |
 | `/usr/local/bin/lcm`, `lcm.prev`, `lcm.failed` | root 0755 | Installed binary, the one it replaced, and the last one a verification rejected |
@@ -17,18 +18,49 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 | `/etc/systemd/system/lcm.service` | root 0644 | [`deploy/lcm.service`](../deploy/lcm.service) |
 | `https://<host>:9443` | tailscale serve | Tailnet-only HTTPS proxy to `http://127.0.0.1:7800` |
 
-**Prerequisites:** systemd, sudo, `git`, `curl`, `jq`, `make`, Tailscale signed in with HTTPS certificates; Go and Node.js 24 toolchains in the operator's `~/.local/{go,node}` (or pass `--go-root`, `--node-root`). The repository is public, so neither the clone nor the CI check needs credentials.
+**Prerequisites:** systemd, sudo, `git`, `curl`, `make`, `jq` (for `seed.sh`), Tailscale signed in with HTTPS certificates; Go and Node.js 24 toolchains, by default in the operator's `~/.local/{go,node}`. The repository is public, so neither the clone nor the CI check needs credentials.
+
+### Host configuration
+
+`/etc/lcm/host.json` says what `lcm host apply` installs. It must be a regular file owned by root and not writable by group or others, in root-owned directories that are not symbolic links and not writable by group or others. Decoding is strict: unknown, duplicate or differently cased keys and trailing data are refused. It holds no secrets and no host name; the tailnet name comes from `tailscale status`. `lcm host init` writes a first one (it never replaces an existing file).
+
+```json
+{
+  "operator": "alice",
+  "repository": "https://github.com/ACaccel/LCM.git",
+  "toolchains": {"go": "/home/alice/.local/go", "node": "/home/alice/.local/node"},
+  "tailscale": {"port": 9443},
+  "components": {"machinePower": false, "securityHost": null}
+}
+```
+
+| Key | `host init` flag (default) | Meaning |
+|---|---|---|
+| `operator` | `--operator` (`$SUDO_USER`) | Non-root administrator account: owns the toolchains to copy and gets the first API token |
+| `repository` | `--repository` (`https://github.com/ACaccel/LCM.git`) | https URL without credentials that self-deploy clones into `work/lcm` |
+| `toolchains.go`, `toolchains.node` | `--go-root`, `--node-root` (`~OPERATOR/.local/{go,node}`) | Absolute toolchain directories, not symbolic links; copied to `/opt/lcm/toolchain` |
+| `tailscale.port` | `--ts-port` (`9443`) | HTTPS port of `tailscale serve` |
+| `components.machinePower` | `--machine-power` (`false`) | Install the [machine power helper](#local-machine-power-helper) |
+| `components.securityHost` | `--security-host-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>"}` installs the [security host helper](#security-console-host-controls) |
 
 ### Procedure
 
 1. From a reviewed checkout, build the first binary as the operator: `make build`.
-2. Install, as root:
+2. Install, as root, with the build of that checkout:
 
    ```sh
-   sudo deploy/bootstrap.sh            # --help lists the options and defaults
+   sudo deploy/bootstrap.sh            # first run: writes host.json from its flags (--help), then runs host apply
    ```
 
-   It validates its inputs before changing anything, then creates the `lcm` account and directories, writes `lcm.env` if missing, copies the toolchains (refusing links that leave them), installs the binary (only when none is installed; `--replace-binary` forces it), `self-install`, the sudoers rule (checked with `visudo`) and the unit (`systemd-analyze verify`), clones `work/lcm` over HTTPS as `lcm`, starts the service and waits for health. When it created the database and runs in a terminal, it asks for the web console's admin password (min 8 characters). When `~/.config/lcm/token` of the operator (`--operator`, default the user who ran sudo) is missing, it creates an admin API token and has the operator's own process write it there (0600). Last, it adds the `tailscale serve` handler, refusing a port that something else uses. Rerunning it changes only what differs.
+   or step by step:
+
+   ```sh
+   sudo bin/lcm host init --operator alice   # writes /etc/lcm/host.json; review it
+   sudo bin/lcm host apply --check           # what would change
+   sudo bin/lcm host apply
+   ```
+
+   `bootstrap.sh` passes `--replace-binary` and `--check` on to `host apply`; its first-run flags fail once `host.json` exists, and `--ts-host NAME` only refuses to run when the node's tailnet name differs. `host apply` validates everything before it changes anything (tools, operator account, toolchains and their links, tailscale state and port, the staged binary running `lcm version` as `nobody`, `visudo -cf` on the staged sudoers rules, an existing `work/lcm` tracking `repository`). It then creates the `lcm` account and directories, writes `lcm.env` if missing, copies the toolchains (refusing links that leave them), installs the binary (only when none is installed; `--replace-binary` forces it), `self-install`, the sudoers rule (checked with `visudo -c` and removed again when that fails) and the unit (`systemd-analyze verify`, restoring the previous unit when that fails), clones `work/lcm` over HTTPS as `lcm`, enables and starts the service (restarting it for a changed unit) and waits up to 60 s for health, then installs the enabled optional components. When it created the database and runs in a terminal, it asks for the web console's admin password (min 8 characters). When `~/.config/lcm/token` of the operator is missing, it creates an admin API token and has the operator's own process write it there (0600). Last, it adds the `tailscale serve` handler, refusing a port that something else uses.
 3. Seed, as the operator:
 
    ```sh
@@ -41,6 +73,17 @@ Later admin password changes: `sudo -u lcm /usr/local/bin/lcm admin set-password
 
 **Monitoring-only services (optional).** `seed.sh` reads `${LCM_SEED_INVENTORY:-$HOME/.config/lcm/seed-inventory}`; without that file it registers none. Copy [`deploy/seed-inventory.example`](../deploy/seed-inventory.example) and edit it: one entry per line, `service NAME UNIT_REGEX [HTTP_URL]` for systemd units or `container NAME CONTAINER [HTTP_URL]` for a docker container, `#` comments. `seed.sh` rejects an invalid name (`^[a-z0-9-]{1,63}$`, not `lcm`), a duplicate, an unknown kind, a bad regex, or a URL that is not `http(s)://` or has credentials, before it changes anything. Each entry becomes one service resource with adapter `external` (LCM only monitors it, so its start, stop and restart are disabled; see [runtimes](services.md#runtime)) and no policies. Long-running units matching the regex get critical `systemd` checks; oneshot units are represented by their timer as non-critical checks. An `http` check is added only when the URL answers at seed time. The docker check is added only when `lcm` is in the `docker` group, which bootstrap does not do because that group is root-equivalent.
 
+### Rerunning, checking and updates
+
+Rerun `sudo bin/lcm host apply` from a reviewed build for upgrades and repairs; it changes only what differs from the configuration and the embedded files.
+
+- Each step prints one line per result: `unchanged`, `would change: <what>` (`--check`), `changed: <what>`, or `needs manual action: <what>` for a difference it does not fix itself. Exit status: 0 converged; 3 with `--check` while changes or manual actions are pending; 1 on an error or a remaining manual action; 2 for usage errors. `--check` changes nothing; it stages the binary in a temporary directory to validate it.
+- Drift it fixes: changed, missing or replaced root files (a file owned by someone else is replaced, never taken over), their modes, directory owners and modes, toolchain copies that differ from their source, a missing checkout, token file or `tailscale serve` handler, a disabled, stopped or not reloaded unit.
+- What it keeps: an existing `lcm.env` (reported when it differs from the embedded one), the installed `/usr/local/bin/lcm` (self-deploy keeps it current), and components switched off in `host.json`, which are reported as `installed but disabled` and never removed.
+- Root runs only reviewed builds: `host init` and `host apply` refuse to run as root from the self-deployed binary (`/usr/local/bin/lcm`, its `.prev`/`.failed` copies or anything under `/var/lib/lcm`), because whoever can push to `main` controls it.
+- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security-host`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine helper is compared with the running executable.
+- Helper updates: LCM never changes root files itself. When a self-deployed commit changes a host file, `lcm host status` shows `outdated`; review the change, then run `make build && sudo bin/lcm host apply` in the updated reviewed checkout. An installed security host helper is the exception: it needs its [reviewed upgrade](#security-console-host-controls).
+
 ### Self-deploy
 
 The `lcm` service builds and installs LCM like any other service; the auto-deploy policy runs it for every new commit on `main` whose `ci.yml` run passed:
@@ -51,7 +94,7 @@ The `lcm` service builds and installs LCM like any other service; the auto-deplo
 4. The verification restarts `lcm.service` and waits up to 60 s for `/api/v1/health` to report the new version. If it does not, it restores `lcm.prev` (keeping the rejected binary as `lcm.failed`), restarts again, logs at error priority and leaves the transient unit failed.
 5. The policy's `wait.until` was suspended across the restart and resumes in the new process. The service's `version` check passes only when the running server reports the version of the binary built in the checkout, so after a verification rollback the service stays unhealthy, the wait times out after 3 minutes and `lifecycle.rollback` rebuilds and reinstalls the previous successful commit.
 
-**Trust boundary.** Code on `main` that passes CI is built and run by LCM as `lcm`, the same model as the other auto-deployed projects on this host, and installed as the root-owned `/usr/local/bin/lcm`. Anyone who can push to `main`, or write the `lcm` service Resource document, therefore controls the `lcm` account and the content of that binary: never run it as root (bootstrap and self-install run it only as `lcm` or `nobody`). The sudoers rule accepts one fixed argv; rules for other units are separate, reviewed changes.
+**Trust boundary.** Code on `main` that passes CI is built and run by LCM as `lcm`, the same model as the other auto-deployed projects on this host, and installed as the root-owned `/usr/local/bin/lcm`. Anyone who can push to `main`, or write the `lcm` service Resource document, therefore controls the `lcm` account and the content of that binary: never run it as root (self-install runs it only as `lcm`, and `lcm host` refuses to run as root from it). The sudoers rule accepts one fixed argv; rules for other units are separate, reviewed changes.
 
 **Inspect and recover.**
 
@@ -80,14 +123,16 @@ systemctl list-units --failed 'lcm-self-update-*'      # rejected updates; clear
 
 ### Local Machine power helper
 
-Registering a [Machine](machines.md) enables observation without granting power permission. `LCM_MACHINE_POWER` / `--machine-power` defaults false. Neither the standard install nor registration establishes helper readiness. Wrapper/sudoers delivery and its deployment checks are separate from the controller implementation; source examples are not evidence that anything is installed or validated on the host.
+Registering a [Machine](machines.md) enables observation without granting power permission. `LCM_MACHINE_POWER` / `--machine-power` defaults false. Neither the standard install (`components.machinePower` defaults false) nor registration establishes helper readiness, and installed files are not evidence that the host was validated.
 
 Use the [helper source contract](../internal/machine/power/README.md#deployment-contract-for-parent-integration) as the authority for fixed paths, file ownership/modes, protocol, ledger initialization and OS checks. The deployment must provide:
 
-- A root-owned, version-pinned helper binary and a root-owned wrapper at `/usr/local/libexec/lcm-machine-power`. Use [`deploy/machine-power`](../deploy/machine-power) with the pinned binary `/usr/local/libexec/lcm-machine-helper`. The wrapper accepts no arguments, clears the environment and invokes only that binary's `machine-helper` command; the helper bounds stdin/processing to 30 seconds and the client invocation to 35 seconds. Ancestors must be trusted; never use the service-account-writable self-deploy executable as the privileged helper.
-- A reviewed [`deploy/machine-power-sudoers`](../deploy/machine-power-sudoers) rule limited to the exact no-argument wrapper: `lcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm-machine-power ""`. The final empty argument string is required. Do not grant arbitrary `lcm`, shell or `systemctl` execution. Validate the rule with `visudo` before activation.
+- A root-owned, version-pinned helper binary and a root-owned wrapper at `/usr/local/libexec/lcm-machine-power`. With `components.machinePower: true`, `lcm host apply` installs [`deploy/machine-power`](../deploy/machine-power) there and the pinned binary `/usr/local/libexec/lcm-machine-helper`, a copy of the reviewed executable that runs `apply`; it replaces the pin when that executable differs, which requires renewed validation. The wrapper accepts no arguments, clears the environment and invokes only that binary's `machine-helper` command; the helper bounds stdin/processing to 30 seconds and the client invocation to 35 seconds. Ancestors must be trusted; never use the service-account-writable self-deploy executable as the privileged helper.
+- A reviewed [`deploy/machine-power-sudoers`](../deploy/machine-power-sudoers) rule limited to the exact no-argument wrapper: `lcm ALL=(root) NOPASSWD: /usr/local/libexec/lcm-machine-power ""`. The final empty argument string is required. Do not grant arbitrary `lcm`, shell or `systemctl` execution. `lcm host apply` installs it as `/etc/sudoers.d/lcm-machine-power` after the wrapper and the pin, validated with `visudo` (staged, then the whole configuration; it is removed again when that fails).
 - Root-only `/etc/lcm/machine-power.json`, with its `controllerID` equal to the registered Machine's immutable ID, not its name. Pin the locally validated systemd major. Keep `recoveryReady` false until startup recovery has been validated to restore unresolved operations and maintenance gates before every write path and automation. Changing registration or helper version requires renewed validation; copying an enabled example is not a readiness check.
 - The independent root-owned `/var/lib/lcm-machine-power` receipt ledger and lock, durably provisioned as specified in the contract. Retain them across reboot, controller backup/restore and binary rollback. Never delete/reset the ledger, reuse operation IDs or replace a live lock. Missing or stale restored receipts require control disabled and external reconciliation.
+
+Provision the last two by hand, once: `lcm host apply` reports them as not provisioned but never creates them, because a ledger initialized again after a loss would hide receipts.
 
 The ledger permanently retains IDs, refuses new receipts at 10,000 entries and fails closed if a write exceeds 16 MiB. It has no automatic pruning; arrange a reviewed capacity/migration procedure before those limits. Disabling new power submissions must still permit receipt queries for recovery; `recoveryReady=false` blocks control while preserving queries against valid existing configuration/storage. Controller queries also remain available with `LCM_MACHINE_POWER=false`.
 
@@ -257,7 +302,13 @@ displayed version and a reason. A notification test uses the configured relay ro
 wait for its firing and recovery revisions on the same message before accepting it.
 
 Install the restricted security helper only through a reviewed release; follow its
-[deployment and recovery contract](../deploy/security-host/README.md). Verify actual
+[deployment and recovery contract](../deploy/security-host/README.md). With
+`components.securityHost` set to `{"machineId": "<immutable Machine ID>"}`, `lcm host apply`
+runs the embedded `install.py` with `python3 -I` from a root-only temporary directory,
+with that Machine ID and the SHA-256 of the embedded `helper.py`. `install.py` refuses an
+existing installation, so `apply` reports an installed helper that differs, a policy for
+another Machine or an incomplete installation as `needs manual action` and changes nothing;
+upgrade it as the contract describes. Verify actual
 LCM-context `GET /api/v1/security/host` availability after installation, rather than
 relying on a root-only status probe. Preserve existing timer jitter, required audit
 coverage, Nginx dry-run and locally reviewed AIDE baseline. The web baseline action
