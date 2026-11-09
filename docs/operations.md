@@ -77,6 +77,8 @@ Later admin password changes: `sudo -u lcm /usr/local/bin/lcm admin set-password
 
 Rerun `sudo bin/lcm host apply` from a reviewed build for upgrades and repairs; it changes only what differs from the configuration and the embedded files.
 
+A build with another storage schema is installed by [`lcm host upgrade`](#lcm-host-upgrade) instead, which backs up, checks the migration and rolls back on failure.
+
 - Each step prints one line per result: `unchanged`, `would change: <what>` (`--check`), `changed: <what>`, or `needs manual action: <what>` for a difference it does not fix itself. Exit status: 0 converged; 3 with `--check` while changes or manual actions are pending; 1 on an error or a remaining manual action; 2 for usage errors. `--check` changes nothing; it stages the binary in a temporary directory to validate it.
 - Drift it fixes: changed, missing or replaced root files (a file owned by someone else is replaced, never taken over), their modes, directory owners and modes, toolchain copies that differ from their source, a missing checkout, token file or `tailscale serve` handler, a disabled, stopped or not reloaded unit.
 - Older builds: when the installed `/usr/local/bin/lcm` reports a later commit time (`lcm version`) than the build running `apply`, `apply` and `--check` print a warning first and mark each file they would replace; they do not stop.
@@ -92,7 +94,7 @@ The `lcm` service builds and installs LCM like any other service; the auto-deplo
 
 1. `trigger.git` sees the commit; `ci.status` waits for CI (unauthenticated GitHub API, 60 requests per hour per IP).
 2. `lifecycle.deploy` points `origin` of `work/lcm` at the service's `source.url`, fetches and detaches the checkout at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`.
-3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation; use the [manual upgrade procedure](#upgrade). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared write gate blocks this self-deploy path during machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
+3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation; run [`lcm host upgrade`](#lcm-host-upgrade) (or the [manual procedure](#manual-procedure)). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared write gate blocks this self-deploy path during machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
 4. The verification restarts `lcm.service` and waits up to 60 s for `/api/v1/health` to report the new version. If it does not, it restores `lcm.prev` (keeping the rejected binary as `lcm.failed`), restarts again, logs at error priority and leaves the transient unit failed.
 5. The policy's `wait.until` was suspended across the restart and resumes in the new process. The service's `version` check passes only when the running server reports the version of the binary built in the checkout, so after a verification rollback the service stays unhealthy, the wait times out after 3 minutes and `lifecycle.rollback` rebuilds and reinstalls the previous successful commit.
 
@@ -186,9 +188,34 @@ Back up `secrets/` separately and store it more carefully than the database. Pre
 
 ## Upgrade
 
-Compare the installed and candidate `lcm storage-schema` outputs before choosing an upgrade path. The command reports the binary's schema contract without starting a controller. Automatic [self-install](#self-deploy) accepts only equal schemas; a differing schema, unavailable command or unknown older binary requires a manual maintenance window. Startup migrations are forward-only, so binary-only rollback after a migration is unsafe.
+Compare the installed and candidate `lcm storage-schema` outputs before choosing an upgrade path. The command reports the binary's schema contract without starting a controller. Automatic [self-install](#self-deploy) accepts only equal schemas and, for a differing schema, fails with the command to run (`make build && sudo bin/lcm host upgrade`). Startup migrations are forward-only, so binary-only rollback after a migration is unsafe.
 
-For a schema-changing or unknown-version upgrade:
+### `lcm host upgrade`
+
+```sh
+make build && sudo bin/lcm host upgrade --check   # preflight and plan, changes nothing
+sudo bin/lcm host upgrade
+```
+
+Run it as root from a build of a reviewed checkout, like `host apply` (the self-deployed binary is refused). Pause `lcm-auto-deploy` first if a commit could arrive meanwhile, and review unresolved Machine operations and maintenance gates beforehand: the command does not read them. It prints one line per step in the `host apply` format.
+
+1. **Preflight**, no changes: root; valid `host.json`; the installed binary's `version` and `storage-schema` (run as `lcm`, strict parsing) against this build's (run as `nobody` from the staged copy of the running executable, the file `host apply` installs); the database is at the installed schema (read by this build as `lcm`, read-only); no `lcm.env` setting of `LCM_AUTOMATION`; no self-install still being verified (10 minutes); `/var/backups/lcm` root-owned; free space for the backup set (twice the database with its WAL, plus the binary) and for a restore next to the database. It refuses a lower schema (forward-only migrations) and a build whose commit is older than the installed binary's unless `--allow-older`, printing both versions. Equal schemas exit 0 without changes: self-deploy or `host apply --replace-binary` installs those.
+2. Stop `lcm.service` and wait until it is inactive (60 s).
+3. Back up to `/var/backups/lcm/upgrade-<UTC stamp>/` (root, 0700): `database/lcm.db` with any `-wal`/`-shm` (a plain copy of the stopped database; this build has no online backup path), `bin/lcm` (the old binary; `lcm.prev` stays self-install's), `etc-lcm/` (all of `/etc/lcm`) and `secrets/` (`LCM_SECRETS_DIR` from `lcm.env`, default `<data dir>/secrets`). `manifest.json` records both versions and schemas, the SHA-256 and size of every file, and the original source, owner and mode of the files a rollback restores. Copies are checked against what was read. `etc-lcm/` and `secrets/` keep modes but not owners (a manual restore sets them: `lcm` owns secrets); entries of other owners than root and `lcm` are refused.
+4. Install the staged build as `/usr/local/bin/lcm` (atomic replace) and verify it.
+5. Start with automation off and wait up to 120 s for `/api/v1/health` to report the new version. A runtime drop-in `/run/systemd/system/lcm.service.d/zz-lcm-upgrade.conf` sets [`LCM_AUTOMATION=off`](../README.md#configuration) for this start only (so interrupted runs, policy triggers, config sync and self-deploy stay idle while the migration is checked), and the command checks that systemd loaded it before starting. Then the database must report the new storage schema.
+6. Remove the drop-in, restart normally (automation on) and wait for health again.
+7. Keep the newest three `upgrade-*` sets (and always the one just written); other entries of the directory are never touched.
+
+**Failure.** Any error after the stop, including `Ctrl-C` or a termination signal, rolls back: before step 4 only the stop happened and LCM starts again; after it, LCM is stopped (and must be confirmed stopped), the backup files are verified against the manifest, the database files are replaced (stale `-wal` and `-shm` removed first) and the old binary is put back, and only then the old binary starts and must report its own version healthy. The old binary never runs on a migrated database. The set is kept and its path printed. If the rollback itself fails (unverifiable backup, stop not confirmed, old version not healthy) the message says `ROLLBACK FAILED` and the host is left as it is, for the manual steps below. After step 6 the new controller has run with automation on, so a rollback then also discards what it did since; external effects of resumed runs are not undone. A rollback never touches the root helper ledger ([backup](#backup)).
+
+Exit status: 0 done or nothing to upgrade; 1 error, including a completed or failed rollback; 2 usage; 3 with `--check` when an upgrade would run. A killed command (power loss, `SIGKILL`) can leave LCM stopped or the drop-in in `/run`: restore from the set by the manual steps (a reboot removes the drop-in, and the next run removes it).
+
+The upgrade installs only the binary. When the build also changes embedded host files (for example the `self-install` script), `lcm host status` shows `core` as `outdated` until `sudo bin/lcm host apply` installs them.
+
+### Manual procedure
+
+Use it when `lcm host upgrade` cannot run (no `host.json`, an unusual layout, a failed rollback). For a schema-changing or unknown-version upgrade:
 
 1. Prepare an independent recovery path and disable old/new automation, including self-deploy, deployed policy triggers and config sync. Review and preserve unresolved Machine operations/gates; an old binary may not recognize them. Do not rely solely on a new-version gate to constrain an older controller.
 2. Stop LCM and take a consistent pre-migration database backup using the [WAL-aware procedure](#backup), paired with the exact old binary, configuration and secrets. Preserve independent root helper receipts in place; do not restore an earlier ledger as part of this backup set.

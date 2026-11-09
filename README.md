@@ -41,9 +41,10 @@ The console (Traditional Chinese, light and dark themes) shows an overview (what
 | `lcm token create --name <name> [--scope admin\|ingest]` | Create an API token and print it once; the default scope is `admin` |
 | `lcm token list` / `lcm token revoke <id>` | List or revoke API tokens |
 | `lcm version` | Print version information |
-| `lcm storage-schema` | Report the binary's supported storage schema without starting a controller; used for upgrade compatibility checks |
+| `lcm storage-schema [--data-dir dir]` | Report the binary's supported storage schema without starting a controller; with `--data-dir`, the schema the database in that directory has reached (read-only). Used for upgrade compatibility checks |
 | `lcm host init --operator <user> [flags]` | As root: write the [host configuration](docs/operations.md#host-configuration) `/etc/lcm/host.json`; never replaces an existing file |
 | `lcm host apply [--check] [--config path] [--replace-binary]` | As root, from a reviewed build: install LCM's host components or converge them with the files embedded in this binary; `--check` changes nothing and exits 3 while changes are pending ([install](docs/operations.md#install)) |
+| `lcm host upgrade [--check] [--config path] [--allow-older]` | As root, from a reviewed build: upgrade across a storage schema change with a backup set, a migration check with automation off and automatic rollback; `--check` changes nothing and exits 3 when an upgrade would run ([upgrade](docs/operations.md#upgrade)) |
 | `lcm host status` | Compare installed host files with this build, as any user |
 | `lcm convert -f <file\|dir> [-f ...]` | Print `lcm/v1` documents converted to `lcm/v2`, offline; [rules](docs/policies.md#policy-as-code) |
 | `lcm apply -f <file\|dir> [-f ...] [--dry-run] [--force]` | Apply Resource, Policy and Module documents; prints a result and a diff per document |

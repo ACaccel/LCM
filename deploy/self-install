@@ -114,7 +114,7 @@ install_binary() {
 	new=$(version_of "$bin.new") || { rm -f -- "$bin.new"; die 1 "$src fails 'lcm version'"; }
 	if [ -f "$bin" ] && ! same_schema "$bin" "$bin.new"; then
 		rm -f -- "$bin.new"
-		die 1 "storage schema unknown or changed; use a maintenance upgrade with a consistent DB backup and matching rollback"
+		die 1 "storage schema unknown or changed; self-install cannot migrate it. As the operator, from a reviewed checkout: make build && sudo bin/lcm host upgrade"
 	fi
 	if [ -f "$bin" ]; then
 		cp -p -- "$bin" "$bin.prev.tmp"

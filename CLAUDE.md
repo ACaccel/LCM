@@ -31,7 +31,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 
 | Path | Contents |
 |---|---|
-| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper`, root `host init`/`host apply` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
+| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper`, root `host init`/`host apply`/`host upgrade` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
 | `internal/app/` | Composition root: builds every component in dependency order, registers resource types, adapters (lock -> catalog, execx -> monitor), the `resource` expression variable, monitor sync, retention jobs, `Run`/`Close` |
 | `internal/config/` | Env and flag configuration, validation, slog setup |
 | `internal/store/` | SQLite handles (writer + reader pool), migrator (including the Go part of the v2 resource migration, `migrate_resources.go`), `storetest.Open(t)` test helper |
