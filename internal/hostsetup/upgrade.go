@@ -42,6 +42,7 @@ const (
 	UpgradeDropIn    = UpgradeDropInDir + "/zz-lcm-upgrade.conf"
 
 	selfInstallPending = "/run/lcm-self-install.pending"
+	selfInstallLock    = "/run/lcm-self-install.lock"
 	// selfInstallVerify is how long self-install treats an update as still
 	// being verified.
 	selfInstallVerify = 10 * time.Minute
@@ -49,8 +50,10 @@ const (
 	upgradeHealthWait = 120 * time.Second
 	upgradeStopWait   = 60 * time.Second
 	keepUpgradeSets   = 3
-	// backupSlack is free space kept beyond the copies themselves.
-	backupSlack = 16 << 20
+	// backupSlack is free space the preflight wants beyond the copies
+	// themselves; backupMargin is what must stay free while copying.
+	backupSlack  = 16 << 20
+	backupMargin = 8 << 20
 )
 
 const dropInContent = "# Written by lcm host upgrade for the validation start; removed when it ends.\n[Service]\nEnvironment=LCM_AUTOMATION=off\n"
@@ -74,6 +77,10 @@ type UpgradeOptions struct {
 	// FreeBytes returns the free space of the filesystem holding path; nil
 	// selects statfs.
 	FreeBytes func(path string) (uint64, error)
+	// LockSelfInstall takes the lock that self-install holds while it
+	// installs and verifies an update, and returns what releases it; nil
+	// selects the real lock file. It fails when self-install holds it.
+	LockSelfInstall func() (release func(), err error)
 }
 
 // manifestFile is one file (or link) of a backup set.
@@ -118,7 +125,8 @@ type upgrader struct {
 	oldSchema, candSchema int
 	secretsDir            string
 	staleDropIn           bool
-	dbBytes               int64
+	// Sizes of what the backup set copies, for the space checks.
+	dbBytes, etcBytes, secretBytes int64
 
 	set      string
 	manifest upgradeManifest
@@ -127,6 +135,8 @@ type upgrader struct {
 	stopRequested bool
 	installed     bool
 	dropIn        bool
+	// unlock releases the self-install lock.
+	unlock func()
 }
 
 // errNothingToUpgrade ends Upgrade without error when both builds use the
@@ -151,9 +161,17 @@ func Upgrade(ctx context.Context, h Host, o UpgradeOptions) (Result, error) {
 	if o.FreeBytes == nil {
 		o.FreeBytes = freeBytes
 	}
+	if o.LockSelfInstall == nil {
+		o.LockSelfInstall = lockSelfInstall
+	}
 	a := &applier{h: h, o: Options{ConfigPath: o.ConfigPath, Check: o.Check, Out: o.Out}, planned: map[string]bool{}}
 	defer a.cleanup()
 	u := &upgrader{a: a, h: h, o: o}
+	defer func() {
+		if u.unlock != nil {
+			u.unlock()
+		}
+	}()
 	err := u.run(ctx)
 	if errors.Is(err, errNothingToUpgrade) {
 		return a.res, nil
@@ -246,6 +264,9 @@ func (u *upgrader) preflight(ctx context.Context) error {
 		return err
 	}
 	if err := u.preflightEnvFile(); err != nil {
+		return err
+	}
+	if err := u.takeSelfInstallLock(); err != nil {
 		return err
 	}
 	if err := u.preflightSelfInstall(); err != nil {
@@ -341,6 +362,48 @@ func parseEnvFile(data []byte) map[string]string {
 		env[strings.TrimSpace(k)] = v
 	}
 	return env
+}
+
+// takeSelfInstallLock holds self-install's lock until the command ends, so
+// that no update is installed or verified (its verification restarts the
+// unit) while the upgrade runs. Check mode changes nothing and does not lock.
+func (u *upgrader) takeSelfInstallLock() error {
+	if u.a.o.Check {
+		return nil
+	}
+	release, err := u.o.LockSelfInstall()
+	if err != nil {
+		return fmt.Errorf("%w; wait for it to finish (a few minutes) and run the command again", err)
+	}
+	u.unlock = release
+	return nil
+}
+
+// lockSelfInstall takes an exclusive flock on the file that self-install
+// locks with flock(1), without waiting.
+func lockSelfInstall() (func(), error) {
+	fd, err := syscall.Open(selfInstallLock, syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o644)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: selfInstallLock, Err: err}
+	}
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil {
+		_ = syscall.Close(fd)
+		return nil, &fs.PathError{Op: "fstat", Path: selfInstallLock, Err: err}
+	}
+	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Uid != 0 {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("%s is not a regular file owned by root", selfInstallLock)
+	}
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = syscall.Close(fd)
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("a self-install holds %s: an update is being installed or verified", selfInstallLock)
+		}
+		return nil, &fs.PathError{Op: "flock", Path: selfInstallLock, Err: err}
+	}
+	// Closing the descriptor releases the lock.
+	return func() { _ = syscall.Close(fd) }, nil
 }
 
 // preflightSelfInstall refuses while a self-install is being verified: its
@@ -478,13 +541,22 @@ func (u *upgrader) preflightSpace() error {
 	if err != nil {
 		return err
 	}
-	// The backup holds the database once, and a rollback needs room for a
-	// second copy next to the migrated one while it is replaced.
+	if u.etcBytes, err = treeBytes(fsys, EtcDir, &budget{}); err != nil {
+		return fmt.Errorf("size of %s: %w", EtcDir, err)
+	}
+	if _, err := fsys.Lstat(u.secretsDir); err == nil {
+		if u.secretBytes, err = treeBytes(fsys, u.secretsDir, &budget{}); err != nil {
+			return fmt.Errorf("size of %s: %w", u.secretsDir, err)
+		}
+	}
+	// The backup holds the database once more (twice, with the room that a
+	// restore beside the migrated database needs), the binary and the two
+	// trees.
 	for _, need := range []struct {
 		dir   string
 		bytes int64
 	}{
-		{nearestDir(fsys, BackupRoot), 2*u.dbBytes + binInfo.Size + backupSlack},
+		{nearestDir(fsys, BackupRoot), 2*u.dbBytes + binInfo.Size + u.etcBytes + u.secretBytes + backupSlack},
 		{DataDir, u.dbBytes + backupSlack},
 	} {
 		free, err := u.o.FreeBytes(need.dir)
@@ -496,6 +568,35 @@ func (u *upgrader) preflightSpace() error {
 		}
 	}
 	return nil
+}
+
+// treeBytes adds up the sizes of the regular files below dir.
+func treeBytes(fsys FS, dir string, b *budget) (int64, error) {
+	names, err := fsys.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, n := range names {
+		if err := b.entry(); err != nil {
+			return 0, err
+		}
+		info, err := fsys.Lstat(dir + "/" + n)
+		if err != nil {
+			return 0, err
+		}
+		switch {
+		case info.IsDir():
+			sub, err := treeBytes(fsys, dir+"/"+n, b)
+			if err != nil {
+				return 0, err
+			}
+			total += sub
+		case info.IsRegular():
+			total += info.Size
+		}
+	}
+	return total, nil
 }
 
 // nearestDir returns p or its closest existing ancestor.
@@ -574,6 +675,11 @@ func (u *upgrader) backup(ctx context.Context, s *step) error {
 	stamp := u.h.Clock.Now().UTC().Format("20060102T150405Z")
 	u.set = BackupRoot + "/upgrade-" + stamp
 	return s.change("back up the database, the binary, "+EtcDir+" and the secrets to "+u.set, func() error {
+		// Only a set this run created is ever removed: a set of the same name
+		// that already exists is somebody's backup.
+		if err := u.createSet(); err != nil {
+			return err
+		}
 		if err := u.writeBackup(ctx); err != nil {
 			// A partial set must not look like a usable one.
 			if rerr := u.h.FS.RemoveAll(u.set); rerr != nil {
@@ -585,7 +691,9 @@ func (u *upgrader) backup(ctx context.Context, s *step) error {
 	})
 }
 
-func (u *upgrader) writeBackup(_ context.Context) error {
+// createSet makes the new, empty backup set. It refuses a name that exists
+// and does not touch it.
+func (u *upgrader) createSet() error {
 	fsys := u.h.FS
 	if _, err := fsys.Lstat(BackupRoot); errors.Is(err, fs.ErrNotExist) {
 		if err := fsys.Mkdir(BackupRoot, 0o700, 0, 0); err != nil {
@@ -594,9 +702,35 @@ func (u *upgrader) writeBackup(_ context.Context) error {
 	} else if err != nil {
 		return err
 	}
-	if err := fsys.Mkdir(u.set, 0o700, 0, 0); err != nil {
+	if _, err := fsys.Lstat(u.set); err == nil {
+		return fmt.Errorf("the backup set %s already exists; it was left alone, run the command again in a second", u.set)
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	if err := fsys.Mkdir(u.set, 0o700, 0, 0); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("the backup set %s already exists; it was left alone, run the command again in a second", u.set)
+		}
+		return err
+	}
+	return nil
+}
+
+// ensureRoom fails when the backup filesystem could not take need more bytes
+// and still keep backupMargin free.
+func (u *upgrader) ensureRoom(need int64) error {
+	free, err := u.o.FreeBytes(u.set)
+	if err != nil {
+		return fmt.Errorf("free space of %s: %w", u.set, err)
+	}
+	if free < uint64(need)+backupMargin { //nolint:gosec // sizes are non-negative
+		return fmt.Errorf("the backup stopped: %d MiB free on %s, but the next copy needs %d MiB and %d MiB must stay free", free>>20, u.set, need>>20, backupMargin>>20)
+	}
+	return nil
+}
+
+func (u *upgrader) writeBackup(_ context.Context) error {
+	fsys := u.h.FS
 	u.manifest = upgradeManifest{
 		Format: 1, CreatedAt: u.h.Clock.Now().UTC().Format(time.RFC3339),
 		From: versionLabel(u.old, u.oldSchema), To: versionLabel(u.cand, u.candSchema),
@@ -607,22 +741,21 @@ func (u *upgrader) writeBackup(_ context.Context) error {
 	// LCM is stopped and has checkpointed its WAL, so the files are
 	// consistent; any -wal and -shm left behind are copied with them.
 	for _, name := range []string{"lcm.db", "lcm.db-wal", "lcm.db-shm"} {
-		src := DataDir + "/" + name
-		if _, err := fsys.Lstat(src); errors.Is(err, fs.ErrNotExist) && name != "lcm.db" {
+		if _, err := fsys.Lstat(DataDir + "/" + name); errors.Is(err, fs.ErrNotExist) && name != "lcm.db" {
 			continue
 		}
-		if err := u.backupFile(src, "database/"+name); err != nil {
+		if err := u.backupFile(DataDir, name, "database/"+name); err != nil {
 			return err
 		}
 	}
 	if err := fsys.Mkdir(u.set+"/bin", 0o700, 0, 0); err != nil {
 		return err
 	}
-	if err := u.backupFile(Binary, "bin/lcm"); err != nil {
+	if err := u.backupFile(path.Dir(Binary), path.Base(Binary), "bin/lcm"); err != nil {
 		return err
 	}
 	owners := map[int]bool{0: true, u.a.lcm.UID: true}
-	if err := u.backupTree(EtcDir, "etc-lcm", owners); err != nil {
+	if err := u.backupTree(EtcDir, "etc-lcm", owners, u.etcBytes); err != nil {
 		return err
 	}
 	switch _, err := fsys.Lstat(u.secretsDir); {
@@ -631,7 +764,7 @@ func (u *upgrader) writeBackup(_ context.Context) error {
 	case err != nil:
 		return err
 	default:
-		if err := u.backupTree(u.secretsDir, "secrets", owners); err != nil {
+		if err := u.backupTree(u.secretsDir, "secrets", owners, u.secretBytes); err != nil {
 			return err
 		}
 	}
@@ -645,22 +778,38 @@ func (u *upgrader) writeBackup(_ context.Context) error {
 	return fsys.WriteFile(u.set+"/manifest.json", bytes.NewReader(append(data, '\n')), 0o600, 0, 0)
 }
 
-// backupFile copies the regular file src to rel in the set and records the
-// digest of what was read, which the copy must match.
-func (u *upgrader) backupFile(src, rel string) error {
+// backupFile copies the regular file name of dir to rel in the set and
+// records the digest of what was read, which the copy must match. The file
+// is opened below a confined directory, and its size, mode and owner come
+// from the opened descriptor, which must be the file that was looked at
+// first: a file swapped in meanwhile is refused, not copied with the
+// metadata of another.
+func (u *upgrader) backupFile(dir, name, rel string) error {
 	fsys := u.h.FS
-	info, err := fsys.Lstat(src)
+	src := dir + "/" + name
+	t, err := openSource(fsys, dir)
 	if err != nil {
 		return err
 	}
-	if !info.IsRegular() {
+	defer func() { _ = t.Close() }()
+	before, err := t.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if !before.IsRegular() {
 		return fmt.Errorf("%s is not a regular file", src)
 	}
-	r, err := fsys.Open(src)
+	r, info, err := t.Open(name)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = r.Close() }()
+	if !info.IsRegular() || !sameFile(before, info) {
+		return fmt.Errorf("%s changed while it was opened; nothing was copied", src)
+	}
+	if err := u.ensureRoom(info.Size); err != nil {
+		return err
+	}
 	h := sha256.New()
 	dst := u.set + "/" + rel
 	if err := fsys.WriteFile(dst, io.TeeReader(r, h), 0o600, 0, 0); err != nil {
@@ -688,8 +837,11 @@ func (u *upgrader) backupFile(src, rel string) error {
 // backupTree copies a directory tree into the set as a confined, checked
 // copy; ownership is not kept (the set is root's), so a manual restore sets
 // it again.
-func (u *upgrader) backupTree(src, rel string, owners map[int]bool) error {
+func (u *upgrader) backupTree(src, rel string, owners map[int]bool, size int64) error {
 	fsys := u.h.FS
+	if err := u.ensureRoom(size); err != nil {
+		return err
+	}
 	t, err := openSource(fsys, src)
 	if err != nil {
 		return err
@@ -778,16 +930,116 @@ func (u *upgrader) installBinary(_ context.Context, s *step) error {
 	return nil
 }
 
-// waitVersion polls until LCM reports the wanted version or the wait
-// ends.
-func (u *upgrader) waitVersion(ctx context.Context, want string) error {
+// unitState is what systemd reports about lcm.service.
+type unitState struct {
+	active   string
+	mainPID  int
+	restarts int
+	cgroup   string
+}
+
+func (u *upgrader) unitState(ctx context.Context) (unitState, error) {
+	out, err := u.systemctl(ctx, "show", "--property=ActiveState,MainPID,NRestarts,ControlGroup", UnitName)
+	if err != nil {
+		return unitState{}, err
+	}
+	var st unitState
+	for _, line := range strings.Split(string(out), "\n") {
+		k, v, _ := strings.Cut(strings.TrimSpace(line), "=")
+		switch k {
+		case "ActiveState":
+			st.active = v
+		case "MainPID":
+			st.mainPID, _ = strconv.Atoi(v)
+		case "NRestarts":
+			st.restarts, _ = strconv.Atoi(v)
+		case "ControlGroup":
+			st.cgroup = v
+		}
+	}
+	return st, nil
+}
+
+// inCgroup reports whether process pid belongs to the control group cg.
+func (u *upgrader) inCgroup(pid int, cg string) bool {
+	if cg == "" || cg == "/" {
+		return false
+	}
+	data, err := readAll(u.h.FS, "/proc/"+strconv.Itoa(pid)+"/cgroup")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) == 3 && (parts[2] == cg || strings.HasPrefix(parts[2], cg+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// confirmUnit checks that the health answer comes from the unit's own
+// process: the unit is active, its main process belongs to its control
+// group, and neither the process nor the restart count change while the
+// version is read twice. Any other process that listens on the health port
+// therefore cannot stand in for it.
+func (u *upgrader) confirmUnit(ctx context.Context, want string, baseRestarts int) error {
+	first, err := u.unitState(ctx)
+	if err != nil {
+		return err
+	}
+	switch {
+	case first.active != "active":
+		return fmt.Errorf("%s is %q, not active", UnitName, printable(first.active, 32))
+	case first.mainPID <= 0:
+		return fmt.Errorf("%s has no main process", UnitName)
+	case first.restarts != baseRestarts:
+		return fmt.Errorf("%s was restarted by systemd %d time(s) since the start", UnitName, first.restarts-baseRestarts)
+	case !u.inCgroup(first.mainPID, first.cgroup):
+		return fmt.Errorf("process %d is not in the control group of %s", first.mainPID, UnitName)
+	}
+	v, err := u.o.HealthVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if v != want {
+		return fmt.Errorf("health reports version %q, not %q", printable(v, 64), want)
+	}
+	second, err := u.unitState(ctx)
+	if err != nil {
+		return err
+	}
+	if second.active != "active" || second.mainPID != first.mainPID || second.restarts != first.restarts {
+		return fmt.Errorf("%s changed its main process while it was checked", UnitName)
+	}
+	return nil
+}
+
+// startUnit runs systemctl start or restart and waits until the unit's own
+// process reports the wanted version.
+func (u *upgrader) startUnit(ctx context.Context, verb, want string) error {
+	base, err := u.unitState(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := u.systemctl(ctx, verb, UnitName); err != nil {
+		return err
+	}
+	return u.waitVersion(ctx, want, base.restarts)
+}
+
+// waitVersion polls until the unit reports the wanted version or the wait
+// ends. baseRestarts is the unit's restart count before the start.
+func (u *upgrader) waitVersion(ctx context.Context, want string, baseRestarts int) error {
 	deadline := u.h.Clock.Now().Add(upgradeHealthWait)
 	for {
 		v, err := u.o.HealthVersion(ctx)
 		if err == nil && v == want {
-			return nil
-		}
-		if err == nil {
+			err = u.confirmUnit(ctx, want, baseRestarts)
+			if err == nil {
+				return nil
+			}
+		} else if err == nil {
 			err = fmt.Errorf("health reports version %q, not %q", printable(v, 64), want)
 		}
 		if !u.h.Clock.Now().Before(deadline) {
@@ -809,10 +1061,7 @@ func (u *upgrader) validate(ctx context.Context, s *step) error {
 		if err := u.expectAutomation(ctx, true); err != nil {
 			return err
 		}
-		if _, err := u.systemctl(ctx, "start", UnitName); err != nil {
-			return err
-		}
-		if err := u.waitVersion(ctx, u.cand.version); err != nil {
+		if err := u.startUnit(ctx, "start", u.cand.version); err != nil {
 			return err
 		}
 		out, err := u.lcmCommand(ctx, Binary, "storage-schema", "--data-dir", DataDir)
@@ -887,10 +1136,12 @@ func (u *upgrader) expectAutomation(ctx context.Context, off bool) error {
 	if err != nil {
 		return err
 	}
+	// The last assignment is the effective one; systemd lists the
+	// environment in the order the files and drop-ins define it.
 	has := false
 	for _, f := range strings.Fields(string(out)) {
-		if f == "LCM_AUTOMATION=off" {
-			has = true
+		if v, ok := strings.CutPrefix(strings.TrimPrefix(f, `"`), "LCM_AUTOMATION="); ok {
+			has = strings.TrimSuffix(v, `"`) == "off"
 		}
 	}
 	switch {
@@ -911,10 +1162,7 @@ func (u *upgrader) restart(ctx context.Context, s *step) error {
 		if err := u.expectAutomation(ctx, false); err != nil {
 			return err
 		}
-		if _, err := u.systemctl(ctx, "restart", UnitName); err != nil {
-			return err
-		}
-		return u.waitVersion(ctx, u.cand.version)
+		return u.startUnit(ctx, "restart", u.cand.version)
 	})
 }
 
@@ -949,11 +1197,8 @@ func (u *upgrader) rollback(ctx context.Context, cause error) error {
 		}
 	}
 	_, _ = u.systemctl(ctx, "reset-failed", UnitName)
-	if _, err := u.systemctl(ctx, "start", UnitName); err != nil {
+	if err := u.startUnit(ctx, "start", u.old.version); err != nil {
 		return fail(fmt.Errorf("start %s: %w", UnitName, err))
-	}
-	if err := u.waitVersion(ctx, u.old.version); err != nil {
-		return fail(err)
 	}
 	if u.installed {
 		s.line(fmt.Sprintf("restored the database and %s from %s; %s is healthy again", Binary, u.set, u.old))

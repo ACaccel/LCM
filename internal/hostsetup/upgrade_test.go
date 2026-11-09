@@ -57,6 +57,13 @@ type upRunner struct {
 	// schemaAfterStart, when set, is what "storage-schema --data-dir" reports.
 	schemaAfterStart int
 	hook             func(line string) error
+
+	// What systemd reports about the unit.
+	pid, restarts int
+	badCgroup     bool
+	churnPID      bool
+	notActive     bool
+	envOverride   string
 }
 
 func (r *upRunner) LookPath(name string) (string, error) {
@@ -159,10 +166,24 @@ func (r *upRunner) systemctl(a []string) ([]byte, error) {
 	case "daemon-reload":
 		r.loadOff = !r.ignoreDropIn && r.fs.get(UpgradeDropIn) != nil
 	case "show":
-		if r.loadOff {
-			return []byte("LCM_AUTOMATION=off\n"), nil
+		if len(a) > 1 && a[1] == "--property=Environment" {
+			switch {
+			case r.envOverride != "":
+				return []byte(r.envOverride + "\n"), nil
+			case r.loadOff:
+				return []byte("LCM_AUTOMATION=off\n"), nil
+			}
+			return []byte("\n"), nil
 		}
-		return []byte("\n"), nil
+		if r.churnPID && r.active {
+			r.pid++
+			r.fs.file(fmt.Sprintf("/proc/%d/cgroup", r.pid), "0::/system.slice/lcm.service\n", 0o444, 0, 0)
+		}
+		state, pid := "inactive", 0
+		if r.active && !r.notActive {
+			state, pid = "active", r.pid
+		}
+		return fmt.Appendf(nil, "ActiveState=%s\nMainPID=%d\nNRestarts=%d\nControlGroup=/system.slice/lcm.service\n", state, pid, r.restarts), nil
 	case "reset-failed":
 	case "start", "restart":
 		r.startedOff = append(r.startedOff, r.loadOff)
@@ -174,9 +195,17 @@ func (r *upRunner) systemctl(a []string) ([]byte, error) {
 			r.fs.file(DatabaseFile+"-wal", "wal-17", 0o600, 990, 990)
 			r.fs.file(DatabaseFile+"-shm", "shm-17", 0o600, 990, 990)
 		}
+		var err error
 		if r.onStart != nil {
-			return nil, r.onStart(len(r.startedOff))
+			err = r.onStart(len(r.startedOff))
 		}
+		r.pid++
+		cg := "0::/system.slice/lcm.service\n"
+		if r.badCgroup {
+			cg = "0::/user.slice/impostor.service\n"
+		}
+		r.fs.file(fmt.Sprintf("/proc/%d/cgroup", r.pid), cg, 0o444, 0, 0)
+		return nil, err
 	default:
 		return nil, fmt.Errorf("fake systemctl: unexpected %v", a)
 	}
@@ -205,13 +234,16 @@ type upTest struct {
 	healthOverride func(running string) (string, error)
 	free           func(string) (uint64, error)
 	cancelClock    context.CancelFunc
+	// lock stands in for self-install's lock; locks counts the holders.
+	lock  func() (func(), error)
+	locks int
 }
 
 func newUpTest(t *testing.T) *upTest {
 	t.Helper()
 	th := newTestHost(t)
 	m := th.fs
-	r := &upRunner{fs: m, missing: map[string]bool{}, active: true, running: "v1", acc: map[string]Account{
+	r := &upRunner{fs: m, missing: map[string]bool{}, active: true, running: "v1", pid: 100, acc: map[string]Account{
 		"alice":  {Name: "alice", UID: aliceUID, GID: aliceUID, Home: "/home/alice"},
 		"nobody": {Name: "nobody", UID: 65534, GID: 65534, Home: "/nonexistent"},
 		"lcm":    {Name: "lcm", UID: 990, GID: 990, Home: DataDir},
@@ -227,7 +259,12 @@ func newUpTest(t *testing.T) *upTest {
 	m.file(EnvFile, "LCM_DATA_DIR=/var/lib/lcm\nLCM_LISTEN=127.0.0.1:7800\n", 0o640, 0, 990)
 	m.dir("/var/backups", 0o755, 0, 0)
 	m.dir("/run/systemd/system", 0o755, 0, 0)
+	m.file("/proc/100/cgroup", "0::/system.slice/lcm.service\n", 0o444, 0, 0)
 	u := &upTest{t: t, th: th, r: r, fs: m, free: func(string) (uint64, error) { return 1 << 40, nil }}
+	u.lock = func() (func(), error) {
+		u.locks++
+		return func() { u.locks-- }, nil
+	}
 	return u
 }
 
@@ -265,6 +302,7 @@ func (u *upTest) upgradeCtx(ctx context.Context, o UpgradeOptions) (Result, stri
 	o.Out = &out
 	o.HealthVersion = u.health
 	o.FreeBytes = u.free
+	o.LockSelfInstall = u.lock
 	res, err := Upgrade(ctx, u.th.host, o)
 	return res, out.String(), err
 }
