@@ -100,7 +100,7 @@ func validate(p Props) error {
 		return fmt.Errorf("stateKey: invalid key %q", p.StateKey)
 	case p.StateKey != "" && p.Target != TargetDiscord && p.Target != TargetKonata:
 		return fmt.Errorf("stateKey: editing is only supported for discord and konata; %s always sends a new message", p.Target)
-	case p.Target == TargetKonata && p.TokenSecret == "":
+	case p.Target == TargetKonata && p.TokenSecret == "" && (!p.Optional || p.URL != "" || p.URLSecret != ""):
 		return errors.New("tokenSecret: konata needs the relay's bearer key")
 	case p.Status != "" && !slices.Contains(statuses, p.Status):
 		return fmt.Errorf("status: must be one of %s", strings.Join(statuses, ", "))

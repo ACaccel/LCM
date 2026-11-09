@@ -329,6 +329,28 @@ func TestNotifyDryRunSendsNothing(t *testing.T) {
 	}
 }
 
+// A konata destination that a template leaves empty must skip like any other
+// target: the token is only required once there is a route to send to.
+func TestNotifyOptionalKonataSkipsWithoutRouteAndToken(t *testing.T) {
+	x := setup(t)
+	x.h.Deploy(x.e, `apiVersion: lcm/v2
+kind: Policy
+metadata: { name: k }
+spec:
+  params: { route: "", key: "" }
+  nodes:
+    - { id: start, type: trigger.manual, next: { out: [say] } }
+    - { id: say, type: notify, props: { target: konata, optional: true, url: "{{ params.route }}", tokenSecret: "{{ params.key }}", message: hello } }
+`)
+	v := x.h.Wait(x.e, x.h.Start(x.e, "k", nil))
+	if v.Status != engine.RunSucceeded || len(x.stub.requests()) != 0 {
+		t.Fatalf("status=%s requests=%d (%s)", v.Status, len(x.stub.requests()), v.Error)
+	}
+	if n, _ := v.Node("say"); n.Output.(map[string]any)["sent"] != false {
+		t.Fatalf("output = %v", n.Output)
+	}
+}
+
 func TestNotifyValidationAndSecrets(t *testing.T) {
 	x := setup(t)
 	bad := map[string]string{
