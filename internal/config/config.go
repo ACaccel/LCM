@@ -60,6 +60,7 @@ const (
 	EnvFailedLoginKeep           = "LCM_FAILED_LOGIN_RETENTION_KEEP"
 	EnvMemoryLimit               = "LCM_MEMORY_LIMIT"
 	EnvPprofListen               = "LCM_PPROF_LISTEN"
+	EnvAutomation                = "LCM_AUTOMATION"
 	EnvPruneInterval             = "LCM_PRUNE_INTERVAL"
 	EnvGitHubWebhookSecret       = "LCM_GITHUB_WEBHOOK_SECRET" //nolint:gosec // names an environment variable, not a credential
 	EnvConnectionsFile           = "LCM_CONNECTIONS_FILE"
@@ -195,6 +196,11 @@ type Config struct {
 	PprofListen string
 	// PruneInterval is how often the retention jobs run.
 	PruneInterval time.Duration
+	// AutomationOff starts the controller without resuming interrupted
+	// policy runs, policy triggers and config sync (so no self-deploy
+	// either); the API, observation and the retention jobs still run.
+	// "lcm host upgrade" validates a migration this way.
+	AutomationOff bool
 
 	// GitHubWebhookSecret is the name (not the value) of the secret that
 	// verifies GitHub push webhooks. Empty means pushes must authenticate
@@ -370,11 +376,29 @@ func (c *Config) componentsFromEnv(getenv func(string) string) error {
 	str(&c.GitHubWebhookSecret, EnvGitHubWebhookSecret)
 	str(&c.MemoryLimit, EnvMemoryLimit)
 	str(&c.PprofListen, EnvPprofListen)
+	if v := getenv(EnvAutomation); v != "" {
+		if err := c.setAutomation(v); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", EnvAutomation, err))
+		}
+	}
 	str(&c.ConnectionsFile, EnvConnectionsFile)
 	if v := getenv(EnvTrustedProxies); v != "" {
 		c.TrustedProxies = splitList(v)
 	}
 	return errors.Join(errs...)
+}
+
+// setAutomation parses the value of LCM_AUTOMATION and --automation.
+func (c *Config) setAutomation(v string) error {
+	switch v {
+	case "on":
+		c.AutomationOff = false
+	case "off":
+		c.AutomationOff = true
+	default:
+		return fmt.Errorf("invalid value %q: want on or off", v)
+	}
+	return nil
 }
 
 // splitList splits a comma-separated list, trimming blanks and dropping
@@ -440,6 +464,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.FailedLoginKeep, "failed-login-retention-keep", c.FailedLoginKeep, "failed-login audit entries kept ("+EnvFailedLoginKeep+")")
 	fs.DurationVar(&c.PruneInterval, "prune-interval", c.PruneInterval, "how often retention jobs run ("+EnvPruneInterval+")")
 	fs.StringVar(&c.MemoryLimit, "memory-limit", c.MemoryLimit, "soft memory limit such as 40MiB, 0 or off to disable ("+EnvMemoryLimit+")")
+	fs.Func("automation", "on (default) or off: off keeps policy triggers, interrupted run recovery and config sync from running ("+EnvAutomation+")", c.setAutomation)
 	fs.StringVar(&c.PprofListen, "pprof-listen", c.PprofListen, "serve pprof on this loopback address, off when empty ("+EnvPprofListen+")")
 	fs.StringVar(&c.ConnectionsFile, "connections-file", c.ConnectionsFile,
 		"YAML file of host-configured connections such as routers, none when empty ("+EnvConnectionsFile+")")

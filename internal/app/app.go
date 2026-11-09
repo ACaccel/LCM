@@ -495,7 +495,12 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		log.Info("reconciled service states", "changes", len(changes))
 	}
 	a.automationReady = make(chan struct{})
-	if err := a.Engine.Recover(ctx); errors.Is(err, engine.ErrRecoveryDeferred) {
+	if cfg.AutomationOff {
+		// Neither interrupted runs nor deployed policies are restored, and
+		// automationReady stays open, so triggers and config sync (and with
+		// them self-deploy) never start.
+		log.Warn("automation is off (" + config.EnvAutomation + "=off): policies, triggers and config sync do not run")
+	} else if err := a.Engine.Recover(ctx); errors.Is(err, engine.ErrRecoveryDeferred) {
 		a.recoveryDeferred.Store(true)
 		log.Info("automation recovery deferred until maintenance exits")
 	} else if err != nil {

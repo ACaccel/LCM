@@ -104,6 +104,7 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_FAILED_LOGIN_RETENTION_KEEP` | `--failed-login-retention-keep` | `10000` | Failed-login audit entries kept, oldest removed first; every other audit entry is kept forever |
 | `LCM_MEMORY_LIMIT` | `--memory-limit` | `40MiB` | Soft memory limit of the Go runtime (a size such as `40MiB` or `64M`; `0` or `off` disables it). A `GOMEMLIMIT` in the environment is respected unless this is set explicitly |
 | `LCM_PPROF_LISTEN` | `--pprof-listen` | empty | Serve `net/http/pprof` on this loopback address for diagnosis; off when empty |
+| `LCM_AUTOMATION` | `--automation` | `on` | `off` starts the controller without resuming interrupted policy runs and without policy triggers or config sync (so no self-deploy either); the API, observation and retention still run. `lcm host upgrade` sets it for its validation start and refuses a `lcm.env` that sets it |
 | `LCM_PRUNE_INTERVAL` | `--prune-interval` | `1h` | How often the retention jobs run |
 | `LCM_GITHUB_WEBHOOK_SECRET` | `--github-webhook-secret` | empty | Name (not value) of the secret that verifies GitHub push webhooks on `POST /api/v1/hooks/github`; when empty that endpoint needs an API token |
 

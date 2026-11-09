@@ -134,6 +134,8 @@ func TestInvalidValues(t *testing.T) {
 		{"zero prune interval", nil, []string{"--prune-interval", "0s"}, "prune interval"},
 		{"zero action timeout", nil, []string{"--runtime-action-timeout", "0s"}, "runtime action timeout"},
 		{"empty git", nil, []string{"--git", " "}, "git binary"},
+		{"bad automation", map[string]string{EnvAutomation: "maybe"}, nil, EnvAutomation},
+		{"bad automation flag", nil, []string{"--automation", "no"}, "on or off"},
 		{"bad github secret name", map[string]string{EnvGitHubWebhookSecret: "../etc"}, nil, "github webhook secret"},
 	}
 	for _, tc := range tests {
@@ -146,6 +148,21 @@ func TestInvalidValues(t *testing.T) {
 				t.Fatalf("error %q does not mention %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestAutomation(t *testing.T) {
+	c, err := load(t, nil)
+	if err != nil || c.AutomationOff {
+		t.Fatalf("default: off=%v err=%v", c.AutomationOff, err)
+	}
+	c, err = load(t, map[string]string{EnvAutomation: "off"})
+	if err != nil || !c.AutomationOff {
+		t.Fatalf("env off: off=%v err=%v", c.AutomationOff, err)
+	}
+	c, err = load(t, map[string]string{EnvAutomation: "off"}, "--automation", "on")
+	if err != nil || c.AutomationOff {
+		t.Fatalf("flag overrides env: off=%v err=%v", c.AutomationOff, err)
 	}
 }
 
