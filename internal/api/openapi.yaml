@@ -616,6 +616,7 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+        "502": { $ref: "#/components/responses/BadGateway" }
   /resources/{resource}/impact:
     get:
       tags: [Resources]
@@ -682,6 +683,7 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "413": { $ref: "#/components/responses/TooLarge" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+        "502": { $ref: "#/components/responses/BadGateway" }
   /resource-groups/actions/{id}:
     get:
       tags: [Actions]
@@ -3254,6 +3256,14 @@ components:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }
     Unavailable:
       description: Component disabled, capacity exceeded or shutting down.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    BadGateway:
+      description: |
+        The deploy helper of a managed service failed, or its outcome is unknown
+        (`error.code` is `bad_gateway`). A helper refusal or a missing release
+        is 409 `precondition_failed`, a busy helper 409 `conflict`.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorEnvelope' }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/configsync"
+	"github.com/ACaccel/lcm/internal/deployhelper"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/lock"
 	"github.com/ACaccel/lcm/internal/maintenance"
@@ -16,6 +17,7 @@ import (
 	"github.com/ACaccel/lcm/internal/monitor"
 	"github.com/ACaccel/lcm/internal/monitor/alert"
 	"github.com/ACaccel/lcm/internal/resource"
+	rt "github.com/ACaccel/lcm/internal/runtime"
 	"github.com/ACaccel/lcm/internal/security"
 	"github.com/ACaccel/lcm/internal/securityhost"
 	"github.com/ACaccel/lcm/internal/state"
@@ -49,6 +51,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		stErr  *catalog.StateError
 		busy   *lock.BusyError
 		impact *resource.ImpactError
+		helper *rt.HelperError
 	)
 	switch {
 	case errors.As(err, &impact):
@@ -56,6 +59,8 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, extra m
 		d.Action, d.AcknowledgementRequired = impact.Action, true
 		writeError(w, http.StatusConflict, codeImpactUnacknowledged, publicMessage(err),
 			details(map[string]any{"resource": impact.Impact.Resource, "action": impact.Action, "impact": d}))
+	case errors.As(err, &helper):
+		failHelper(w, helper, details)
 	case errors.Is(err, securityhost.ErrConflict):
 		writeError(w, http.StatusConflict, codeConflict, publicMessage(err), details(nil))
 	case errors.Is(err, securityhost.ErrUnavailable):
@@ -167,4 +172,26 @@ func invalidField(err error) string {
 		return "key"
 	}
 	return ""
+}
+
+// failHelper answers a deploy helper error: a refusal or a missing item is
+// a precondition the operator can fix, a busy helper a conflict, and a
+// failure or unknown outcome of the host-side helper a bad gateway. The
+// message is the helper's own sanitized text.
+func failHelper(w http.ResponseWriter, he *rt.HelperError, details func(map[string]any) map[string]any) {
+	msg := "deploy helper " + string(he.Op)
+	if he.Message != "" {
+		msg += ": " + he.Message
+	}
+	d := details(map[string]any{"operation": string(he.Op)})
+	switch {
+	case he.Unknown:
+		writeError(w, http.StatusBadGateway, codeBadGateway, he.Error(), d)
+	case he.Code == deployhelper.CodeRefused, he.Code == deployhelper.CodeNotFound:
+		writeError(w, http.StatusConflict, codePrecondition, msg, d)
+	case he.Code == deployhelper.CodeBusy:
+		writeError(w, http.StatusConflict, codeConflict, msg, d)
+	default:
+		writeError(w, http.StatusBadGateway, codeBadGateway, msg, d)
+	}
 }

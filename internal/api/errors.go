@@ -20,6 +20,7 @@ const (
 	codeMethodNotAllowed   = "method_not_allowed"
 	codeRateLimited        = "rate_limited"
 	codeUnavailable        = "unavailable"
+	codeBadGateway         = "bad_gateway"
 	codeInternal           = "internal"
 
 	codeAlreadyExists   = "already_exists"

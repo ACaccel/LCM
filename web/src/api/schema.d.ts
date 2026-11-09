@@ -3831,6 +3831,19 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
+        /**
+         * @description The deploy helper of a managed service failed, or its outcome is unknown
+         *     (`error.code` is `bad_gateway`). A helper refusal or a missing release
+         *     is 409 `precondition_failed`, a busy helper 409 `conflict`.
+         */
+        BadGateway: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description The request is malformed. */
         BadRequest: {
             headers: {
@@ -4642,6 +4655,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            502: components["responses"]["BadGateway"];
         };
     };
     getResourceImpact: {
@@ -4712,6 +4726,7 @@ export interface operations {
             409: components["responses"]["Conflict"];
             413: components["responses"]["TooLarge"];
             422: components["responses"]["Unprocessable"];
+            502: components["responses"]["BadGateway"];
         };
     };
     getResourceGroupAction: {
