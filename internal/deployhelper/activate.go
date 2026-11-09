@@ -129,8 +129,9 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 }
 
 // switchAndRestart installs the unit, switches the current and previous
-// links, reloads systemd when the unit changed and restarts the service. A
-// unit that does not verify is put back together with the links.
+// links, reloads systemd when the unit changed or systemd reports an
+// outdated copy, and restarts the service. A unit that does not verify or
+// load is put back together with the links.
 func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Response, unit string) Response {
 	svc, id := req.Service, req.ReleaseID
 	opt := hostsetup.ServiceOptDir(svc)
@@ -197,9 +198,25 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 			}
 			return refuse(resp, CodeFailed, "the unit does not verify; the previous unit and release were restored")
 		}
+	}
+	// systemd may also hold an older copy of an unchanged unit, for example
+	// after an earlier reload failed.
+	reload := result.UnitChanged
+	if !reload {
+		res, err := h.run(ctx, systemctlTimeout, systemctl, "show", "--property=NeedDaemonReload", "--value", unitName(svc))
+		reload = err != nil || strings.TrimSpace(res.Output) != "no"
+	}
+	if reload {
 		if res, err := h.run(ctx, systemctlTimeout, systemctl, "daemon-reload"); err != nil {
 			resp.Log = sanitizeLog(res.Output)
-			return refuse(resp, CodeFailed, "%s", commandFailure("systemctl daemon-reload", err))
+			rerr := restore()
+			if rerr == nil {
+				_, rerr = h.run(ctx, systemctlTimeout, systemctl, "daemon-reload")
+			}
+			if rerr != nil {
+				return refuse(resp, CodeFailed, "%s, and restoring the previous unit and release failed: %v", commandFailure("systemctl daemon-reload", err), rerr)
+			}
+			return refuse(resp, CodeFailed, "%s; the previous unit and release were restored", commandFailure("systemctl daemon-reload", err))
 		}
 	}
 	if res, _ := h.run(ctx, systemctlTimeout, systemctl, "is-enabled", unitName(svc)); strings.TrimSpace(res.Output) != "enabled" {

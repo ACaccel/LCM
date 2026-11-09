@@ -40,6 +40,8 @@ type env struct {
 	build      func(src string) (string, int)
 	migrate    func(argv []string) (string, int)
 	analyze    int
+	reloadFail int
+	needReload bool
 	enabled    bool
 	opCounter  int
 	systemctls []string
@@ -210,7 +212,16 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 			return result("enabled\n", 0)
 		case "enable":
 			e.enabled = true
+		case "daemon-reload":
+			if e.reloadFail > 0 {
+				e.reloadFail--
+				return result("Failed to reload daemon\n", 1)
+			}
+			e.needReload = false
 		case "show":
+			if c.Argv[2] == "--property=NeedDaemonReload" {
+				return result(map[bool]string{true: "yes\n", false: "no\n"}[e.needReload], 0)
+			}
 			return result("LoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=4242\n", 0)
 		}
 		return result("", 0)
@@ -638,6 +649,30 @@ func TestActivateFailures(t *testing.T) {
 	r = e.ok(Request{Op: OpActivate, Service: "web", ReleaseID: rel2, Start: []string{"bin/server", "--listen"}})
 	if !strings.Contains(e.read("/etc/systemd/system/web.service"), "\nExecStart=/opt/web/current/bin/server --listen\n") || r.Activate.Previous != rel1 {
 		t.Errorf("activate %+v\n%s", r.Activate, e.read("/etc/systemd/system/web.service"))
+	}
+
+	// An unchanged unit is reloaded when systemd holds an outdated copy.
+	e.needReload = true
+	n := len(e.systemctlCalls())
+	e.ok(Request{Op: OpActivate, Service: "web", ReleaseID: rel2, Start: []string{"bin/server", "--listen"}})
+	if got := e.systemctlCalls()[n:]; !slices.Equal(got[:2], []string{"show --property=NeedDaemonReload --value web.service", "daemon-reload"}) {
+		t.Errorf("systemctl %q", got)
+	}
+
+	// A reload that fails puts back the previous unit and release.
+	unit2 := e.read("/etc/systemd/system/web.service")
+	e.reloadFail = 1
+	r = e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel1, Start: []string{"index.js"}, Runtime: "node24"},
+		CodeFailed, "systemctl daemon-reload exited with status 1; the previous unit and release were restored")
+	if e.read("/etc/systemd/system/web.service") != unit2 || r.Activate.Switched {
+		t.Errorf("not restored: %+v", r.Activate)
+	}
+	if target, _ := os.Readlink(e.real("/opt/web/current")); target != "releases/"+rel2 {
+		t.Errorf("current -> %q after a failed reload", target)
+	}
+	// The restored unit is loaded again, and the service is not restarted.
+	if got := e.systemctlCalls(); !slices.Equal(got[len(got)-2:], []string{"daemon-reload", "daemon-reload"}) {
+		t.Errorf("systemctl %q", got)
 	}
 
 	// A unit the helper did not write is never replaced.
