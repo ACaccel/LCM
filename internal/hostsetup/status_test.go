@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-func syscallMkfifo(p string) error { return syscall.Mkfifo(p, 0o600) }
-
 func statusOf(t *testing.T, th *testHost) map[string]ComponentStatus {
 	t.Helper()
 	st, err := Status(th.host)
@@ -127,7 +125,7 @@ func TestOSFS(t *testing.T) {
 	if _, err := fsys.Open("/etc/l"); err == nil {
 		t.Fatal("open followed a link")
 	}
-	if err := fsys.Chmod("/etc/l", 0o777); err == nil {
+	if li, err := fsys.Lstat("/etc/l"); err != nil || fsys.Chmod("/etc/l", li, 0o777) == nil {
 		t.Fatal("chmod followed a link")
 	}
 	if target, err := fsys.Readlink("/etc/l"); err != nil || target != "a" {
@@ -158,10 +156,10 @@ func TestOSFS(t *testing.T) {
 	}
 }
 
-// TestOSFSMetadataDoesNotFollowLinks swaps a directory for a link to a file
-// the caller must not change, the race a service account that owns the
-// parent could attempt.
-func TestOSFSMetadataDoesNotFollowLinks(t *testing.T) {
+// TestOSFSMetadataChangesOnlyTheCheckedFile swaps the checked file for a
+// link, a hard link or a FIFO, the races a service account that owns the
+// parent could attempt, and expects every change to be refused.
+func TestOSFSMetadataChangesOnlyTheCheckedFile(t *testing.T) {
 	root := t.TempDir()
 	fsys := OS{Root: root}
 	uid, gid := os.Getuid(), os.Getgid()
@@ -174,26 +172,52 @@ func TestOSFSMetadataDoesNotFollowLinks(t *testing.T) {
 	if err := fsys.WriteFile("/secret", strings.NewReader("s"), 0o600, uid, gid); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(root, "data")); err != nil {
+	if err := fsys.WriteFile("/file", strings.NewReader("f"), 0o600, uid, gid); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("secret", filepath.Join(root, "data")); err != nil {
+	checked := map[string]Info{}
+	for _, name := range []string{"/data", "/file"} {
+		info, err := fsys.Lstat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checked[name] = info
+	}
+	// The checked files themselves can be changed.
+	if err := fsys.Chmod("/file", checked["/file"], 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := fsys.Chmod("/data", 0o755); err == nil {
-		t.Error("chmod followed the swapped link")
+	if err := fsys.Chown("/data", checked["/data"], uid, gid); err != nil {
+		t.Fatal(err)
 	}
-	if err := fsys.Chown("/data", uid, gid); err == nil {
-		t.Error("chown followed the swapped link")
+	secret := filepath.Join(root, "secret")
+	swaps := map[string]func(p string) error{
+		"symbolic link": func(p string) error { return os.Symlink("secret", p) },
+		"hard link":     func(p string) error { return os.Link(secret, p) },
+		"FIFO":          func(p string) error { return syscall.Mkfifo(p, 0o600) },
+	}
+	for kind, swap := range swaps {
+		for name, info := range checked {
+			p := filepath.Join(root, name)
+			if err := os.RemoveAll(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := swap(p); err != nil {
+				t.Fatalf("%s: %v", kind, err)
+			}
+			if err := fsys.Chmod(name, info, 0o755); err == nil {
+				t.Errorf("chmod of %s accepted a %s", name, kind)
+			}
+			if err := fsys.Chown(name, info, uid, gid); err == nil {
+				t.Errorf("chown of %s accepted a %s", name, kind)
+			}
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if info, _ := fsys.Lstat("/secret"); info.Mode.Perm() != 0o600 {
-		t.Errorf("the link target changed to %04o", info.Mode.Perm())
-	}
-	if err := syscallMkfifo(filepath.Join(root, "fifo")); err != nil {
-		t.Skip("no FIFOs:", err)
-	}
-	if err := fsys.Chmod("/fifo", 0o644); err == nil {
-		t.Error("chmod accepted a FIFO")
+		t.Errorf("the swapped-in file changed to %04o", info.Mode.Perm())
 	}
 }
 

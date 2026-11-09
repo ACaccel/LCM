@@ -559,7 +559,11 @@ func (a *applier) preflightStage(ctx context.Context) error {
 		return err
 	}
 	a.stage = stage
-	if err := fsys.Chmod(stage, 0o755); err != nil {
+	info, err := fsys.Lstat(stage)
+	if err != nil {
+		return err
+	}
+	if err := fsys.Chmod(stage, info, 0o755); err != nil {
 		return err
 	}
 	if a.h.OpenExecutable == nil {
@@ -713,7 +717,7 @@ func (a *applier) ensureFile(s *step, p string, c Content, perm fs.FileMode) (bo
 			return false, nil
 		}
 		return true, s.change(fmt.Sprintf("set the mode of %s to %04o (was %04o)", p, perm, info.Mode.Perm()), func() error {
-			return fsys.Chmod(p, perm)
+			return fsys.Chmod(p, info, perm)
 		})
 	}
 	if a.downgrade != "" {
@@ -787,14 +791,14 @@ func (a *applier) ensureDir(s *step, p string, perm fs.FileMode, uid, gid int, o
 		return err
 	case info.UID != uid || info.GID != gid:
 		return s.change(fmt.Sprintf("set %s to %s %04o", p, owner, perm), func() error {
-			if err := fsys.Chown(p, uid, gid); err != nil {
+			if err := fsys.Chown(p, info, uid, gid); err != nil {
 				return err
 			}
-			return fsys.Chmod(p, perm)
+			return fsys.Chmod(p, info, perm)
 		})
 	case info.Mode.Perm() != perm || info.Mode&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0:
 		return s.change(fmt.Sprintf("set the mode of %s to %04o (was %04o)", p, perm, info.Mode.Perm()), func() error {
-			return fsys.Chmod(p, perm)
+			return fsys.Chmod(p, info, perm)
 		})
 	}
 	return nil
@@ -863,10 +867,10 @@ func (a *applier) envFile(_ context.Context, s *step) error {
 	}
 	if info.GID != gid || info.Mode.Perm() != 0o640 {
 		return s.change("set "+EnvFile+" to root:lcm 0640", func() error {
-			if err := fsys.Chown(EnvFile, 0, gid); err != nil {
+			if err := fsys.Chown(EnvFile, info, 0, gid); err != nil {
 				return err
 			}
-			return fsys.Chmod(EnvFile, 0o640)
+			return fsys.Chmod(EnvFile, info, 0o640)
 		})
 	}
 	return nil

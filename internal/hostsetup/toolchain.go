@@ -287,7 +287,11 @@ func (c *copier) dir(rel, dst string, want Info) error {
 	}
 	// The final mode last, so that a read-only source directory can still
 	// be filled.
-	return c.fsys.Chmod(dst, copyPerm(info.Mode))
+	made, err := c.fsys.Lstat(dst)
+	if err != nil {
+		return err
+	}
+	return c.fsys.Chmod(dst, made, copyPerm(info.Mode))
 }
 
 // file copies the regular file rel, which must still be the file want.

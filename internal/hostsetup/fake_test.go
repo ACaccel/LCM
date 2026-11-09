@@ -257,30 +257,39 @@ func (m *memFS) Symlink(target, p string, uid, gid int) error {
 	return nil
 }
 
-func (m *memFS) Chown(p string, uid, gid int) error {
+func (m *memFS) Chown(p string, want Info, uid, gid int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	n, ok := m.nodes[p]
-	if !ok {
-		return notExist("chown", p)
-	}
-	if n.mode&fs.ModeSymlink != 0 {
-		return fmt.Errorf("chown %s: symbolic link", p)
+	n, err := m.expected(p, want)
+	if err != nil {
+		return err
 	}
 	m.log("chown", p)
 	n.uid, n.gid = uid, gid
 	return nil
 }
 
-func (m *memFS) Chmod(p string, perm fs.FileMode) error {
+// expected returns the node at p if it is the regular file or directory
+// want describes.
+func (m *memFS) expected(p string, want Info) (*memNode, error) {
+	n, ok := m.nodes[p]
+	switch {
+	case !ok:
+		return nil, notExist("open", p)
+	case !want.IsDir() && !want.IsRegular():
+		return nil, fmt.Errorf("%s is not a regular file or directory", p)
+	case n.mode.Type() != want.Mode.Type() || n.ino != want.Ino:
+		return nil, fmt.Errorf("%s changed since it was checked; nothing was changed", p)
+	}
+	return n, nil
+}
+
+func (m *memFS) Chmod(p string, want Info, perm fs.FileMode) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	n, ok := m.nodes[p]
-	if !ok {
-		return notExist("chmod", p)
-	}
-	if n.mode&fs.ModeSymlink != 0 {
-		return fmt.Errorf("chmod %s: symbolic link", p)
+	n, err := m.expected(p, want)
+	if err != nil {
+		return err
 	}
 	m.log("chmod", p)
 	n.mode = n.mode.Type() | perm

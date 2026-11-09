@@ -728,3 +728,36 @@ func TestOlderBuildIsWarnedAbout(t *testing.T) {
 		t.Error("a version without a time was parsed")
 	}
 }
+
+func TestMetadataFixesNeedTheCheckedFile(t *testing.T) {
+	// A hard link swapped in for a directory apply fixes, after the check,
+	// is not changed: the fake replaces the node between Lstat and Chmod.
+	th := converged(t)
+	th.fs.get(WorkDir).uid = 0
+	fsys := &swapOnChown{memFS: th.fs, at: WorkDir}
+	th.host.FS = fsys
+	_, out, err := th.apply(Options{})
+	if err == nil || !strings.Contains(err.Error(), "changed since it was checked") {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if n := th.fs.get(WorkDir); n.mode.IsDir() || n.uid != 0 || n.mode.Perm() != 0o440 {
+		t.Fatalf("the swapped-in file was changed: %+v", n)
+	}
+}
+
+// swapOnChown replaces a directory by a root-owned regular file right
+// before the first chown of it, as a hard link to such a file would.
+type swapOnChown struct {
+	*memFS
+	at   string
+	done bool
+}
+
+func (s *swapOnChown) Chown(p string, want Info, uid, gid int) error {
+	if p == s.at && !s.done {
+		s.done = true
+		s.remove(p)
+		s.file(p, "root data", 0o440, 0, 0)
+	}
+	return s.memFS.Chown(p, want, uid, gid)
+}

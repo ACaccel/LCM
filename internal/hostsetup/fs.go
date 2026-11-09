@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -46,10 +47,12 @@ type FS interface {
 	// mode.
 	WriteFile(name string, r io.Reader, perm fs.FileMode, uid, gid int) error
 	Symlink(target, name string, uid, gid int) error
-	// Chown and Chmod change a regular file or directory; they never
-	// follow a symbolic link.
-	Chown(name string, uid, gid int) error
-	Chmod(name string, perm fs.FileMode) error
+	// Chown and Chmod change the regular file or directory that want, an
+	// earlier Lstat, describes. They refuse when name now is another file
+	// (a link, a hard link or a replacement), so that a decision taken on
+	// one file is never applied to another.
+	Chown(name string, want Info, uid, gid int) error
+	Chmod(name string, want Info, perm fs.FileMode) error
 	Rename(from, to string) error
 	Remove(name string) error
 	RemoveAll(name string) error
@@ -166,8 +169,9 @@ func (o OS) Readlink(name string) (string, error) {
 }
 
 // Mkdir implements FS. The directory is created private, whatever the
-// umask, and gets its owner and final mode through a descriptor, so that a
-// directory swapped in by whoever owns the parent is never changed.
+// umask, and gets its owner and final mode only if it is still the
+// directory just created, so that one swapped in by whoever owns the parent
+// is never changed.
 func (o OS) Mkdir(name string, perm fs.FileMode, uid, gid int) error {
 	p, err := o.path(name)
 	if err != nil {
@@ -176,22 +180,17 @@ func (o OS) Mkdir(name string, perm fs.FileMode, uid, gid int) error {
 	if err := os.Mkdir(p, 0o700); err != nil {
 		return err
 	}
-	f, err := openNoFollow(p, syscall.O_DIRECTORY)
+	info, err := o.Lstat(name)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || !fi.IsDir() || int(st.Uid) != os.Geteuid() {
+	if !info.IsDir() || info.UID != os.Geteuid() {
 		return fmt.Errorf("%s changed while it was created", name)
 	}
-	if err := f.Chown(uid, gid); err != nil {
+	if err := o.Chown(name, info, uid, gid); err != nil {
 		return err
 	}
-	return f.Chmod(perm)
+	return o.Chmod(name, info, perm)
 }
 
 // openNoFollow opens p for reading without following a symbolic link in
@@ -200,23 +199,51 @@ func openNoFollow(p string, extra int) (*os.File, error) {
 	return os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_NOCTTY|extra, 0) //nolint:gosec // host paths chosen by host setup, opened without following a final link
 }
 
-// openForMetadata opens a regular file or directory to change its owner or
-// mode through the descriptor: a link or another file type swapped in for
-// it is refused rather than followed.
-func openForMetadata(name, p string) (*os.File, error) {
-	f, err := openNoFollow(p, 0)
+// oPath is Linux's O_PATH (the same on every architecture Go supports),
+// which package syscall does not define.
+const oPath = 0x200000
+
+// withExpected runs change on a /proc/self/fd path that names exactly the
+// file want describes. The file is opened with O_PATH, which neither
+// follows a final link nor opens a device, and must have want's type,
+// device and inode; a link, a hard link or any other file swapped in after
+// want was taken is refused instead of changed.
+func withExpected(name, p string, want Info, change func(proc string) error) error {
+	flags := oPath | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	switch {
+	case want.IsDir():
+		flags |= syscall.O_DIRECTORY
+	case want.IsRegular():
+	default:
+		return fmt.Errorf("%s is not a regular file or directory", name)
+	}
+	fd, err := syscall.Open(p, flags, 0)
 	if err != nil {
-		return nil, err
+		return &fs.PathError{Op: "open", Path: name, Err: err}
 	}
-	fi, err := f.Stat()
-	if err == nil && !fi.IsDir() && !fi.Mode().IsRegular() {
-		err = fmt.Errorf("%s is not a regular file or directory", name)
+	defer func() { _ = syscall.Close(fd) }()
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil {
+		return &fs.PathError{Op: "fstat", Path: name, Err: err}
 	}
-	if err != nil {
-		_ = f.Close()
-		return nil, err
+	got := Info{Mode: fileType(st.Mode), Dev: uint64(st.Dev), Ino: st.Ino} //nolint:gosec,unconvert // Dev is unsigned on Linux; the conversion keeps other layouts building
+	if got.Mode.Type() != want.Mode.Type() || !sameFile(got, want) {
+		return fmt.Errorf("%s changed since it was checked; nothing was changed", name)
 	}
-	return f, nil
+	return change("/proc/self/fd/" + strconv.Itoa(fd))
+}
+
+// fileType converts the type bits of a stat mode.
+func fileType(m uint32) fs.FileMode {
+	switch m & syscall.S_IFMT {
+	case syscall.S_IFDIR:
+		return fs.ModeDir
+	case syscall.S_IFREG:
+		return 0
+	case syscall.S_IFLNK:
+		return fs.ModeSymlink
+	}
+	return fs.ModeIrregular
 }
 
 // WriteFile implements FS.
@@ -283,34 +310,22 @@ func (o OS) Symlink(target, name string, uid, gid int) error {
 	return os.Lchown(p, uid, gid)
 }
 
-// Chown implements FS for regular files and directories; it refuses
-// symbolic links instead of following them.
-func (o OS) Chown(name string, uid, gid int) error {
+// Chown implements FS.
+func (o OS) Chown(name string, want Info, uid, gid int) error {
 	p, err := o.path(name)
 	if err != nil {
 		return err
 	}
-	f, err := openForMetadata(name, p)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return f.Chown(uid, gid)
+	return withExpected(name, p, want, func(proc string) error { return os.Chown(proc, uid, gid) })
 }
 
-// Chmod implements FS for regular files and directories; it refuses
-// symbolic links instead of following them.
-func (o OS) Chmod(name string, perm fs.FileMode) error {
+// Chmod implements FS.
+func (o OS) Chmod(name string, want Info, perm fs.FileMode) error {
 	p, err := o.path(name)
 	if err != nil {
 		return err
 	}
-	f, err := openForMetadata(name, p)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return f.Chmod(perm)
+	return withExpected(name, p, want, func(proc string) error { return os.Chmod(proc, perm) })
 }
 
 // Rename implements FS.
