@@ -353,7 +353,8 @@ func TestBuildInstallActivate(t *testing.T) {
 		"\nNoNewPrivileges=yes\n", "\nProtectSystem=strict\n", "\nProtectHome=yes\n", "\nPrivateTmp=yes\n", "\nPrivateDevices=yes\n",
 		"\nRestrictSUIDSGID=yes\n", "\nCapabilityBoundingSet=\n", "\nReadWritePaths=/var/lib/web\n",
 		"\nInaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm\n",
-		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\nProtectProc=invisible\n", "\n[Install]\nWantedBy=multi-user.target\n",
+		"\nInaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build\n", "\nProtectProc=invisible\n",
+		"\nSocketBindAllow=tcp:3200\nSocketBindDeny=any\nRestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX\nPrivateIPC=yes\n", "\n[Install]\nWantedBy=multi-user.target\n",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit lacks %q:\n%s", want, unit)

@@ -23,11 +23,20 @@ var interpreters = []string{"node", "python3"}
 func unitName(svc string) string { return svc + ".service" }
 
 // serviceSandbox is the hardening of a service's unit and migration: it
-// runs as its own account, can write only its data directory, and sees
-// neither LCM's data, the backups nor the build trees.
-func serviceSandbox(svc, backup string) []string {
+// runs as its own account, can write only its data directory, sees neither
+// LCM's data, the backups nor the build trees, may bind no port but its
+// own, uses only IP and Unix sockets and has its own IPC namespace. It may
+// still connect anywhere, and the kernel does not stop it from binding its
+// port on another address than HOST: systemd has no per-address bind
+// rule, and IPAddressAllow= would also block its outbound connections.
+func serviceSandbox(svc string, port int, backup string) []string {
 	props := sandbox("0027", backup)
-	props = append(props, "ReadWritePaths="+hostsetup.ServiceDataDir(svc))
+	props = append(props,
+		"SocketBindAllow=tcp:"+strconv.Itoa(port),
+		"SocketBindDeny=any",
+		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX",
+		"PrivateIPC=yes",
+		"ReadWritePaths="+hostsetup.ServiceDataDir(svc))
 	return append(props, "InaccessiblePaths=-"+hostsetup.BuildDir+" -"+hostsetup.BuildCacheDir)
 }
 
@@ -53,7 +62,7 @@ func renderUnit(svc string, port int, execStart []string, rtBin, backup string) 
 		lines = append(lines, "Environment=PATH="+rtBin+":"+systemPath)
 	}
 	lines = append(lines, "Restart=on-failure", "RestartSec=5")
-	lines = append(lines, serviceSandbox(svc, backup)...)
+	lines = append(lines, serviceSandbox(svc, port, backup)...)
 	lines = append(lines, "", "[Install]", "WantedBy=multi-user.target")
 	return strings.Join(lines, "\n") + "\n"
 }
@@ -293,7 +302,7 @@ func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port in
 	if rtBin != "" {
 		args = append(args, "--setenv=PATH="+rtBin+":"+systemPath)
 	}
-	props := append(serviceSandbox(svc, backup), "EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
+	props := append(serviceSandbox(svc, port, backup), "EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
 		"RuntimeMaxSec="+strconv.Itoa(int(migrateTimeout.Seconds())))
 	for _, p := range props {
 		args = append(args, "--property="+p)
