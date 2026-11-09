@@ -48,7 +48,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/engine/` | Compiler, scheduler, run state, checkpoints, recovery, concurrency modes, observers, static resource targets of a plan; semantics in `doc.go`; `enginetest/` harness |
 | `internal/resource/` | Resource registry for every type: IDs, versioned documents, phases, archives, relations, impact and guard, the `Type`/`TypeHooks` facade the type packages implement; observation retention with per-resource ceilings; `operation/` the durable operation mechanics machines and routers share |
 | `internal/catalog/` | Service resource type: lifecycle state machine, deployments, timeline, the `Manager` that performs lifecycle and group actions, action availability and reconciliation |
-| `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external) and `CapabilitiesOf`, the actions a runtime configuration supports |
+| `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external, managed over the deploy helper) and `CapabilitiesOf`, the actions a runtime configuration supports |
 | `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |
 | `internal/security/` | Bounded security incidents and traffic, operator handling, notification settings and durable Konata outbox |
 | `internal/securityhost/` | Typed preview/apply/query client and durable intent for the independently installed restricted security helper |

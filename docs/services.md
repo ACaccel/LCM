@@ -42,8 +42,39 @@ The adapter decides which process actions exist; its fields sit directly in `con
 | `compose` | `project`, `file` | `docker compose ps` | `docker compose up -d / stop / restart` |
 | `command` | `status`, `start`, `stop`, `restart` (each optional) | `status` exit code: 0 active, other inactive; unknown without `status` or when the shell cannot run it (126, 127) | the matching command (`sh -c`); restart falls back to stop then start. A missing command makes that action unsupported |
 | `external` | none | unknown | none: LCM only monitors it |
+| `managed` | `artifact`, `start`, `startArgs`, `runtime`, `migrate`, `keepReleases` ([below](#managed-services)) | the [deploy helper](operations.md#deploy-helper)'s `status` of `<name>.service`: active, inactive (also before the first activation), failed, otherwise unknown; unknown without the helper | the helper's `start/stop/restart` |
 
 LCM's own service uses a `command` runtime with only `status`, because it must not stop or restart itself ([self-deploy](operations.md#self-deploy)).
+
+### Managed services
+
+A managed service needs no deployment code in its repository: the restricted [deploy helper](operations.md#deploy-helper) builds it as `lcm-build`, installs the artifact as a root-owned release under `/opt/<name>/releases`, and runs it as its own account from a unit of a built-in template. The host's administrator grants the service first (`sudo bin/lcm host allow <name> --port N`, [service grants](operations.md#service-grants)); its port, runtimes, build inputs and directories come only from `/etc/lcm/host.json`, never from the document.
+
+```yaml
+metadata: { name: web }           # at most 31 characters, not starting with "lcm": the account, unit and directories
+spec:
+  type: service
+  adapter: managed
+  config:
+    source: { url: https://github.com/acme/web.git, branch: main, build: npm ci && npm run build, timeout: 20m }
+    artifact: dist/                # the directory of the build tree installed as a release; "." is the whole tree
+    runtime: node24                # optional: a runtime of host.json granted to the service
+    start: server/main.mjs         # release-relative file, run with the runtime's node or python3, or executed itself
+    startArgs: [--quiet]           # optional, at most 32
+    migrate: [node, scripts/migrate.mjs]   # optional: run as the service account before the switch
+    keepReleases: 3                # 2-20, default 3
+```
+
+| Field | Rule |
+|---|---|
+| `source` | Required, with `build` (run by the helper, not by LCM); `install` is refused because the helper installs; `timeout` is the build's limit, at most 2h |
+| `artifact`, `start` | Required clean relative paths of letters, digits and `._-/` without `..` |
+| `startArgs`, `migrate` arguments | Letters, digits and `._/=:,@+-`; `migrate` starts with a release-relative executable or a program of the runtime |
+| `runtime` | A runtime name; whether `host.json` grants it is checked by the helper when the service is deployed |
+
+The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused, and the managed fields are refused for every other adapter. The helper checks every request again and refuses what the host does not grant; its message is shown as the error of the action.
+
+**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy` and `rollback` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; `backup` and jobs are unaffected. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
 
 ## Source
 
@@ -80,14 +111,28 @@ The lifecycle state is what LCM did to the service; health (below) is what the c
 | `start` | registered, stopped, failed | runtime start | start |
 | `stop` | registered, running, failed | runtime stop | stop |
 | `restart` | running, stopped, failed | runtime restart | restart, or start when inactive |
-| `deploy` | registered, running, stopped, failed | `source` | clone `url` into the [build checkout](#source) when it is missing; otherwise refuse if tracked files changed, set `origin` to `url` and `git fetch --prune`; resolve the version (default: head of the branch); `git checkout --detach`; `build`; `install`; restart (skipped when the runtime cannot restart, so `install` must apply the new version) |
-| `rollback` | running, stopped, failed | `source` and an earlier successful deployment | as deploy, to the previous successful commit, without fetching (a missing checkout is cloned) |
+| `deploy` | registered, running, stopped, failed | `source` | clone `url` into the [build checkout](#source) when it is missing; otherwise refuse if tracked files changed, set `origin` to `url` and `git fetch --prune`; resolve the version (default: head of the branch); `git checkout --detach`; `build`; `install`; restart (skipped when the runtime cannot restart, so `install` must apply the new version). Managed services: [helper steps](#managed-deployments) after the checkout |
+| `rollback` | running, stopped, failed | `source` and an earlier successful deployment | as deploy, to the previous successful commit, without fetching (a missing checkout is cloned). Managed services first try to [switch back to the installed release](#managed-deployments) |
 | `backup` | registered, running, stopped, failed | `backup` | run the command (in the build checkout when the service has a source) |
 | `run-job` | registered, running, stopped, failed | `jobs` | run the named job |
 
 Run an action with `lcm resource action <service> <action> [--version <commit>] [--job <job>] [--dry-run] [--wait]` or `POST /api/v1/resources/{resource}/actions/{action}` (202 and an id for `GET /api/v1/actions/{id}`). Every action takes the lock `resource:<name>`, so actions on one service never overlap, and writes an audit entry and a timeline entry. The action renews its lock every third of `LCM_LOCK_TTL` while it runs, so the TTL only bounds a lock left by a crashed process, not the length of an action. Once the runtime has done the work, the new state is recorded even if the request is cancelled. `?dryRun=true` (console: *預覽*) returns the steps and the [impact](resources.md#relations) without locking or changing anything; `stop`, `restart`, `deploy`, `rollback` and `run-job` on a service that others depend on or are controlled through need `acknowledgeImpact`. Build, install, backup and job commands run with `sh -c`; step timeouts default to 15 minutes (`source.timeout`) and 30 minutes (`timeout` of backup and jobs).
 
-The resource detail (`GET /api/v1/resources/{name}`) lists each action's availability with a reason: `notConfigured` (the console hides the button), `unsupported`, `invalidState`, `notManaged` (retired) or `busy` (the button is disabled and says why). A rollback marked available may still find no target; the dry-run is definitive.
+The resource detail (`GET /api/v1/resources/{name}`) lists each action's availability with a reason: `notConfigured` (the console hides the button), `unsupported`, `helperUnavailable` ([managed services](#managed-services) without the deploy helper), `invalidState`, `notManaged` (retired) or `busy` (the button is disabled and says why). A rollback marked available may still find no target; the dry-run is definitive.
+
+### Managed deployments
+
+After LCM has fetched and detached its own checkout as `lcm` (unchanged), the helper does the rest; LCM runs neither `build` nor a restart itself:
+
+1. `build`: the helper copies the checkout, checks that its `HEAD` is the commit and runs `source.build` as `lcm-build` in its sandbox, with the `runtime` in `PATH` (dry-run step `step.helperBuild`).
+2. `install`: `artifact` of that build becomes a new release (`step.helperInstall`).
+3. `activate`: `migrate` runs as the service account in the new release, then `current` switches, the unit is written and the service restarted; releases beyond `keepReleases` are removed (`step.helperActivate`). The deployment log ends with `installed release <id>`.
+
+- **Durable intent.** Every helper call has a fresh operation ID, written to the running deployment's log (`deploy helper <op> operation <id>`) before the request is sent; the helper's own output follows indented (`  | `).
+- **Lost replies.** After a timeout or a lost reply LCM queries the helper's ledger by that ID: a recorded success continues the deployment, a recorded failure fails it, and an operation that is still running, was interrupted or cannot be looked up fails the deployment with `outcome unknown, query <id>`. It is never assumed to have succeeded. An ID the ledger does not know was not carried out.
+- **Failures.** A refused (`refused`, `busy`, `not_found`) or failed operation fails the deployment with the helper's message and leaves the service `failed`, like any failed deployment. When `activate` switched the release before a later step failed, the log says so; there is no automatic switch back, a rollback (or a policy) does that.
+- **Rollback.** Without rebuilding, a rollback activates the release recorded by the target deployment (or else the newest installed release built from the target commit) when the helper still keeps it (`step.helperActivatePrevious`); otherwise it rebuilds the commit with the steps above. A rollback never runs `migrate`: data the newer release migrated stays as it is, so migrations must stay compatible with the previous release or be restored from a backup.
+- **Restarts of LCM.** A deployment that was running when LCM stopped is closed as `interrupted`, its error naming what the ledger reports for the last helper operation (for example `deploy helper activate operation <id> succeeded: release <id> is current`); reconciliation then takes the state from the helper's status.
 
 **Reconciliation.** At startup and every minute LCM compares each state with what the runtime reports and corrects what can no longer be true: `running` with an inactive or failed runtime becomes `failed`; `registered` or `stopped` becomes `running` when the runtime is active and `failed` when it reports failed; a transient state with no action running (the process died mid-action) becomes `running` or `failed`. `failed` is left alone, and an `unknown` runtime status (external services) changes nothing. Retired services are skipped. Corrections appear on the timeline as `reconcile`.
 
