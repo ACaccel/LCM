@@ -51,6 +51,19 @@ func (h *Helper) install(ctx context.Context, req Request) Response {
 	if _, err := h.trustedPath(releases, false); err != nil {
 		return refuse(resp, CodeRefused, "%v; run sudo bin/lcm host allow or host apply", err)
 	}
+	// Installs that are never activated must not fill the disk: keep at most
+	// as many releases as activate may keep, and current and previous.
+	opt := hostsetup.ServiceOptDir(svc)
+	current, err := h.linkTarget(opt + "/current")
+	if err == nil {
+		var previous string
+		if previous, err = h.linkTarget(opt + "/previous"); err == nil {
+			h.pruneReleases(svc, MaxKeepReleases-1, current, previous)
+		}
+	}
+	if err != nil {
+		return refuse(resp, CodeFailed, "%v", err)
+	}
 	id := h.newID()
 	dst := releases + "/" + id
 	err = hostsetup.CopyTree(h.FS, dir+"/src", req.Artifact, dst, hostsetup.CopyOptions{

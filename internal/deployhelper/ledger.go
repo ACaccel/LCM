@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -40,8 +41,9 @@ type record struct {
 // use, with ops/ for records and locks/ for flock files. It is reached
 // through an os.Root, so no name inside it resolves elsewhere.
 type Ledger struct {
-	root  *os.Root
-	owner int
+	root       *os.Root
+	owner      int
+	maxRecords int
 }
 
 // OpenLedger opens the ledger directory dir (a real path): it must exist,
@@ -59,7 +61,7 @@ func OpenLedger(dir string, owner int) (*Ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Ledger{root: root, owner: owner}
+	l := &Ledger{root: root, owner: owner, maxRecords: maxRecords}
 	if after, err := root.Stat("."); err != nil || !os.SameFile(fi, after) {
 		_ = root.Close()
 		return nil, fmt.Errorf("%s changed while it was opened", dir)
@@ -223,9 +225,38 @@ func (l *Ledger) begin(r record) (record, bool, error) {
 	return record{}, false, l.put(r)
 }
 
-// prune removes records of operations that finished before cutoff; at most
-// limit per call, so that a request never waits long for it.
-func (l *Ledger) prune(cutoff time.Time, limit int) {
+const (
+	// maxRecords bounds the ledger; beyond it the records of the oldest
+	// finished operations are removed first.
+	maxRecords = 10000
+	// pruneEvery is how often a request lists the ledger to prune it; the
+	// other requests only read the stamp's modification time.
+	pruneEvery = time.Hour
+	pruneStamp = "prune-stamp"
+)
+
+// maybePrune prunes the ledger when the last pruning is older than
+// pruneEvery. Record and stamp times are file modification times, so now is
+// the real time on a host.
+func (l *Ledger) maybePrune(now time.Time) {
+	if fi, err := l.root.Lstat(pruneStamp); err == nil && fi.ModTime().After(now.Add(-pruneEvery)) && !fi.ModTime().After(now) {
+		return
+	}
+	f, err := l.root.OpenFile(pruneStamp, os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
+	if err != nil {
+		return
+	}
+	_ = f.Close()
+	if err := l.root.Chtimes(pruneStamp, now, now); err != nil {
+		return
+	}
+	l.prune(now)
+}
+
+// prune removes the records of operations that finished more than
+// ledgerRetention before now and, while more than maxRecords remain, those
+// of the oldest finished operations. Running records are kept.
+func (l *Ledger) prune(now time.Time) {
 	d, err := l.root.Open("ops")
 	if err != nil {
 		return
@@ -235,24 +266,37 @@ func (l *Ledger) prune(cutoff time.Time, limit int) {
 	if err != nil {
 		return
 	}
+	type entry struct {
+		id  string
+		mod time.Time
+	}
+	var entries []entry
 	for _, n := range names {
-		if limit <= 0 {
-			return
-		}
 		id, ok := strings.CutSuffix(n, ".json")
 		if !ok || !uuidPattern.MatchString(id) {
 			continue
 		}
-		fi, err := l.root.Lstat("ops/" + n)
-		if err != nil || !fi.ModTime().Before(cutoff) {
+		if fi, err := l.root.Lstat(recordName(id)); err == nil {
+			entries = append(entries, entry{id: id, mod: fi.ModTime()})
+		}
+	}
+	slices.SortFunc(entries, func(a, b entry) int { return a.mod.Compare(b.mod) })
+	cutoff := now.Add(-ledgerRetention)
+	excess := len(entries) - l.maxRecords
+	for _, e := range entries {
+		expired := e.mod.Before(cutoff)
+		if !expired && excess <= 0 {
+			return
+		}
+		r, found, err := l.get(e.id)
+		if err != nil || !found || r.State == StateRunning {
 			continue
 		}
-		r, found, err := l.get(id)
-		if err != nil || !found || r.State == StateRunning || r.FinishedAt == 0 || !time.UnixMilli(r.FinishedAt).Before(cutoff) {
+		if excess <= 0 && !time.UnixMilli(r.FinishedAt).Before(cutoff) {
 			continue
 		}
-		if l.root.Remove("ops/"+n) == nil {
-			limit--
+		if l.root.Remove(recordName(e.id)) == nil {
+			excess--
 		}
 	}
 }

@@ -54,6 +54,11 @@ type Host struct {
 	// RootUID owns every directory and file the helper trusts, and RootUID
 	// and RootGID own what it writes: 0 on a host.
 	RootUID, RootGID int
+	// Free reports the free bytes and inodes of the file system holding a
+	// host path; nil checks nothing.
+	Free func(p string) (bytes, inodes uint64, err error)
+	// Limits bound builds.
+	Limits Limits
 }
 
 // Helper serves deploy helper requests.
@@ -190,7 +195,7 @@ func (h *Helper) change(ctx context.Context, req Request) Response {
 	if err := h.Ledger.put(rec); err != nil {
 		resp.Message = strings.TrimSpace(resp.Message + " (the outcome could not be recorded; a query will report the operation as interrupted)")
 	}
-	h.Ledger.prune(h.Clock.Now().Add(-ledgerRetention), 100)
+	h.Ledger.maybePrune(h.Clock.Now())
 	return resp
 }
 

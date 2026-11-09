@@ -108,6 +108,17 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 			return refuse(resp, CodeFailed, "%v", err)
 		}
 	}
+	lim := h.Limits.withDefaults()
+	if err := h.checkFree(builds, lim.MinFreeBytes, lim.MinFreeInodes); err != nil {
+		return refuse(resp, CodeRefused, "not enough room for a build: %v", err)
+	}
+	// A cache that grew too large is started afresh; no build of the
+	// service runs meanwhile.
+	if size, n, err := usage(h.FS, cache, lim.MaxEntries); err != nil || size > lim.CacheBytes || n > lim.MaxEntries/2 {
+		if err := h.emptyDir(cache); err != nil {
+			return refuse(resp, CodeFailed, "empty the build cache: %v", err)
+		}
+	}
 
 	id := h.newID()
 	dir := builds + "/" + id
@@ -152,8 +163,12 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 	}
 	unit := "lcm-build-" + svc + "-" + id
 	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs, backupDir(cfg))
+	stop := h.watchBuild(ctx, unit, []string{dir + "/src", dir + "/home", cache}, builds, lim)
 	res, err := h.run(ctx, time.Duration(req.TimeoutSec)*time.Second+2*time.Minute, argv...)
 	resp.Log = sanitizeLog(res.Output)
+	if why := stop(); why != "" {
+		return finish(refuse(resp, CodeFailed, "the build was stopped: %s", why))
+	}
 	if err != nil {
 		h.stopUnit(ctx, unit, err)
 		return finish(refuse(resp, CodeFailed, "%s", commandFailure("the build", err)))

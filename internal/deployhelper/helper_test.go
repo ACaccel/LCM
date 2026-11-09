@@ -184,13 +184,19 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		}
 		return execx.Result{Output: out}, nil
 	}
-	switch c.Argv[0] {
-	case systemdRun:
+	if c.Argv[0] == systemdRun {
+		// The fake build runs unlocked: it may advance the clock, and the
+		// build watcher then runs systemctl.
+		build, migrate := e.build, e.migrate
+		e.mu.Unlock()
+		defer e.mu.Lock()
 		if strings.HasPrefix(arg(c, "--unit="), "lcm-build-") {
-			return result(e.build(e.real(arg(c, "--working-directory="))))
+			return result(build(e.real(arg(c, "--working-directory="))))
 		}
 		i := slices.Index(c.Argv, "--")
-		return result(e.migrate(c.Argv[i+1:]))
+		return result(migrate(c.Argv[i+1:]))
+	}
+	switch c.Argv[0] {
 	case systemdAnalyze:
 		return result("bad unit\n", e.analyze)
 	case systemctl:
@@ -393,6 +399,45 @@ func TestBuildInstallActivate(t *testing.T) {
 	if got := e.systemctlCalls(); !slices.Equal(got[len(got)-4:], []string{"show --property=LoadState,ActiveState,SubState,UnitFileState,MainPID web.service", "stop web.service", "start web.service", "restart web.service"}) {
 		t.Errorf("systemctl %q", got)
 	}
+}
+
+func TestBuildLimits(t *testing.T) {
+	e := newEnv(t)
+	free := uint64(10 << 30)
+	e.h.Free = func(p string) (uint64, uint64, error) {
+		if p != "/var/lib/lcm-build/web" {
+			t.Errorf("measured %s", p)
+		}
+		return free, 1 << 20, nil
+	}
+	e.h.Limits = Limits{MaxBytes: 1000, CacheBytes: 100, Interval: time.Second}
+
+	// A cache that grew too large is emptied before the build.
+	e.write("/var/cache/lcm-build/web/npm/big", strings.Repeat("x", 200), 0o644)
+	e.ok(buildReq(commit1))
+	if e.exists("/var/cache/lcm-build/web/npm") {
+		t.Error("the oversized cache was kept")
+	}
+
+	// A build that writes too much is stopped.
+	e.build = func(src string) (string, int) {
+		e.writeReal(filepath.Join(src, "huge"), strings.Repeat("x", 2000), 0o644)
+		e.clock.Advance(time.Second)
+		return "killed\n", 143
+	}
+	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: its files exceed 1000 bytes")
+	if got := e.systemctlCalls(); len(got) == 0 || !strings.HasPrefix(got[len(got)-1], "stop lcm-build-web-") {
+		t.Errorf("systemctl %q", got)
+	}
+
+	// So is one that fills the file system, and none starts without room.
+	e.build = func(string) (string, int) {
+		free = 1 << 20
+		e.clock.Advance(time.Second)
+		return "", 143
+	}
+	e.refused(buildReq(commit1), CodeFailed, "the build was stopped: the build file system has only 1048576 bytes")
+	e.refused(buildReq(commit1), CodeRefused, "not enough room for a build")
 }
 
 func TestPruning(t *testing.T) {
@@ -671,15 +716,91 @@ func TestLedger(t *testing.T) {
 	}
 	e.refused(Request{Op: OpQuery, OperationID: id}, CodeFailed, "must be a regular file with mode 0600")
 
-	// Finished records are removed after the retention period.
-	e.clock.Advance(ledgerRetention + time.Hour)
-	old := time.Now().Add(-ledgerRetention - 2*time.Hour)
+	// Finished records are removed after the retention period, by the first
+	// request after an hour; the times are the clock's.
+	start := e.clock.Now()
+	for _, f := range e.records() {
+		if err := os.Chtimes(f, start, start); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(e.real("/var/lib/lcm-deploy/prune-stamp"), start, start); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Advance(ledgerRetention + time.Minute)
+	old := start.Add(-time.Hour)
 	if err := os.Chtimes(e.real("/var/lib/lcm-deploy/ops/"+runningID+".json"), old, old); err != nil {
 		t.Fatal(err)
 	}
 	e.ok(Request{Op: OpRestart, Service: "web"})
 	if e.exists("/var/lib/lcm-deploy/ops/" + runningID + ".json") {
 		t.Error("an expired record was kept")
+	}
+}
+
+// records returns the real paths of the ledger's records.
+func (e *env) records() []string {
+	e.t.Helper()
+	files, err := filepath.Glob(e.real("/var/lib/lcm-deploy/ops/*.json"))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return files
+}
+
+func TestLedgerIsBounded(t *testing.T) {
+	e := newEnv(t)
+	e.deploy(commit1)
+	e.h.Ledger.maxRecords = 3
+	for range 3 {
+		e.ok(Request{Op: OpRestart, Service: "web"})
+	}
+	// Within the hour the ledger is not listed again.
+	if n := len(e.records()); n != 6 {
+		t.Fatalf("%d records", n)
+	}
+	// Then the oldest finished records go first, and a running one stays.
+	for i, f := range e.records() {
+		at := e.clock.Now().Add(time.Duration(i-10) * time.Minute)
+		if err := os.Chtimes(f, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	running := "44444444-2222-4333-8444-555555555555"
+	if err := e.h.Ledger.put(record{Version: Version, OperationID: running, Service: "web", Op: OpStart, RequestHash: "x", State: StateRunning, StartedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	old := e.clock.Now().Add(-time.Hour)
+	if err := os.Chtimes(e.real("/var/lib/lcm-deploy/ops/"+running+".json"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	e.clock.Advance(pruneEvery + time.Minute)
+	last := e.ok(Request{Op: OpRestart, Service: "web"}).OperationID
+	files := e.records()
+	if len(files) != 3 || !e.exists("/var/lib/lcm-deploy/ops/"+running+".json") || !e.exists("/var/lib/lcm-deploy/ops/"+last+".json") {
+		t.Errorf("kept %v", files)
+	}
+}
+
+func TestInstallKeepsReleasesBounded(t *testing.T) {
+	e := newEnv(t)
+	b := e.ok(buildReq(commit1)).Build.BuildID
+	for range MaxKeepReleases + 3 {
+		e.ok(Request{Op: OpInstall, Service: "web", BuildID: b, Artifact: "dist"})
+		e.clock.Advance(time.Second)
+	}
+	names, err := os.ReadDir(e.real("/opt/web/releases"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := 0
+	for _, n := range names {
+		if n.IsDir() {
+			dirs++
+		}
+	}
+	if dirs != MaxKeepReleases || len(names) != 2*MaxKeepReleases {
+		t.Errorf("%d release directories, %d entries", dirs, len(names))
 	}
 }
 
