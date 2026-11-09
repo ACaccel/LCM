@@ -323,7 +323,11 @@ func (a *applier) checkGrant(ctx context.Context, name string, g ServiceGrant, u
 // preflightDeploy checks the deploy component, runtimes and service grants.
 func (a *applier) preflightDeploy(ctx context.Context) error {
 	fsys := a.h.FS
-	for _, d := range []string{BuildDir, BuildCacheDir, DeployLedger, RuntimesDir} {
+	dirs := []string{BuildDir, BuildCacheDir, DeployLedger, RuntimesDir}
+	if a.cfg.Backup != nil {
+		dirs = append(dirs, a.cfg.Backup.Dir)
+	}
+	for _, d := range dirs {
 		info, err := fsys.Lstat(d)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
@@ -411,6 +415,12 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 		perm fs.FileMode
 	}{{BuildDir, 0o755}, {BuildCacheDir, 0o755}, {DeployLedger, 0o700}} {
 		if err := a.ensureDir(s, d.path, d.perm, 0, 0, "root:root"); err != nil {
+			return err
+		}
+	}
+	// Backups of services are kept here; only root may enter it.
+	if b := a.cfg.Backup; b != nil {
+		if err := a.ensureDir(s, b.Dir, 0o700, 0, 0, "root:root"); err != nil {
 			return err
 		}
 	}
