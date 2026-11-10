@@ -484,11 +484,110 @@ func TestManagedService(t *testing.T) {
 	}
 
 	// The managed fields belong to the managed adapter only.
-	for _, field := range []string{"artifact: dist", "startArgs: [a]", "runtime: node24", "migrate: [node]", "keepReleases: 3"} {
+	for _, field := range []string{"artifact: dist", "startArgs: [a]", "runtime: node24", "migrate: [node]", "keepReleases: 3",
+		"publish: { dir: . }", "limits: { memoryMax: 1G }"} {
 		name, _, _ := strings.Cut(field, ":")
 		doc := resourceHead + "spec:\n  type: service\n  adapter: systemd\n  config: { unit: app.service, " + field + " }\n"
 		_, err := model.DecodeResource([]byte(doc))
 		assertIssue(t, err, "spec.config."+name, "not valid for adapter systemd")
+	}
+}
+
+const publishService = managedService + `    publish: { dir: client/dist/, retain: [assets/, provided-music/], retainDays: 30 }
+    limits: { memoryHigh: 768M, memoryMax: 1G, stopTimeout: 60s }
+`
+
+func TestManagedPublishAndLimits(t *testing.T) {
+	r, err := model.DecodeResource([]byte(publishService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := r.Service()
+	if p := cfg.Publish; p == nil || p.Dir != "client/dist" || !reflect.DeepEqual(p.Retain, []string{"assets/", "provided-music/"}) || p.EffectiveRetainDays() != 30 {
+		t.Fatalf("publish = %+v", cfg.Publish)
+	}
+	if l := cfg.Limits; l == nil || l.MemoryHigh != "768M" || l.MemoryMax != "1G" || l.StopTimeout.D() != time.Minute {
+		t.Fatalf("limits = %+v", cfg.Limits)
+	}
+	b, err := model.Encode(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2, err := model.DecodeResource(b); err != nil || !reflect.DeepEqual(r, r2) {
+		t.Fatalf("round trip: %v\n%s", err, b)
+	}
+	if (model.Publish{Dir: "."}).EffectiveRetainDays() != model.DefaultRetainDays {
+		t.Fatal("retainDays has no default")
+	}
+
+	// Without start the service only publishes: nothing that configures a
+	// process may be set.
+	static := strings.Replace(publishService, "    start: server/main.mjs\n    startArgs: [--port-from-env, mode=prod]\n    migrate: [node, scripts/migrate.mjs]\n", "", 1)
+	static = strings.Replace(static, "    limits: { memoryHigh: 768M, memoryMax: 1G, stopTimeout: 60s }\n", "", 1)
+	if r, err := model.DecodeResource([]byte(strings.Replace(static, "dir: client/dist/", "dir: .", 1))); err != nil {
+		t.Fatalf("static only: %v", err)
+	} else if cfg, _ := r.Service(); cfg.Start != "" || cfg.Publish.Dir != "." {
+		t.Fatalf("static only = %+v", cfg)
+	}
+	for _, tt := range []struct{ name, add, path string }{
+		{"startArgs", "    startArgs: [a]\n", "spec.config.startArgs"},
+		{"migrate", "    migrate: [node]\n", "spec.config.migrate"},
+		{"limits", "    limits: { memoryMax: 1G }\n", "spec.config.limits"},
+	} {
+		t.Run("static "+tt.name, func(t *testing.T) {
+			_, err := model.DecodeResource([]byte(static + tt.add))
+			assertIssue(t, err, tt.path, "needs start")
+		})
+	}
+	noPublish := strings.Replace(static, "    publish: { dir: client/dist/, retain: [assets/, provided-music/], retainDays: 30 }\n", "", 1)
+	_, err = model.DecodeResource([]byte(noPublish))
+	assertIssue(t, err, "spec.config.start", "required unless publish is set")
+
+	many := "[" + strings.TrimSuffix(strings.Repeat("a/,", 17), ",") + "]"
+	bad := []struct{ from, to, path, msg string }{
+		{"dir: client/dist/", "dir: /srv/www", "spec.config.publish.dir", "directory of the release"},
+		{"dir: client/dist/", "dir: ../www", "spec.config.publish.dir", "directory of the release"},
+		{"dir: client/dist/, ", "", "spec.config.publish.dir", "directory of the release"},
+		{"retain: [assets/, provided-music/]", "retain: [assets]", "spec.config.publish.retain", `ending with "/"`},
+		{"retain: [assets/, provided-music/]", "retain: [./]", "spec.config.publish.retain", `ending with "/"`},
+		{"retain: [assets/, provided-music/]", "retain: [.cache/]", "spec.config.publish.retain", `starts with "."`},
+		{"retain: [assets/, provided-music/]", "retain: [a/.b/]", "spec.config.publish.retain", `starts with "."`},
+		{"retain: [assets/, provided-music/]", "retain: [../x/]", "spec.config.publish.retain", `ending with "/"`},
+		{"retain: [assets/, provided-music/]", "retain: [assets/, assets/]", "spec.config.publish.retain", "listed twice"},
+		{"retain: [assets/, provided-music/]", "retain: " + many, "spec.config.publish.retain", "at most 16"},
+		{"retainDays: 30", "retainDays: 91", "spec.config.publish.retainDays", "between 1 and 90"},
+		{"retainDays: 30", "retainDays: -1", "spec.config.publish.retainDays", "between 1 and 90"},
+		{"retain: [assets/, provided-music/], ", "", "spec.config.publish.retainDays", "needs retain"},
+		{"memoryHigh: 768M", "memoryHigh: 768", "spec.config.limits.memoryHigh", "size such as"},
+		{"memoryHigh: 768M", "memoryHigh: 768m", "spec.config.limits.memoryHigh", "size such as"},
+		{"memoryHigh: 768M", "memoryHigh: 0M", "spec.config.limits.memoryHigh", "size such as"},
+		{"memoryHigh: 768M", "memoryHigh: 1023K", "spec.config.limits.memoryHigh", "between 1M and 16G"},
+		{"memoryMax: 1G", "memoryMax: 17G", "spec.config.limits.memoryMax", "between 1M and 16G"},
+		{"memoryMax: 1G", "memoryMax: 1T", "spec.config.limits.memoryMax", "size such as"},
+		{"memoryMax: 1G", "memoryMax: 512M", "spec.config.limits.memoryHigh", "not be larger than memoryMax"},
+		{"stopTimeout: 60s", "stopTimeout: 500ms", "spec.config.limits.stopTimeout", "between 1s and 10m0s"},
+		{"stopTimeout: 60s", "stopTimeout: 11m", "spec.config.limits.stopTimeout", "between 1s and 10m0s"},
+		{"stopTimeout: 60s", "stopTimeout: 1500ms", "spec.config.limits.stopTimeout", "whole seconds"},
+		{"stopTimeout: 60s", "stopTimeout: 60s, swap: 1G", "", "field swap not found"},
+	}
+	for _, tt := range bad {
+		t.Run(tt.to, func(t *testing.T) {
+			if !strings.Contains(publishService, tt.from) {
+				t.Fatalf("fixture lacks %q", tt.from)
+			}
+			_, err := model.DecodeResource([]byte(strings.Replace(publishService, tt.from, tt.to, 1)))
+			assertIssue(t, err, tt.path, tt.msg)
+		})
+	}
+	// The bounds themselves are accepted.
+	for _, ok := range []string{"memoryHigh: 1M, memoryMax: 16G, stopTimeout: 1s", "memoryMax: 16384M, stopTimeout: 10m", "memoryHigh: 1024K"} {
+		doc := strings.Replace(publishService, "memoryHigh: 768M, memoryMax: 1G, stopTimeout: 60s", ok, 1)
+		if _, err := model.DecodeResource([]byte(doc)); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	if n, ok := model.UnitSize("768M"); !ok || n != 768<<20 {
+		t.Fatalf("UnitSize(768M) = %d %v", n, ok)
 	}
 }
 

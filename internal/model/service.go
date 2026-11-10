@@ -55,7 +55,8 @@ type ServiceConfig struct {
 	File    string `yaml:"file,omitempty" json:"file,omitempty"`
 	// command: shell commands per action; each is optional and an action
 	// without one is not offered. managed: start is the release-relative
-	// file the service runs, see below.
+	// file the service runs, see below; a managed service without start
+	// only publishes static content.
 	Start   string `yaml:"start,omitempty" json:"start,omitempty"`
 	Stop    string `yaml:"stop,omitempty" json:"stop,omitempty"`
 	Restart string `yaml:"restart,omitempty" json:"restart,omitempty"`
@@ -70,6 +71,10 @@ type ServiceConfig struct {
 	RuntimeName  string   `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	Migrate      []string `yaml:"migrate,omitempty" json:"migrate,omitempty"`
 	KeepReleases int      `yaml:"keepReleases,omitempty" json:"keepReleases,omitempty"`
+	// managed: the static content of a release that the helper publishes
+	// to the service's fixed publish directory, and the limits of its unit.
+	Publish *Publish    `yaml:"publish,omitempty" json:"publish,omitempty"`
+	Limits  *UnitLimits `yaml:"limits,omitempty" json:"limits,omitempty"`
 
 	Source *Source            `yaml:"source,omitempty" json:"source,omitempty"`
 	Backup *Backup            `yaml:"backup,omitempty" json:"backup,omitempty"`
@@ -151,6 +156,39 @@ func (s Source) EffectiveTimeout() time.Duration {
 		return DefaultSourceTimeout.D()
 	}
 	return s.Timeout.D()
+}
+
+// Publish names the static content of a managed release. The deploy helper
+// copies it to the service's publish directory, which the host
+// configuration fixes; the document only chooses what of the release goes
+// there and which files outlive the release that brought them.
+type Publish struct {
+	// Dir is the release-relative directory to publish; "." is the whole
+	// release.
+	Dir string `yaml:"dir" json:"dir"`
+	// Retain are directories below Dir, each ending with "/", whose files
+	// stay RetainDays after the last release that contained them, so that
+	// pages loaded before a deployment still find their assets.
+	Retain     []string `yaml:"retain,omitempty" json:"retain,omitempty"`
+	RetainDays int      `yaml:"retainDays,omitempty" json:"retainDays,omitempty"`
+}
+
+// EffectiveRetainDays returns retainDays, defaulting to
+// DefaultRetainDays.
+func (p Publish) EffectiveRetainDays() int {
+	if p.RetainDays == 0 {
+		return DefaultRetainDays
+	}
+	return p.RetainDays
+}
+
+// UnitLimits tighten the unit of a managed service: its memory and how
+// long systemd waits for it to stop. Sizes are a number with K, M or G
+// (powers of 1024).
+type UnitLimits struct {
+	MemoryHigh  string   `yaml:"memoryHigh,omitempty" json:"memoryHigh,omitempty"`
+	MemoryMax   string   `yaml:"memoryMax,omitempty" json:"memoryMax,omitempty"`
+	StopTimeout Duration `yaml:"stopTimeout,omitempty" json:"stopTimeout,omitempty"`
 }
 
 // Command is an operator-defined shell command (run with sh -c).
@@ -289,6 +327,9 @@ func (c *ServiceConfig) normalize(adapter string) {
 	if RuntimeType(adapter) == RuntimeManaged && len(c.Artifact) > 1 {
 		c.Artifact = strings.TrimSuffix(c.Artifact, "/")
 	}
+	if RuntimeType(adapter) == RuntimeManaged && c.Publish != nil && len(c.Publish.Dir) > 1 {
+		c.Publish.Dir = strings.TrimSuffix(c.Publish.Dir, "/")
+	}
 	// The same for the paths of file sources.
 	if c.Backup != nil {
 		for i, src := range c.Backup.Sources {
@@ -394,10 +435,9 @@ func validateRuntime(r Runtime, base string, is *Issues) {
 		// start names the file the service runs; the helper's unit does
 		// the rest, so the other commands have no meaning.
 		forbid(merge(systemd, docker, compose, map[string]string{"stop": r.Stop, "restart": r.Restart, "status": r.Status}))
-		switch {
-		case r.Start == "":
-			is.addf(base+".start", "is required")
-		case !releasePath(r.Start) || r.Start == ".":
+		// Without start the service only publishes static content, which
+		// validateManaged checks.
+		if r.Start != "" && (!releasePath(r.Start) || r.Start == ".") {
 			is.addf(base+".start", "must be a release-relative file: %s", releasePathRule)
 		}
 	}
@@ -418,6 +458,17 @@ const (
 	MaxManagedBuildTimeout = Duration(2 * time.Hour)
 	maxManagedArgs         = 32
 	releasePathRule        = `letters, digits and ._-/ without ".." components, not absolute`
+
+	// DefaultRetainDays, MaxRetainDays and MaxRetain bound publish.
+	DefaultRetainDays = 14
+	MaxRetainDays     = 90
+	MaxRetain         = 16
+	// MinUnitMemory and MaxUnitMemory bound memoryHigh and memoryMax;
+	// MinStopTimeout and MaxStopTimeout bound stopTimeout.
+	MinUnitMemory  = 1 << 20
+	MaxUnitMemory  = 16 << 30
+	MinStopTimeout = Duration(time.Second)
+	MaxStopTimeout = Duration(10 * time.Minute)
 )
 
 var (
@@ -425,7 +476,23 @@ var (
 	managedArgRe  = regexp.MustCompile(`^[A-Za-z0-9._/=:,@+-]{1,256}$`)
 	programNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 	runtimeNameRe = regexp.MustCompile(`^[a-z][a-z0-9]{0,15}$`)
+	unitSizeRe    = regexp.MustCompile(`^([1-9][0-9]{0,8})([KMG])$`)
 )
+
+// UnitSize returns the bytes of a unit memory size such as 768M, or false
+// when s is not one.
+func UnitSize(s string) (int64, bool) {
+	m := unitSizeRe.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	var n int64
+	for _, c := range m[1] {
+		n = n*10 + int64(c-'0')
+	}
+	shift := map[string]uint{"K": 10, "M": 20, "G": 30}[m[2]]
+	return n << shift, true
+}
 
 // releasePath accepts a clean relative path without ".." components.
 func releasePath(p string) bool {
@@ -455,6 +522,7 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 		}{
 			{"artifact", c.Artifact != ""}, {"keepReleases", c.KeepReleases != 0}, {"migrate", c.Migrate != nil},
 			{"runtime", c.RuntimeName != ""}, {"startArgs", c.StartArgs != nil},
+			{"publish", c.Publish != nil}, {"limits", c.Limits != nil},
 		} {
 			if f.set {
 				is.addf(base+"."+f.name, "is not valid for adapter %s", adapter)
@@ -485,6 +553,27 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 	if c.KeepReleases != 0 && (c.KeepReleases < MinKeepReleases || c.KeepReleases > MaxKeepReleases) {
 		is.addf(base+".keepReleases", "must be between %d and %d", MinKeepReleases, MaxKeepReleases)
 	}
+	if c.Start == "" {
+		// A service without a process: the release only brings static
+		// content, and nothing that configures a process applies.
+		if c.Publish == nil {
+			is.addf(base+".start", "is required unless publish is set: a managed service without start only publishes static content")
+		}
+		for _, f := range []struct {
+			name string
+			set  bool
+		}{{"limits", c.Limits != nil}, {"migrate", c.Migrate != nil}, {"startArgs", c.StartArgs != nil}} {
+			if f.set {
+				is.addf(base+"."+f.name, "needs start: a managed service without start runs no process")
+			}
+		}
+	}
+	if c.Publish != nil {
+		validatePublish(c.Publish, base+".publish", is)
+	}
+	if c.Limits != nil {
+		validateLimits(c.Limits, base+".limits", is)
+	}
 	src := c.Source
 	if src == nil {
 		is.addf(base+".source", "is required for adapter managed: it is what the service is built from")
@@ -501,6 +590,78 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 	}
 	if src.Timeout > MaxManagedBuildTimeout {
 		is.addf(base+".source.timeout", "must be at most %s for adapter managed", MaxManagedBuildTimeout.D())
+	}
+}
+
+// validatePublish checks the static content a release publishes. Where it
+// goes is the host's to decide: the service's publish directory.
+func validatePublish(p *Publish, base string, is *Issues) {
+	if !releasePath(p.Dir) {
+		is.addf(base+".dir", `must be a directory of the release: %s ("." is the whole release)`, releasePathRule)
+	}
+	if len(p.Retain) > MaxRetain {
+		is.addf(base+".retain", "at most %d directories are allowed", MaxRetain)
+	}
+	seen := map[string]bool{}
+	for _, r := range p.Retain {
+		if !ValidRetainPrefix(r) {
+			is.addf(base+".retain", `%q must be a directory below publish.dir ending with "/" (%s), without a component that starts with "."`, r, releasePathRule)
+		}
+		if seen[r] {
+			is.addf(base+".retain", "%s is listed twice", r)
+		}
+		seen[r] = true
+	}
+	switch {
+	case p.RetainDays != 0 && len(p.Retain) == 0:
+		is.addf(base+".retainDays", "needs retain: it is how long the files of the retained directories stay")
+	case p.RetainDays < 0 || p.RetainDays > MaxRetainDays:
+		is.addf(base+".retainDays", "must be between 1 and %d (default %d)", MaxRetainDays, DefaultRetainDays)
+	}
+}
+
+// ValidRetainPrefix accepts a directory such as "assets/" or
+// "media/emoji/": a release path ending with "/" whose components do not
+// start with ".", which publishing skips.
+func ValidRetainPrefix(r string) bool {
+	dir, ok := strings.CutSuffix(r, "/")
+	if !ok || !releasePath(dir) || dir == "." {
+		return false
+	}
+	for _, c := range strings.Split(dir, "/") {
+		if strings.HasPrefix(c, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+func validateLimits(l *UnitLimits, base string, is *Issues) {
+	var high, ceiling int64
+	for _, f := range []struct {
+		name, value string
+		bytes       *int64
+	}{{"memoryHigh", l.MemoryHigh, &high}, {"memoryMax", l.MemoryMax, &ceiling}} {
+		if f.value == "" {
+			continue
+		}
+		n, ok := UnitSize(f.value)
+		if !ok || n < MinUnitMemory || n > MaxUnitMemory {
+			is.addf(base+"."+f.name, "must be a size such as 768M or 1G (K, M or G, powers of 1024) between 1M and 16G")
+			continue
+		}
+		*f.bytes = n
+	}
+	if high > 0 && ceiling > 0 && high > ceiling {
+		is.addf(base+".memoryHigh", "must not be larger than memoryMax")
+	}
+	if t := l.StopTimeout; t != 0 {
+		switch {
+		case t < MinStopTimeout || t > MaxStopTimeout:
+			is.addf(base+".stopTimeout", "must be between %s and %s", MinStopTimeout.D(), MaxStopTimeout.D())
+		case t.D()%time.Second != 0:
+			is.addf(base+".stopTimeout", "must be whole seconds")
+		}
 	}
 }
 
