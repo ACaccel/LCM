@@ -499,6 +499,17 @@ func TestBackupDoesNotTrustTheWorkersOutput(t *testing.T) {
 			e.mkdirReal(out + "/sub")
 			e.writeReal(out+"/sub/x", "x", 0o600)
 		}, "unexpected entry \"sub\""},
+		// A directory the account made read-only cannot be emptied until root
+		// takes it over; the cleanup must still remove the staging directory.
+		"a read-only subdirectory": {func(e *env, out string) {
+			e.mkdirReal(out + "/sub/deeper")
+			e.writeReal(out+"/sub/deeper/x", "x", 0o600)
+			for _, d := range []string{out + "/sub/deeper", out + "/sub"} {
+				if err := os.Chmod(d, 0o555); err != nil { //nolint:gosec // a directory that cannot be emptied, to be taken over
+					e.t.Fatal(err)
+				}
+			}
+		}, "unexpected entry \"sub\""},
 		"a directory in place of an artifact": {func(e *env, out string) {
 			_ = os.Remove(out + "/001-sqlite.db")
 			e.mkdirReal(out + "/001-sqlite.db")
@@ -523,6 +534,65 @@ func TestBackupDoesNotTrustTheWorkersOutput(t *testing.T) {
 				t.Errorf("left %v", names)
 			}
 		})
+	}
+}
+
+// stuckFS cannot remove staging leftovers while stuck is set, like a tree
+// whose directories the service account keeps changing.
+type stuckFS struct {
+	hostsetup.OS
+	stuck *bool
+}
+
+func (f stuckFS) RemoveAll(name string) error {
+	if _, err := f.OS.Lstat(name); err != nil {
+		return nil
+	}
+	if *f.stuck && (strings.Contains(name, "/.stage-") || strings.Contains(name, "/.del-stuck-")) {
+		return fmt.Errorf("remove %s: directory not empty", name)
+	}
+	return f.OS.RemoveAll(name)
+}
+
+// A staging tree that cannot be removed is moved aside, so that it blocks no
+// later operation, and the sweep skips what it cannot remove.
+func TestStuckStagingBlocksNothing(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	stuck := true
+	e.h.FS = stuckFS{OS: hostsetup.OS{Root: e.root}, stuck: &stuck}
+	hold := func() []string {
+		var out []string
+		names, _ := os.ReadDir(e.real("/var/backups/lcm/web"))
+		for _, n := range names {
+			out = append(out, n.Name())
+		}
+		return out
+	}
+	// A failed backup leaves its staging directory, now under another name.
+	e.workerWrap = func(string, func() (string, int)) (string, int) { return "boom\n", 1 }
+	e.refused(backupReq(fileSources...), CodeFailed, "the backup worker exited")
+	left := hold()
+	if len(left) != 1 || !strings.HasPrefix(left[0], ".del-stuck-") {
+		t.Fatalf("left %v", left)
+	}
+	// The next operations go on, and say what they skipped.
+	e.workerWrap = nil
+	resp := e.ok(backupReq(fileSources...))
+	if !strings.Contains(resp.Log, "left "+left[0]+" in place") {
+		t.Errorf("log %q", resp.Log)
+	}
+	if got := e.ok(Request{Op: OpPrune, Service: "web", Keep: &Keep{Daily: 5, Weekly: 1}}); !strings.Contains(got.Log, "in place") {
+		t.Errorf("prune log %q", got.Log)
+	}
+	e.ok(e.restoreReq(resp.Backup.BackupID))
+	// Once the tree can be removed the next change clears it.
+	stuck = false
+	e.ok(backupReq(fileSources...))
+	for _, n := range hold() {
+		if strings.HasPrefix(n, ".") {
+			t.Errorf("left %v", hold())
+		}
 	}
 }
 
@@ -562,14 +632,10 @@ func TestBackupSecuresTheOutputBeforeReadingIt(t *testing.T) {
 	var events []string
 	e.h.FS = recordingFS{OS: hostsetup.OS{Root: e.root}, events: &events}
 	e.ok(backupReq(fileSources...))
-	// The measurement and the copy both read the directory.
-	if len(events) < 3 || events[0] != fmt.Sprintf("chown %d:%d", e.h.RootUID, e.h.RootGID) || events[1] != "chmod 0700" || slices.Contains(events[2:], "chown") {
+	// The directory is taken before anything reads it; the measurement and the
+	// copy read it after, and the cleanup takes the staging directory once more.
+	if len(events) < 3 || events[0] != fmt.Sprintf("chown %d:%d", e.h.RootUID, e.h.RootGID) || events[1] != "chmod 0700" || events[2] != "read" {
 		t.Errorf("events %v", events)
-	}
-	for _, ev := range events[2:] {
-		if ev != "read" {
-			t.Errorf("events %v", events)
-		}
 	}
 }
 

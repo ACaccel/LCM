@@ -415,9 +415,11 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 	if e != nil {
 		return respond(resp, e)
 	}
-	if e := h.sweep(env); e != nil {
+	notes, e := h.sweep(env)
+	if e != nil {
 		return respond(resp, e)
 	}
+	resp.Log = notes
 	p := setParams{backupEnv: env, opID: req.OperationID, tag: "b", kind: KindBackup, mode: req.Mode, sources: req.Sources, timeoutSec: req.TimeoutSec}
 	if p.mode == "" {
 		p.mode = ModeOnline
@@ -453,7 +455,7 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 		}
 		return respond(resp, e)
 	}
-	resp.Log = out
+	resp.Log = notes + out
 	resp.Backup = &BackupResult{BackupID: m.BackupID, ManifestSHA256: sum, Size: m.Size, Files: len(m.Files),
 		Skipped: m.Skipped, CreatedAt: m.CreatedAt, ReleaseID: m.ReleaseID}
 	if startErr != nil {
@@ -593,7 +595,7 @@ func (h *Helper) makeSet(ctx context.Context, p setParams) (setManifest, string,
 	}
 	tmp := p.svcDir + "/" + tmpPrefix + name
 	defer func() {
-		_ = h.FS.RemoveAll(stage)
+		_ = h.discard(stage)
 		_ = h.FS.RemoveAll(tmp)
 	}()
 	if err := h.FS.RemoveAll(tmp); err != nil {
@@ -622,6 +624,39 @@ func (h *Helper) makeSet(ctx context.Context, p setParams) (setManifest, string,
 	return m, hex.EncodeToString(sum[:]), out, nil
 }
 
+// secureLimits bound the walk that takes the staging directories over.
+func (h *Helper) secureLimits() hostsetup.MeasureLimits {
+	lim := h.backupLimits()
+	deadline := h.Clock.Now().Add(lim.MeasureTimeout)
+	return hostsetup.MeasureLimits{MaxDepth: lim.MaxDepth, MaxEntries: stageEntries,
+		Expired: func() bool { return !h.Clock.Now().Before(deadline) }}
+}
+
+// discard removes a staging directory after its worker ran. The service
+// account may keep descriptors of directories in it, through which it could
+// add entries while root removes the tree, so the directories are taken over
+// first (best effort, bounded). A tree that still cannot be removed is
+// renamed to .del-stuck-* so that it blocks nothing; a leftover already named
+// so is reported as an error and left.
+func (h *Helper) discard(p string) error {
+	info, err := h.FS.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err == nil && info.IsDir() && !info.IsLink() {
+		_ = hostsetup.SecureTree(h.FS, p, info, h.RootUID, h.RootGID, h.secureLimits())
+	}
+	rmErr := h.FS.RemoveAll(p)
+	if rmErr == nil || strings.HasPrefix(path.Base(p), delPrefix) {
+		return rmErr
+	}
+	aside := path.Dir(p) + "/" + delPrefix + "stuck-" + h.newID()
+	if err := h.FS.Rename(p, aside); err != nil {
+		return errors.Join(rmErr, err)
+	}
+	return nil
+}
+
 // collect copies the artifacts the worker left in out, which the service
 // account controls, into the new directory tmp. It reads out through a tree
 // confined to it, takes exactly the expected names, and only regular files
@@ -643,10 +678,10 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 	// reached through /proc) and write to it later. Take the directory away
 	// from the account, so that nothing can be added after the next
 	// measurement, and measure again.
-	if err := h.FS.Chown(out, before, h.RootUID, h.RootGID); err != nil {
-		return zero, failf(CodeFailed, "secure the output directory: %v", err)
-	}
-	if err := h.FS.Chmod(out, before, 0o700); err != nil {
+	// Every directory the account made in it is taken too: one it keeps
+	// open stays writable to it and would keep root from removing the
+	// staging directory.
+	if err := hostsetup.SecureTree(h.FS, out, before, h.RootUID, h.RootGID, h.secureLimits()); err != nil {
 		return zero, failf(CodeFailed, "secure the output directory: %v", err)
 	}
 	lim := h.backupLimits()
@@ -910,20 +945,23 @@ func (h *Helper) backups(req Request, cfg hostsetup.Config, g hostsetup.ServiceG
 
 // sweep removes the staging leftovers of an operation that was interrupted.
 // Every changing operation calls it first: it holds the service's lock, so no
-// backup or restore of the service is running and the leftovers are dead.
-func (h *Helper) sweep(env backupEnv) *opErr {
+// backup or restore of the service is running and the leftovers are dead. A
+// leftover that cannot be removed is skipped, not an error: it must not block
+// the service's operations. The returned note names what was skipped.
+func (h *Helper) sweep(env backupEnv) (string, *opErr) {
 	names, err := h.FS.ReadDir(env.svcDir)
 	if err != nil {
-		return failf(CodeFailed, "%v", err)
+		return "", failf(CodeFailed, "%v", err)
 	}
+	var note string
 	for _, n := range names {
 		if strings.HasPrefix(n, stagePrefix) || strings.HasPrefix(n, tmpPrefix) || strings.HasPrefix(n, delPrefix) {
-			if err := h.FS.RemoveAll(env.svcDir + "/" + n); err != nil {
-				return failf(CodeFailed, "remove %s: %v", n, err)
+			if err := h.discard(env.svcDir + "/" + n); err != nil {
+				note += fmt.Sprintf("left %s in place, as it cannot be removed: %s\n", hostsetup.Printable(n, 64), hostsetup.Printable(err.Error(), 200))
 			}
 		}
 	}
-	return nil
+	return note, nil
 }
 
 // prune removes what the retention rules allow.
@@ -933,9 +971,11 @@ func (h *Helper) prune(_ context.Context, req Request, cfg hostsetup.Config, g h
 	if e != nil {
 		return respond(resp, e)
 	}
-	if e := h.sweep(env); e != nil {
+	notes, e := h.sweep(env)
+	if e != nil {
 		return respond(resp, e)
 	}
+	resp.Log = notes
 	list, e := h.listSets(env)
 	if e != nil {
 		return respond(resp, e)
@@ -1186,9 +1226,11 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	if e != nil {
 		return respond(resp, e)
 	}
-	if e := h.sweep(env); e != nil {
+	notes, e := h.sweep(env)
+	if e != nil {
 		return respond(resp, e)
 	}
+	resp.Log = notes
 	m, sum, e := h.readSet(env.svcDir, env.svc, req.BackupID)
 	if e != nil {
 		return respond(resp, e)
@@ -1228,7 +1270,7 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	if e != nil {
 		return respond(resp, e)
 	}
-	defer func() { _ = h.FS.RemoveAll(stage) }()
+	defer func() { _ = h.discard(stage) }()
 
 	// The tools of the restore were checked by staging the set; the copy of
 	// the current data needs its own, which must be there before the service
@@ -1291,7 +1333,7 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 				msg += "; starting the service again failed: " + serr.msg
 			}
 		}
-		resp.Log = e.log
+		resp.Log += e.log
 		return refuse(resp, CodeFailed, "%s", msg)
 	}
 	if serr := startAgain(); serr != nil {
@@ -1307,6 +1349,6 @@ func (h *Helper) undoRestore(ctx context.Context, env backupEnv, opName string, 
 	if e != nil {
 		return e
 	}
-	defer func() { _ = h.FS.RemoveAll(stage) }()
+	defer func() { _ = h.discard(stage) }()
 	return h.applyStage(ctx, env, opName+"u", stage)
 }
