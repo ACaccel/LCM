@@ -38,6 +38,12 @@ NGINX_LOG = '/var/log/nginx/workstation-security.jsonl'
 # keeps either side from testing or reloading the other's half-written files.
 NGINX_LOCK = Path('/run/lcm-ingress.lock')
 CONTROL_LOCK = Path('/run/lcm-security.lock')
+# A root operation of install.py waits for CONTROL_LOCK; while this file is
+# recent, new requests are refused so that the lcm account cannot hold the
+# lock away from root by starting the helper again and again.
+PENDING = Path('/run/lcm-security.pending')
+PENDING_SECONDS = 3600
+MAX_DEPTH = 8
 ACTIONS = ('aide.check', 'aide.schedule', 'nginx.configure', 'audit.profile', 'aide.profile', 'baseline.request')
 # Categories with observation thresholds. Ingress names the category of every
 # location in $lcm_category; health and static locations have no thresholds.
@@ -747,9 +753,14 @@ class Controls:
         else:
             raise Failure('invalid')
         before = {str(path): self.files.get(str(path), self.optional.get(str(path))) for path in targets}
-        journal['rollback'] = {name: value.decode() if value is not None else None for name, value in before.items()}
-        journal['candidateHashes'] = {str(path): digest(value) for path, value in targets.items()}
-        journal['policyBefore'] = json.loads(canonical(self.policy))
+        # One digest over each set: the journal stays far below its read limit
+        # whatever the number of services; the content to restore stays in
+        # memory, and the files' own digests are pinned in the policy.
+        journal['rollbackDigest'] = digest(canonical({name: digest(value) if value is not None else None
+                                                      for name, value in before.items()}))
+        journal['candidateDigest'] = digest(canonical({str(path): digest(value) for path, value in targets.items()}))
+        policy_before = json.loads(canonical(self.policy))
+        journal['policyBeforeDigest'] = digest(canonical(policy_before))
         if action == 'audit.profile':
             lines = {line for line in run(['/usr/sbin/auditctl', '-l']).splitlines() if line and line != 'No rules'}
             journal['auditForeignBefore'] = sorted(line for line in lines if 'wssec_optional_' not in line)
@@ -812,7 +823,7 @@ class Controls:
                         path.unlink()
                     else:
                         atomic(path, old, 0o644)
-                atomic(POLICY, canonical(journal['policyBefore']))
+                atomic(POLICY, canonical(policy_before))
                 if action == 'nginx.configure':
                     run(['/usr/sbin/nginx', '-t'])
                     run(['/usr/bin/systemctl', 'reload', 'nginx.service'])
@@ -857,6 +868,39 @@ class Controls:
         raise Failure('invalid')
 
 
+def refuse_while_pending():
+    try:
+        info = PENDING.lstat()
+    except FileNotFoundError:
+        return
+    # A stale file of an interrupted installer (it lives in /run) stops
+    # counting after PENDING_SECONDS.
+    if stat.S_ISREG(info.st_mode) and info.st_uid == 0 and dt.datetime.now().timestamp() - info.st_mtime < PENDING_SECONDS:
+        raise Failure('busy')
+
+
+def depth(raw):
+    """The deepest nesting of arrays and objects, outside strings."""
+    deepest = level = 0
+    in_string = escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5c:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in (0x5b, 0x7b):
+            level += 1
+            deepest = max(deepest, level)
+        elif byte in (0x5d, 0x7d):
+            level -= 1
+    return deepest
+
+
 def main():
     os.umask(0o077)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
@@ -867,10 +911,13 @@ def main():
     trusted(Path(__file__))
     trusted(BASE)
     # The installer holds the same lock while it changes the component.
+    refuse_while_pending()
     lock = lock_file(CONTROL_LOCK)
     try:
         raw = sys.stdin.buffer.read(16385)
         if len(raw) > 16384:
+            raise Failure('invalid')
+        if depth(raw) > MAX_DEPTH:
             raise Failure('invalid')
         request = json.loads(raw)
         if not isinstance(request, dict):
@@ -887,5 +934,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (Failure, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+    except Exception as error:  # noqa: BLE001 - every failure answers with the protocol's error
         print(json.dumps({'version': VERSION, 'error': error.code if isinstance(error, Failure) else 'unavailable'}))

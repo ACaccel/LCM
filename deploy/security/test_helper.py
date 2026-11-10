@@ -207,6 +207,44 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(all(v['rate'] == '45r/s' for v in H.Controls().limits()))
         self.assertEqual(H.read_json(H.POLICY)['nginx']['limits'], H.valid_limits(self.limits()['limits']))
 
+    def test_journal_and_policy_stay_readable_with_the_most_services(self):
+        services = ['svc-{:02d}'.format(i) for i in range(H.MAX_SERVICES)]
+        nginx = {'services': sorted(services), 'limits': [dict(item) for item in H.DEFAULT_LIMITS]}
+        files = H.nginx_files(nginx)
+        for path, value in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(value)
+        policy = copy.deepcopy(self.policy)
+        policy['nginx'] = nginx
+        policy['files'] = {name: value for name, value in policy['files'].items() if name in H.pinned_paths(policy)}
+        policy['files'].update({str(path): H.digest(value) for path, value in files.items()})
+        H.POLICY.write_bytes(H.canonical(policy))
+        request, preview = self.preview('nginx.configure', self.limits())
+        operation = self.apply(request, preview)
+        self.assertEqual(operation['state'], 'succeeded')
+        path = H.Controls().journal_path(request['requestId'])
+        self.assertLess(path.stat().st_size, H.MAX_JSON // 2)
+        self.assertLess(H.POLICY.stat().st_size, H.MAX_JSON)
+        self.assertEqual(H.Controls().operation({'requestId': request['requestId']})['state'], 'succeeded')
+
+    def test_deeply_nested_requests_are_refused(self):
+        self.assertEqual(H.depth(b'{"a":[1,{"b":"[[[["}]}'), 3)
+        self.assertGreater(H.depth(b'[' * 5000), H.MAX_DEPTH)
+        self.assertEqual(H.depth(b'{"a":"\\"}'), 1)
+
+    def test_requests_wait_for_a_pending_root_operation(self):
+        now = H.dt.datetime.now().timestamp()
+        def pending(uid, age):
+            return types.SimpleNamespace(lstat=lambda: types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=uid, st_mtime=now - age))
+        with patch.object(H, 'PENDING', pending(0, 5)), self.assertRaises(H.Failure) as error:
+            H.refuse_while_pending()
+        self.assertEqual(error.exception.code, 'busy')
+        for uid, age in ((1000, 5), (0, H.PENDING_SECONDS + 5)):
+            with patch.object(H, 'PENDING', pending(uid, age)):
+                H.refuse_while_pending()
+        with patch.object(H, 'PENDING', self.root / 'absent'):
+            H.refuse_while_pending()
+
     def test_ingress_files_never_count_as_drift(self):
         site = H.HOOKS.parent / 'ingress-site.conf'
         site.write_text('server { set $lcm_service web; set $lcm_category api; }\n')

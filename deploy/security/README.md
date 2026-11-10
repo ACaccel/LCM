@@ -53,6 +53,9 @@ unprivileged status invocation (`GET /api/v1/security/host`) after installation.
 The helper and the installer hold `/run/lcm-security.lock` while they change the
 component, and `nginx.configure` also takes `/run/lcm-ingress.lock`, which the ingress
 component holds while it changes Nginx, before re-reading and changing the files.
+While `/run/lcm-security.pending` (root-owned, less than an hour old) exists, a root
+installer operation is waiting for or holding the lock, and the helper refuses every
+request with `busy`. Requests nested deeper than 8 levels are refused as `invalid`.
 
 ## Recovery and local approval
 
@@ -63,8 +66,10 @@ rechecks the digest under the global control lock and persists `running` before 
 side effect. A request ID cannot change intent. A later query reconciles AIDE using
 its actual unit and a report newer than the recorded execution start. An interrupted
 configuration change becomes `indeterminate`; it is never executed again implicitly.
-Snapshots and candidate hashes remain in the protected operation journal for local
-review. Verified command failures restore only unchanged candidate files. A failed
+The protected operation journal keeps one digest of the files before the change, of
+the candidate files and of the policy before it, never their content, so that it stays
+far below its read limit whatever the number of services; the content to restore stays
+in the helper's memory. Verified command failures restore only unchanged candidate files. A failed
 rollback remains indeterminate and requires administrator review.
 
 The journal holds at most 2,000 operations. When it is full, a preview first removes
