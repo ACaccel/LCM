@@ -753,7 +753,7 @@ func encodeResponse(r Response) []byte {
 	if err == nil && len(raw) <= MaxResponse {
 		return raw
 	}
-	r.Log, r.Releases = "", nil
+	r.Log, r.Releases, r.Backups = "", nil, nil
 	r.Message = strings.TrimSpace(r.Message + " (the reply was too large; details were dropped)")
 	raw, _ = marshal(r)
 	return raw
