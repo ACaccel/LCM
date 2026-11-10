@@ -48,7 +48,7 @@ LCM's own service uses a `command` runtime with only `status`, because it must n
 
 ### Managed services
 
-A managed service needs no deployment code in its repository: the restricted [deploy helper](operations.md#deploy-helper) builds it as `lcm-build`, installs the artifact as a root-owned release under `/opt/<name>/releases`, and runs it as its own account from a unit of a built-in template. The host's administrator grants the service first (`sudo bin/lcm host allow <name> --port N`, [service grants](operations.md#service-grants)); its port, runtimes, build inputs and directories come only from `/etc/lcm/host.json`, never from the document.
+A managed service needs no deployment code in its repository: the restricted [deploy helper](operations.md#deploy-helper) builds it as its build account `lcmb-<name>`, installs the artifact as a root-owned release under `/opt/<name>/releases`, and runs it as its own account from a unit of a built-in template. The host's administrator grants the service first (`sudo bin/lcm host allow <name> --port N`, [service grants](operations.md#service-grants)); its port, runtimes, build inputs and directories come only from `/etc/lcm/host.json`, never from the document.
 
 ```yaml
 metadata: { name: web }           # at most 27 characters, not starting with "lcm": the account, unit and directories
@@ -74,7 +74,7 @@ spec:
 
 The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused, and the managed fields are refused for every other adapter. The helper checks every request again and refuses what the host does not grant; its message is shown as the error of the action.
 
-**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy`, `rollback`, `backup` and `restore` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; jobs are unaffected. The wrapper is checked at every use, so enabling the component needs no restart of LCM. The reason message names the cause (wrapper missing, wrapper not a root-owned file only root can write, or another data directory) and the console shows it. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
+**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy`, `rollback`, `backup` and `restore` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; jobs are unaffected. The reason message names the cause (wrapper missing, wrapper not a root-owned file only root can write, or another data directory) and the console shows it. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
 
 ## Source
 
@@ -89,7 +89,11 @@ The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused,
 
 - **Build checkout.** LCM owns one checkout per service at `<data dir>/work/<name>` (`/var/lib/lcm/work/<name>` with `deploy/`); a document cannot name it. The first deploy clones `url` there (an existing empty directory counts as missing; a non-empty directory without `.git` is refused). Every later deploy first sets the checkout's `origin` to `url`, so editing `url` switches the source at the next deploy, then fetches.
 - **Uncommitted changes.** A deploy or rollback refuses to start while tracked files in the checkout have uncommitted changes; untracked files (build output) do not count.
-- **Local development repository.** With a path as `url`, LCM clones and fetches it like a remote: commits on its branch are deployed without being pushed, and its working tree is never touched.
+- **Local development repository.** With a path as `url`, LCM clones and fetches it like a remote: commits on its branch are deployed without being pushed, and its working tree is never touched. LCM runs Git as its own account `lcm`, with a fixed environment that a document cannot widen (no `safe.directory`), so the repository must satisfy two conditions:
+  - It is owned by `lcm`. Git refuses a repository owned by another account, root included, with `detected dubious ownership`. Keep a dedicated repository for LCM, for example `sudo -u lcm git init --bare /srv/lcm-repos/<name>.git` (or `sudo chown -R lcm: <repo>`), and commit or push to it as `lcm` (`sudo -u lcm git ...`).
+  - `lcm` can reach it: every parent directory must be searchable by `lcm` and the files readable. A repository below a home directory with mode `0750` is not (`fatal: repository ... does not exist`). Put it in a shared location such as `/srv`.
+
+  A failed clone or fetch reports Git's last output line in the deployment error (`deployment failed at clone: exit status 128: fatal: ...`); the full output is in the deployment log.
 - **Other commands.** `backup` and jobs of a service with a source run in the build checkout; before the first deploy has cloned it they are refused.
 - **Refused URLs.** A `url` inside `<data dir>/work/` is refused when the document is saved or validated: those checkouts only move to commits LCM deploys. `trigger.git` refuses them for the same reason ([policies](policies.md#templates)).
 
@@ -161,7 +165,7 @@ The resource detail (`GET /api/v1/resources/{name}`) lists each action's availab
 
 After LCM has fetched and detached its own checkout as `lcm` (unchanged), the helper does the rest; LCM runs neither `build` nor a restart itself:
 
-1. `build`: the helper copies the checkout, checks that its `HEAD` is the commit and runs `source.build` as `lcm-build` in its sandbox, with the `runtime` in `PATH` (dry-run step `step.helperBuild`).
+1. `build`: the helper copies the checkout, checks that its `HEAD` is the commit and runs `source.build` as the build account `lcmb-<name>` in its sandbox, with the `runtime` in `PATH` (dry-run step `step.helperBuild`).
 2. `install`: `artifact` of that build becomes a new release (`step.helperInstall`).
 3. `activate`: `migrate` runs as the service account in the new release, then `current` switches, the unit is written and the service restarted; releases beyond `keepReleases` are removed (`step.helperActivate`). The deployment log ends with `installed release <id>`.
 

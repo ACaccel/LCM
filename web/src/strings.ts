@@ -1283,7 +1283,7 @@ export const msg: Record<string, (p: Params) => string> = {
   "step.build": (p) => `建置：${p.command}`,
   "step.install": (p) => `安裝：${p.command}`,
   "step.skipRestart": () => "略過重啟：runtime 無法重啟這個服務，必須由安裝步驟套用新版本",
-  "step.helperBuild": (p) => `由 deploy helper 在沙箱中以 lcm-build 建置${p.runtime ? `（runtime ${p.runtime}）` : ""}：${p.command}`,
+  "step.helperBuild": (p) => `由 deploy helper 在沙箱中以 lcmb-${p.service} 建置${p.runtime ? `（runtime ${p.runtime}）` : ""}：${p.command}`,
   "step.helperInstall": (p) => `把建置結果的 ${p.artifact} 安裝為 ${p.service} 的新 release`,
   "step.helperActivate": (p) =>
     `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}將 ${p.service} 切換到新 release，以 ${p.start} 重啟`,

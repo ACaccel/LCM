@@ -351,8 +351,8 @@ func managedDeploySteps(rec *Record, action string) []message.Message {
 		activate = fmt.Sprintf("run the migration %s, then %s", migrate, activate)
 	}
 	return []message.Message{
-		message.New("step.helperBuild", "build in the deploy helper's sandbox as lcm-build: "+cfg.Source.Build,
-			"command", cfg.Source.Build, "runtime", cfg.RuntimeName),
+		message.New("step.helperBuild", "build in the deploy helper's sandbox as lcmb-"+rec.Name+": "+cfg.Source.Build,
+			"command", cfg.Source.Build, "runtime", cfg.RuntimeName, "service", rec.Name),
 		message.New("step.helperInstall", fmt.Sprintf("install %s of the build as a new release of %s", cfg.Artifact, rec.Name),
 			"artifact", cfg.Artifact, "service", rec.Name),
 		message.New("step.helperActivate", activate, "service", rec.Name, "start", start, "migrate", migrate),
