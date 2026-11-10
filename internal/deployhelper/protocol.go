@@ -254,6 +254,10 @@ type Request struct {
 	// restore
 	BackupID       string `json:"backupId,omitempty"`
 	ManifestSHA256 string `json:"manifestSha256,omitempty"`
+	// RestoreUsers also restores the users and roles of a MongoDB source
+	// saved with users: true. They live in the admin database of the whole
+	// mongod instance, so restoring them replaces every account of it.
+	RestoreUsers bool `json:"restoreUsers,omitempty"`
 	// prune
 	Keep *Keep `json:"keep,omitempty"`
 }
@@ -482,6 +486,7 @@ func (r Request) fields() []string {
 	add(r.Mode != "", "mode")
 	add(r.BackupID != "", "backupId")
 	add(r.ManifestSHA256 != "", "manifestSha256")
+	add(r.RestoreUsers, "restoreUsers")
 	add(r.Keep != nil, "keep")
 	return out
 }
@@ -498,7 +503,7 @@ var opFields = map[Op][]string{
 	OpReleases: {"service"},
 	OpQuery:    {},
 	OpBackup:   {"service", "sources", "mode", "timeoutSec", "runtime"},
-	OpRestore:  {"service", "backupId", "manifestSha256"},
+	OpRestore:  {"service", "backupId", "manifestSha256", "restoreUsers"},
 	OpBackups:  {"service"},
 	OpPrune:    {"service", "keep"},
 }
@@ -707,7 +712,7 @@ var requestKeys = map[string]bool{
 	"version": true, "op": true, "operationId": true, "service": true, "commit": true, "command": true,
 	"timeoutSec": true, "runtimes": true, "buildId": true, "artifact": true, "releaseId": true,
 	"start": true, "runtime": true, "migrate": true, "keepReleases": true,
-	"sources": true, "mode": true, "backupId": true, "manifestSha256": true, "keep": true,
+	"sources": true, "mode": true, "backupId": true, "manifestSha256": true, "restoreUsers": true, "keep": true,
 }
 
 // DecodeRequest decodes and validates one request.

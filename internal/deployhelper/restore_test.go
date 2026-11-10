@@ -444,29 +444,54 @@ func TestRestoreRunsTheDatabaseTools(t *testing.T) {
 	t.Setenv("MONGODB_URI", "mongodb://admin:secret@localhost/")
 	sources := []BackupSource{{Type: SourcePostgres, Database: "app"}, {Type: SourceMongoDB, Database: "app", Users: true}}
 	a := e.ok(backupReq(sources...)).Backup
-	if err := os.Remove(argsFile); err != nil {
-		t.Fatal(err)
+	// run restores and returns the tools it ran, in order, with their arguments.
+	run := func(users bool) (Response, []string, string) {
+		t.Helper()
+		_ = os.Remove(argsFile)
+		r := e.restoreReq(a.BackupID)
+		r.RestoreUsers = users
+		resp := e.ok(r)
+		raw, _ := os.ReadFile(argsFile) //nolint:gosec // a file of the test's own tree
+		var tools []string
+		for _, l := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			tools = append(tools, strings.Fields(l)[0])
+		}
+		if strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "--uri") || !strings.Contains(string(raw), "mongorestore --archive=") {
+			t.Errorf("the connection string is in the arguments:\n%s", raw)
+		}
+		return resp, tools, string(raw)
 	}
-	resp := e.ok(e.restoreReq(a.BackupID))
-	if !slices.Equal(resp.Restore.Restored, []string{"postgres app", "mongodb app"}) {
-		t.Errorf("restored %v", resp.Restore.Restored)
+
+	// A plain restore puts the database back and never touches the instance's
+	// accounts in admin, nor copies them first.
+	resp, tools, raw := run(false)
+	if !slices.Equal(resp.Restore.Restored, []string{"postgres app", "mongodb app"}) ||
+		!slices.Equal(resp.Restore.Skipped, []string{"users and roles of mongodb app (restoreUsers is not set)"}) {
+		t.Errorf("restore result %+v", resp.Restore)
 	}
-	raw, _ := os.ReadFile(argsFile) //nolint:gosec // a file of the test's own tree
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	// The pre-restore copy dumps the databases first, then the restore runs.
-	var tools []string
-	for _, l := range lines {
-		tools = append(tools, strings.Fields(l)[0])
+	if want := []string{"pg_dump", "mongodump", "pg_restore", "mongorestore"}; !slices.Equal(tools, want) {
+		t.Fatalf("tools run: %v\n%s", tools, raw)
+	}
+	if strings.Contains(raw, "admin") {
+		t.Errorf("a plain restore touches admin:\n%s", raw)
+	}
+	for _, want := range []string{"--clean --if-exists --no-owner --no-privileges --exit-on-error --no-password --dbname=app", "--gzip --drop --nsInclude=app.*"} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("arguments lack %q:\n%s", want, raw)
+		}
+	}
+
+	// With restoreUsers the users and roles are copied and restored too.
+	resp, tools, raw = run(true)
+	if len(resp.Restore.Skipped) != 0 {
+		t.Errorf("skipped %v", resp.Restore.Skipped)
 	}
 	if want := []string{"pg_dump", "mongodump", "mongodump", "mongodump", "pg_restore", "mongorestore", "mongorestore", "mongorestore"}; !slices.Equal(tools, want) {
 		t.Fatalf("tools run: %v\n%s", tools, raw)
 	}
-	if strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "--uri") || !strings.Contains(string(raw), "mongorestore --archive=") {
-		t.Errorf("the connection string is in the arguments:\n%s", raw)
-	}
-	for _, want := range []string{"--clean --if-exists --no-owner --no-privileges --exit-on-error --no-password --dbname=app",
-		"--gzip --drop --nsInclude=app.*", "--nsInclude=admin.system.users", "--nsInclude=admin.system.roles"} {
-		if !strings.Contains(string(raw), want) {
+	for _, want := range []string{"--nsInclude=admin.system.users", "--nsInclude=admin.system.roles"} {
+		if !strings.Contains(raw, want) {
 			t.Errorf("arguments lack %q:\n%s", want, raw)
 		}
 	}

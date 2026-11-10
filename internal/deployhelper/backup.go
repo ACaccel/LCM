@@ -1015,9 +1015,10 @@ func restorable(m setManifest) []int {
 
 // stageSet verifies a set against its manifest and copies its restorable
 // artifacts into a new staging directory the service account can read. The
+// users and roles of a MongoDB source are left out unless restoreUsers. The
 // hashes are computed on the bytes copied, so what is staged is what was
 // verified.
-func (h *Helper) stageSet(env backupEnv, name string, m setManifest, maxEntries int, maxBytes int64) (string, *opErr) {
+func (h *Helper) stageSet(env backupEnv, name string, m setManifest, restoreUsers bool, maxEntries int, maxBytes int64) (string, *opErr) {
 	spec := workerSpec{Version: Version, Mode: "restore", Service: env.svc, MaxBytes: maxBytes, MaxEntries: maxEntries}
 	files := map[string]manifestFile{}
 	for _, f := range m.Files {
@@ -1026,7 +1027,13 @@ func (h *Helper) stageSet(env backupEnv, name string, m setManifest, maxEntries 
 	for _, i := range restorable(m) {
 		s := m.Sources[i]
 		ss := specSource{BackupSource: s.BackupSource, Absent: s.Absent}
-		for _, a := range s.Artifacts {
+		arts := s.Artifacts
+		if s.Type == SourceMongoDB && s.Users && !restoreUsers {
+			// The users and roles are the whole instance's: only the database
+			// is put back unless the request asks for more.
+			arts, ss.Users = arts[:1], false
+		}
+		for _, a := range arts {
 			ss.Artifacts = append(ss.Artifacts, artifactRef{Name: a, Size: files[a].Size, SHA256: files[a].SHA256})
 		}
 		spec.Sources = append(spec.Sources, ss)
@@ -1169,8 +1176,11 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	}
 	result := &RestoreResult{BackupID: req.BackupID, Restored: describeAll(m, idx), Skipped: []string{}}
 	for i, s := range m.Sources {
-		if !slices.Contains(idx, i) {
+		switch {
+		case !slices.Contains(idx, i):
 			result.Skipped = append(result.Skipped, describeSource(s.BackupSource))
+		case s.Type == SourceMongoDB && s.Users && !req.RestoreUsers:
+			result.Skipped = append(result.Skipped, "users and roles of "+describeSource(s.BackupSource)+" (restoreUsers is not set)")
 		}
 	}
 	lim := h.backupLimits()
@@ -1188,7 +1198,7 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 		return refuse(resp, CodeRefused, "not enough room for the restore: %v", err)
 	}
 	opName := req.OperationID[:8]
-	stage, e := h.stageSet(env, opName+"r", m, lim.MaxEntries, lim.MaxBytes)
+	stage, e := h.stageSet(env, opName+"r", m, req.RestoreUsers, lim.MaxEntries, lim.MaxBytes)
 	if e != nil {
 		return respond(resp, e)
 	}
@@ -1214,7 +1224,12 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	pre := setParams{backupEnv: env, opID: req.OperationID, tag: "p", kind: KindPreRestore, mode: ModeStopped,
 		timeoutSec: restoreWorkerSec, restoredFrom: req.BackupID, allowMissing: true}
 	for _, i := range idx {
-		pre.sources = append(pre.sources, m.Sources[i].BackupSource)
+		src := m.Sources[i].BackupSource
+		if src.Type == SourceMongoDB && !req.RestoreUsers {
+			// Nothing of the instance's accounts is replaced, so none is copied.
+			src.Users = false
+		}
+		pre.sources = append(pre.sources, src)
 	}
 	pm, _, _, e := h.makeSet(ctx, pre)
 	if e != nil {
@@ -1238,7 +1253,7 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 
 	if e := h.applyStage(ctx, env, opName+"r", stage); e != nil {
 		msg := "the restore failed: " + e.msg
-		if uerr := h.undoRestore(context.WithoutCancel(ctx), env, opName, pm, lim); uerr != nil {
+		if uerr := h.undoRestore(context.WithoutCancel(ctx), env, opName, pm, req.RestoreUsers, lim); uerr != nil {
 			// The data is neither the old nor the new: starting the service on
 			// it could corrupt it further or serve garbage.
 			result.LeftStopped = true
@@ -1261,8 +1276,8 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 }
 
 // undoRestore applies the pre-restore set after a failed restore.
-func (h *Helper) undoRestore(ctx context.Context, env backupEnv, opName string, pm setManifest, lim Limits) *opErr {
-	stage, e := h.stageSet(env, opName+"u", pm, lim.MaxEntries, lim.MaxBytes)
+func (h *Helper) undoRestore(ctx context.Context, env backupEnv, opName string, pm setManifest, restoreUsers bool, lim Limits) *opErr {
+	stage, e := h.stageSet(env, opName+"u", pm, restoreUsers, lim.MaxEntries, lim.MaxBytes)
 	if e != nil {
 		return e
 	}
