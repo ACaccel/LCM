@@ -192,6 +192,9 @@ func TestIngressApplyRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeRefused, "not installed yet")
+	// Revert removes the site file too; the refusal still names the revert.
+	e.write(hostsetup.IngressState+"/reverted.json", "{}", 0o600)
+	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeRefused, "was reverted")
 
 	// Without the component nothing is done.
 	e.cfg.Components.Ingress = nil

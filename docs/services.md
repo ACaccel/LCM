@@ -183,7 +183,7 @@ Without a `route` section the route proxies everything below the prefix to the s
 
 **Applying.** LCM sends the section to the [deploy helper](operations.md#deploy-helper) (`ingress.apply`) in the background after a document is saved, restored or synced from Git, when its `route` differs from the last recorded outcome (removing the section sends "no options" so that the host drops them), and once at every start for routes whose last outcome was not `applied`. The helper renders the whole site, tests it with nginx and reloads it, or puts the previous site back. Each send records its operation ID on the timeline before the call, so a lost reply is settled from the helper's ledger; an outcome that cannot be confirmed stays `unknown` and is never taken as success. Every send writes an audit entry (`service.apply-route`).
 
-**The host decides.** A refusal (no route granted in `host.json`, the site never installed, a location that collides) or a failed apply never rejects the document write. The outcome is the `route` object of the resource detail and the *路由* panel of the service overview, with the helper's message and whether it concerns the current section:
+**The host decides.** A refusal (no route granted in `host.json`, the site never installed, a location that collides) or a failed apply never rejects the document write. The outcome is `service.route` of the resource detail and the *路由* panel of the service overview, with the helper's message and whether it concerns the current section:
 
 | State | Meaning |
 |---|---|

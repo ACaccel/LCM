@@ -125,10 +125,11 @@ func (h *Helper) siteRefusal(req Request) *Response {
 	switch {
 	case err != nil:
 		resp = refuse(reply(req), CodeRefused, "%v", err)
+	case hostsetup.Reverted(h.FS):
+		// Checked first: revert also removes the site file.
+		resp = refuse(reply(req), CodeRefused, "the ingress site was reverted with sudo bin/lcm host ingress revert; sudo bin/lcm host apply installs it again")
 	case !hostsetup.SiteInstalled(h.FS):
 		resp = refuse(reply(req), CodeRefused, "the ingress site is not installed yet; an administrator installs it (and reviews the cutover) with sudo bin/lcm host apply")
-	case hostsetup.Reverted(h.FS):
-		resp = refuse(reply(req), CodeRefused, "the ingress site was reverted with sudo bin/lcm host ingress revert; sudo bin/lcm host apply installs it again")
 	case !enabled:
 		resp = refuse(reply(req), CodeRefused, "%s is not enabled; an administrator enables it again with sudo bin/lcm host apply", hostsetup.SiteName)
 	default:
