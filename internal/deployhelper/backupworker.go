@@ -496,7 +496,7 @@ func mongoConfig() (string, func(), error) {
 		return "", nil, err
 	}
 	file := dir + "/config.yaml"
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // a new file in the private directory just made
 	if err == nil {
 		_, err = fmt.Fprintf(f, "uri: %s\n", quoted)
 		if cerr := f.Close(); err == nil {

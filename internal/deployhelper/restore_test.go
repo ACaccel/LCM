@@ -301,7 +301,7 @@ func TestRestoreReservesRoomForTheCopyAndTheUndo(t *testing.T) {
 		e.deploy(commit1)
 		a := e.ok(backupReq(fileSources...)).Backup
 		e.active = true
-		return e, a.BackupID, uint64(a.Size)
+		return e, a.BackupID, uint64(a.Size) //nolint:gosec // a size of a test backup
 	}
 	lim := Limits{}.withDefaults()
 	t.Run("the current data is larger than the set", func(t *testing.T) {
