@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Info describes a file without following a final symbolic link.
@@ -24,6 +25,8 @@ type Info struct {
 	// after it was opened.
 	Dev uint64
 	Ino uint64
+	// ModTime is the last modification time.
+	ModTime time.Time
 }
 
 // IsDir, IsRegular and IsLink report the file type.
@@ -53,6 +56,9 @@ type FS interface {
 	// one file is never applied to another.
 	Chown(name string, want Info, uid, gid int) error
 	Chmod(name string, want Info, perm fs.FileMode) error
+	// Chtimes sets the access and modification time of the regular file
+	// or directory that want describes, with the same refusal.
+	Chtimes(name string, want Info, mtime time.Time) error
 	Rename(from, to string) error
 	Remove(name string) error
 	RemoveAll(name string) error
@@ -83,7 +89,7 @@ type Tree interface {
 }
 
 func infoOf(fi fs.FileInfo) Info {
-	info := Info{Mode: fi.Mode(), Size: fi.Size(), UID: -1, GID: -1}
+	info := Info{Mode: fi.Mode(), Size: fi.Size(), UID: -1, GID: -1, ModTime: fi.ModTime()}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		info.UID, info.GID = int(st.Uid), int(st.Gid)
 		info.Dev, info.Ino = uint64(st.Dev), st.Ino //nolint:gosec,unconvert // Dev is unsigned on Linux; the conversion keeps other layouts building
@@ -326,6 +332,15 @@ func (o OS) Chmod(name string, want Info, perm fs.FileMode) error {
 		return err
 	}
 	return withExpected(name, p, want, func(proc string) error { return os.Chmod(proc, perm) })
+}
+
+// Chtimes implements FS.
+func (o OS) Chtimes(name string, want Info, mtime time.Time) error {
+	p, err := o.path(name)
+	if err != nil {
+		return err
+	}
+	return withExpected(name, p, want, func(proc string) error { return os.Chtimes(proc, mtime, mtime) })
 }
 
 // Rename implements FS.

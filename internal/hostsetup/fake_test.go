@@ -41,6 +41,7 @@ type memNode struct {
 	target   string
 	ino      uint64
 	dev      uint64
+	mtime    time.Time
 }
 
 var inodes atomic.Uint64
@@ -150,7 +151,7 @@ func (m *memFS) Lstat(p string) (Info, error) {
 	if !ok {
 		return Info{}, notExist("lstat", p)
 	}
-	return Info{Mode: n.mode, UID: n.uid, GID: n.gid, Size: int64(len(n.data)), Ino: n.ino, Dev: n.dev}, nil
+	return Info{Mode: n.mode, UID: n.uid, GID: n.gid, Size: int64(len(n.data)), Ino: n.ino, Dev: n.dev, ModTime: n.mtime}, nil
 }
 
 func (m *memFS) Open(p string) (io.ReadCloser, error) {
@@ -301,6 +302,18 @@ func (m *memFS) Chmod(p string, want Info, perm fs.FileMode) error {
 	}
 	m.log("chmod", p)
 	n.mode = n.mode.Type() | perm
+	return nil
+}
+
+func (m *memFS) Chtimes(p string, want Info, mtime time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, err := m.expected(p, want)
+	if err != nil {
+		return err
+	}
+	m.log("chtimes", p)
+	n.mtime = mtime
 	return nil
 }
 
