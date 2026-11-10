@@ -90,6 +90,11 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 }
 
 func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version string) ([]message.Message, error) {
+	if action == ActionDeploy && rec.Runtime().Type == model.RuntimeManaged {
+		if err := m.checkGranted(ctx, rec.Name); err != nil {
+			return nil, err
+		}
+	}
 	if action == ActionRollback && rec.Runtime().Type == model.RuntimeManaged {
 		if steps, err := m.managedRollbackSteps(ctx, rec); err != nil || steps != nil {
 			return steps, err

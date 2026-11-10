@@ -212,6 +212,22 @@ func (s *session) activateRelease(ctx context.Context, res *ActionResult, target
 	})
 }
 
+// checkGranted asks the helper a read-only question about the service, so
+// that a dry run shows the refusal a real deployment would meet when the
+// administrator has not granted the service. A service that has no releases
+// yet is fine.
+func (m *Manager) checkGranted(ctx context.Context, name string) error {
+	_, err := rt.CallHelper(ctx, m.deploy, deployhelper.Request{Op: deployhelper.OpReleases, Service: name, OperationID: rt.NewOperationID()})
+	var he *rt.HelperError
+	if errors.As(err, &he) && he.Code == deployhelper.CodeNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check the grant of %s: %w", name, err)
+	}
+	return nil
+}
+
 // rollbackRelease returns the installed release of the rollback target: the
 // release recorded by the newest successful deployment of target, else the
 // newest release built from target. It is empty when the helper keeps

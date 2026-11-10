@@ -343,6 +343,21 @@ func TestManagedDeploy(t *testing.T) {
 	}
 }
 
+func TestManagedDeployPlanShowsARefusedGrant(t *testing.T) {
+	e, _, h := managedEnv(t)
+	h.refuse[deployhelper.OpReleases] = deployhelper.CodeRefused
+	_, err := e.mgr.Plan(e.ctx, "app", catalog.ActionDeploy, catalog.ActionOptions{})
+	var he *rt.HelperError
+	if !errors.As(err, &he) || he.Code != deployhelper.CodeRefused {
+		t.Fatalf("plan err = %v", err)
+	}
+
+	h.refuse[deployhelper.OpReleases] = deployhelper.CodeNotFound
+	if _, err := e.mgr.Plan(e.ctx, "app", catalog.ActionDeploy, catalog.ActionOptions{}); err != nil {
+		t.Fatalf("a service without releases is fine: %v", err)
+	}
+}
+
 func TestManagedDeployPlan(t *testing.T) {
 	e, _, _ := managedEnv(t)
 	p, err := e.mgr.Plan(e.ctx, "app", catalog.ActionDeploy, catalog.ActionOptions{})

@@ -167,8 +167,11 @@ func TestManagedServiceThroughTheApp(t *testing.T) {
 	if !slices.Contains(codes, "step.helperBuild") || !slices.Contains(codes, "step.helperActivate") || slices.Contains(codes, "step.restart") {
 		t.Fatalf("plan steps = %v", codes)
 	}
-	if len(helper.Requests()) != 0 {
-		t.Fatal("a dry run of a deploy called the helper")
+	// A dry run only asks the helper a read-only question, which also shows
+	// a refused grant.
+	dry := helper.Requests()
+	if len(dry) != 1 || dry[0].Op != deployhelper.OpReleases {
+		t.Fatalf("a dry run of a deploy sent %+v", dry)
 	}
 
 	if _, err := h.app.Manager.Deploy(h.ctx, "web", catalog.ActionOptions{}); err != nil {
@@ -179,7 +182,7 @@ func TestManagedServiceThroughTheApp(t *testing.T) {
 	if err != nil || res.Version != v2 || res.PreviousVersion != v1 {
 		t.Fatalf("second deploy = %+v, %v", res, err)
 	}
-	first := helper.Requests()[2].ReleaseID
+	first := helper.Requests()[len(dry)+2].ReleaseID
 	before := len(helper.Requests())
 	if res, err := h.app.Manager.Rollback(h.ctx, "web", catalog.ActionOptions{}); err != nil || res.Version != v1 {
 		t.Fatalf("rollback = %+v, %v", res, err)
