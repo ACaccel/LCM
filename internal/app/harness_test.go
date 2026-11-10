@@ -45,6 +45,8 @@ type harness struct {
 	app    *app.App
 	// ctx carries the CLI actor, as for operator-driven calls.
 	ctx context.Context
+	// commit is the build the Apps report as their own.
+	commit string
 }
 
 type testOpts struct {
@@ -57,6 +59,7 @@ type testOpts struct {
 	machinePower    machine.PowerBackend
 	hostStatus      api.HostStatusFunc
 	deployHelper    rt.DeployHelper
+	commit          string
 }
 
 func newHarness(t *testing.T, mod ...func(*testOpts)) *harness {
@@ -65,7 +68,7 @@ func newHarness(t *testing.T, mod ...func(*testOpts)) *harness {
 	for _, f := range mod {
 		f(&o)
 	}
-	h := &harness{t: t, dir: o.dir, clk: o.clk, runner: o.runner, events: enginetest.NewRecorder(),
+	h := &harness{t: t, dir: o.dir, clk: o.clk, runner: o.runner, events: enginetest.NewRecorder(), commit: o.commit,
 		ctx: auth.WithActor(context.Background(), auth.CLI)}
 	h.app = h.open(o)
 	return h
@@ -86,7 +89,7 @@ func (h *harness) open(o testOpts) *app.App {
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	a, err := app.New(h.ctx, cfg,
 		app.WithMachineObserver(o.machineObserver), app.WithMachinePower(o.machinePower), app.WithHostStatus(o.hostStatus),
-		app.WithDeployHelper(o.deployHelper), app.WithRestoreSettle(-1),
+		app.WithDeployHelper(o.deployHelper), app.WithRestoreSettle(-1), app.WithCommit(o.commit),
 		app.WithClock(o.clk), app.WithRunner(o.runner), app.WithHTTPClient(client), app.WithRouterHTTPClient(client),
 		app.WithLogger(testLogger(h.t)), app.WithObservers(h.events), app.WithGitRunner(o.git), app.WithConnectionsTrust(trustTestFile))
 	if err != nil {
@@ -114,7 +117,7 @@ func (h *harness) reopen(clk *clock.Fake) {
 	}
 	h.clk = clk
 	h.events = enginetest.NewRecorder()
-	h.app = h.open(testOpts{dir: h.dir, clk: clk, runner: h.runner})
+	h.app = h.open(testOpts{dir: h.dir, clk: clk, runner: h.runner, commit: h.commit})
 }
 
 // run starts App.Run and returns a function that stops it and returns its error.

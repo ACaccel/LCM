@@ -57,6 +57,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/machine/` | Machine resource type: identity, snapshots/minute points, health transitions, journal checkpoints, maintenance and durable operations; `observe/` contains bounded native probes, `power/` the restricted privileged protocol and independent receipts |
 | `internal/router/` | Router resource type: observation loops, native health, durable reboot operations; `xiaomi/` the allowlisted Xiaomi router web API client (`xiaomitest/` simulator) |
 | `internal/hostsetup/` | `lcm host`: host configuration (`/etc/lcm/host.json`), validation before any change, converging steps over an `FS`/`Runner` with in-memory fakes in tests, optional components, installed-vs-embedded status |
+| `internal/upgrademarker/` | Format of `<data dir>/host-upgrade.json`, the dependency-free file `lcm host upgrade` leaves and the server consumes at start (`internal/app/hostupgrade.go`, `catalog.RecordHostUpgrade`) to record the upgrade as a deployment |
 | `internal/connection/` | Host connections file (`LCM_CONNECTIONS_FILE`): strict loading, validation, secret references; documents can name but not widen a connection |
 | `internal/maintenance/` | Common local write gate held across resource/service/config-sync writes and persisted across machine maintenance; shared by all components in the controller |
 | `internal/trigger/` | `trigger.*` nodes and the manager running signal, git, cron and webhook watchers |
