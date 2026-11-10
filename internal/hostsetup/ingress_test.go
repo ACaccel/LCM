@@ -121,9 +121,13 @@ func TestIngressApply(t *testing.T) {
 	if th.fs.get(SitesEnabled+"/example.org") != nil || th.fs.content(SitesAvailable+"/example.org") != handMadeSite {
 		t.Error("the adopted site link is still enabled, or its file changed")
 	}
-	var rec adoptedRecord
-	if err := json.Unmarshal([]byte(th.fs.content(adoptedFile)), &rec); err != nil || rec != (adoptedRecord{Name: "example.org", Target: SitesAvailable + "/example.org"}) {
-		t.Errorf("adopted record %+v %v", rec, err)
+	var recs []adoptedRecord
+	if err := json.Unmarshal([]byte(th.fs.content(adoptedFile)), &recs); err != nil || len(recs) != 1 || recs[0] != (adoptedRecord{Name: "example.org", Target: SitesAvailable + "/example.org"}) {
+		t.Errorf("adopted records %+v %v", recs, err)
+	}
+	var orig renewalOriginal
+	if err := json.Unmarshal([]byte(th.fs.content(renewalFile)), &orig); err != nil || orig.Content != renewalSample || orig.Path != RenewalConf("example.org") || orig.Mode != 0o644 {
+		t.Errorf("kept renewal configuration %+v %v", orig, err)
 	}
 	if got := th.fs.content(IngressWellKnown + "/assetlinks.json"); got != "[]\n" {
 		t.Errorf("well-known copy %q", got)
@@ -143,11 +147,11 @@ func TestIngressApply(t *testing.T) {
 		t.Errorf("state dir %+v", n)
 	}
 	test, reload := th.r.index(Nginx+" -t -q"), th.r.index(Systemctl+" reload nginx.service")
-	probe := th.r.index("probe https://example.org/")
+	probe := th.r.index("probe http://example.org/.well-known/lcm-probe")
 	if test < 0 || reload < test || probe < reload {
 		t.Errorf("nginx -t %d, reload %d, probe %d: %v", test, reload, probe, th.r.calls)
 	}
-	if strings.Join(th.probes, "\n") != "192.0.2.10:443 https://example.org/\n192.0.2.10:443 https://example.org/web/" {
+	if strings.Join(th.probes, "\n") != "192.0.2.10:80 http://example.org/.well-known/lcm-probe\n192.0.2.10:443 https://example.org/.well-known/lcm-probe" {
 		t.Errorf("probes %v", th.probes)
 	}
 	last, err := ReadLastApply(th.host.ingressEnv())
@@ -199,7 +203,8 @@ func TestIngressFailuresPutThePreviousSiteBack(t *testing.T) {
 			}
 		}, 0, "nginx -t refused the configuration"},
 		{"reload", func(th *testHost) { th.r.failReload = true }, 2, "reloading nginx failed"},
-		{"probe", func(th *testHost) { th.probeStatus = 500 }, 2, "does not answer: answered 500"},
+		{"probe", func(th *testHost) { th.probeStatus = 500 }, 2, "answered 500"},
+		{"probe answered by another server", func(th *testHost) { th.probeStatus = 200 }, 2, "answered 200"},
 		{"probe connection", func(th *testHost) { th.probeErr = errors.New("connection refused") }, 2, "connection refused"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -217,6 +222,9 @@ func TestIngressFailuresPutThePreviousSiteBack(t *testing.T) {
 			}
 			if th.r.reloads != tc.reloads {
 				t.Errorf("reloads %d, want %d", th.r.reloads, tc.reloads)
+			}
+			if th.fs.content(RenewalConf("example.org")) != renewalSample || th.fs.get(renewalFile) != nil {
+				t.Error("the renewal configuration changed although the site failed")
 			}
 			last, _ := ReadLastApply(th.host.ingressEnv())
 			if last == nil || last.Outcome != "failed" || !strings.Contains(last.Message, tc.want) {
@@ -365,7 +373,7 @@ func TestIssueCertificate(t *testing.T) {
 	if !strings.Contains(out, "there is no certificate for example.org yet") || th.fs.content(SiteFile) != string(th.wantSite(false, nil)) {
 		t.Fatalf("apply without a certificate:\n%s", out)
 	}
-	if len(th.probes) != 2 || !strings.HasPrefix(th.probes[0], "192.0.2.10:80 http://example.org/") {
+	if strings.Join(th.probes, "\n") != "192.0.2.10:80 http://example.org/.well-known/lcm-probe" {
 		t.Errorf("probes %v", th.probes)
 	}
 	var buf bytes.Buffer
@@ -581,7 +589,7 @@ func TestProbeHTTP(t *testing.T) {
 }
 
 func TestProbeOK(t *testing.T) {
-	for status, ok := range map[int]bool{200: true, 301: true, 404: true, 500: false, 502: true, 503: true, 504: true, 505: false} {
+	for status, ok := range map[int]bool{204: true, 200: false, 301: false, 404: false, 500: false, 502: false} {
 		if probeOK(status) != ok {
 			t.Errorf("%d: %v", status, !ok)
 		}
@@ -711,4 +719,120 @@ func TestIngressStaticSymlink(t *testing.T) {
 	if res, out, err := th.apply(Options{}); err == nil && res.Manual == 0 || th.fs.content(SiteFile) != site {
 		t.Fatalf("applied with a refused target: %v\n%s", err, out)
 	}
+}
+
+func TestIngressRevertRestoresRenewalAndAllAdoptedSites(t *testing.T) {
+	th := ingressHost(t, true)
+	th.converge()
+	// A second hand-made site is adopted later.
+	th.fs.file(SitesAvailable+"/old2", handMadeSite, 0o644, 0, 0)
+	th.fs.link(SitesEnabled+"/old2", "../sites-available/old2", 0, 0)
+	th.cfg.Components.Ingress.Adopt = "old2"
+	th.cfg.Components.Ingress.LegacyLock = "/run/lock/example.lock"
+	th.writeConfig(th.cfg)
+	th.converge()
+	if th.fs.get(SitesEnabled+"/old2") != nil {
+		t.Fatal("the second site was not adopted")
+	}
+	if !strings.Contains(th.fs.content(RenewalConf("example.org")), "webroot_path = /var/www/lcm-acme,") {
+		t.Fatal("the renewal configuration was not changed")
+	}
+	var out bytes.Buffer
+	if err := RevertIngress(context.Background(), th.host, RevertOptions{Out: &out}); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out.String())
+	}
+	if th.lockedLegacy != "" {
+		t.Errorf("revert took the legacy lock %q", th.lockedLegacy)
+	}
+	if n := th.fs.get(SitesEnabled + "/example.org"); n == nil || n.target != SitesAvailable+"/example.org" {
+		t.Errorf("first adopted site %+v", n)
+	}
+	if n := th.fs.get(SitesEnabled + "/old2"); n == nil || n.target != "../sites-available/old2" {
+		t.Errorf("second adopted site %+v", n)
+	}
+	if th.fs.content(RenewalConf("example.org")) != renewalSample || th.fs.get(renewalFile) != nil {
+		t.Errorf("renewal configuration not restored:\n%s", th.fs.content(RenewalConf("example.org")))
+	}
+	if !strings.Contains(out.String(), "restore "+RenewalConf("example.org")) {
+		t.Errorf("revert output:\n%s", out.String())
+	}
+}
+
+func TestIngressRevertDoesNotReadTheSiteBack(t *testing.T) {
+	th := ingressHost(t, true)
+	th.converge()
+	th.fs.file(SiteFile, ingress.Marker+"\n"+strings.Repeat("#\n", maxSite), 0o644, 0, 0)
+	if err := RevertIngress(context.Background(), th.host, RevertOptions{}); err != nil {
+		t.Fatalf("revert of an oversized site: %v", err)
+	}
+	if th.fs.get(SiteFile) != nil || th.fs.get(SiteLink) != nil {
+		t.Fatal("the site stayed")
+	}
+	// A file without the marker is never removed.
+	th.fs.file(SiteFile, "server {}\n", 0o644, 0, 0)
+	if err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil || th.fs.get(SiteFile) == nil {
+		t.Fatalf("removed a site LCM did not write: %v", err)
+	}
+}
+
+func TestIngressDropsStoredOptionsThatNoLongerFit(t *testing.T) {
+	th := ingressHost(t, true)
+	th.converge()
+	fits := ingress.Options{Headers: &ingress.Headers{CSP: "default-src 'self'"}}
+	// The site has no port, so proxy options do not fit its grant.
+	stale := ingress.Options{Proxy: []ingress.Proxy{{Path: "api/", Upstream: "/api/"}}}
+	th.fs.file(RouteOptionsFile("web"), string(EncodeRouteOptions(fits)), 0o600, 0, 0)
+	th.fs.file(RouteOptionsFile("site"), string(EncodeRouteOptions(stale)), 0o600, 0, 0)
+	res, out, err := th.apply(Options{})
+	if err != nil || res.Manual != 1 || !strings.Contains(out, "services.site: the stored route options no longer fit") {
+		t.Fatalf("apply: %+v %v\n%s", res, err, out)
+	}
+	if got := th.fs.content(SiteFile); got != string(th.wantSite(true, map[string]ingress.Options{"web": fits})) {
+		t.Fatalf("site:\n%s", got)
+	}
+	st, err := SiteStatus(th.host.ingressEnv(), th.cfg)
+	if err != nil || len(st.Dropped) != 1 || st.Rendered != st.Installed {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	// Options that cannot be decoded are dropped the same way.
+	th.fs.file(RouteOptionsFile("site"), "{not json", 0o600, 0, 0)
+	res, out, err = th.apply(Options{})
+	if err != nil || res.Manual != 1 || !strings.Contains(out, "services.site: the stored route options /var/lib/lcm-ingress/routes/site.json cannot be used") {
+		t.Fatalf("apply: %+v %v\n%s", res, err, out)
+	}
+}
+
+func TestIngressHooksMustBeRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(m *memFS)
+		want  string
+	}{
+		{"writable hooks directory", func(m *memFS) { m.dir(ingress.HooksDir, 0o777, 0, 0) }, "hooks: /etc/nginx/lcm/hooks is writable"},
+		{"service hooks of another account", func(m *memFS) {
+			m.dir(ingress.HooksDir+"/web", 0o755, aliceUID, aliceUID)
+		}, "hooks: /etc/nginx/lcm/hooks/web is not a directory only root can change"},
+		{"writable hook file", func(m *memFS) {
+			m.file(ingress.HooksDir+"/web/api-observe.conf", "", 0o666, 0, 0)
+		}, "hooks: /etc/nginx/lcm/hooks/web/api-observe.conf is not a regular file only root can change"},
+		{"hook file is a link", func(m *memFS) {
+			m.link(ingress.HooksDir+"/web/api-observe.conf", "/tmp/x.conf", 0, 0)
+		}, "api-observe.conf is not a regular file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			th := ingressHost(t, true)
+			th.fs.dir(ingress.HooksDir+"/web", 0o755, 0, 0)
+			tc.setup(th.fs)
+			res, out, err := th.apply(Options{})
+			if err == nil && res.Manual == 0 || !strings.Contains(out+errString(err), tc.want) {
+				t.Fatalf("want %q: %+v %v\n%s", tc.want, res, err, out)
+			}
+			if th.fs.get(SiteFile) != nil {
+				t.Error("the site was applied")
+			}
+		})
+	}
+	th := ingressHost(t, true)
+	th.fs.file(ingress.HooksDir+"/web/api-observe.conf", "", 0o644, 0, 0)
+	th.converge()
 }

@@ -14,12 +14,12 @@ func TestShutdownSignals(t *testing.T) {
 		}
 		return false
 	}
-	for _, args := range [][]string{{"host", "upgrade"}, {"host", "upgrade", "--check"}, {"host", "apply"}} {
+	for _, args := range [][]string{{"host", "upgrade"}, {"host", "upgrade", "--check"}, {"host", "apply"}, {"host", "cert", "issue"}, {"host", "ingress", "revert"}} {
 		if !has(args, syscall.SIGHUP) {
 			t.Errorf("%v must handle SIGHUP, which an SSH drop sends", args)
 		}
 	}
-	for _, args := range [][]string{{"serve"}, {"host", "status"}, {"host", "init"}, {"host"}, nil} {
+	for _, args := range [][]string{{"serve"}, {"host", "status"}, {"host", "init"}, {"host"}, {"hostx", "cert"}, nil} {
 		if has(args, syscall.SIGHUP) {
 			t.Errorf("%v must keep the default SIGHUP behavior", args)
 		}

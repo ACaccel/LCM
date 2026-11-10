@@ -14,7 +14,6 @@ import (
 	"net"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +43,8 @@ const (
 	reloadTimeout    = 3 * time.Minute
 	certbotTimeout   = 5 * time.Minute
 	probeTimeout     = 5 * time.Second
+	// undoTimeout bounds putting the previous site back and reloading it.
+	undoTimeout = nginxTestTimeout + reloadTimeout
 	// ProbePhase bounds the probes of all routes after a reload.
 	ProbePhase = 2 * time.Minute
 	// maxSite bounds the site file that is read back.
@@ -68,10 +69,10 @@ type IngressEnv struct {
 	ProbeWait     time.Duration
 }
 
-// Probe is one request that checks a route after a reload.
+// Probe is one request that checks the site after a reload: the location
+// nginx answers itself (ingress.ProbePath).
 type Probe struct {
-	Service string
-	// Scheme is "https", or "http" while there is no certificate.
+	// Scheme is "http" or, with a certificate, "https".
 	Scheme string
 	// Address is the IP and port to connect to.
 	Address string
@@ -103,6 +104,7 @@ const (
 	previousFile  = IngressState + "/previous.conf"
 	adoptedFile   = IngressState + "/adopted.json"
 	revertedFile  = IngressState + "/reverted.json"
+	renewalFile   = IngressState + "/renewal-original.json"
 )
 
 // ownedBy refuses a path that someone other than uid could change.
@@ -166,19 +168,28 @@ func digest(b []byte) string {
 // kept.
 func RouteOptionsFile(service string) string { return IngressRoutes + "/" + service + ".json" }
 
+// RouteOptions are the accepted route options of services, by service,
+// and the stored options that cannot be used, each with the reason.
+type RouteOptions struct {
+	Options  map[string]ingress.Options
+	Problems []string
+}
+
 // ReadRouteOptions returns the accepted route options of every service
-// that has some. A service without a file has none.
-func ReadRouteOptions(fsys FS, rootUID int) (map[string]ingress.Options, error) {
-	out := map[string]ingress.Options{}
+// that has some. A service without a file has none. A file that cannot be
+// decoded is reported in Problems and the service's route keeps its
+// defaults; a file someone other than root could have written is an error.
+func ReadRouteOptions(fsys FS, rootUID int) (RouteOptions, error) {
+	out := RouteOptions{Options: map[string]ingress.Options{}}
 	if _, err := fsys.Lstat(IngressRoutes); errors.Is(err, fs.ErrNotExist) {
 		return out, nil
 	}
 	if _, err := trustedAs(fsys, IngressRoutes, rootUID, false); err != nil {
-		return nil, err
+		return RouteOptions{}, err
 	}
 	names, err := fsys.ReadDir(IngressRoutes)
 	if err != nil {
-		return nil, err
+		return RouteOptions{}, err
 	}
 	for _, n := range names {
 		service, ok := strings.CutSuffix(n, ".json")
@@ -187,22 +198,28 @@ func ReadRouteOptions(fsys FS, rootUID int) (map[string]ingress.Options, error) 
 		}
 		info, err := fsys.Lstat(IngressRoutes + "/" + n)
 		if err != nil {
-			return nil, err
+			return RouteOptions{}, err
 		}
 		if err := ownedBy(IngressRoutes+"/"+n, info, rootUID); err != nil || !info.IsRegular() {
-			return nil, fmt.Errorf("%s/%s is not a root-owned regular file", IngressRoutes, n)
+			return RouteOptions{}, fmt.Errorf("%s/%s is not a root-owned regular file", IngressRoutes, n)
 		}
 		data, err := readLimited(fsys, IngressRoutes+"/"+n, 256<<10)
-		if err != nil {
-			return nil, err
+		if err == nil {
+			var o ingress.Options
+			if o, err = DecodeRouteOptions(data); err == nil {
+				out.Options[service] = o
+				continue
+			}
 		}
-		o, err := DecodeRouteOptions(data)
-		if err != nil {
-			return nil, fmt.Errorf("%s/%s: %w", IngressRoutes, n, err)
-		}
-		out[service] = o
+		out.Problems = append(out.Problems, fmt.Sprintf("services.%s: the stored route options %s/%s cannot be used (%s); the route has its defaults until LCM sends them again",
+			service, IngressRoutes, n, oneLine(err)))
 	}
 	return out, nil
+}
+
+// oneLine is an error on one printable line.
+func oneLine(err error) string {
+	return printable(strings.ReplaceAll(err.Error(), "\n", "; "), 1000)
 }
 
 // DecodeRouteOptions decodes stored route options strictly and validates
@@ -249,22 +266,61 @@ func SiteFor(cfg Config, options map[string]ingress.Options, tls bool) ingress.S
 	return s
 }
 
-// probes returns one probe per route, sent to the first listen address (a
-// local address) or to loopback.
-func probes(s ingress.Site) []Probe {
-	scheme, port := "http", 80
-	if s.TLS != nil {
-		scheme, port = "https", 443
+// renderAccepted renders the site with every service's stored options that
+// still fit the configuration, each added in turn (strict, the service of
+// a request, last). Options that no longer fit, for example after its grant
+// changed, are left out and described in dropped, so that one service
+// never keeps the others' routes from changing; options of strict that do
+// not fit are an error.
+func renderAccepted(cfg Config, ro RouteOptions, strict string, tls bool) ([]byte, ingress.Site, []string, error) {
+	accepted := map[string]ingress.Options{}
+	site := SiteFor(cfg, accepted, tls)
+	content, err := ingress.Render(site)
+	if err != nil {
+		return nil, site, nil, err
 	}
-	addr := "127.0.0.1"
-	if len(s.Listen) > 0 {
-		addr = s.Listen[0]
+	var names []string
+	for _, name := range slices.Sorted(maps.Keys(ro.Options)) {
+		if g, ok := cfg.Services[name]; ok && g.Route != nil && name != strict {
+			names = append(names, name)
+		}
+	}
+	if _, ok := ro.Options[strict]; ok && strict != "" {
+		names = append(names, strict)
+	}
+	var dropped []string
+	for _, name := range names {
+		try := maps.Clone(accepted)
+		try[name] = ro.Options[name]
+		trySite := SiteFor(cfg, try, tls)
+		out, err := ingress.Render(trySite)
+		if err != nil {
+			if name == strict {
+				return nil, site, nil, err
+			}
+			dropped = append(dropped, fmt.Sprintf("services.%s: the stored route options no longer fit (%s); the route has its defaults until they are sent again", name, oneLine(err)))
+			continue
+		}
+		accepted, site, content = try, trySite, out
+	}
+	return content, site, dropped, nil
+}
+
+// probes returns the probes of the site: the location nginx answers itself
+// on every listen address (or loopback), over HTTP and, with a
+// certificate, HTTPS.
+func probes(s ingress.Site) []Probe {
+	addrs := s.Listen
+	if len(addrs) == 0 {
+		addrs = []string{"127.0.0.1"}
 	}
 	var out []Probe
-	for _, r := range s.Routes {
-		out = append(out, Probe{Service: r.Service, Scheme: scheme, Address: net.JoinHostPort(addr, strconv.Itoa(port)), Host: s.Domain, Path: r.Prefix})
+	for _, a := range addrs {
+		out = append(out, Probe{Scheme: "http", Address: net.JoinHostPort(a, "80"), Host: s.Domain, Path: ingress.ProbePath})
+		if s.TLS != nil {
+			out = append(out, Probe{Scheme: "https", Address: net.JoinHostPort(a, "443"), Host: s.Domain, Path: ingress.ProbePath})
+		}
 	}
-	slices.SortFunc(out, func(a, b Probe) int { return strings.Compare(a.Path, b.Path) })
 	return out
 }
 
@@ -288,8 +344,10 @@ type SitePlan struct {
 	Adopt       string
 	adoptTarget string
 	// Reverted reports that "host ingress revert" removed the site.
-	Reverted  bool
-	TLS       bool
+	Reverted bool
+	TLS      bool
+	// Dropped describes stored route options left out of the site.
+	Dropped   []string
 	wellKnown []wellKnownCopy
 	probes    []Probe
 }
@@ -327,7 +385,8 @@ func (p SitePlan) siteChanges() bool {
 var nginxDirs = []string{NginxDir, SitesAvailable, SitesEnabled}
 
 // PlanSite renders the site and compares it with the host. It only reads.
-func PlanSite(env IngressEnv, cfg Config, options map[string]ingress.Options) (SitePlan, error) {
+// strict names the service whose options must fit (see renderAccepted).
+func PlanSite(env IngressEnv, cfg Config, ro RouteOptions, strict string) (SitePlan, error) {
 	i := cfg.Components.Ingress
 	if i == nil {
 		return SitePlan{}, ErrNoIngress
@@ -337,6 +396,9 @@ func PlanSite(env IngressEnv, cfg Config, options map[string]ingress.Options) (S
 		if _, err := trustedAs(fsys, d, env.RootUID, false); err != nil {
 			return SitePlan{}, fmt.Errorf("nginx: %w", err)
 		}
+	}
+	if err := checkHooks(env, cfg); err != nil {
+		return SitePlan{}, err
 	}
 	var plan SitePlan
 	files := ingress.CertificateFiles(i.Domain)
@@ -380,12 +442,12 @@ func PlanSite(env IngressEnv, cfg Config, options map[string]ingress.Options) (S
 	if len(problems) > 0 {
 		return SitePlan{}, errors.Join(problems...)
 	}
-	site := SiteFor(cfg, options, plan.TLS)
-	content, err := ingress.Render(site)
+	content, site, dropped, err := renderAccepted(cfg, ro, strict, plan.TLS)
 	if err != nil {
 		return SitePlan{}, err
 	}
 	plan.Content, plan.SHA256, plan.probes = content, digest(content), probes(site)
+	plan.Dropped = append(slices.Clone(ro.Problems), dropped...)
 	if plan.Installed, err = installedSite(env); err != nil {
 		return SitePlan{}, err
 	}
@@ -451,6 +513,78 @@ func staticRoot(env IngressEnv, cfg Config, p string) error {
 	}
 	return nil
 }
+
+// checkHooks refuses hook files that someone other than root could change:
+// nginx includes them in the proxy locations. Missing directories are
+// fine; a glob without matches includes nothing.
+func checkHooks(env IngressEnv, cfg Config) error {
+	fsys := env.FS
+	if _, err := fsys.Lstat(ingress.HooksDir); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if _, err := trustedAs(fsys, ingress.HooksDir, env.RootUID, false); err != nil {
+		return fmt.Errorf("hooks: %w", err)
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
+		if cfg.Services[name].Route == nil {
+			continue
+		}
+		dir := ingress.HooksDir + "/" + name
+		info, err := fsys.Lstat(dir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			return err
+		case !info.IsDir() || ownedBy(dir, info, env.RootUID) != nil:
+			return fmt.Errorf("hooks: %s is not a directory only root can change", dir)
+		}
+		files, err := fsys.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if !strings.HasSuffix(f, ".conf") {
+				continue
+			}
+			info, err := fsys.Lstat(dir + "/" + f)
+			if err != nil {
+				return err
+			}
+			if !info.IsRegular() || ownedBy(dir+"/"+f, info, env.RootUID) != nil {
+				return fmt.Errorf("hooks: %s/%s is not a regular file only root can change", dir, printable(f, 100))
+			}
+		}
+	}
+	return nil
+}
+
+// ownSite checks that the site file, if any, is LCM's by its owner and its
+// first line, without reading the rest.
+func ownSite(env IngressEnv) (bool, error) {
+	info, err := env.FS.Lstat(SiteFile)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	case !info.IsRegular() || ownedBy(SiteFile, info, env.RootUID) != nil:
+		return false, fmt.Errorf("%s exists and is not a root-owned regular file; move it away", SiteFile)
+	}
+	f, err := env.FS.Open(SiteFile)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+	head := make([]byte, len(ingress.Marker)+1)
+	if _, err := io.ReadFull(f, head); err != nil || string(head) != ingress.Marker+"\n" {
+		return false, fmt.Errorf("%s exists and was not written by LCM; move it away", SiteFile)
+	}
+	return true, nil
+}
+
+// SiteEnabled reports whether LCM's site is enabled.
+func SiteEnabled(fsys FS) (bool, error) { return siteEnabled(fsys) }
 
 // installedSite reads the site file, nil when there is none. A file
 // without the marker, or that someone else could have written, is not
@@ -626,8 +760,12 @@ func applySite(ctx context.Context, env IngressEnv, plan SitePlan) error {
 		}
 	}
 	if plan.Adopt != "" {
-		if _, err := fsys.Lstat(adoptedFile); errors.Is(err, fs.ErrNotExist) {
-			data, _ := json.Marshal(adoptedRecord{Name: plan.Adopt, Target: plan.adoptTarget}) // plain struct
+		recs, err := readAdopted(env)
+		if err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(recs, func(r adoptedRecord) bool { return r.Name == plan.Adopt }) {
+			data, _ := json.Marshal(append(recs, adoptedRecord{Name: plan.Adopt, Target: plan.adoptTarget})) // plain structs
 			if err := writeState(env, adoptedFile, append(data, '\n')); err != nil {
 				return err
 			}
@@ -677,6 +815,27 @@ func applySite(ctx context.Context, env IngressEnv, plan SitePlan) error {
 	return transact(ctx, env, change, undo, plan.probes)
 }
 
+// readAdopted returns the recorded adopted links, oldest first.
+func readAdopted(env IngressEnv) ([]adoptedRecord, error) {
+	data, err := readLimited(env.FS, adoptedFile, 64<<10)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var recs []adoptedRecord
+	if err := json.Unmarshal(data, &recs); err != nil {
+		return nil, fmt.Errorf("%s cannot be used (%w); restore the adopted links by hand", adoptedFile, err)
+	}
+	for _, r := range recs {
+		if !siteFileName.MatchString(r.Name) || r.Name == SiteName {
+			return nil, fmt.Errorf("%s names %q; restore the adopted links by hand", adoptedFile, printable(r.Name, 100))
+		}
+	}
+	return recs, nil
+}
+
 func ignoreMissing(err error) error {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -688,6 +847,10 @@ func ignoreMissing(err error) error {
 // configuration and probes it; any failure is undone, and nginx reloaded
 // again when it had loaded the change.
 func transact(ctx context.Context, env IngressEnv, change, undo func() error, probes []Probe) error {
+	// Putting the previous site back must finish even when the command is
+	// interrupted, with a bound of its own.
+	undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+	defer cancel()
 	if err := change(); err != nil {
 		return errors.Join(fmt.Errorf("change the site: %w", err), undoing(undo()))
 	}
@@ -695,10 +858,10 @@ func transact(ctx context.Context, env IngressEnv, change, undo func() error, pr
 		return errors.Join(err, undoing(undo()))
 	}
 	if err := reloadNginx(ctx, env); err != nil {
-		return errors.Join(err, undoing(undo()), reloadAfterUndo(ctx, env))
+		return errors.Join(err, undoing(undo()), reloadAfterUndo(undoCtx, env))
 	}
 	if err := probeAll(ctx, env, probes); err != nil {
-		return errors.Join(err, undoing(undo()), reloadAfterUndo(ctx, env))
+		return errors.Join(err, undoing(undo()), reloadAfterUndo(undoCtx, env))
 	}
 	return nil
 }
@@ -744,16 +907,13 @@ func commandMessage(out string, err error) string {
 	return err.Error()
 }
 
-// probeOK reports whether a status shows that nginx serves the route:
-// anything but a server error of nginx itself. 502, 503 and 504 mean the
-// route reached a service that is not answering yet, which is not the
-// site's fault.
-func probeOK(status int) bool {
-	return status < 500 || status == 502 || status == 503 || status == 504
-}
+// probeOK reports whether the probe location answered as rendered, which
+// only nginx itself does: no service's answer decides whether the site is
+// kept.
+func probeOK(status int) bool { return status == 204 }
 
 // errProbePhase ends probes that together took longer than ProbePhase.
-var errProbePhase = errors.New("the routes did not answer within " + ProbePhase.String())
+var errProbePhase = errors.New("nginx did not answer the probes within " + ProbePhase.String())
 
 func probeAll(ctx context.Context, env IngressEnv, probes []Probe) error {
 	if len(probes) == 0 {
@@ -781,7 +941,7 @@ func probeAll(ctx context.Context, env IngressEnv, probes []Probe) error {
 			last = err
 		}
 		if last != nil {
-			return fmt.Errorf("the route of %s (%s via %s) does not answer: %w", p.Service, p, p.Address, last)
+			return fmt.Errorf("nginx does not answer %s via %s as the new site would: %w", p, p.Address, last)
 		}
 	}
 	return nil
@@ -796,9 +956,11 @@ type IngressStatus struct {
 	Installed   string     `json:"installed,omitempty"`
 	Enabled     bool       `json:"enabled"`
 	TLS         bool       `json:"tls"`
-	Adopted     string     `json:"adopted,omitempty"`
+	Adopted     []string   `json:"adopted,omitempty"`
 	Reverted    bool       `json:"reverted,omitempty"`
 	Last        *LastApply `json:"last,omitempty"`
+	// Dropped describes stored route options the site leaves out.
+	Dropped []string `json:"dropped,omitempty"`
 	// Routes are the services with a route and whether options were
 	// accepted for them.
 	Routes []RouteStatus `json:"routes"`
@@ -818,30 +980,29 @@ func SiteStatus(env IngressEnv, cfg Config) (IngressStatus, error) {
 	if cfg.Components.Ingress == nil {
 		return st, ErrNoIngress
 	}
-	options, err := ReadRouteOptions(env.FS, env.RootUID)
+	ro, err := ReadRouteOptions(env.FS, env.RootUID)
 	if err != nil {
 		return st, err
 	}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
 		if r := cfg.Services[name].Route; r != nil {
-			_, has := options[name]
+			_, has := ro.Options[name]
 			st.Routes = append(st.Routes, RouteStatus{Service: name, Prefix: r.Prefix, Options: has})
 		}
 	}
-	plan, err := PlanSite(env, cfg, options)
+	plan, err := PlanSite(env, cfg, ro, "")
 	if err != nil {
 		st.RenderError = printable(err.Error(), 2000)
 	} else {
-		st.Rendered, st.TLS = plan.SHA256, plan.TLS
+		st.Rendered, st.TLS, st.Dropped = plan.SHA256, plan.TLS, plan.Dropped
 	}
 	if installed, err := installedSite(env); err == nil && installed != nil {
 		st.Installed = digest(installed)
 	}
 	st.Enabled, _ = siteEnabled(env.FS)
-	if data, err := readLimited(env.FS, adoptedFile, 64<<10); err == nil {
-		var rec adoptedRecord
-		if json.Unmarshal(data, &rec) == nil {
-			st.Adopted = rec.Name
+	if recs, err := readAdopted(env); err == nil {
+		for _, r := range recs {
+			st.Adopted = append(st.Adopted, r.Name)
 		}
 	}
 	if _, err := env.FS.Lstat(revertedFile); err == nil {
@@ -853,10 +1014,11 @@ func SiteStatus(env IngressEnv, cfg Config) (IngressStatus, error) {
 	return st, nil
 }
 
-// RevertSite removes LCM's site and enables the adopted one again, from
-// what the first application recorded or, without a record, from the
-// configuration's adopt. The caller holds the ingress lock. It returns what
-// it changed.
+// RevertSite removes LCM's site, enables every adopted site again (from the
+// links the applications recorded or, without a record, the
+// configuration's adopt) and puts back the renewal configuration apply
+// changed. The caller holds the ingress lock. It does not read the site
+// back beyond its marker. It returns what it changed.
 func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, error) {
 	fsys := env.FS
 	for _, d := range nginxDirs {
@@ -867,7 +1029,7 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 	if err := checkState(env); err != nil {
 		return nil, err
 	}
-	installed, err := installedSite(env)
+	installed, err := ownSite(env)
 	if err != nil {
 		return nil, err
 	}
@@ -875,37 +1037,42 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	rec := adoptedRecord{}
-	if data, err := readLimited(fsys, adoptedFile, 64<<10); err == nil {
-		if err := json.Unmarshal(data, &rec); err != nil || !siteFileName.MatchString(rec.Name) {
-			return nil, fmt.Errorf("%s cannot be used; restore the link by hand", adoptedFile)
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	recs, err := readAdopted(env)
+	if err != nil {
 		return nil, err
-	} else if i := cfg.Components.Ingress; i != nil && i.Adopt != "" {
-		rec = adoptedRecord{Name: i.Adopt, Target: SitesAvailable + "/" + i.Adopt}
 	}
-	restoreAdopted := false
-	if rec.Name != "" {
+	if i := cfg.Components.Ingress; len(recs) == 0 && i != nil && i.Adopt != "" {
+		recs = []adoptedRecord{{Name: i.Adopt, Target: SitesAvailable + "/" + i.Adopt}}
+	}
+	var restore []adoptedRecord
+	for _, rec := range recs {
 		target, err := adoptedLink(fsys, rec.Name)
 		if err != nil {
 			return nil, err
 		}
-		if target == "" {
-			if !within(rec.Target, SitesAvailable) || path.Clean(rec.Target) != rec.Target {
-				return nil, fmt.Errorf("the recorded link target %q of %s is not in %s; restore the link by hand", printable(rec.Target, 200), rec.Name, SitesAvailable)
-			}
-			if _, err := trustedAs(fsys, rec.Target, env.RootUID, true); err != nil {
-				return nil, fmt.Errorf("the adopted site cannot be enabled again: %w", err)
-			}
-			restoreAdopted = true
+		if target != "" {
+			continue
 		}
+		// The link is put back as it was; a relative target is resolved
+		// from sites-enabled, which like sites-available is root's and no
+		// link.
+		resolved := rec.Target
+		if !path.IsAbs(resolved) {
+			resolved = path.Join(SitesEnabled, resolved)
+		}
+		if resolved == "" || !within(resolved, SitesAvailable) || path.Dir(resolved) != SitesAvailable {
+			return nil, fmt.Errorf("the recorded link target %q of %s is not in %s; restore the link by hand", printable(rec.Target, 200), rec.Name, SitesAvailable)
+		}
+		if _, err := trustedAs(fsys, resolved, env.RootUID, true); err != nil {
+			return nil, fmt.Errorf("the adopted site %s cannot be enabled again: %w", rec.Name, err)
+		}
+		restore = append(restore, rec)
 	}
 	var did []string
 	if enabled {
 		did = append(did, "disable "+SiteName)
 	}
-	if restoreAdopted {
+	for _, rec := range restore {
 		did = append(did, "enable the adopted site "+rec.Name+" again")
 	}
 	if len(did) > 0 {
@@ -915,14 +1082,16 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 					return err
 				}
 			}
-			if restoreAdopted {
-				return fsys.Symlink(rec.Target, SitesEnabled+"/"+rec.Name, env.RootUID, env.RootGID)
+			for _, rec := range restore {
+				if err := fsys.Symlink(rec.Target, SitesEnabled+"/"+rec.Name, env.RootUID, env.RootGID); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
 		undo := func() error {
 			var errs []error
-			if restoreAdopted {
+			for _, rec := range restore {
 				errs = append(errs, ignoreMissing(fsys.Remove(SitesEnabled+"/"+rec.Name)))
 			}
 			if enabled {
@@ -936,14 +1105,24 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 			return nil, recordLast(env, "", fmt.Errorf("revert: %w", err))
 		}
 	}
-	if installed != nil {
-		if err := writeState(env, previousFile, installed); err != nil {
-			return did, err
+	if installed {
+		// A copy is kept when it can be read; the removal does not depend
+		// on it.
+		kept := ""
+		if data, err := readLimited(fsys, SiteFile, maxSite); err == nil && writeState(env, previousFile, data) == nil {
+			kept = " (kept as " + previousFile + ")"
 		}
 		if err := fsys.Remove(SiteFile); err != nil {
 			return did, err
 		}
-		did = append(did, "remove "+SiteFile+" (kept as "+previousFile+")")
+		did = append(did, "remove "+SiteFile+kept)
+	}
+	restored, err := restoreRenewal(env)
+	if err != nil {
+		return did, err
+	}
+	if restored != "" {
+		did = append(did, "restore "+restored+" as it was before ingress changed it")
 	}
 	if err := ignoreMissing(fsys.Remove(adoptedFile)); err != nil {
 		return did, err
@@ -953,6 +1132,46 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 		return did, err
 	}
 	return did, recordLast(env, "", nil)
+}
+
+// renewalOriginal is certbot's renewal configuration as it was before apply
+// first changed it.
+type renewalOriginal struct {
+	Path    string      `json:"path"`
+	Mode    fs.FileMode `json:"mode"`
+	Content string      `json:"content"`
+}
+
+// saveRenewal keeps the renewal configuration before its first change.
+func saveRenewal(env IngressEnv, p string, mode fs.FileMode, content []byte) error {
+	if _, err := env.FS.Lstat(renewalFile); err == nil {
+		return nil
+	}
+	data, _ := json.Marshal(renewalOriginal{Path: p, Mode: mode.Perm(), Content: string(content)}) // plain struct
+	return writeState(env, renewalFile, append(data, '\n'))
+}
+
+// restoreRenewal puts back the kept renewal configuration and returns its
+// path, or "" when none was kept.
+func restoreRenewal(env IngressEnv) (string, error) {
+	data, err := readLimited(env.FS, renewalFile, 2*maxConfigSize)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var orig renewalOriginal
+	if err := json.Unmarshal(data, &orig); err != nil || !within(orig.Path, RenewalDir) || path.Clean(orig.Path) != orig.Path || !strings.HasSuffix(orig.Path, ".conf") {
+		return "", fmt.Errorf("%s cannot be used; restore the renewal configuration by hand", renewalFile)
+	}
+	if _, err := trustedAs(env.FS, orig.Path, env.RootUID, true); err != nil {
+		return "", fmt.Errorf("the renewal configuration cannot be restored: %w", err)
+	}
+	if err := env.FS.WriteFile(orig.Path, strings.NewReader(orig.Content), orig.Mode&0o644, env.RootUID, env.RootGID); err != nil {
+		return "", err
+	}
+	return orig.Path, env.FS.Remove(renewalFile)
 }
 
 // Reverted reports whether the site was reverted and not applied since.

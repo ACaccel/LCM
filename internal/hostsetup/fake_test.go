@@ -803,7 +803,7 @@ func newTestHost(t *testing.T) *testHost {
 		"nobody": {Name: "nobody", UID: 65534, GID: 65534, Home: "/nonexistent"},
 	}}
 	clk := clock.NewFake(time.Unix(1_800_000_000, 0))
-	th := &testHost{t: t, fs: m, r: r, clock: clk, probeStatus: 200}
+	th := &testHost{t: t, fs: m, r: r, clock: clk, probeStatus: 204}
 	th.host = Host{
 		FS: m, Runner: r, Clock: clk, Privileged: true, Executable: testExe,
 		OpenExecutable: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(exeData)), nil },

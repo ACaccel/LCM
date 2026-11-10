@@ -79,50 +79,53 @@ func (a *applier) ingressStep(ctx context.Context, s *step) error {
 	if err := a.renewalHook(s); err != nil {
 		return err
 	}
-	if err := a.renewalConf(s, i); err != nil {
-		return err
-	}
 	env := a.h.ingressEnv()
 	plan, err := a.planIngress(env)
 	if err != nil {
 		s.manual(err.Error())
+		s.note("the renewal configuration is changed only after the site applies")
 		return nil
+	}
+	for _, d := range plan.Dropped {
+		s.manual(d)
 	}
 	if !plan.TLS {
 		s.note("there is no certificate for " + i.Domain + " yet, so only port 80 is served; issue one with: sudo bin/lcm host cert issue")
 	}
-	changes := plan.Changes()
-	if len(changes) == 0 {
-		return nil
-	}
-	what := strings.Join(changes, "; ")
-	if plan.Reverted {
-		what += " (the site was reverted; this applies it again)"
-	}
-	if a.o.Check && plan.siteChanges() {
-		_, _ = fmt.Fprintf(a.o.Out, "--- rendered %s (sha256 %s) ---\n%s--- end of %s ---\n", SiteFile, plan.SHA256, plan.Content, SiteFile)
-	}
-	return s.change(what, func() error {
-		unlock, err := a.h.lockIngress(i.LegacyLock)
-		if err != nil {
+	if changes := plan.Changes(); len(changes) > 0 {
+		what := strings.Join(changes, "; ")
+		if plan.Reverted {
+			what += " (the site was reverted; this applies it again)"
+		}
+		if a.o.Check && plan.siteChanges() {
+			_, _ = fmt.Fprintf(a.o.Out, "--- rendered %s (sha256 %s) ---\n%s--- end of %s ---\n", SiteFile, plan.SHA256, plan.Content, SiteFile)
+		}
+		if err := s.change(what, func() error {
+			unlock, err := a.h.lockIngress(i.LegacyLock)
+			if err != nil {
+				return err
+			}
+			defer unlock()
+			// Another change may have come first: plan again under the lock.
+			plan, err := a.planIngress(env)
+			if err != nil {
+				return err
+			}
+			return ApplySite(ctx, env, plan)
+		}); err != nil {
 			return err
 		}
-		defer unlock()
-		// Another change may have come first: plan again under the lock.
-		plan, err := a.planIngress(env)
-		if err != nil {
-			return err
-		}
-		return ApplySite(ctx, env, plan)
-	})
+	}
+	// The site serves the ACME webroot now, so renewals may use it.
+	return a.renewalConf(s, i)
 }
 
 func (a *applier) planIngress(env IngressEnv) (SitePlan, error) {
-	options, err := ReadRouteOptions(a.h.FS, 0)
+	ro, err := ReadRouteOptions(a.h.FS, 0)
 	if err != nil {
 		return SitePlan{}, err
 	}
-	return PlanSite(env, a.cfg, options)
+	return PlanSite(env, a.cfg, ro, "")
 }
 
 // renewalHook installs certbot's deploy hook; other hooks, such as a
@@ -190,6 +193,10 @@ func (a *applier) renewalConf(s *step, i *Ingress) error {
 		}
 		if string(now) != string(data) {
 			return fmt.Errorf("%s changed since it was read; apply again", p)
+		}
+		// host ingress revert puts the first version back.
+		if err := saveRenewal(a.h.ingressEnv(), p, info.Mode, data); err != nil {
+			return err
 		}
 		return fsys.WriteFile(p, strings.NewReader(fixed), info.Mode.Perm(), 0, 0)
 	})
@@ -324,11 +331,11 @@ func IssueCertificate(ctx context.Context, h Host, o CertOptions) error {
 	defer unlock()
 	env := h.ingressEnv()
 	apply := func(stage string) error {
-		options, err := ReadRouteOptions(h.FS, 0)
+		ro, err := ReadRouteOptions(h.FS, 0)
 		if err != nil {
 			return err
 		}
-		plan, err := PlanSite(env, cfg, options)
+		plan, err := PlanSite(env, cfg, ro, "")
 		if err != nil {
 			return err
 		}
@@ -384,11 +391,9 @@ func RevertIngress(ctx context.Context, h Host, o RevertOptions) error {
 	if err != nil {
 		return safeError{err}
 	}
-	legacy := ""
-	if cfg.Components.Ingress != nil {
-		legacy = cfg.Components.Ingress.LegacyLock
-	}
-	unlock, err := h.lockIngress(legacy)
+	// Revert never waits for the legacy lock, which anyone who can read
+	// the lock file can hold: going back must stay possible.
+	unlock, err := h.lockIngress("")
 	if err != nil {
 		return err
 	}
@@ -481,11 +486,11 @@ func renderedStatus(h Host, env IngressEnv, st *FileStatus) error {
 		st.State, st.Detail = StateOutdated, "components.ingress is null; sudo bin/lcm host ingress revert removes the site"
 		return nil
 	}
-	options, err := ReadRouteOptions(h.FS, 0)
+	ro, err := ReadRouteOptions(h.FS, 0)
 	if err != nil {
 		return err
 	}
-	plan, err := PlanSite(env, cfg, options)
+	plan, err := PlanSite(env, cfg, ro, "")
 	if err != nil {
 		return err
 	}
@@ -497,6 +502,8 @@ func renderedStatus(h Host, env IngressEnv, st *FileStatus) error {
 		st.State, st.Detail = StateOutdated, "not enabled in "+SitesEnabled
 	case plan.Adopt != "":
 		st.State, st.Detail = StateOutdated, "the adopted site "+plan.Adopt+" is still enabled"
+	case len(plan.Dropped) > 0:
+		st.State, st.Detail = StateOutdated, strings.Join(plan.Dropped, "; ")
 	default:
 		st.State = StateUpToDate
 	}

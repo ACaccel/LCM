@@ -83,10 +83,10 @@
 //     skipped, started, leftStopped}, "backups" [{backupId, kind, createdAt,
 //     size, manifestSha256, mode, releaseId, sources, skipped, restoredFrom,
 //     problem}] (with "backupsTruncated" when the list is cut) or "prune"
-//     {removed, kept}, "ingressApply" {sha256, changes} or "ingress"
+//     {removed, kept}, "ingressApply" {sha256, changes, dropped} or "ingress"
 //     (ingress.status) {rendered, renderError, installed, enabled, tls,
-//     adopted, reverted, last {at, outcome, message, sha256}, routes
-//     [{service, prefix, options}]}.
+//     adopted, reverted, last {at, outcome, message, sha256}, dropped,
+//     routes [{service, prefix, options}]}.
 //
 // A release manifest records the service, releaseId, buildId, commit,
 // build runtimes, artifact, the SHA-256 of the installed tree (over each
@@ -255,16 +255,19 @@
 // presentation options of one service (internal/ingress.Options; absent
 // means the service has none), refuses them unless the service's grant has
 // a route and they pass ingress.Options.Validate, renders the whole site
-// with them and with the accepted options of every other service, and
-// applies it: under /run/lcm-ingress.lock (and the configured legacy lock
-// while it exists), with "nginx -t" of the complete configuration, a
-// reload, a probe of every route and a full revert on any failure. The
-// accepted options are kept, root-only, in
-// /var/lib/lcm-ingress/routes/<service>.json, written before the site is
-// applied and put back when it fails. It refuses while the site was never
-// installed or was reverted ("lcm host apply" installs it and adopts the
-// hand-made site, so that an administrator reviews the cutover), and while
-// the adopted site is enabled again. Its ledger lock is "lcm-ingress", one
+// with them and with the accepted options of every other service (another
+// service's options that no longer fit its grant are left out and named in
+// "dropped"; the requested ones must fit), and applies it: under
+// /run/lcm-ingress.lock (and the configured legacy lock while it exists,
+// waiting at most 30 seconds for each), with "nginx -t" of the complete
+// configuration, a reload, a probe of the location nginx answers itself on
+// every listen address, and a full revert on any failure. The accepted
+// options are kept, root-only, in /var/lib/lcm-ingress/routes/<service>.json,
+// written before the site is applied and put back when it fails. It
+// refuses while the site was never installed, was reverted or is not
+// enabled ("lcm host apply" installs it and adopts the hand-made site, so
+// that an administrator reviews the cutover), and while the adopted site is
+// enabled again; it checks this before and again after taking the locks. Its ledger lock is "lcm-ingress", one
 // for all services. ingress.status reports the digest of the site the
 // configuration renders, the installed one and the last result; it is not
 // recorded.
@@ -434,6 +437,9 @@ type Response struct {
 type IngressApplyResult struct {
 	SHA256  string   `json:"sha256"`
 	Changes []string `json:"changes"`
+	// Dropped describes other services' stored options that no longer fit
+	// and were left out (their routes have their defaults).
+	Dropped []string `json:"dropped,omitempty"`
 }
 
 // BuildResult is the result of build.

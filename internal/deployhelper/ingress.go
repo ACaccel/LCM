@@ -50,11 +50,8 @@ func (h *Helper) ingressApply(ctx context.Context, req Request, cfg hostsetup.Co
 	if _, err := h.trustedPath(hostsetup.Nginx, true); err != nil {
 		return refuse(reply(req), CodeRefused, "nginx cannot be used: %v", err)
 	}
-	switch {
-	case !hostsetup.SiteInstalled(h.FS):
-		return refuse(reply(req), CodeRefused, "the ingress site is not installed yet; an administrator installs it (and reviews the cutover) with sudo bin/lcm host apply")
-	case hostsetup.Reverted(h.FS):
-		return refuse(reply(req), CodeRefused, "the ingress site was reverted with sudo bin/lcm host ingress revert; sudo bin/lcm host apply installs it again")
+	if refused := h.siteRefusal(req); refused != nil {
+		return *refused
 	}
 	if info, err := h.trustedPath(hostsetup.IngressRoutes, false); err != nil || info.Mode.Perm() != 0o700 {
 		return refuse(reply(req), CodeRefused, "%s is not a root-only directory; run sudo bin/lcm host apply", hostsetup.IngressRoutes)
@@ -67,7 +64,12 @@ func (h *Helper) ingressApply(ctx context.Context, req Request, cfg hostsetup.Co
 		return refuse(reply(req), CodeFailed, "the ingress lock cannot be taken: %v", err)
 	}
 	defer unlock()
-	options, err := hostsetup.ReadRouteOptions(h.FS, h.RootUID)
+	// The site may have been reverted or disabled while the lock was
+	// taken.
+	if refused := h.siteRefusal(req); refused != nil {
+		return *refused
+	}
+	ro, err := hostsetup.ReadRouteOptions(h.FS, h.RootUID)
 	if err != nil {
 		return refuse(reply(req), CodeFailed, "the accepted route options cannot be read: %v", err)
 	}
@@ -77,23 +79,26 @@ func (h *Helper) ingressApply(ctx context.Context, req Request, cfg hostsetup.Co
 		return refuse(reply(req), CodeFailed, "%v", err)
 	}
 	if req.Route != nil {
-		options[req.Service] = *req.Route
+		ro.Options[req.Service] = *req.Route
 	} else {
-		delete(options, req.Service)
+		delete(ro.Options, req.Service)
 	}
 	env := h.ingressEnv()
-	plan, err := hostsetup.PlanSite(env, cfg, options)
+	plan, err := hostsetup.PlanSite(env, cfg, ro, req.Service)
 	if err != nil {
 		return refuse(reply(req), CodeRefused, "the route cannot be applied: %v", err)
 	}
-	if plan.Adopt != "" {
+	switch {
+	case plan.Adopt != "":
 		return refuse(reply(req), CodeRefused, "the adopted site %s is enabled again; an administrator reviews it with sudo bin/lcm host apply --check", plan.Adopt)
+	case !plan.Enabled:
+		return refuse(reply(req), CodeRefused, "%s is not enabled; an administrator enables it again with sudo bin/lcm host apply", hostsetup.SiteName)
 	}
 	if err := h.writeOptions(file, req.Route); err != nil {
 		return refuse(reply(req), CodeFailed, "the route options cannot be stored: %v", err)
 	}
 	resp := reply(req)
-	resp.IngressApply = &IngressApplyResult{SHA256: plan.SHA256, Changes: plan.Changes()}
+	resp.IngressApply = &IngressApplyResult{SHA256: plan.SHA256, Changes: plan.Changes(), Dropped: plan.Dropped}
 	if resp.IngressApply.Changes == nil {
 		resp.IngressApply.Changes = []string{}
 	}
@@ -110,6 +115,26 @@ func (h *Helper) ingressApply(ctx context.Context, req Request, cfg hostsetup.Co
 		return refuse(resp, CodeFailed, "%v", err)
 	}
 	return resp
+}
+
+// siteRefusal refuses a change of a site that an administrator has not
+// installed, has reverted or has disabled.
+func (h *Helper) siteRefusal(req Request) *Response {
+	var resp Response
+	enabled, err := hostsetup.SiteEnabled(h.FS)
+	switch {
+	case err != nil:
+		resp = refuse(reply(req), CodeRefused, "%v", err)
+	case !hostsetup.SiteInstalled(h.FS):
+		resp = refuse(reply(req), CodeRefused, "the ingress site is not installed yet; an administrator installs it (and reviews the cutover) with sudo bin/lcm host apply")
+	case hostsetup.Reverted(h.FS):
+		resp = refuse(reply(req), CodeRefused, "the ingress site was reverted with sudo bin/lcm host ingress revert; sudo bin/lcm host apply installs it again")
+	case !enabled:
+		resp = refuse(reply(req), CodeRefused, "%s is not enabled; an administrator enables it again with sudo bin/lcm host apply", hostsetup.SiteName)
+	default:
+		return nil
+	}
+	return &resp
 }
 
 // readOptionsFile returns the stored options file of a service as it is.
