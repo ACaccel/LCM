@@ -56,6 +56,8 @@ type env struct {
 	tools      map[string]string
 	opCounter  int
 	systemctls []string
+	// nginxTest is the exit status of "nginx -t".
+	nginxTest int
 }
 
 func newEnv(t *testing.T) *env {
@@ -214,6 +216,8 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		return result(migrate(c.Argv[i+1:]))
 	}
 	switch c.Argv[0] {
+	case hostsetup.Nginx:
+		return result("nginx: [emerg] test failure\n", e.nginxTest)
 	case systemdAnalyze:
 		return result("bad unit\n", e.analyze)
 	case systemctl:

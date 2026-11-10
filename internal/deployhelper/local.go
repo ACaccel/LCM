@@ -52,6 +52,10 @@ func ServeLocal(ctx context.Context, in io.Reader, out io.Writer) error {
 			return lookup(ctx, runner, name)
 		},
 		Free: statfsFree,
+		IngressLock: func(legacy string) (func(), error) {
+			return hostsetup.LockIngress("", 0, legacy, ingressLockWait)
+		},
+		Probe: hostsetup.ProbeHTTP, ProbeAttempts: 10, ProbeWait: 500 * time.Millisecond,
 	}
 	h := &Helper{Host: host}
 	ledger, err := openTrustedLedger(h, "")
