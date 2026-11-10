@@ -31,7 +31,7 @@ func TestCatalogIsCompleteAndSorted(t *testing.T) {
 			t.Errorf("%s: document is not a policy", tpl.ID)
 		}
 	}
-	want := []string{"auto-deploy", "post-deploy-verify", "restart-on-down", "scheduled-backup"}
+	want := []string{"auto-deploy", "cert-expiry", "post-deploy-verify", "restart-on-down", "scheduled-backup"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("templates = %v, want %v", ids, want)
 	}
@@ -102,6 +102,35 @@ func TestRenderSubstitutesTriggerPropsAndKeepsOthersAsParams(t *testing.T) {
 	}
 	if pol.Spec.Params["resource"] != "web" {
 		t.Errorf("resource missing from spec.params: %v", pol.Spec.Params)
+	}
+}
+
+func TestCertExpiryWatchesTLSChecksOfOneResource(t *testing.T) {
+	tpl, ok := templates.Get("cert-expiry")
+	if !ok {
+		t.Fatal("cert-expiry missing")
+	}
+	out, err := tpl.Render("site-cert", map[string]any{"resource": "site"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol, err := model.DecodePolicy(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	trig := pol.Spec.Nodes[0]
+	if trig.Type != "trigger.signal" || !slices.Equal(toStrings(trig.Props["kinds"]), []string{"check.changed"}) ||
+		!slices.Equal(toStrings(trig.Props["resources"]), []string{"site"}) || !slices.Equal(toStrings(trig.Props["statuses"]), []string{"down"}) {
+		t.Errorf("trigger = %+v", trig)
+	}
+	// Notifications are off unless a secret is named.
+	if pol.Spec.Params["notifySecret"] != "" {
+		t.Errorf("params = %v", pol.Spec.Params)
+	}
+	for _, n := range pol.Spec.Nodes {
+		if n.Type == "notify" && n.Props["optional"] != true {
+			t.Errorf("notify node %s is not optional", n.ID)
+		}
 	}
 }
 

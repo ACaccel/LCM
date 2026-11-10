@@ -14,7 +14,7 @@ spec:
   type: service                  # service | machine | router
   adapter: systemd               # allowed values depend on type (table below)
   config: { unit: web.service }  # strict, typed by type and adapter; unknown fields are refused
-  checks:                        # any type: http, tcp, systemd, docker, command, heartbeat, prometheus
+  checks:                        # any type: http, tcp, tls, systemd, docker, command, heartbeat, prometheus
     - { name: http, type: http, props: { url: http://127.0.0.1:8080/health } }
   relations:
     - { type: dependsOn, target: db }

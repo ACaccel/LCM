@@ -3,6 +3,7 @@ package monitor
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/model"
 )
 
@@ -44,6 +46,11 @@ type Built struct {
 // Env gives check builders access to collaborators.
 type Env struct {
 	Runner Runner
+	// Clock is the time source of expiry arithmetic; nil means the real clock.
+	Clock clock.Clock
+	// Roots overrides the trust anchors of TLS checks; nil means the system
+	// roots. Tests use it to trust a generated authority.
+	Roots *x509.CertPool
 }
 
 // Spec defines a check type with props type P.

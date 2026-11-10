@@ -9,7 +9,7 @@ import (
 func TestTemplatesList(t *testing.T) {
 	x := newSite(t)
 	items := x.call("GET", v1+"/templates", nil).want(http.StatusOK).items()
-	if len(items) != 4 || items[0]["id"] != "auto-deploy" || items[0]["resourceParam"] != "resource" {
+	if len(items) != 5 || items[0]["id"] != "auto-deploy" || items[0]["resourceParam"] != "resource" {
 		t.Fatalf("templates = %v", items)
 	}
 	params := items[0]["params"].([]any)

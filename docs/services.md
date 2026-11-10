@@ -199,6 +199,7 @@ Checks apply to every resource type; the rules below are the same for machines a
 |---|---|---|
 | `http` | `url`, `method`, `expectStatus` (default 200-399), `bodyContains`, `headers`, `insecureSkipVerify` | the status is accepted and the body contains the text |
 | `tcp` | `address` | a connection opens |
+| `tls` | `host`, `port` (443), `serverName` (default `host`), `minValidity` (Go duration, default `504h` = 21 days, at least `1h`) | the served certificate chains to the system roots, matches `serverName` and stays valid for at least `minValidity`; the message states the days left and the `notAfter` date, or the verification error |
 | `systemd` | `unit`, `scope` | the unit is active |
 | `docker` | `container` | the container runs and is healthy when it defines a healthcheck |
 | `command` | `command` (argv, no shell), `expectExit` (default 0) | the exit code matches |

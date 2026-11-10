@@ -93,7 +93,7 @@ func TestChecksHeartbeatAndSeries(t *testing.T) {
 	for _, ty := range types {
 		seen[ty["type"].(string)] = true
 	}
-	for _, want := range []string{"http", "tcp", "systemd", "docker", "command", "heartbeat", "prometheus"} {
+	for _, want := range []string{"http", "tcp", "tls", "systemd", "docker", "command", "heartbeat", "prometheus"} {
 		if !seen[want] {
 			t.Errorf("check type %s missing from %v", want, types)
 		}
