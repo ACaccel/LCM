@@ -329,6 +329,8 @@ To take over a host whose site was written by hand, name that site in `adopt`, t
 2. Stop the scripts that still edit nginx, or set `legacyLock` to the lock they take. Avoid the days around a certificate renewal.
 3. `sudo bin/lcm host apply`: the first application disables the adopted link and records it in `adopted.json`.
 
+When the same `apply` adopts an existing [security component](security.md#install-adopt-and-upgrade), first add to `components.security.watch.deploy` the root deploy tooling directories that projects on the host still use, until their services are deployed by LCM; the security component no longer watches them by itself.
+
 To go back:
 
 ```sh

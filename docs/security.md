@@ -275,11 +275,20 @@ component's programs.
 
 The collector forwards one audit summary per category, login UID, effective UID and
 result each minute, with the record count, so a deployment that writes thousands of
-watched files does not fill its queue. AIDE skips `/opt/<service>/releases`: every
-deployment changes it, and LCM records each one (the audit watch on `/opt/<service>`
-still covers it). A change to the integrity scope itself (a new grant, a new `watch`
-path) makes the next AIDE check report the difference until the baseline is reviewed
-and accepted locally.
+watched files does not fill its queue. Summaries take the rule key from the record's
+own `key=` field and the identities from the fields before `comm=`, so a program name
+cannot claim another category or account. AIDE skips `/opt/<service>`: every deployment
+changes it, its releases are root-owned and LCM records each deployment (the audit watch
+on `/opt/<service>` stays); it checks `/etc/<service>` and the system categories. A
+change to the integrity scope itself (a new grant, a new `watch` path) makes the next
+AIDE check report the difference until the baseline is reviewed and accepted locally.
+
+The collector treats every line of the Nginx observation log, which the web server's
+account can write, as untrusted: a line that is not a well-formed JSON object is
+discarded and counted, at most 64 distinct services are counted per window (the rest
+as unassigned), and items from that log may hold at most 600 of the 1,000 queue slots
+and are dropped first, so they never push out audit, AIDE or health events, which are
+also delivered first. Each input's batch is checkpointed with its cursor.
 
 ### Installed files
 
@@ -311,7 +320,9 @@ sends traffic per service and category (unknown categories count as `other`).
 Thresholds for `auth`, `api`, `upload` and `socket` are kept in the helper policy and
 rendered into one hook file per granted service and category; they stay in dry-run
 mode. The helper's `nginx.configure` re-renders them under `/run/lcm-ingress.lock`, the
-lock the ingress component changes Nginx with. The helper pins only files the component
+lock the ingress component changes Nginx with; `apply`, removal and revert hold the same
+lock from their first Nginx change to the end of any rollback. At most 64 services are
+observed. The helper pins only files the component
 renders, so ingress changes never count as drift. Without Nginx installed, traffic
 observation is off.
 
@@ -341,23 +352,34 @@ and approvals, the AIDE schedule and the approved profiles. It converts `policy.
 version 2 with the thresholds read from the replaced Nginx files, replaces the
 observation configuration, removes `/etc/nginx/workstation-security/` (it refuses files
 there that no installer made), copies the log rotation state out of its dated directory
-and restricts the token to root. Watches are computed again: list deploy tooling that
-should stay watched in `watch.deploy`. Locations that ingress does not serve yet are not
-observed.
+and restricts the token to root. It holds the previous helper's lock
+(`/var/lib/lcm-security-host/control.lock`) meanwhile. Watches are computed again: on a
+host where projects still deploy with their own root tooling (until their services move
+to LCM deploys), list those directories in `watch.deploy`, or they stop being watched.
+Locations that ingress does not serve yet are not observed.
 
 **Transactions.** Every `apply` and removal records each change in
 `/var/lib/workstation-security/backups/transactions/<id>/` with a copy of every file it
-replaces; a failed run undoes its own transaction.
+replaces, and records the units it enables, starts, disables or stops; a failed run
+undoes its own transaction, including the units and the kernel's audit watches, and
+restarts the collector when its files were restored.
 `sudo bin/lcm host security revert --check|--apply [--transaction <id>]` undoes the last
 one when no file it changed was changed since (otherwise it names the file and changes
 nothing). Data written since (reports, rotation state, the recorded permissions),
-installed packages and the account stay.
+installed packages and the account stay. The newest 10 transactions are kept; older
+ones, with their file copies (which can include an ingest token), are deleted.
+
+**Locking.** The installer holds `/run/lcm-security.lock`, waiting up to a minute for it.
+While it waits and works, `/run/lcm-security.pending` makes the helper refuse new
+requests, so the `lcm` account cannot keep the lock from root by calling the helper
+again and again; a file older than an hour, left by an interrupted run, is ignored.
 
 ### Ingest token
 
 When `/etc/workstation-security/ingest-token` is missing, `apply` creates an ingest-scope
 API token named `security-collector` (`lcm token create --scope ingest`, run as `lcm`),
-hands it to the installer on stdin and stores it root-only (0600). The collector unit
+hands it to the installer on stdin and stores it root-only (0600); when the installer
+then fails, `apply` revokes that token again. The collector unit
 reads it as a systemd credential (`LoadCredential=`). To rotate it: revoke the old token
 (console, or `sudo -u lcm lcm token list` and `token revoke <id>` with
 `--data-dir /var/lib/lcm`), delete the file, run `sudo bin/lcm host apply`.
@@ -366,7 +388,9 @@ reads it as a systemd credential (`LoadCredential=`). To rotate it: revoke the o
 
 `apply` never creates or accepts a baseline. After reviewing the host
 (`sudo python3 -I /usr/local/lib/workstation-security/install.py review` writes a
-root-only source report), accept it locally with
+root-only report: package verification and the digests of LCM's own root tools,
+`/usr/local/bin/lcm`, `/usr/local/libexec/lcm*` and the component's programs, read
+without following links), accept it locally with
 `sudo python3 -I /usr/local/lib/workstation-security/install.py baseline --reviewed-source`
 (`--replace-reviewed` replaces an existing one; the previous one is kept as
 `aide.db.previous`), then record the receipt the [helper contract](../deploy/security/README.md#recovery-and-local-approval) describes.
