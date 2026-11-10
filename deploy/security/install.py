@@ -80,7 +80,8 @@ LEGACY_LOGROTATE_STATE = Path('/var/lib/workstation-security-nginx-20261101/logr
 LEFTOVER_UNITS = ('workstation-security-ssh-auth-rollback.service', 'workstation-security-ssh-auth-rollback.timer')
 LEFTOVER_DIRS = tuple('/var/lib/workstation-security-' + suffix for suffix in (
     '20261101', 'deploy-20261029', 'nginx-20261101', 'lcm-20261101', 'lcm-repair-20261101',
-    'repair-20261101', 'completion-20261102', 'ssh-auth-20261029'))
+    'repair-20261101', 'completion-20261102', 'ssh-auth-20261029')) + tuple('/var/lib/lcm-security-' + suffix for suffix in (
+    'console-20261102', 'console-release-20261102'))
 LEFTOVER_FAMILIES = ('workstation-security-', 'lcm-security-')
 OWN_STATE_DIRS = ('/var/lib/workstation-security', str(HELPER_STATE))
 

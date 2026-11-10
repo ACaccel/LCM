@@ -383,7 +383,8 @@ baseline, reports, collector state and transactions in `/var/lib/workstation-sec
 
 `sudo bin/lcm host security cleanup --check|--apply` removes the leftovers of the
 installers the component replaced: the units `workstation-security-ssh-auth-rollback.{service,timer}`
-and the directories `/var/lib/workstation-security-{20261101,deploy-20261029,nginx-20261101,lcm-20261101,lcm-repair-20261101,repair-20261101,completion-20261102,ssh-auth-20261029}`.
+and the directories `/var/lib/workstation-security-{20261101,deploy-20261029,nginx-20261101,lcm-20261101,lcm-repair-20261101,repair-20261101,completion-20261102,ssh-auth-20261029}`
+and `/var/lib/lcm-security-{console-20261102,console-release-20261102}`.
 A directory a unit, logrotate or cron file still names is refused (run `apply` first).
 Other `/var/lib/workstation-security-*` and `/var/lib/lcm-security-*` directories are
 only reported.

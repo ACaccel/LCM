@@ -452,7 +452,7 @@ class InstallerTests(unittest.TestCase):
             put(self.root, directory + '/state.json', '{}')
         for unit in I.LEFTOVER_UNITS:
             put(self.root, str(I.SYSTEMD / unit), 'ExecStart=/var/lib/workstation-security-ssh-auth-20261029/runner.py\n')
-        put(self.root, '/var/lib/lcm-security-console-20261102/x', 'x')
+        put(self.root, '/var/lib/lcm-security-other/x', 'x')
 
     def test_cleanup_removes_only_the_known_leftovers(self):
         self.leftovers()
@@ -462,7 +462,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(tree(self.root), before)
         self.assertEqual(plan['manual'], ['/var/lib/workstation-security-nginx-20261101 is still named by {}; '
                                           'run "lcm host apply" first'.format(I.SYSTEMD / I.ROTATE_SERVICE)])
-        self.assertIn('/var/lib/lcm-security-console-20261102 is not a known leftover and was left alone; review it by hand',
+        self.assertIn('/var/lib/lcm-security-other is not a known leftover and was left alone; review it by hand',
                       plan['notes'])
         self.assertEqual(self.run_action('cleanup')['changes'], [])
         (self.root / str(I.SYSTEMD / I.ROTATE_SERVICE).lstrip('/')).unlink()
@@ -472,7 +472,7 @@ class InstallerTests(unittest.TestCase):
             self.assertFalse(self.exists(directory), directory)
         for unit in I.LEFTOVER_UNITS:
             self.assertFalse(self.exists(I.SYSTEMD / unit))
-        self.assertTrue(self.exists('/var/lib/lcm-security-console-20261102/x'))
+        self.assertTrue(self.exists('/var/lib/lcm-security-other/x'))
         self.assertEqual(self.run_action('cleanup-plan')['changes'], [])
 
     def test_cleanup_never_follows_a_link(self):
