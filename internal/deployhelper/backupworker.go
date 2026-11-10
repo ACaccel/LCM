@@ -41,6 +41,9 @@ const (
 	restoreSuffix = ".lcm-new"
 	maxSpec       = 1 << 20
 	maxResult     = 1 << 20
+	// restoredMode is the permission of a restored database when neither the
+	// file it replaces nor the set says which to use.
+	restoredMode fs.FileMode = 0o640
 	// sqliteHeader starts every SQLite database file.
 	sqliteHeader = "SQLite format 3\x00"
 )
@@ -59,6 +62,9 @@ type specSource struct {
 	BackupSource
 	Artifacts []artifactRef `json:"artifacts,omitempty"`
 	Absent    bool          `json:"absent,omitempty"`
+	// Mode is the permission of the database file when the set was made, the
+	// fallback of a restore when nothing is there to keep the mode of.
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 // workerSpec is <in>/spec.json, written by the helper.
@@ -83,6 +89,9 @@ type workerSpec struct {
 type sourceResult struct {
 	Absent  bool `json:"absent,omitempty"`
 	Skipped int  `json:"skipped,omitempty"`
+	// Mode is the permission bits of a SQLite database file, without
+	// special bits.
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 // workerResult is <out>/result.json.
@@ -425,7 +434,7 @@ func (w *worker) backupSQLite(i int, src BackupSource) (sourceResult, error) {
 		return sourceResult{}, err
 	}
 	w.logf("sqlite %s: %d bytes", src.Path, fi.Size())
-	return sourceResult{}, nil
+	return sourceResult{Mode: uint32(info.Mode().Perm())}, nil
 }
 
 // checkSQLite opens a copy and runs the quick integrity check.
@@ -646,7 +655,7 @@ func (w *worker) restoreSource(ctx context.Context, in *os.Root, i int, src spec
 		if src.Type == SourceFiles {
 			return w.extract(in, src.Path, src.Artifacts[0].Name)
 		}
-		return w.restoreSQLite(in, src.Path, src.Artifacts[0].Name)
+		return w.restoreSQLite(in, src.Path, src.Artifacts[0].Name, fs.FileMode(src.Mode))
 	case SourcePostgres:
 		if len(src.Artifacts) != 1 {
 			return errors.New("the set has no artifact for it")
@@ -697,7 +706,11 @@ func (w *worker) removePath(rel string) error {
 // restoreSQLite copies a staged database next to its target and swaps it
 // in, removing the journal files of the replaced database first: they
 // belong to it and would corrupt the restored one.
-func (w *worker) restoreSQLite(in *os.Root, rel, artifact string) error {
+//
+// The restored file keeps the permissions of the file it replaces; when none
+// exists it gets the permissions recorded at backup time, else restoredMode.
+// Special bits are never set.
+func (w *worker) restoreSQLite(in *os.Root, rel, artifact string, recorded fs.FileMode) error {
 	src, err := in.Open(artifact)
 	if err != nil {
 		return err
@@ -713,6 +726,13 @@ func (w *worker) restoreSQLite(in *os.Root, rel, artifact string) error {
 	if err := w.data.MkdirAll(path.Dir(rel), 0o750); err != nil {
 		return err
 	}
+	mode := restoredMode
+	if recorded&0o600 == 0o600 && recorded&^0o777 == 0 {
+		mode = recorded
+	}
+	if old, err := w.data.Lstat(rel); err == nil && old.Mode().IsRegular() {
+		mode = old.Mode().Perm() | 0o600
+	}
 	tmp := rel + restoreSuffix
 	if err := w.data.RemoveAll(tmp); err != nil {
 		return err
@@ -722,6 +742,9 @@ func (w *worker) restoreSQLite(in *os.Root, rel, artifact string) error {
 		return err
 	}
 	_, err = io.Copy(limitedWriter{w: dst, c: w}, src)
+	if err == nil {
+		err = dst.Chmod(mode)
+	}
 	if err == nil {
 		err = dst.Sync()
 	}

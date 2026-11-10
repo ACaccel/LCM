@@ -76,6 +76,10 @@ type manifestSource struct {
 	// Absent: the path did not exist when the set was made (only the copy
 	// of what a restore replaces).
 	Absent bool `json:"absent,omitempty"`
+	// Mode is the permission bits of a SQLite database file at backup time
+	// (never special bits); a restore uses it when no file is there to take
+	// the mode from. Sets made before it was recorded have none.
+	Mode uint32 `json:"mode,omitempty"`
 }
 
 type manifestFile struct {
@@ -158,6 +162,9 @@ func (m setManifest) validate(svc, id string) error {
 		}
 		if s.Absent && s.Type != SourceFiles && s.Type != SourceSQLite {
 			return errors.New("only a path can be absent")
+		}
+		if s.Mode != 0 && (s.Type != SourceSQLite || s.Absent || s.Mode&^0o777 != 0) {
+			return fmt.Errorf("source %d has an invalid mode", i)
 		}
 		if !slices.Equal(s.Artifacts, want) {
 			return fmt.Errorf("source %d has unexpected artifacts", i)
@@ -711,6 +718,9 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 		if res.Sources[i].Absent && (!p.allowMissing || (s.Type != SourceFiles && s.Type != SourceSQLite)) {
 			return zero, failf(CodeFailed, "the worker reports %s as absent", describeSource(s))
 		}
+		if res.Sources[i].Mode != 0 && (s.Type != SourceSQLite || res.Sources[i].Absent || res.Sources[i].Mode&^0o777 != 0) {
+			return zero, failf(CodeFailed, "the worker's result is not valid")
+		}
 		if res.Sources[i].Skipped < 0 || (s.Type != SourceFiles && res.Sources[i].Skipped != 0) {
 			return zero, failf(CodeFailed, "the worker's result is not valid")
 		}
@@ -739,7 +749,7 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 		return zero, failf(CodeFailed, "%v", err)
 	}
 	for i, s := range p.sources {
-		ms := manifestSource{BackupSource: s, Artifacts: []string{}, Absent: res.Sources[i].Absent}
+		ms := manifestSource{BackupSource: s, Artifacts: []string{}, Absent: res.Sources[i].Absent, Mode: res.Sources[i].Mode}
 		m.Skipped += res.Sources[i].Skipped
 		if !ms.Absent {
 			for _, name := range artifactNames(i, s) {
@@ -1066,7 +1076,7 @@ func (h *Helper) stageSet(env backupEnv, name string, m setManifest, restoreUser
 	}
 	for _, i := range restorable(m) {
 		s := m.Sources[i]
-		ss := specSource{BackupSource: s.BackupSource, Absent: s.Absent}
+		ss := specSource{BackupSource: s.BackupSource, Absent: s.Absent, Mode: s.Mode}
 		arts := s.Artifacts
 		if s.Type == SourceMongoDB && s.Users && !restoreUsers {
 			// The users and roles are the whole instance's: only the database
