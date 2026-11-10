@@ -24,16 +24,13 @@ import (
 // directories the unit would bind.
 func (e *env) worker(c execx.Cmd) (string, int) {
 	var in, out string
-	restore := false
+	restore := strings.HasPrefix(arg(c, "--unit="), "lcm-restore-")
 	for _, a := range c.Argv {
 		if v, ok := strings.CutPrefix(a, "--property=BindReadOnlyPaths="); ok {
 			in = v
 		}
 		if v, ok := strings.CutPrefix(a, "--property=BindPaths="); ok {
 			out = v
-		}
-		if a == "--property=ReadWritePaths=/var/lib/web" {
-			restore = true
 		}
 	}
 	run := func() (string, int) {
@@ -65,12 +62,23 @@ func (e *env) worker(c execx.Cmd) (string, int) {
 
 func (e *env) sqliteDB(p string, rows ...string) {
 	e.t.Helper()
+	e.sqliteDBMode(p, "", rows...)
+}
+
+// sqliteDBMode writes the rows to a database in the given journal mode.
+func (e *env) sqliteDBMode(p, journal string, rows ...string) {
+	e.t.Helper()
 	e.mkdirReal(filepath.Dir(e.real(p)))
 	db, err := sql.Open("sqlite", "file:"+e.real(p))
 	if err != nil {
 		e.t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
+	if journal != "" {
+		if _, err := db.Exec("PRAGMA journal_mode=" + journal); err != nil {
+			e.t.Fatal(err)
+		}
+	}
 	if _, err := db.Exec("CREATE TABLE IF NOT EXISTS t (v TEXT)"); err != nil {
 		e.t.Fatal(err)
 	}
@@ -217,10 +225,10 @@ func TestBackupFilesAndSQLite(t *testing.T) {
 			t.Errorf("worker argv lacks %s: %v", want, worker)
 		}
 	}
-	for _, a := range worker {
-		if a == "--property=ReadWritePaths=/var/lib/web" {
-			t.Error("the data directory is writable during a backup")
-		}
+	// The data directory is writable for the worker's account so that a
+	// read-only SQLite connection can create the -shm of a WAL database.
+	if !slices.Contains(worker, "--property=ReadWritePaths=/var/lib/web") {
+		t.Errorf("the data directory is not a read-write path: %v", worker)
 	}
 	if !slices.ContainsFunc(worker, func(a string) bool {
 		return strings.HasPrefix(a, "--property=BindReadOnlyPaths="+stage) && strings.HasSuffix(a, "/in")
@@ -233,6 +241,40 @@ func TestBackupFilesAndSQLite(t *testing.T) {
 	if n := len(worker); n < 4 || worker[n-4] != "/usr/local/libexec/lcm-deploy-helper" || worker[n-3] != "backup-worker" {
 		t.Errorf("worker command %v", worker)
 	}
+}
+
+// A WAL database that was closed cleanly has no -wal or -shm file. The
+// worker's read-only connection must create the -shm, which needs a
+// writable directory: the sandbox grants one.
+func TestBackupOfACleanWALDatabase(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	e.sqliteDBMode("/var/lib/web/wal.sqlite", "WAL", "x", "y")
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if e.exists("/var/lib/web/wal.sqlite" + suffix) {
+			t.Fatalf("a cleanly closed database left its %s file", suffix)
+		}
+	}
+	for _, mode := range []string{ModeOnline, ModeStopped} {
+		r := backupReq(BackupSource{Type: SourceSQLite, Path: "wal.sqlite"})
+		r.Mode = mode
+		resp := e.ok(r)
+		if rows := e.sqliteRows(e.real("/var/backups/lcm/web/" + resp.Backup.BackupID + "/000-sqlite.db")); !slices.Equal(rows, []string{"x", "y"}) {
+			t.Errorf("%s: copy %v", mode, rows)
+		}
+	}
+
+	// Without a writable directory the same copy fails, which is what the
+	// sandbox's read-write path prevents. The read-only connection leaves the
+	// files it created; removing them gives the clean state again.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		_ = os.Remove(e.real("/var/lib/web/wal.sqlite" + suffix))
+	}
+	if err := os.Chmod(e.real("/var/lib/web"), 0o555); err != nil { //nolint:gosec // a read-only directory, to show the failure
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(e.real("/var/lib/web"), 0o755) }() //nolint:gosec // restored for the cleanup
+	e.refused(backupReq(BackupSource{Type: SourceSQLite, Path: "wal.sqlite"}), CodeFailed, "the backup worker exited with status 1")
 }
 
 func TestBackupStoppedModeStopsAndStarts(t *testing.T) {

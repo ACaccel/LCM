@@ -355,12 +355,16 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 
 // workerArgs is the systemd-run command line of a worker. The worker runs as
 // the service's account in a unit like the service's: a read-only file
-// system except its staging output (and, for a restore, the data
-// directory), no LCM data or build trees, no ports, bounded time, memory,
-// processes and file size. The backup directory is replaced by an empty
+// system except its staging output and the service's data directory, no LCM
+// data or build trees, no ports, bounded time, memory, processes and file
+// size. A backup does not write the data directory (its SQLite connection
+// is read-only), but a read-only connection to a WAL database that was
+// closed cleanly must create the -shm file next to it, which a read-only
+// directory would refuse. The directory belongs to the worker's own account,
+// so this grants nothing the service does not have. The backup directory is replaced by an empty
 // read-only file system with only this operation's staging directories
 // bound back.
-func (h *Helper) workerArgs(unit string, p setParams, stage string, restore bool, timeoutSec int, lim Limits) []string {
+func (h *Helper) workerArgs(unit string, p setParams, stage string, timeoutSec int, lim Limits) []string {
 	args := []string{
 		systemdRun, "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec",
 		"--unit=" + unit,
@@ -385,15 +389,13 @@ func (h *Helper) workerArgs(unit string, p setParams, stage string, restore bool
 		"BindReadOnlyPaths="+stage+"/in",
 		"BindPaths="+stage+"/out",
 		"ReadWritePaths="+stage+"/out",
+		"ReadWritePaths="+hostsetup.ServiceDataDir(p.svc),
 		"RuntimeMaxSec="+strconv.Itoa(timeoutSec),
 		"MemoryMax="+workerMemory,
 		"TasksMax=512",
 		"LimitFSIZE="+strconv.FormatInt(lim.MaxBytes, 10),
 		"LimitCORE=0",
 	)
-	if restore {
-		props = append(props, "ReadWritePaths="+hostsetup.ServiceDataDir(p.svc))
-	}
 	for _, prop := range props {
 		args = append(args, "--property="+prop)
 	}
@@ -433,7 +435,7 @@ func (h *Helper) newStage(p backupEnv, name string, spec workerSpec) (string, *o
 // runWorker runs a worker and watches the size of its output.
 func (h *Helper) runWorker(ctx context.Context, unit, stage string, p setParams, restore bool, timeoutSec int) (string, *opErr) {
 	lim := h.backupLimits()
-	argv := h.workerArgs(unit, p, stage, restore, timeoutSec, lim)
+	argv := h.workerArgs(unit, p, stage, timeoutSec, lim)
 	watch := lim
 	watch.MaxEntries = stageEntries
 	var stop func() string
