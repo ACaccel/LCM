@@ -47,7 +47,7 @@ func Status(h Host) ([]ComponentStatus, error) {
 	}{
 		{ComponentCore, coreFiles},
 		{ComponentMachinePower, powerFiles},
-		{ComponentSecurityHost, securityFiles},
+		{ComponentSecurity, securityFiles},
 		{ComponentDeploy, deployFiles},
 	} {
 		cs := ComponentStatus{Name: c.name}
@@ -61,7 +61,7 @@ func Status(h Host) ([]ComponentStatus, error) {
 		cs.State = componentState(cs.Files)
 		out = append(out, cs)
 	}
-	return out, nil
+	return append(out, ingressStatus(h)), nil
 }
 
 func fileStatus(fsys FS, f rootFile, want Content) FileStatus {
@@ -133,6 +133,10 @@ func unknown(st FileStatus, err error) FileStatus {
 	}
 	return st
 }
+
+// ComponentState summarizes the files of a component: not installed when
+// none exists, otherwise the most significant file state.
+func ComponentState(files []FileStatus) string { return componentState(files) }
 
 // componentState summarizes the files: not installed when none exists,
 // otherwise the most significant file state.

@@ -5,7 +5,8 @@ persisted local Machine observations and existing Service health checks, accepts
 sanitized collector input, and persists incidents with optional bounded Konata delivery.
 Observation and delivery perform no lifecycle or host changes. The optional
 [operator controls](#security-console-and-operator-controls) use a separate restricted
-helper for explicitly confirmed host changes.
+helper for explicitly confirmed host changes. The optional [host component](#host-component)
+installs the collector, audit watches, integrity checks and that helper.
 
 ## Configuration
 
@@ -232,9 +233,182 @@ as the `lcm` account (including commands in resource documents, which run as `lc
 can name any actor. Treat it as a reference only; LCM's audit log
 (`security.host.preview`, `security.host.apply.start`, `security.host.apply`) is the
 authoritative record of who requested a change.
-The [host helper contract](../deploy/security-host/README.md) owns installation,
-privileged paths, limits, protected receipts and recovery procedures.
+The [host helper contract](../deploy/security/README.md) owns the helper's privileged
+paths, limits, protected receipts and recovery procedures; the
+[host component](#host-component) installs it.
 
 Migrations 0012/0013 add operator state and host operation records. Deploy with a
 matched database/binary recovery point; an older schema-11 binary cannot open the
 upgraded database. Keep self-deploy paused until its source includes this release.
+
+## Host component
+
+The optional `security` component of [`lcm host apply`](operations.md#install) installs
+the host side: kernel audit watches, a curated AIDE integrity check, the sanitized
+collector that feeds the [collector contract](#collector-contract), Nginx traffic
+observation and the restricted helper of the
+[operator controls](#security-console-and-operator-controls). Its source is
+[`deploy/security/`](../deploy/security/) (Python 3 standard library), embedded in `lcm`.
+
+### Configuration
+
+```json
+"components": {"security": {"machineId": "<immutable Machine ID>", "watch": {"deploy": ["/opt/extra"]}}}
+```
+
+`machineId` is the registered Machine the collector reports for. Watched paths are
+fixed categories plus `watch` (at most 32 absolute paths per category). Paths that do
+not exist are skipped and reported. Audit watches record writes and attribute changes;
+AIDE checks the same paths plus `sudo`, `sshd`, `nginx`, the Python binary and the
+component's programs.
+
+| Category | Paths |
+|---|---|
+| `accounts` | `/etc/passwd`, `/etc/group`, `/etc/shadow`, `/etc/gshadow` |
+| `ssh` | `/etc/ssh`, `~/.ssh` of root and of accounts under `/home` |
+| `sudoers` | `/etc/sudoers`, `/etc/sudoers.d` |
+| `cron` | `/etc/crontab`, `/etc/cron.*`, `/var/spool/cron/crontabs` |
+| `systemd` | `/etc/systemd/system`, `/etc/systemd/user`, `~/.config/systemd/user` |
+| `deploy` | `/usr/local/libexec/lcm*`, `/usr/local/bin/lcm`, `/etc/lcm`, and `/opt/<service>`, `/etc/<service>` of every grant in [`services`](operations.md#service-grants) except `external` ones |
+| `nginx` | `/etc/nginx` |
+| `probe` | `/var/lib/workstation-security/audit-probe` (acceptance probe only; not extendable) |
+
+The collector forwards one audit summary per category, login UID, effective UID and
+result each minute, with the record count, so a deployment that writes thousands of
+watched files does not fill its queue. Summaries take the rule key from the record's
+own `key=` field and the identities from the fields before `comm=`, so a program name
+cannot claim another category or account. AIDE skips `/opt/<service>`: every deployment
+changes it, its releases are root-owned and LCM records each deployment (the audit watch
+on `/opt/<service>` stays); it checks `/etc/<service>` and the system categories. A
+change to the integrity scope itself (a new grant, a new `watch` path) makes the next
+AIDE check report the difference until the baseline is reviewed and accepted locally.
+
+The collector treats every line of the Nginx observation log, which the web server's
+account can write, as untrusted: a line that is not a well-formed JSON object is
+discarded and counted, at most 64 distinct services are counted per window (the rest
+as unassigned), and items from that log may hold at most 600 of the 1,000 queue slots
+and are dropped first, so they never push out audit, AIDE or health events, which are
+also delivered first. Each input's batch is checkpointed with its cursor.
+
+### Installed files
+
+The component keeps the paths of the installation it adopts; none carries a date.
+
+| Path | Contents |
+|---|---|
+| `/usr/local/lib/workstation-security/{runtime.py,install.py}` | Collector and report programs; the installer copy for the local operator actions |
+| `/usr/local/libexec/lcm/security-host/helper.py` | Restricted helper (in a root-only directory) |
+| `/etc/sudoers.d/lcm-security-host` | Lets `lcm` run exactly `python3 -I` with the helper |
+| `/etc/lcm/security-host/policy.json` | Helper policy: digests of the files the component renders, AIDE schedule, profiles, Nginx thresholds |
+| `/var/lib/lcm-security-host/` | Helper journal and local approval receipts |
+| `/etc/workstation-security/` | `collector.json`, `aide.conf`, `ingest-token` (root 0600) |
+| `/var/lib/workstation-security/` | AIDE baseline `aide/aide.db`, reports, collector state, log rotation state, `backups/transactions/` |
+| `/etc/audit/rules.d/50-workstation-security.rules` | Managed watches, keys `wssec_<category>`; approved optional profiles go to `60-lcm-security-optional.rules` |
+| `/etc/nginx/conf.d/20-workstation-security.conf` | Observation log format and dry-run zones per category |
+| `/etc/nginx/lcm/hooks/<service>/<category>-10-observation.conf` | Dry-run thresholds that ingress locations include |
+| `/var/log/nginx/workstation-security.jsonl`, `/etc/logrotate-workstation-nginx-security.conf` | Observation log (root:workstation-security 0640) and its rotation |
+| Units `workstation-security-collector.service`, `-audit-status.timer`, `-aide.timer`, `workstation-nginx-security-logrotate.timer` | Collector, audit health each minute, daily AIDE check, log rotation |
+| `/etc/lcm/workstation-security.env`, `lcm.service.d/60-workstation-security.conf` | The [configuration](#configuration) LCM reads; written only when missing, then only checked for `LCM_SECURITY_ENABLED=true` and the configured Machine |
+
+### Nginx observation
+
+The [ingress component](operations.md) sets `$lcm_service` and `$lcm_category` (`api`,
+`auth`, `upload`, `socket`, `health`, `static`) in every location it renders. The
+observation configuration gives both an empty default, so requests outside ingress
+locations are neither logged nor counted, and `health` is not logged. The collector
+sends traffic per service and category (unknown categories count as `other`).
+Thresholds for `auth`, `api`, `upload` and `socket` are kept in the helper policy and
+rendered into one hook file per granted service and category; they stay in dry-run
+mode. The helper's `nginx.configure` re-renders them under `/run/lcm-ingress.lock`, the
+lock the ingress component changes Nginx with; `apply`, removal and revert hold the same
+lock from their first Nginx change to the end of any rollback. At most 64 services are
+observed. The helper pins only files the component
+renders, so ingress changes never count as drift. Without Nginx installed, traffic
+observation is off.
+
+### Install, adopt and upgrade
+
+`sudo bin/lcm host apply` stages `install.py`, `runtime.py` and `helper.py` of its build
+in a root-only temporary directory, runs `python3 -I install.py plan`, then `apply` with
+the wanted state on stdin, and installs the sudoers rule last. `--check` runs only
+`plan`, which changes nothing. Upgrading is the same: `make build && sudo bin/lcm host apply`
+from the reviewed checkout. What `apply` changes outside the component's own files:
+
+- installs `auditd` and `aide` with `apt-get` when missing, and the system account `workstation-security` (no login shell);
+- sets `max_log_file`, `num_logs`, the rotate and `SYSLOG` actions and `log_group` in `/etc/audit/auditd.conf` and `CRON_DAILY_RUN=no` in `/etc/default/aide`, keeping every other line;
+- records, then disables, the vendor AIDE timers (`vendor-timers.json`);
+- records, then sets, `/var/log/audit` to root:workstation-security 0750 and its logs to 0640 (`audit-dir.json`);
+- loads only the managed watches: it never flushes other runtime rules and generates boot rules without `augenrules --load`;
+- validates (`nginx -t`) and reloads Nginx, and checks that the helper answers a status request.
+
+`apply` refuses, changing nothing, while the audit configuration is immutable
+(`-e 2`), `auditd.conf` names another log file, the collector account has a login shell
+or other groups, an output path has a symbolic link or a non-root ancestor, or an
+existing policy or collector configuration names another Machine.
+
+**Adoption.** On a host with the earlier hand-installed version, the first `apply`
+keeps the AIDE baseline, reports, collector state, the token value, the helper journal
+and approvals, the AIDE schedule and the approved profiles. It converts `policy.json` to
+version 2 with the thresholds read from the replaced Nginx files, replaces the
+observation configuration, removes `/etc/nginx/workstation-security/` (it refuses files
+there that no installer made), copies the log rotation state out of its dated directory
+and restricts the token to root. It holds the previous helper's lock
+(`/var/lib/lcm-security-host/control.lock`) meanwhile. Watches are computed again: on a
+host where projects still deploy with their own root tooling (until their services move
+to LCM deploys), list those directories in `watch.deploy`, or they stop being watched.
+Locations that ingress does not serve yet are not observed.
+
+**Transactions.** Every `apply` and removal records each change in
+`/var/lib/workstation-security/backups/transactions/<id>/` with a copy of every file it
+replaces, and records the units it enables, starts, disables or stops; a failed run
+undoes its own transaction, including the units and the kernel's audit watches, and
+restarts the collector when its files were restored.
+`sudo bin/lcm host security revert --check|--apply [--transaction <id>]` undoes the last
+one when no file it changed was changed since (otherwise it names the file and changes
+nothing). Data written since (reports, rotation state, the recorded permissions),
+installed packages and the account stay. The newest 10 transactions are kept; older
+ones, with their file copies (which can include an ingest token), are deleted.
+
+**Locking.** The installer holds `/run/lcm-security.lock`, waiting up to a minute for it.
+While it waits and works, `/run/lcm-security.pending` makes the helper refuse new
+requests, so the `lcm` account cannot keep the lock from root by calling the helper
+again and again; a file older than an hour, left by an interrupted run, is ignored.
+
+### Ingest token
+
+When `/etc/workstation-security/ingest-token` is missing, `apply` creates an ingest-scope
+API token named `security-collector` (`lcm token create --scope ingest`, run as `lcm`),
+hands it to the installer on stdin and stores it root-only (0600); when the installer
+then fails, `apply` revokes that token again. The collector unit
+reads it as a systemd credential (`LoadCredential=`). To rotate it: revoke the old token
+(console, or `sudo -u lcm lcm token list` and `token revoke <id>` with
+`--data-dir /var/lib/lcm`), delete the file, run `sudo bin/lcm host apply`.
+
+### AIDE baseline
+
+`apply` never creates or accepts a baseline. After reviewing the host
+(`sudo python3 -I /usr/local/lib/workstation-security/install.py review` writes a
+root-only report: package verification and the digests of LCM's own root tools,
+`/usr/local/bin/lcm`, `/usr/local/libexec/lcm*` and the component's programs, read
+without following links), accept it locally with
+`sudo python3 -I /usr/local/lib/workstation-security/install.py baseline --reviewed-source`
+(`--replace-reviewed` replaces an existing one; the previous one is kept as
+`aide.db.previous`), then record the receipt the [helper contract](../deploy/security/README.md#recovery-and-local-approval) describes.
+
+### Removal and cleanup
+
+With `components.security` set to `null`, `apply` reports the installed component as
+needing manual action. `sudo bin/lcm host apply --remove` removes the sudoers rule first,
+then the units, programs, configuration, managed audit rules, Nginx files and the token,
+and restores the vendor timers and `/var/log/audit` permissions it recorded. It keeps the
+baseline, reports, collector state and transactions in `/var/lib/workstation-security`
+(with a copy of the policy), the helper journal, the packages, the account and the
+`auditd` settings. Revoke the token in LCM afterwards.
+
+`sudo bin/lcm host security cleanup --check|--apply` removes the leftovers of the
+installers the component replaced: the units `workstation-security-ssh-auth-rollback.{service,timer}`
+and the directories `/var/lib/workstation-security-{20261101,deploy-20261029,nginx-20261101,lcm-20261101,lcm-repair-20261101,repair-20261101,completion-20261102,ssh-auth-20261029}`
+and `/var/lib/lcm-security-{console-20261102,console-release-20261102}`.
+A directory a unit, logrotate or cron file still names is refused (run `apply` first).
+Other `/var/lib/workstation-security-*` and `/var/lib/lcm-security-*` directories are
+only reported.

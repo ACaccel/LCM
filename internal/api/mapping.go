@@ -187,7 +187,7 @@ func failHelper(w http.ResponseWriter, he *rt.HelperError, details func(map[stri
 	switch {
 	case he.Unknown:
 		writeError(w, http.StatusBadGateway, codeBadGateway, he.Error(), d)
-	case he.Code == deployhelper.CodeRefused, he.Code == deployhelper.CodeNotFound:
+	case he.Code == deployhelper.CodeRefused, he.Code == deployhelper.CodeNotFound, he.Code == deployhelper.CodeDisabled:
 		writeError(w, http.StatusConflict, codePrecondition, msg, d)
 	case he.Code == deployhelper.CodeBusy:
 		writeError(w, http.StatusConflict, codeConflict, msg, d)

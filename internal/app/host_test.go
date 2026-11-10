@@ -29,9 +29,10 @@ func TestHostComponentsEndpoint(t *testing.T) {
 		return p
 	}
 	put(hostsetup.Unit, "an old unit", 0o644)
-	secret := put(hostsetup.SecurityHelper, "a helper", 0o644)
-	if err := os.Chmod(secret, 0); err != nil {
-		t.Fatal(err)
+	for _, p := range []string{hostsetup.SecurityHelper, hostsetup.SecurityRuntime, hostsetup.SecurityInstaller, hostsetup.SecuritySudoers} {
+		if err := os.Chmod(put(p, "a root-only file", 0o644), 0); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	var status api.HostStatusFunc = func() ([]hostsetup.ComponentStatus, error) {
@@ -71,12 +72,12 @@ func TestHostComponentsEndpoint(t *testing.T) {
 	for _, c := range body.Items {
 		got[c.Name] = c.State
 	}
-	want := map[string]string{"core": "outdated", "machine-power": "not_installed", "security-host": "unknown", "deploy": "not_installed"}
+	want := map[string]string{"core": "outdated", "machine-power": "not_installed", "security": "unknown", "deploy": "not_installed", "ingress": "not_installed"}
 	if len(got) != len(want) {
 		t.Fatalf("components = %v", got)
 	}
 	for name, state := range want {
-		if name == "security-host" && os.Geteuid() == 0 {
+		if name == "security" && os.Geteuid() == 0 {
 			continue // root reads files whatever their mode
 		}
 		if got[name] != state {

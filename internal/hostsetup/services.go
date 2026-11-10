@@ -180,7 +180,19 @@ func (c Config) validateDeploy() []error {
 		if err := ValidServiceName(name); err != nil {
 			errs = append(errs, fmt.Errorf("services: %w", err))
 		}
+		if g.External {
+			switch {
+			case g.Route == nil:
+				errs = append(errs, fmt.Errorf("%s.external needs a route: LCM only publishes an external service", at))
+			case len(g.Runtimes) > 0 || len(g.Inputs) > 0:
+				errs = append(errs, fmt.Errorf("%s: an external service has no runtimes or inputs; LCM does not build or run it", at))
+			}
+		}
 		switch other, dup := ports[g.Port]; {
+		case g.Port == 0 && g.External && g.Route != nil && g.Route.Static != "":
+			// A static-only external route needs no port.
+		case g.Port == 0 && g.External:
+			errs = append(errs, fmt.Errorf("%s.port is required unless the external service's route serves a static directory", at))
 		case g.Port < 1024 || g.Port > 65535:
 			errs = append(errs, fmt.Errorf("%s.port must be between 1024 and 65535 (got %d)", at, g.Port))
 		case g.Port == ServePort || g.Port == c.Tailscale.Port:
@@ -433,6 +445,9 @@ func (a *applier) preflightDeploy(ctx context.Context) error {
 	}
 	a.grants = map[string]grantState{}
 	for _, name := range slices.Sorted(maps.Keys(a.cfg.Services)) {
+		if a.cfg.Services[name].External {
+			continue
+		}
 		st, err := a.checkGrant(ctx, name, a.cfg.Services[name], min)
 		if err != nil {
 			return err
@@ -455,10 +470,14 @@ func (a *applier) deploySteps() []namedStep {
 	return append(out, namedStep{"services", a.removedGrants})
 }
 
+// helper reports whether the deploy helper is installed: the deploy and
+// the ingress component both use it.
+func (c Components) helper() bool { return c.Deploy || c.Ingress != nil }
+
 func (a *applier) deployComponent(ctx context.Context, s *step) error {
-	if !a.cfg.Components.Deploy {
+	if !a.cfg.Components.helper() {
 		if a.present(deployFiles) {
-			s.note("installed but disabled; components.deploy is false and nothing is removed")
+			s.note("installed but disabled; components.deploy is false, components.ingress is null and nothing is removed")
 		}
 		return nil
 	}
@@ -468,25 +487,34 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 	if _, err := a.ensureFile(s, DeployHelper, a.exe, 0o755); err != nil {
 		return err
 	}
-	for _, d := range []struct {
+	type dir struct {
 		path string
 		perm fs.FileMode
-	}{{BuildDir, 0o755}, {BuildCacheDir, 0o755}, {DeployLedger, 0o700}} {
+	}
+	dirs := []dir{{DeployLedger, 0o700}}
+	if a.cfg.Components.Deploy {
+		dirs = []dir{{BuildDir, 0o755}, {BuildCacheDir, 0o755}, {DeployLedger, 0o700}}
+	}
+	for _, d := range dirs {
 		if err := a.ensureDir(s, d.path, d.perm, 0, 0, "root:root"); err != nil {
 			return err
 		}
 	}
-	// Backups of services are kept here; only root may enter it.
-	if b := a.cfg.Backup; b != nil {
-		if err := a.ensureDir(s, b.Dir, 0o700, 0, 0, "root:root"); err != nil {
-			return err
+	if a.cfg.Components.Deploy {
+		// Backups of services are kept here; only root may enter it.
+		if b := a.cfg.Backup; b != nil {
+			if err := a.ensureDir(s, b.Dir, 0o700, 0, 0, "root:root"); err != nil {
+				return err
+			}
+			if a.otherFilesystem(b.Dir, "/var/lib") {
+				s.note("backup.dir is on another file system than /var/lib; a service can keep a file of a backup open for writing and grow it past the limits, which only a quota or the same file system bounds (docs/operations.md#backups)")
+			}
 		}
-		if a.otherFilesystem(b.Dir, "/var/lib") {
-			s.note("backup.dir is on another file system than /var/lib; a service can keep a file of a backup open for writing and grow it past the limits, which only a quota or the same file system bounds (docs/operations.md#backups)")
+		for _, limit := range SandboxLimits(ctx, a.h) {
+			s.note(limit)
 		}
-	}
-	for _, limit := range SandboxLimits(ctx, a.h) {
-		s.note(limit)
+	} else {
+		s.note("installed for the ingress component; components.deploy is false, so the helper refuses deploy and backup operations")
 	}
 	// The grant comes last: it is useless before the wrapper and the
 	// pinned helper are in place.
@@ -586,6 +614,10 @@ func (a *applier) runtime(ctx context.Context, s *step, name string) error {
 
 // grant converges the account and directories of one service grant.
 func (a *applier) grant(ctx context.Context, s *step, name string) error {
+	if a.cfg.Services[name].External {
+		s.note("external: LCM creates no account or directory for it; only its route is published")
+		return nil
+	}
 	st := a.grants[name]
 	if st.problem != "" {
 		s.manual(st.problem)

@@ -135,6 +135,9 @@ type deployFixture struct {
 	goodCommit atomic.Value
 	// badBuild is a commit whose build fails.
 	badBuild atomic.Value
+	// needsUpgrade is a commit whose build reports that it cannot be
+	// installed without the operator.
+	needsUpgrade atomic.Value
 }
 
 // newDeployFixture instantiates auto-deploy with Discord notifications;
@@ -146,6 +149,7 @@ func newDeployFixture(t *testing.T, params ...map[string]any) *deployFixture {
 	f.served.Store(shaOld)
 	f.goodCommit.Store(shaA)
 	f.badBuild.Store("")
+	f.needsUpgrade.Store("")
 	runner := &execx.Fake{}
 	f.harness = newHarness(t, func(o *testOpts) { o.git, o.runner = git, runner })
 
@@ -167,6 +171,10 @@ func newDeployFixture(t *testing.T, params ...map[string]any) *deployFixture {
 		return execx.Result{}, nil
 	})
 	runner.On(matchCmd("web-build"), func(execx.Cmd) (execx.Result, error) {
+		if f.served.Load() == f.needsUpgrade.Load() {
+			return execx.Result{ExitCode: catalog.ExitNeedsUpgrade, Output: "storage schema 16 -> 17 needs the operator\n"},
+				&execx.ExitError{Code: catalog.ExitNeedsUpgrade}
+		}
 		if f.served.Load() == f.badBuild.Load() {
 			return execx.Result{ExitCode: 2}, &execx.ExitError{Code: 2}
 		}
@@ -346,6 +354,38 @@ func TestAutoDeployTemplateReportsToKonata(t *testing.T) {
 	want := "PUT failed | Deploying bbbbbbb failed. Rolled back to the previous version. | CI=skipped | Deploy window=done | Build and install=failed | Health check=skipped | Rollback=done"
 	if msgs[3] != want {
 		t.Fatalf("last update = %q, want %q", msgs[3], want)
+	}
+}
+
+// A deploy that asks for the operator changed nothing: the policy says so and
+// does not roll back, and the service stays running.
+func TestAutoDeployTemplateDoesNotRollBackAnUpgradeRequest(t *testing.T) {
+	f := newDeployFixture(t)
+	f.needsUpgrade.Store(shaB)
+	run := f.push(shaB)
+	view := f.finish(run)
+	if view.Status != engine.RunSucceeded {
+		t.Fatalf("run = %s (%s)", view.Status, view.Error)
+	}
+	for _, id := range []string{"deploy_failed", "needs_upgrade"} {
+		if n, _ := view.Node(id); n.Status != engine.NodeCompleted {
+			t.Errorf("node %s = %s", id, n.Status)
+		}
+	}
+	for _, id := range []string{"rolling_back", "rollback", "rolled_back", "done"} {
+		if n, _ := view.Node(id); n.Status == engine.NodeCompleted {
+			t.Errorf("node %s ran for a deploy that changed nothing", id)
+		}
+	}
+	rec, err := f.app.Catalog.Get(f.ctx, "web")
+	if err != nil || rec.State != catalog.StateRunning {
+		t.Fatalf("service = %+v %v, want running", rec, err)
+	}
+	msgs := f.discord.all()
+	last := msgs[len(msgs)-1]
+	if !strings.Contains(last, "bbbbbbb needs an operator action and was not installed") || !strings.Contains(last, "deploy.needsUpgrade: storage schema 16 -> 17 needs the operator") ||
+		!strings.Contains(last, "Status: failed") || strings.Contains(last, "Rolling back") {
+		t.Fatalf("discord = %q", msgs)
 	}
 }
 

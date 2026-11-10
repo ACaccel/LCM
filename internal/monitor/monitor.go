@@ -197,7 +197,7 @@ func New(ctx context.Context, cfg Config) (*Monitor, error) {
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	m := &Monitor{
-		db: cfg.DB, bus: cfg.Bus, registry: cfg.Registry, env: Env{Runner: cfg.Runner}, clock: cfg.Clock,
+		db: cfg.DB, bus: cfg.Bus, registry: cfg.Registry, env: Env{Runner: cfg.Runner, Clock: cfg.Clock}, clock: cfg.Clock,
 		log: cfg.Logger, w: newWriter(cfg.DB, cfg.Logger),
 		rawRetention: cfg.RawRetention, rollupRetention: cfg.RollupRetention, pruneInterval: cfg.PruneInterval, pruneChunk: defaultPruneChunk,
 		startSpread: cfg.StartSpread, alertLabels: cfg.AlertResourceLabels,

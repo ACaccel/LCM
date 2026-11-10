@@ -219,13 +219,15 @@ func impactOutput(imp resource.Impact) map[string]any {
 	return out
 }
 
-// classify marks errors that a retry cannot fix as permanent. A busy
-// resource and a failed action stay retryable.
+// classify marks errors that a retry cannot fix as permanent, including a
+// candidate that needs the operator's upgrade. A busy resource and a failed
+// action stay retryable.
 func classify(err error) error {
 	var issues model.Issues
 	switch {
 	case errors.Is(err, catalog.ErrPrecondition),
 		errors.Is(err, catalog.ErrNotFound),
+		errors.Is(err, catalog.ErrNeedsUpgrade),
 		errors.Is(err, catalog.ErrInvalidTransition),
 		errors.Is(err, rt.ErrUnsupported),
 		errors.As(err, &issues):

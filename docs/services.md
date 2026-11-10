@@ -23,6 +23,8 @@ spec:
     backup: { command: ./backup.sh }   # optional: enables the backup action (managed services: typed sources, see below)
     jobs:                          # optional: named commands for run-job
       reindex: { command: ./reindex.sh, timeout: 10m }
+    route:                         # optional: how the host's nginx site presents the service (see Route)
+      proxy: [{ path: api/, upstream: /api/ }]
   checks:
     - { name: http, type: http, props: { url: http://127.0.0.1:8080/health } }
   relations:
@@ -84,7 +86,7 @@ The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused,
 |---|---|
 | `url` | Required. A remote (`https://`, `ssh://`, `git@host:path`) or the absolute path of a local development repository. It must not carry credentials (only the ssh user `git`) and must not point into LCM's build directory |
 | `branch` | Required. Branch a deploy without `--version` takes the head of |
-| `build`, `install` | Optional `sh -c` commands run in the build checkout |
+| `build`, `install` | Optional `sh -c` commands run in the build checkout. A command that exits with status 75 asks for the operator and promises it changed nothing: the deployment is recorded as failed with the code `deploy.needsUpgrade` and the last line of the output, a service that still runs stays `running`, and policies can test the code (`auto-deploy` then does not roll back). LCM's own [self-deploy](operations.md#self-deploy) uses it for a storage schema change |
 | `timeout` | Limit of each step, default 15m |
 
 - **Build checkout.** LCM owns one checkout per service at `<data dir>/work/<name>` (`/var/lib/lcm/work/<name>` with `deploy/`); a document cannot name it. The first deploy clones `url` there (an existing empty directory counts as missing; a non-empty directory without `.git` is refused). Every later deploy first sets the checkout's `origin` to `url`, so editing `url` switches the source at the next deploy, then fetches.
@@ -135,6 +137,67 @@ After every successful backup LCM asks the helper to apply `keep`: the newest se
 
 An outcome LCM cannot determine (lost reply, helper still running, interrupted) is recorded as `interrupted` with the operation ID to query; it is never assumed to have succeeded.
 
+## Route
+
+The optional `route` section of `config` (valid for every adapter) describes how the host's [nginx site](operations.md#ingress) presents the service. It carries no privileges: the domain, the prefix, the port and the static directory of a route come only from `services.<name>` in `/etc/lcm/host.json` ([routes](operations.md#routes)), and the root helper validates the section again. All paths are relative to the route's prefix. The section is strictly decoded: unknown fields are errors, and issues are reported under `spec.config.route`.
+
+```yaml
+config:
+  route:
+    proxy:                          # extra locations to the approved port
+      - { path: api/, upstream: /api/, bodyLimit: 3m, cookiePath: true, category: api }
+      - { path: socket.io/, upstream: /socket.io/, websocket: true, timeout: 75s, category: socket }
+      - { path: health, exact: true, upstream: /health, category: health }
+    static:                         # needs route.static in host.json
+      spa: true
+      notFound: 404.html
+      immutable: [assets/, _astro/]
+      downloads: [{ path: download/app.apk, type: application/vnd.android.package-archive }]
+    redirects: [{ from: en/, to: /, code: 301 }]
+    headers:
+      csp: "default-src 'self'; img-src 'self' data:"
+      cspReportOnly: false
+```
+
+With prefix `/web/` on `example.org`, `path: api/` serves `https://example.org/web/api/` and sends it to `http://127.0.0.1:<port>/api/`.
+
+| Field | Meaning | Default and limits |
+|---|---|---|
+| `proxy[].path` | Location below the prefix; ends with `/` unless `exact` | at most 32 entries; components of letters, digits and `._-`, none starting with `.` |
+| `proxy[].exact` | Match the path alone instead of everything below it | `false` |
+| `proxy[].upstream` | Absolute path on the service; ends with `/` like `path` unless `exact` | required |
+| `proxy[].bodyLimit` | Largest request body (`512k`, `3m`) | nginx default; at most `64m` |
+| `proxy[].cookiePath` | Rewrite the cookie path `/` of the responses to the prefix | `false` |
+| `proxy[].websocket` | Pass connection upgrades through, no buffering | `false` |
+| `proxy[].timeout` | Read and send timeout (`75s`, `5m`) | nginx default; at most `1h` |
+| `proxy[].category` | `api`, `auth`, `upload`, `socket`, `health` or `static`: names the location for the [security component's](security.md) hooks | `api` |
+| `static.spa` | Unknown paths answer `index.html` instead of 404 | `false` |
+| `static.notFound` | Page served with a 404, relative to the static directory | none |
+| `static.immutable` | Directories (`assets/`) cached for a year; never fall back to `index.html` | at most 16 |
+| `static.downloads` | Files served as attachments with a fixed `type` (a short allowlist: `application/vnd.android.package-archive`, `application/zip`, `application/pdf`, ...) | at most 16 |
+| `redirects[]` | `from` (below the prefix) to `to` (written from the prefix's root, `/` is the prefix) with `code` | `301`; `302`, `307`, `308`; at most 32 |
+| `headers.csp` | Content-Security-Policy in a strict subset of the CSP grammar: printable ASCII directives with quoted keywords or plain sources; no `"`, `\`, `$`, braces or line breaks | at most 4096 characters, 64 directives |
+| `headers.cspReportOnly` | Send it as `Content-Security-Policy-Report-Only` | `false` |
+
+Without a `route` section the route proxies everything below the prefix to the service's port, or serves its static directory; `proxy` locations take precedence over the static directory, and `static` needs a static directory in the grant. A `proxy` entry needs a port in the grant. Locations may not collide with another route.
+
+**Applying.** LCM sends the section to the [deploy helper](operations.md#deploy-helper) (`ingress.apply`) in the background after a document is saved, restored or synced from Git, when its `route` differs from the last recorded outcome (removing the section sends "no options" so that the host drops them), and once at every start for routes whose last outcome was not `applied`. The helper renders the whole site, tests it with nginx and reloads it, or puts the previous site back. Each send records its operation ID on the timeline before the call, so a lost reply is settled from the helper's ledger; an outcome that cannot be confirmed stays `unknown` and is never taken as success. Every send writes an audit entry (`service.apply-route`).
+
+**The host decides.** A refusal (no route granted in `host.json`, the site never installed, a location that collides) or a failed apply never rejects the document write. The outcome is `service.route` of the resource detail and the *路由* panel of the service overview, with the helper's message and whether it concerns the current section:
+
+| State | Meaning |
+|---|---|
+| `applied` | The helper applied the site (`changes` empty: it was up to date) |
+| `refused` | The host does not grant what the route needs, or refused the change |
+| `failed` | nginx rejected the site or a probe failed; the previous site was put back |
+| `unknown` | The reply was lost and the ledger could not confirm the outcome |
+| `skipped` | Nothing was sent: the deploy helper is not installed or `components.ingress` is off |
+| `pending` | A request is in flight, or LCM stopped before recording its outcome |
+
+`dropped` lists stored options of other services that no longer fit `host.json` (for example a grant lost its port); the site leaves them out and those routes have their defaults until their options are sent again. The host components view shows the same list.
+
+After fixing the cause on the host (for example `sudo bin/lcm host allow web --route /web/`), run the `apply-route` action (`lcm resource action web apply-route`, console button *重新套用路由*). It sends the section again, is offered only for a service that has a `route` section and a callable helper, and fails when the route is not applied. Restarting LCM also retries.
+
 ## Lifecycle states and actions
 
 The lifecycle state is what LCM did to the service; health (below) is what the checks observe. The console shows both side by side.
@@ -156,6 +219,7 @@ The lifecycle state is what LCM did to the service; health (below) is what the c
 | `backup` | registered, running, stopped, failed | `backup` | run the command (in the build checkout when the service has a source); managed services: the [typed backup](#backup-and-restore-of-managed-services) and its retention |
 | `restore` | registered, running, stopped, failed | typed `backup` with a restorable source | [restore](#backup-and-restore-of-managed-services) a set (`--backup-id`, the newest when omitted) |
 | `run-job` | registered, running, stopped, failed | `jobs` | run the named job |
+| `apply-route` | registered, running, stopped, failed | `route` and a callable deploy helper | send the [route](#route) to the helper again; the state does not change |
 
 Run an action with `lcm resource action <service> <action> [--version <commit>] [--job <job>] [--backup-id <id>] [--dry-run] [--wait]` or `POST /api/v1/resources/{resource}/actions/{action}` (202 and an id for `GET /api/v1/actions/{id}`). Every action takes the lock `resource:<name>`, so actions on one service never overlap, and writes an audit entry and a timeline entry. The action renews its lock every third of `LCM_LOCK_TTL` while it runs, so the TTL only bounds a lock left by a crashed process, not the length of an action. Once the runtime has done the work, the new state is recorded even if the request is cancelled. `?dryRun=true` (console: *預覽*) returns the steps and the [impact](resources.md#relations) without locking or changing anything; `stop`, `restart`, `deploy`, `rollback`, `restore` and `run-job` on a service that others depend on or are controlled through need `acknowledgeImpact`. Build, install, backup and job commands run with `sh -c`; step timeouts default to 15 minutes (`source.timeout`) and 30 minutes (`timeout` of backup and jobs).
 
@@ -174,7 +238,7 @@ After LCM has fetched and detached its own checkout as `lcm` (unchanged), the he
 - **Failures.** A refused (`refused`, `busy`, `not_found`) or failed operation fails the deployment with the helper's message. The service is left `failed` when the helper may have changed it: an unknown outcome, or an `activate` that switched the release before a later step failed (the log says so; there is no automatic switch back, a rollback or a policy does that). When the helper certainly changed nothing (the checkout, `build` or `install` failed, or `activate` was refused or failed before it switched, for example in `migrate`), the state follows the runtime's status instead: `running` while the service runs, `failed` otherwise.
 - **Rollback.** Without rebuilding, a rollback activates the release recorded by the target deployment (or else the newest installed release built from the target commit) when the helper still keeps it and its manifest has the current `artifact` and `runtime` (`step.helperActivatePrevious`); otherwise it rebuilds the commit with the steps above. The old release starts with the current `start`, `startArgs` and `runtime` of the document, not those it was deployed with. A rollback never runs `migrate`: data the newer release migrated stays as it is, so migrations must stay compatible with the previous release or be restored from a backup.
 - **Restarts of LCM.** A deployment that was running when LCM stopped is closed as `interrupted`, its error naming what the ledger reports for the last helper operation (for example `deploy helper build operation <id> succeeded`, `was not carried out: the helper has no record of it`, or `outcome unknown, query <id>`). When the ledger proves that the last operation was a successful `activate` of the deployment, LCM made that change, so the deployment is finished as `succeeded` instead: its log notes that the outcome was confirmed from the ledger and ends with `installed release <id>`, which rollback and the next deploy read. Reconciliation then takes the state from the helper's status.
-- **Helper errors in the API.** A dry-run or action request whose precheck gets a helper error answers 409 `precondition_failed` for `refused` and `not_found` and 409 `conflict` for `busy`, with the helper's message, and 502 `bad_gateway` for a failed or unknown operation. A managed `deploy` dry run asks the helper a read-only question (`releases`), so a service the administrator has not granted is refused in the dry run as in the real action.
+- **Helper errors in the API.** A dry-run or action request whose precheck gets a helper error answers 409 `precondition_failed` for `refused`, `not_found` and `disabled` (the host configuration does not enable the component, for example `components.ingress` for a route) and 409 `conflict` for `busy`, with the helper's message, and 502 `bad_gateway` for a failed or unknown operation. A managed `deploy` dry run asks the helper a read-only question (`releases`), so a service the administrator has not granted is refused in the dry run as in the real action.
 
 **Reconciliation.** At startup and every minute LCM compares each state with what the runtime reports and corrects what can no longer be true (for a managed service this is a `status` call to the deploy helper through `sudo`, so the host's auth log shows one entry per managed service per minute): `running` with an inactive or failed runtime becomes `failed`; `registered` or `stopped` becomes `running` when the runtime is active and `failed` when it reports failed; a transient state with no action running (the process died mid-action) becomes `running` or `failed`. `failed` is left alone, and an `unknown` runtime status (external services) changes nothing. Retired services are skipped. Corrections appear on the timeline as `reconcile`.
 
@@ -199,6 +263,7 @@ Checks apply to every resource type; the rules below are the same for machines a
 |---|---|---|
 | `http` | `url`, `method`, `expectStatus` (default 200-399), `bodyContains`, `headers`, `insecureSkipVerify` | the status is accepted and the body contains the text |
 | `tcp` | `address` | a connection opens |
+| `tls` | `host`, `port` (443), `serverName` (default `host`), `minValidity` (Go duration, default `504h` = 21 days, at least `1h`) | the served certificate chains to the system roots, matches `serverName` and stays valid for at least `minValidity`; the message states the days left and the `notAfter` date, or the verification error |
 | `systemd` | `unit`, `scope` | the unit is active |
 | `docker` | `container` | the container runs and is healthy when it defines a healthcheck |
 | `command` | `command` (argv, no shell), `expectExit` (default 0) | the exit code matches |

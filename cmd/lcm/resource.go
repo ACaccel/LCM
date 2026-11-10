@@ -27,9 +27,10 @@ const resourceUsage = `Usage: lcm resource <command> <name> [args] [flags]
 
 Commands:
   action <name> <action>      Run a service action (deploy, rollback, start, stop,
-                              restart, backup, restore, run-job); --version <commit>
-                              (deploy), --job <job> (run-job), --backup-id <id>
-                              (restore; the newest set when omitted), --dry-run, --wait
+                              restart, backup, restore, run-job, apply-route);
+                              --version <commit> (deploy), --job <job> (run-job),
+                              --backup-id <id> (restore; the newest set when
+                              omitted), --dry-run, --wait
   observe <name>              Collect a read-only observation (machine, router)
   history | events <name>     Read a page of observations or events (--limit, --cursor);
                               history also takes --from, --to (RFC 3339) and --step

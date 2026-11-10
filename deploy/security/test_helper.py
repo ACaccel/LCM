@@ -24,7 +24,7 @@ class HelperTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         names = ('BASE', 'POLICY', 'LIB', 'REPORTS', 'AIDE_TIMER', 'AIDE_DROPIN', 'AIDE_CONFIG', 'BASELINE', 'AUDIT_OPTIONAL',
-                 'AUDIT_CORE', 'GLOBAL', 'API_HOOK', 'SOCKET_HOOK', 'CARD_LIVE', 'CARD_POLICY', 'CARD_LOCK')
+                 'AUDIT_CORE', 'NGINX_CONF', 'HOOKS', 'NGINX_LOCK', 'CONTROL_LOCK')
         self.patchers = []
         for name in names:
             value = self.root / str(getattr(H, name)).lstrip('/')
@@ -39,25 +39,28 @@ class HelperTests(unittest.TestCase):
         (H.BASE / 'approvals').mkdir()
         self.addCleanup(patch.stopall)
         patch.object(H, 'trusted', lambda path, missing=False: None).start()
+        self.locks = []
+        patch.object(H, 'lock_file', self.fake_lock).start()
         self.commands = []
         patch.object(H, 'run', self.fake_run).start()
-        self.global_text = ''.join('limit_req_zone $ws_security_{0}_key zone=ws_security_{0}:2m rate=30r/s;\n'.format(c) for c in H.CATEGORIES)
-        header = 'limit_req_dry_run on;\nlimit_conn_dry_run on;\n'
-        def hook(categories):
-            return header + ''.join('limit_req zone=ws_security_{0} burst=120 nodelay;\nlimit_conn ws_security_{0}_conn 64;\n'.format(c) for c in categories)
+        nginx = {'services': ['site', 'web'], 'limits': [dict(item) for item in H.DEFAULT_LIMITS]}
         data = {H.AIDE_TIMER: b'[Timer]\nOnCalendar=*-*-* 04:20:00\n', H.AIDE_CONFIG: b'reviewed aide baseline\n',
-                H.AUDIT_CORE: b'-w /etc/passwd -p wa -k wssec_accounts\n', H.GLOBAL: self.global_text.encode(), H.API_HOOK: hook(H.CATEGORIES[:3]).encode(), H.SOCKET_HOOK: hook(('socket',)).encode(),
-                H.CARD_LIVE: b'include /etc/nginx/workstation-security/card-api-*.conf;\ninclude /etc/nginx/workstation-security/card-socket-*.conf;\n'}
-        data[H.CARD_POLICY] = data[H.CARD_LIVE]
+                H.AUDIT_CORE: b'-w /etc/passwd -p wa -k wssec_accounts\n'}
+        data.update(H.nginx_files(nginx))
         for path, value in data.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(value)
-        self.policy = {'version': 1, 'machineId': 'machine-a', 'files': {str(p): H.digest(v) for p, v in data.items()},
-                       'optionalFiles': {}, 'schedule': {'hour': 4, 'minute': 20},
+        self.policy = {'version': 2, 'machineId': 'machine-a', 'files': {str(p): H.digest(v) for p, v in data.items()},
+                       'optionalFiles': {}, 'schedule': {'hour': 4, 'minute': 20}, 'nginx': nginx,
                        'profiles': {'aide': {'baseline': {'enabled': True, 'required': True}}, 'audit': {'core': {'enabled': True, 'required': True}}}}
         H.POLICY.write_bytes(H.canonical(self.policy))
         self.active = 'inactive'
         self.fail_command = None
         self.audit_rules = {'-w /etc/passwd -p wa -k wssec_accounts', '-w /etc/ssh -p wa -k wssec_ssh', '-w /etc/sudoers -p wa -k wssec_sudoers', '-a always,exit -F arch=b64 -S execve -k unrelated'}
+
+    def fake_lock(self, path):
+        self.locks.append(path)
+        return os.open(os.devnull, os.O_RDONLY)
 
     def fake_run(self, command, timeout=20, account=None):
         self.commands.append((command, account))
@@ -93,6 +96,9 @@ class HelperTests(unittest.TestCase):
 
     def limits(self):
         return {'limits': [{'category': c, 'rate': '45r/s', 'burst': 333, 'connections': 99} for c in H.CATEGORIES]}
+
+    def nginx_paths(self):
+        return [H.NGINX_CONF] + [H.hook_path(s, c) for s in ('site', 'web') for c in H.CATEGORIES]
 
     def test_status_unknown_reports_remain_null(self):
         status = H.Controls().status()
@@ -162,7 +168,7 @@ class HelperTests(unittest.TestCase):
 
     def test_apply_rechecks_effective_digest(self):
         request, preview = self.preview()
-        H.GLOBAL.write_bytes(H.GLOBAL.read_bytes() + b'# external edit\n')
+        H.NGINX_CONF.write_bytes(H.NGINX_CONF.read_bytes() + b'# external edit\n')
         with self.assertRaises(H.Failure) as error:
             self.apply(request, preview)
         self.assertEqual(error.exception.code, 'conflict')
@@ -187,19 +193,98 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(H.AIDE_TIMER.read_bytes(), old)
         self.assertEqual(H.Controls().status()['aide']['schedule'], {'hour': 9, 'minute': 35})
 
-    def test_nginx_keeps_dry_run_and_shared_immutable_hooks(self):
-        card = H.CARD_POLICY.read_bytes()
+    def test_nginx_rerenders_every_service_hook_in_dry_run(self):
         request, preview = self.preview('nginx.configure', self.limits())
         operation = self.apply(request, preview)
         self.assertEqual(operation['state'], 'succeeded')
         self.assertFalse(H.Controls().drift)
-        self.assertEqual(H.CARD_POLICY.read_bytes(), card)
-        self.assertEqual(H.CARD_LIVE.read_bytes(), card)
-        self.assertIn(b'limit_req_dry_run on;', H.API_HOOK.read_bytes())
+        self.assertEqual(self.locks, [H.NGINX_LOCK])
+        for service in ('site', 'web'):
+            hook = H.hook_path(service, 'api').read_bytes()
+            self.assertIn(b'limit_req_dry_run on;', hook)
+            self.assertIn(b'limit_req zone=lcm_security_api burst=333 nodelay;', hook)
+        self.assertIn(b'zone=lcm_security_auth:2m rate=45r/s;', H.NGINX_CONF.read_bytes())
         self.assertTrue(all(v['rate'] == '45r/s' for v in H.Controls().limits()))
+        self.assertEqual(H.read_json(H.POLICY)['nginx']['limits'], H.valid_limits(self.limits()['limits']))
+
+    def test_journal_and_policy_stay_readable_with_the_most_services(self):
+        services = ['svc-{:02d}'.format(i) for i in range(H.MAX_SERVICES)]
+        nginx = {'services': sorted(services), 'limits': [dict(item) for item in H.DEFAULT_LIMITS]}
+        files = H.nginx_files(nginx)
+        for path, value in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(value)
+        policy = copy.deepcopy(self.policy)
+        policy['nginx'] = nginx
+        policy['files'] = {name: value for name, value in policy['files'].items() if name in H.pinned_paths(policy)}
+        policy['files'].update({str(path): H.digest(value) for path, value in files.items()})
+        H.POLICY.write_bytes(H.canonical(policy))
+        request, preview = self.preview('nginx.configure', self.limits())
+        operation = self.apply(request, preview)
+        self.assertEqual(operation['state'], 'succeeded')
+        path = H.Controls().journal_path(request['requestId'])
+        self.assertLess(path.stat().st_size, H.MAX_JSON // 2)
+        self.assertLess(H.POLICY.stat().st_size, H.MAX_JSON)
+        self.assertEqual(H.Controls().operation({'requestId': request['requestId']})['state'], 'succeeded')
+
+    def test_deeply_nested_requests_are_refused(self):
+        self.assertEqual(H.depth(b'{"a":[1,{"b":"[[[["}]}'), 3)
+        self.assertGreater(H.depth(b'[' * 5000), H.MAX_DEPTH)
+        self.assertEqual(H.depth(b'{"a":"\\"}'), 1)
+
+    def test_requests_wait_for_a_pending_root_operation(self):
+        now = H.dt.datetime.now().timestamp()
+        def pending(uid, age):
+            return types.SimpleNamespace(lstat=lambda: types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=uid, st_mtime=now - age))
+        with patch.object(H, 'PENDING', pending(0, 5)), self.assertRaises(H.Failure) as error:
+            H.refuse_while_pending()
+        self.assertEqual(error.exception.code, 'busy')
+        for uid, age in ((1000, 5), (0, H.PENDING_SECONDS + 5)):
+            with patch.object(H, 'PENDING', pending(uid, age)):
+                H.refuse_while_pending()
+        with patch.object(H, 'PENDING', self.root / 'absent'):
+            H.refuse_while_pending()
+
+    def test_ingress_files_never_count_as_drift(self):
+        site = H.HOOKS.parent / 'ingress-site.conf'
+        site.write_text('server { set $lcm_service web; set $lcm_category api; }\n')
+        (H.HOOKS / 'web' / 'notes.txt').write_text('unrelated\n')
+        self.assertFalse(H.Controls().drift)
+
+    def test_policy_must_pin_exactly_the_rendered_files(self):
+        policy = H.read_json(H.POLICY)
+        policy['files']['/etc/nginx/snippets/other.conf'] = '0' * 64
+        H.POLICY.write_bytes(H.canonical(policy))
+        with self.assertRaises(H.Failure):
+            H.Controls()
+        policy = copy.deepcopy(self.policy)
+        policy['version'] = 1
+        H.POLICY.write_bytes(H.canonical(policy))
+        with self.assertRaises(H.Failure):
+            H.Controls()
+
+    def test_without_nginx_observation_thresholds_are_unavailable(self):
+        policy = copy.deepcopy(self.policy)
+        policy['nginx'] = None
+        policy['files'] = {name: value for name, value in policy['files'].items() if name in H.pinned_paths(policy)}
+        H.POLICY.write_bytes(H.canonical(policy))
+        status = H.Controls().status()
+        self.assertEqual(status['nginx']['limits'], [])
+        self.assertIsNone(status['nginx']['mode'])
+        capability = next(v for v in status['capabilities'] if v['action'] == 'nginx.configure')
+        self.assertFalse(capability['enabled'])
+
+    def test_rendered_nginx_text_takes_only_validated_values(self):
+        for bad in ({'category': 'api', 'rate': '1r/s; include /x', 'burst': 1, 'connections': 1},
+                    {'category': 'health', 'rate': '1r/s', 'burst': 1, 'connections': 1}):
+            limits = [dict(item) for item in H.DEFAULT_LIMITS if item['category'] != bad['category']] + [bad]
+            with self.subTest(bad=bad), self.assertRaises(H.Failure):
+                H.render_nginx_conf(limits)
+        with self.assertRaises(H.Failure):
+            H.valid_services(['web', '../etc'])
 
     def test_nginx_validation_failure_restores_files_and_policy(self):
-        before = {p: p.read_bytes() for p in (H.GLOBAL, H.API_HOOK, H.SOCKET_HOOK, H.POLICY)}
+        before = {p: p.read_bytes() for p in self.nginx_paths() + [H.POLICY]}
         request, preview = self.preview('nginx.configure', self.limits())
         count = [0]
         def fail(command):
@@ -229,7 +314,7 @@ class HelperTests(unittest.TestCase):
         previous = H.signal.getsignal(H.signal.SIGALRM)
         self.addCleanup(H.signal.signal, H.signal.SIGALRM, previous)
         H.arm_deadline(H.WORK_SECONDS)
-        before = {p: p.read_bytes() for p in (H.GLOBAL, H.API_HOOK, H.SOCKET_HOOK, H.POLICY)}
+        before = {p: p.read_bytes() for p in self.nginx_paths() + [H.POLICY]}
         request, preview = self.preview('nginx.configure', self.limits())
         fired = [False]
         def expire(command):
@@ -273,7 +358,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(len(starts), 1)
 
     def test_drift_disables_configuration_without_disabling_baseline_request(self):
-        H.GLOBAL.write_bytes(H.GLOBAL.read_bytes() + b'# drift\n')
+        H.NGINX_CONF.write_bytes(H.NGINX_CONF.read_bytes() + b'# drift\n')
         caps = {v['action']: v for v in H.Controls().status()['capabilities']}
         self.assertFalse(caps['nginx.configure']['enabled'])
         self.assertFalse(caps['aide.schedule']['enabled'])
@@ -416,6 +501,10 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(H.aide_targets(config.encode()), sorted(paths))
         self.assertIsNone(H.aide_targets(b'/etc/.* SEC\n'))
         self.assertIsNone(H.aide_targets(b'@@include /etc/private.conf\n'))
+        excluded = (config + '!/opt/web/releases(/|$)\n').encode()
+        self.assertEqual(H.aide_targets(excluded), sorted(paths))
+        self.assertIsNone(H.aide_targets(b'!/opt/.*\n'))
+        self.assertIsNone(H.aide_targets(b'!/opt/../etc(/|$)\n'))
         self.assertIsNone(H.aide_targets((''.join('/path' + str(i) + '(/|$) SEC\n' for i in range(257))).encode()))
 
     def test_collector_status_drops_identity(self):

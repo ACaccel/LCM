@@ -64,6 +64,10 @@ func EntryMessage(e Entry) message.Message {
 		if has("action") && has("outcome") {
 			return m("timeline.action", "action", str(d, "action"), "outcome", str(d, "outcome"), "job", str(d, "job"), "version", shortSHA(str(d, "version")))
 		}
+	case KindRoute:
+		if has("state") {
+			return m("timeline.route", "state", str(d, "state"), "message", str(d, "message"))
+		}
 	case string(signal.KindCheck):
 		if inner != nil {
 			return m("timeline.check", "check", str(inner, "check"), "previous", str(inner, "previous"), "status", str(inner, "status"), "message", str(inner, "message"))

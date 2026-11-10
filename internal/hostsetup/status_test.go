@@ -32,13 +32,19 @@ func TestStatus(t *testing.T) {
 
 	th = converged(t)
 	th.cfg.Components.MachinePower = true
-	th.cfg.Components.SecurityHost = &SecurityHost{MachineID: "m-1"}
+	th.cfg.Components.Security = &Security{MachineID: "m-1"}
 	th.cfg.Components.Deploy = true
 	th.writeConfig(th.cfg)
 	th.converge()
 	th.fs.resetOps()
 	got := statusOf(t, th)
 	for name, c := range got {
+		if name == ComponentIngress {
+			if c.State != StateNotInstalled {
+				t.Errorf("converged without ingress: %s is %s", name, c.State)
+			}
+			continue
+		}
 		if c.State != StateUpToDate {
 			t.Errorf("converged: %s is %s: %+v", name, c.State, c.Files)
 		}
@@ -68,7 +74,7 @@ func TestStatus(t *testing.T) {
 	th.fs.get(Unit).mode = 0o664
 	th.fs.denied[Sudoers] = true
 	th.fs.remove(PowerSudoers)
-	th.fs.file(SecurityHelper, string(asset("security-host/helper.py")), 0o644, aliceUID, aliceUID)
+	th.fs.file(SecurityHelper, string(asset("security/helper.py")), 0o644, aliceUID, aliceUID)
 	got = statusOf(t, th)
 	want := map[string]struct{ component, file, detail string }{
 		SelfInstall:    {StateOutdated, StateOutdated, ""},

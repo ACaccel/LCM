@@ -4,7 +4,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 ## Install
 
-`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security host helper and the deploy helper are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls), [deploy helper](#deploy-helper)).
+`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security component, the deploy helper and the nginx ingress are optional components, off by default ([machine power](#local-machine-power-helper), [security component](security.md#host-component), [deploy helper](#deploy-helper), [ingress](#ingress)).
 
 | Path | Owner, mode | Contents |
 |---|---|---|
@@ -30,7 +30,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
   "repository": "https://github.com/ACaccel/LCM.git",
   "toolchains": {"go": "/home/alice/.local/go", "node": "/home/alice/.local/node"},
   "tailscale": {"port": 9443},
-  "components": {"machinePower": false, "securityHost": null}
+  "components": {"machinePower": false, "security": null}
 }
 ```
 
@@ -41,11 +41,12 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 | `toolchains.go`, `toolchains.node` | `--go-root`, `--node-root` (`~OPERATOR/.local/{go,node}`) | Absolute toolchain directories; they and their ancestors must not be symbolic links, must be owned by root or the operator and writable by no one else; copied to `/opt/lcm/toolchain` |
 | `tailscale.port` | `--ts-port` (`9443`) | HTTPS port of `tailscale serve` |
 | `components.machinePower` | `--machine-power` (`false`) | Install the [machine power helper](#local-machine-power-helper) |
-| `components.securityHost` | `--security-host-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>"}` installs the [security host helper](#security-console-host-controls) |
+| `components.security` | `--security-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>", "watch": {"deploy": ["/opt/extra"]}}` installs the [security component](security.md#host-component); `watch` (optional) adds at most 32 absolute paths per category `accounts`, `ssh`, `sudoers`, `cron`, `systemd`, `deploy`, `nginx`. The key `securityHost` of earlier versions is accepted only as `null` |
 | `components.deploy` | (`false`) | Install the [deploy helper](#deploy-helper) and the build account |
 | `runtimes` | (none) | Named [runtimes](#runtimes) that managed services may use: `{"node24": "/home/alice/.local/node"}`; names `^[a-z][a-z0-9]{0,15}$`, directories checked like `toolchains` and copied to `/opt/lcm/runtimes/<name>` |
 | `backup.dir` | (none) | Where the [typed backups](#backups) of managed services are kept; a directory of its own: absolute, not a system directory (`/`, `/var`, `/var/lib`, `/opt`, `/home`, ...) nor inside `/etc`, `/usr`, `/tmp` and the like, not `/var/backups/lcm` (where `host upgrade` keeps its sets; use for example `/var/backups/lcm-services`), not `/var/lib/lcm*`, `/var/cache/lcm-build` or `/opt/lcm`, and not overlapping a service's `/opt/<name>`, `/var/lib/<name>` or `/etc/<name>`, a runtime or an input. `apply` creates it as root 0700; an existing directory must already be root-owned 0700, as `apply` never changes the mode of one that exists. Without it the backup and restore operations are refused |
-| `services` | `lcm host allow` | The [deploy allowlist](#service-grants): `{"web": {"port": 3200, "runtimes": ["node24"], "inputs": {"assets": "/srv/inputs/web/assets"}}}`; `route` and `extraPaths` are reserved for the ingress component and refused |
+| `components.ingress` | (`null`) | The [ingress](#ingress) site: domain, listen addresses, ACME webroot, certbot settings, HSTS, domain-level files, the hand-made site to adopt |
+| `services` | `lcm host allow` | The [deploy allowlist](#service-grants): `{"web": {"port": 3200, "runtimes": ["node24"], "inputs": {"assets": "/srv/inputs/web/assets"}, "route": {"prefix": "/web/"}}}`; `route` and `external` are described under [routes](#routes); `extraPaths` is reserved for a later version and refused |
 
 ### Procedure
 
@@ -64,7 +65,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
    sudo bin/lcm host apply
    ```
 
-   `bootstrap.sh` passes `--replace-binary` and `--check` on to `host apply`; its first-run flags fail once `host.json` exists, and `--ts-host NAME` only refuses to run when the node's tailnet name differs. `host apply` validates everything before it changes anything (tools, operator account, toolchains and their links, tailscale state and port, the staged binary running `lcm version` as `nobody`, `visudo -cf` on the staged sudoers rules, an existing `work/lcm` tracking `repository`). It then creates the `lcm` account and directories, writes `lcm.env` if missing, copies the toolchains (read without leaving them, refusing links that leave them and entries not owned by root or the operator, and checked as `lcm` before they replace the previous copy), installs the binary (only when none is installed; `--replace-binary` forces it), `self-install`, the sudoers rule (checked with `visudo -c` and removed again when that fails) and the unit (`systemd-analyze verify`, restoring the previous unit when that fails), clones `work/lcm` over HTTPS as `lcm`, enables and starts the service (restarting it for a changed unit) and waits up to 60 s for health, then installs the enabled optional components. When it created the database and runs in a terminal, it asks for the web console's admin password (min 8 characters) with echo off and passes it to `lcm admin set-password` through a pipe; no process of another account gets the terminal. When `~/.config/lcm/token` of the operator is missing, it creates an admin API token and has the operator's own process write it there (0600). Last, it adds the `tailscale serve` handler, refusing a port that something else uses.
+   `bootstrap.sh` passes `--replace-binary` and `--check` on to `host apply`; its first-run flags fail once `host.json` exists, and `--ts-host NAME` only refuses to run when the node's tailnet name differs. `host apply` validates everything before it changes anything (tools, operator account, toolchains and their links, tailscale state and port, the staged binary running `lcm version` as `nobody`, `visudo -cf` on the staged sudoers rules, an existing `work/lcm` tracking `repository`). It then creates the `lcm` account and directories, writes `lcm.env` if missing, copies the toolchains (read without leaving them, refusing links that leave them and entries not owned by root or the operator, and checked as `lcm` before they replace the previous copy), installs the binary (only when none is installed; `--replace-binary` forces it), `self-install`, the sudoers rule (checked with `visudo -c` and removed again when that fails) and the unit (`systemd-analyze verify`, restoring the previous unit when that fails), clones `work/lcm` over HTTPS as `lcm`, enables and starts the service (restarting it for a changed unit) and waits up to 60 s for health, then installs the enabled optional components (machine power, the deploy helper, ingress, then security). When it created the database and runs in a terminal, it asks for the web console's admin password (min 8 characters) with echo off and passes it to `lcm admin set-password` through a pipe; no process of another account gets the terminal. When `~/.config/lcm/token` of the operator is missing, it creates an admin API token and has the operator's own process write it there (0600). Last, it adds the `tailscale serve` handler, refusing a port that something else uses.
 3. Seed, as the operator:
 
    ```sh
@@ -86,19 +87,19 @@ A build with another storage schema is installed by [`lcm host upgrade`](#lcm-ho
 - Each step prints one line per result: `unchanged`, `would change: <what>` (`--check`), `changed: <what>`, or `needs manual action: <what>` for a difference it does not fix itself. Exit status: 0 converged; 3 with `--check` while changes or manual actions are pending; 1 on an error or a remaining manual action; 2 for usage errors. `--check` changes nothing; it stages the binary in a temporary directory to validate it.
 - Drift it fixes: changed, missing or replaced root files (a file owned by someone else is replaced, never taken over), their modes, directory owners and modes, toolchain copies that differ from their source, a missing checkout, token file or `tailscale serve` handler, a disabled, stopped or not reloaded unit.
 - Older builds: when the installed `/usr/local/bin/lcm` reports a later commit time (`lcm version`) than the build running `apply`, `apply` and `--check` print a warning first and mark each file they would replace; they do not stop.
-- What it keeps: an existing `lcm.env` (reported when it differs from the embedded one; one owned by someone other than root needs manual action), the installed `/usr/local/bin/lcm` (self-deploy keeps it current), and components switched off in `host.json`, which are reported as `installed but disabled` and never removed.
+- What it keeps: an existing `lcm.env` (reported when it differs from the embedded one; one owned by someone other than root needs manual action), the installed `/usr/local/bin/lcm` (self-deploy keeps it current), and components switched off in `host.json`, which are reported as `installed but disabled` and never removed. The security component is the exception: switched off, it needs manual action until `apply --remove` removes it ([removal](security.md#removal-and-cleanup)).
 - Root runs only a build of a reviewed checkout, because whoever can push to `main` controls the self-deployed binary. `bootstrap.sh` refuses a `--binary` that resolves to `/usr/local/bin/lcm` or its `.prev`/`.failed` copies, lies under `/var/lib/lcm` or is owned by `lcm`, before running it. `host init` and `host apply` refuse to run as root from those paths too; that check catches mistakes, but it runs inside the binary it judges, so it cannot stop an untrusted one.
-- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security-host`, `deploy`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine and deploy helpers have no embedded version: status checks only their owner and mode and shows their digest, and `host apply` replaces them with the reviewed build it runs from.
-- The console shows the same comparison on the machine's Overview tab (`GET /api/v1/host/components`, read as the `lcm` account and cached for 30 s). It warns only about `outdated` or `missing` files and names the update command; a component that is not installed is silent, and so are files the account cannot read (the sudoers rules and the security host helper are root-only by design; `sudo bin/lcm host status` compares them).
-- Helper updates: LCM never changes root files itself. When a self-deployed commit changes a host file, `lcm host status` shows `outdated`; review the change, then run `make build && sudo bin/lcm host apply` in the updated reviewed checkout. An installed security host helper is the exception: it needs its [reviewed upgrade](#security-console-host-controls).
+- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security`, `deploy`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine and deploy helpers have no embedded version: status checks only their owner and mode and shows their digest, and `host apply` replaces them with the reviewed build it runs from.
+- The console shows the same comparison on the machine's Overview tab (`GET /api/v1/host/components`, read as the `lcm` account and cached for 30 s). It warns only about `outdated` or `missing` files and names the update command; a component that is not installed is silent, and so are files the account cannot read (the sudoers rules and the security helper are root-only by design; `sudo bin/lcm host status` compares them).
+- Helper updates: LCM never changes root files itself. When a self-deployed commit changes a host file, `lcm host status` shows `outdated`; review the change, then run `make build && sudo bin/lcm host apply` in the updated reviewed checkout. The security component upgrades the same way ([security component](security.md#host-component)).
 
 ### Self-deploy
 
 The `lcm` service builds and installs LCM like any other service; the auto-deploy policy runs it for every new commit on `main` whose `ci.yml` run passed:
 
 1. `trigger.git` sees the commit; `ci.status` waits for CI (unauthenticated GitHub API, 60 requests per hour per IP).
-2. `lifecycle.deploy` points `origin` of `work/lcm` at the service's `source.url`, fetches and detaches the checkout at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`.
-3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation; run [`lcm host upgrade`](#lcm-host-upgrade) (or the [manual procedure](#manual-procedure)). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared write gate blocks this self-deploy path during machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
+2. `lifecycle.deploy` points `origin` of `work/lcm` at the service's `source.url`, fetches and detaches the checkout at the commit, runs `make build` (console and binary) with the copied toolchains, then the install step, a short script that ends with `sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm`. Before that command it compares `lcm storage-schema` of the installed binary (the running server's) with the candidate's. When they differ, or the candidate cannot report one, it stops with exit status 75 and the line `storage schema 16 -> 17 needs the operator: make build && sudo bin/lcm host upgrade`. A build or install script exiting 75 is recorded as a failed deployment with the code `deploy.needsUpgrade`, changes nothing and leaves the service in the state it had (running). The auto-deploy policy recognises the code, announces it (when [notifications](#self-deploy) are on) and does not roll back: a rollback would only rebuild and reinstall the version that already runs. Run the command on the host, as described in [Upgrade](#upgrade); the next commit with an unchanged schema deploys normally.
+3. `self-install` reads the binary as `lcm` (so a swapped link cannot expose root-only files), checks `lcm version` and requires installed/candidate `lcm storage-schema` values to match. A changed schema or an older binary without that command refuses automatic installation (the step 2 check normally stops it first; this one is the root-side guard and stays unchanged); run [`lcm host upgrade`](#lcm-host-upgrade) (or the [manual procedure](#manual-procedure)). Otherwise it keeps the current binary as `lcm.prev`, moves the new one into place and schedules `self-install --verify` in a transient unit `lcm-self-update-<time>` 3 seconds later. It exits at once, so the deployment is recorded as finished before LCM restarts. For the same reason the runtime has only a status command: start, stop and restart are not offered and the deployment skips its restart step. The shared write gate blocks this self-deploy path during machine maintenance; a pending self-install verification also blocks entering Machine maintenance.
 4. The verification restarts `lcm.service` and waits up to 60 s for `/api/v1/health` to report the new version. If it does not, it restores `lcm.prev` (keeping the rejected binary as `lcm.failed`), restarts again, logs at error priority and leaves the transient unit failed.
 5. The policy's `wait.until` was suspended across the restart and resumes in the new process. The service's `version` check passes only when the running server reports the version of the binary built in the checkout, so after a verification rollback the service stays unhealthy, the wait times out after 3 minutes and `lifecycle.rollback` rebuilds and reinstalls the previous successful commit.
 
@@ -126,6 +127,7 @@ systemctl list-units --failed 'lcm-self-update-*'      # rejected updates; clear
   - Discord: store a webhook URL as a secret and set `notifyTarget: discord` and `notifySecret: <secret-name>` in the policy's `spec.params`.
 
   A configured destination whose secret is missing fails its notification node, and with it the run.
+- A schema-changing commit therefore ends as a failed `deploy.needsUpgrade` deployment while the old version keeps running. After `lcm host upgrade` the server [records the upgrade](#lcm-host-upgrade) itself, so the `version` check turns up without redeploying. The seeded service and policy documents carry this behaviour: rerun `deploy/seed.sh` (as the operator) on a host seeded earlier to apply the new `lcm` install script and `lcm-auto-deploy` policy; until then a schema change fails at `self-install` and rolls back as before.
 - A manual `lcm resource action lcm deploy` has no policy to roll back: if the verification restores `lcm.prev`, the catalog still records the new commit, and the failing `version` check shows the mismatch until you deploy a good commit.
 - Verification restores only the binary; it does not restore the database. The schema-equality guard is therefore required, and the installed `self-install` script must itself include that guard. Existing deployments with an older script need an operator-reviewed script update before relying on this protection. It cannot make an older unguarded installation safe retroactively.
 
@@ -237,6 +239,109 @@ With `backup.dir` set in `host.json`, the deploy helper backs up and restores th
 
 **Prerequisites.** `sqlite` and `files` need nothing installed. `pg_dump`/`pg_restore` and `mongodump`/`mongorestore` must be installed for their sources. Do not put `backup.dir` under `/home`, `/root` or `/run/user`: the sandbox hides them.
 
+### Ingress
+
+With `components.ingress` set, LCM owns one nginx site for the domain and renders it as a whole from `host.json` and the services' route options; it keeps certbot and its timer. Nothing is installed for it when it is `null`, and turning it off removes nothing.
+
+| Path | Owner, mode | Contents |
+|---|---|---|
+| `/etc/nginx/sites-available/lcm-ingress.conf` | root 0644 | The rendered site; its first line is LCM's marker, and a file without it is never replaced |
+| `/etc/nginx/sites-enabled/lcm-ingress.conf` | root link | Link to the site |
+| `/var/lib/lcm-ingress/` | root 0700 | `routes/<service>.json` (accepted route options), `last-apply.json`, `previous.conf` (the site before the last change), `adopted.json` (every link cutover disabled), `renewal-original.json` (the renewal configuration before `apply` first changed it), `reverted.json` |
+| `/var/www/lcm-ingress/well-known/` | root 0755 | Copies of the domain-level files nginx serves |
+| `<acmeWebroot>` (`/var/www/lcm-acme`) | root 0755 | certbot's webroot challenges, served on port 80 |
+| `/etc/letsencrypt/renewal-hooks/deploy/lcm-ingress-reload` | root 0755 | [`deploy/lcm-ingress-reload`](../deploy/lcm-ingress-reload): `nginx -t`, then reload, after certbot saved a renewed certificate |
+| `/run/lcm-ingress.lock` | root 0600 | Serializes every change of the site |
+
+```json
+"components": {
+  "ingress": {
+    "domain": "example.org",
+    "listen": ["192.0.2.10"],
+    "acmeWebroot": "/var/www/lcm-acme",
+    "tls": {"email": "ops@example.org", "keyType": "ecdsa"},
+    "hsts": false,
+    "wellKnown": {"assetlinks.json": "/etc/lcm/ingress/assetlinks.json"},
+    "adopt": "example.org",
+    "legacyLock": "/run/lock/example-nginx-deploy.lock"
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `domain` | Lower-case domain name, the site's `server_name` |
+| `listen` | IP addresses (canonical form, at most 8) both servers bind to; empty binds all addresses (IPv4 and IPv6) |
+| `acmeWebroot` | Default `/var/www/lcm-acme`; not in a system tree, home directories or `/var/lib`, and not overlapping a static directory. On a host that already has a certificate, set it to the webroot certbot uses now (`webroot_path` in the renewal configuration), so that cutover changes nothing in certbot's files |
+| `tls.email`, `tls.keyType` | certbot's account email and key type (`ecdsa`, the default, or `rsa`) |
+| `hsts` | Send `Strict-Transport-Security: max-age=31536000` from every location (default off) |
+| `wellKnown` | Domain-level files: `assetlinks.json`, `security.txt` or `apple-app-site-association`, each naming a root-owned file of at most 64 KiB; the content is copied and served at `/.well-known/<name>` with a fixed media type. The rest of `/.well-known/` answers 404 |
+| `adopt` | The hand-made site in `sites-enabled` whose link the first application disables ([cutover](#cutover-and-revert)) |
+| `legacyLock` | A lock file below `/run` that hand-made scripts still take while they edit nginx; while it exists, every change of the site except a revert waits for it (at most a minute for `host` commands, 30 s for the deploy helper) and is refused as busy after that. Anyone who can read the file can hold it, so remove `legacyLock` from `host.json` once the projects no longer edit nginx |
+
+`apply` needs nginx (`/usr/sbin/nginx`) and reports certbot when it is missing. With the component on it also installs the [deploy helper](#deploy-helper) files (wrapper, pinned helper, sudoers rule, ledger), through which LCM applies route changes; with `components.deploy` false the helper refuses every deploy and backup operation.
+
+#### Routes
+
+```sh
+sudo bin/lcm host allow web --port 3200 --route /web/
+sudo bin/lcm host allow site --external --route / --static /var/www/site/current
+```
+
+A route's prefix, port and static directory come only from `services.<name>` in `host.json`:
+
+- `route.prefix`: `/` or an absolute path ending with `/`, of letters, digits and `._-` components, none starting with `.` (so `/.well-known/` is never a prefix); unique across services. Prefixes may nest: the longest one wins, and a location of one service may not lie in another service's longer prefix.
+- `route.static`: the directory whose content appears at the prefix: `/app/x.js` is `<static>/x.js`, whatever the prefix. LCM writes nginx `root <static>` for the prefix `/` and `alias <static>/` for any other prefix. So for `/app/` with files in `<dir>/app/...` set `route.static` to `<dir>/app`; with files directly in `<dir>/...` set it to `<dir>`. It may not be in a system tree, a home directory, `/var/lib`, `/var/log`, `/var/cache`, `/opt/lcm` or `backup.dir`, and every directory down to it must be root-owned and not writable by group or others.
+- `route.static` may be a symbolic link, such as `/var/www/site/current` pointing to `releases/<id>`, when the link is root's (in directories only root can write, so only root can switch it). Its target, resolved once and named without `..`, must pass every rule above, with no further link anywhere in its path. The site names the link, not the target, so nginx follows it per request and a release switch needs no new site; the target is checked again whenever the site is rendered (`apply`, `ingress.apply`, `host cert issue`), and a refused target stops that change and keeps the installed site.
+- `external: true`: LCM does not own the service's process or accounts. `apply` and `allow` create nothing for it, the deploy helper refuses its deploy and backup operations, and `port` is optional when the route has a static directory. An external service has no runtimes or inputs.
+
+Without route options a route proxies everything below the prefix to `http://127.0.0.1:<port>/` (stripping the prefix), or serves the static directory (`try_files $uri $uri/ =404`). `/prefix` (without the final `/`) redirects to `/prefix/`. The presentation options (proxy locations, SPA fallback, 404 page, immutable directories, downloads, redirects, CSP) belong to the service's document; the [`route` section](services.md#route) describes them, how LCM sends them to the helper and how a refusal is shown on the service.
+
+**What reaches nginx.** Documents carry no nginx syntax: locations come from fixed templates, every value is checked against a strict grammar (paths of letters, digits and `._-` components, fixed vocabularies for categories, media types and redirect codes, sizes up to 64m and timeouts up to 1h, a CSP subset without quotes, backslashes, `$`, braces, commas or line breaks) and checked again by the renderer, which writes it inside double quotes. Every location repeats the full header set (`X-Content-Type-Options`, `Referrer-Policy`, HSTS when on, the service's CSP or CSP-Report-Only), because `add_header` in a location replaces the inherited ones, and sets `$lcm_service` and `$lcm_category`. Proxy locations include `/etc/nginx/lcm/hooks/<service>/<category>-*.conf` (a glob without matches is valid), where the security component adds its observation rules.
+
+**Applying.** `apply`, `host cert issue`, `host ingress revert` and the deploy helper's `ingress.apply` change the site the same way, holding `/run/lcm-ingress.lock` (and `legacyLock` while it exists):
+
+1. Render the whole site; refuse it when a value, a static directory, a well-known file or a hook file in `/etc/nginx/lcm/hooks` (which must be root's, like its directories) fails its checks. Stored route options of a service that no longer fit (its grant changed, or the file cannot be decoded) are left out, so that route has its defaults: `apply` reports them as a manual action, `ingress.status` and `ingress.apply` as `dropped`. The site is at most 1 MiB.
+2. Copy the well-known files, write the site file atomically (the previous content goes to `previous.conf`), enable it and disable the adopted link.
+3. Test the complete configuration with `nginx -t`, exactly what a reload loads.
+4. Reload nginx and probe the location `/.well-known/lcm-probe`, which nginx answers itself with `204` in both servers, on every listen address (or `127.0.0.1`), over HTTP and, with a certificate, HTTPS, with the domain as `Host` and TLS server name. No service's answer decides whether the site is kept. `lcm-probe` is not a name `wellKnown` accepts.
+5. On any failure put the previous file and links back, and reload again if nginx had loaded the change. The result is recorded in `last-apply.json`.
+
+`host apply --check` prints the rendered file when it would change it, together with the adoption. LCM sends a service's route options to the deploy helper (`ingress.apply`, see the [protocol](../internal/deployhelper/protocol.go)); the helper keeps them in `/var/lib/lcm-ingress/routes/` and puts the previous ones back when the site fails. It refuses while the site has never been installed, was reverted or is not enabled, and while the adopted site is enabled again, so that cutover stays an administrator's step; it checks again after taking the locks. The options of the service it applies must fit. `ingress.status` reports the digest of the site the configuration renders, the installed one and the last result; `lcm host status` run as root compares them too (as another user it only checks that the installed site is LCM's). The console's host components view (`GET /api/v1/host/components`) asks the helper for `ingress.status` when the ingress component is installed and the helper is callable, and shows the rendered digest next to the installed one with the last apply result; without the helper it shows what the unprivileged read finds.
+
+#### Certificates
+
+certbot keeps the certificate and renews it with its own timer. Once the site is applied (so the ACME location serves the webroot), `apply` makes the renewal configuration `/etc/letsencrypt/renewal/<domain>.conf` use the webroot: it sets `authenticator = webroot`, `webroot_path = <acmeWebroot>,` and the domain's `[[webroot_map]]` entry, keeps every other line and the file's version before its first change (`renewal-original.json`, which `host ingress revert` puts back), and reports an `installer` other than `None` (certbot would edit nginx's files on renewal) as a manual action. When the site cannot be applied, the renewal configuration is left alone. It installs the deploy hook above and reports other deploy hooks, such as a hand-made reload, without removing them.
+
+On a new machine, after `apply` (which serves port 80 with the ACME location until a certificate exists):
+
+```sh
+sudo bin/lcm host cert issue
+```
+
+It applies the site without TLS, runs `certbot certonly --webroot -w <acmeWebroot> -d <domain> --email <email> --key-type <keyType> --agree-tos -n`, then applies the full site with the port 443 server. It refuses when the domain already has a certificate.
+
+#### Cutover and revert
+
+To take over a host whose site was written by hand, name that site in `adopt`, then:
+
+1. `sudo bin/lcm host apply --check`: review the rendered site and the line that disables the adopted site (its file in `sites-available` stays). Adoption is refused while `host ingress revert` could not enable the site again: its link must point to a file in `sites-available` that only root can write. The rendered site serves HTTP/1.1; a hand-made site with `http2` loses it.
+2. Stop the scripts that still edit nginx, or set `legacyLock` to the lock they take. Avoid the days around a certificate renewal.
+3. `sudo bin/lcm host apply`: the first application disables the adopted link and records it in `adopted.json` (a later `adopt` is added to the record).
+4. Once the projects no longer edit nginx, remove `legacyLock` from `host.json`.
+
+`apply` converges the security component after the deploy helper and the ingress site, so one run installs both and the security component's adoption removes its old nginx hook files only once the hand-made site that included them is disabled; while the site needs manual action, the security component waits. When the same `apply` adopts an existing [security component](security.md#install-adopt-and-upgrade), first add to `components.security.watch.deploy` the root deploy tooling directories that projects on the host still use, until their services are deployed by LCM; the security component no longer watches them by itself.
+
+To go back:
+
+```sh
+sudo bin/lcm host ingress revert
+```
+
+It disables LCM's site, enables every adopted site again with the link it recorded (or `sites-available/<adopt>` without a record), tests and reloads nginx (putting LCM's site back when that fails), then removes `lcm-ingress.conf` (a copy goes to `previous.conf` when it can be read; the removal only checks the marker line), puts back the renewal configuration as it was before `apply` changed it, and marks the site reverted: the deploy helper refuses `ingress.apply` from then on. It does not wait for `legacyLock`, so going back stays possible while the lock is held. The next `apply` installs the site again; set `components.ingress` to `null` first to stay reverted.
+
+After a cutover that also adopted the security component, the hand-made site may include hook files the adoption removed, so `nginx -t` fails and `revert` keeps LCM's site. Undo the security adoption first (`sudo bin/lcm host security revert --apply`, which puts those files back), then revert the site.
+
 ## Uninstall
 
 ```sh
@@ -302,10 +407,11 @@ Run it as root from a build of a reviewed checkout, like `host apply` (the self-
 3. Back up to `/var/backups/lcm/upgrade-<UTC stamp>/` (root, 0700): `database/lcm.db` with any `-wal`/`-shm` (a plain copy of the stopped database; this build has no online backup path), `bin/lcm` (the old binary; `lcm.prev` stays self-install's), `etc-lcm/` (all of `/etc/lcm`) and `secrets/` (`LCM_SECRETS_DIR` from `lcm.env`, default `<data dir>/secrets`). `manifest.json` records both versions and schemas, the SHA-256 and size of every file, and the original source, owner and mode of the files a rollback restores. Each file is opened below its directory and its size, mode and owner come from the opened descriptor, which must be the file first looked at. Copies are checked against what was read, and the copy stops, removing the partial set, when less than 8 MiB would stay free before any file, or when `/etc/lcm` or the secrets grew by more than 1 MiB since the preflight sized them. The database files must belong to `lcm` and the binary to root, in the preflight and again on the opened descriptor; anything else is refused, not copied. A set of the same name that already exists (two runs in one second) is refused and left alone; only a set this run created is ever removed. `etc-lcm/` and `secrets/` keep modes but not owners (a manual restore sets them: `lcm` owns secrets); entries of other owners than root and `lcm` are refused.
 4. Install the staged build as `/usr/local/bin/lcm` (atomic replace) and verify it.
 5. Start with automation off and wait up to 120 s for `/api/v1/health` to report the new version, which counts only while systemd reports the unit `active` with a main process in the unit's control group that holds every IPv4 socket listening on port 7800 (found through `/proc/net/tcp` and `/proc/<MainPID>/fd`), with the same process and restart count (`NRestarts`) across the answer and across a settle delay of the unit's `RestartSec` plus one second, so another process on the health port, or a process that exits right after answering, cannot pass. A runtime drop-in `/run/systemd/system/lcm.service.d/zz-lcm-upgrade.conf` sets [`LCM_AUTOMATION=off`](../README.md#configuration) for this start only (so interrupted runs, policy triggers, config sync and self-deploy stay idle while the migration is checked), and the command checks that the effective (last) `LCM_AUTOMATION` that systemd loaded is `off` before starting. Admin-initiated actions through the API (manual runs, config sync, lifecycle actions) still work during this start, so nobody should use the console meanwhile. Then the database must report the new storage schema.
-6. Remove the drop-in, check that the effective setting is no longer `off`, restart normally (automation on) and wait for health again with the same unit checks.
-7. Keep the newest three `upgrade-*` sets (and always the one just written); other entries of the directory are never touched.
+6. Write the upgrade marker `/var/lib/lcm/host-upgrade.json` (versions, commits and schemas of both builds, the time), owned by `lcm`, mode 0600: the file is created exclusively next to its name, owned and moded through its descriptor and renamed over the name, so a link or file `lcm` left there is replaced, never followed. It is bookkeeping: if it cannot be written, the upgrade still succeeds, a warning names the command that records the deployment by hand (`lcm resource action lcm deploy --version <commit>`), and a rollback removes the marker.
+7. Remove the drop-in, check that the effective setting is no longer `off`, restart normally (automation on) and wait for health again with the same unit checks. This start reads the marker: when it names the commit this server runs, the server adds a successful deployment of the `lcm` service attributed to the system actor `host-upgrade` (action `deploy`, log naming both builds, previous version taken from the catalog) and removes the marker. Nothing is added when the newest successful deployment already is that commit; a marker for another build, or an unreadable one, is left alone and logged. LCM thereby records only what the root command attested and the server itself observes, and the `version` check agrees with the catalog again.
+8. Keep the newest three `upgrade-*` sets (and always the one just written); other entries of the directory are never touched.
 
-**Failure.** Any error after the stop, including `Ctrl-C` or a termination signal, rolls back: before step 4 only the stop happened and LCM starts again; after it, LCM is stopped (and must be confirmed stopped), the backup files are verified against the manifest, the database files are replaced (stale `-wal` and `-shm` removed first) and the old binary is put back, and only then the old binary starts and must report its own version healthy. The old binary never runs on a migrated database. The set is kept and its path printed. If the rollback itself fails (unverifiable backup, stop not confirmed, old version not healthy) the message says `ROLLBACK FAILED` and the host is left as it is, for the manual steps below. After step 6 the new controller has run with automation on, so a rollback then also discards what it did since; external effects of resumed runs are not undone. A rollback never touches the root helper ledger ([backup](#backup)).
+**Failure.** Any error after the stop, including `Ctrl-C` or a termination signal, rolls back: before step 4 only the stop happened and LCM starts again; after it, LCM is stopped (and must be confirmed stopped), the backup files are verified against the manifest, the database files are replaced (stale `-wal` and `-shm` removed first) and the old binary is put back, and only then the old binary starts and must report its own version healthy. The old binary never runs on a migrated database. The set is kept and its path printed. If the rollback itself fails (unverifiable backup, stop not confirmed, old version not healthy) the message says `ROLLBACK FAILED` and the host is left as it is, for the manual steps below. After step 7 the new controller has run with automation on, so a rollback then also discards what it did since; external effects of resumed runs are not undone. A rollback never touches the root helper ledger ([backup](#backup)).
 
 Exit status: 0 done or nothing to upgrade; 1 error, including a completed or failed rollback; 2 usage; 3 with `--check` when an upgrade would run. A killed command (power loss, `SIGKILL`) can leave LCM stopped or the drop-in in `/run`: restore from the set by the manual steps (a reboot removes the drop-in, and the next run removes it).
 
@@ -401,7 +507,7 @@ Storage schema 16 only adds indexes (timeline reads, audit filters and the reten
 - Failed-login audit entries beyond the newest 10,000.
 - Snapshot, point and event ceilings now apply per resource (200,000 rows each) instead of to all resources together.
 
-Set the [retention settings](../README.md#configuration) before the start to keep more. The security host helper purges its own finished operations only after it is reinstalled ([host controls](#security-console-host-controls)).
+Set the [retention settings](../README.md#configuration) before the start to keep more. The security helper purges its own finished operations once `host apply` installed the current one ([security component](security.md#host-component)).
 
 ### Upgrade checks for stricter host configuration
 
@@ -426,6 +532,8 @@ The target is under 50 MB resident. `LCM_MEMORY_LIMIT` (default `40MiB`, `off` d
 
 LCM serves plain HTTP. For access beyond localhost run a TLS-terminating reverse proxy (nginx, Caddy) in front, keep LCM on `127.0.0.1`, and set `LCM_COOKIE_SECURE=true`. Login rate limiting counts failures per client address; behind a proxy every client has the proxy's address, so one client can lock out all of them. When the proxy sets `X-Forwarded-For` (replacing or appending to a client-supplied value), set `LCM_TRUSTED_PROXIES` to its address, for example `127.0.0.1/32,::1/128` for a local proxy. The event stream (`/api/v1/events`) needs response buffering turned off in the proxy.
 
+To watch the proxy's certificate, give a resource a [`tls` check](services.md#health-checks) (days left and `notAfter` show in its message) and, to be told, instantiate the `cert-expiry` [template](policies.md#templates). It connects without privileges and does not renew anything.
+
 
 ## Security console host controls
 
@@ -434,24 +542,11 @@ notification versions and host checks. Handling and settings changes require the
 displayed version and a reason. A notification test uses the configured relay route;
 wait for its firing and recovery revisions on the same message before accepting it.
 
-Install the restricted security helper only through a reviewed release; follow its
-[deployment and recovery contract](../deploy/security-host/README.md). With
-`components.securityHost` set to `{"machineId": "<immutable Machine ID>"}`, `lcm host apply`
-runs the embedded `install.py` with `python3 -I` from a root-only temporary directory,
-with that Machine ID and the SHA-256 of the embedded `helper.py`. `install.py` refuses an
-existing installation, so `apply` reports an installed helper that differs, a policy for
-another Machine or an incomplete installation as `needs manual action` and changes nothing;
-upgrade it as the contract describes. Verify actual
-LCM-context `GET /api/v1/security/host` availability after installation, rather than
-relying on a root-only status probe. Preserve existing timer jitter, required audit
-coverage, Nginx dry-run and locally reviewed AIDE baseline. The web baseline action
+The host side of these controls is the optional [security component](security.md#host-component):
+`lcm host apply` installs, adopts and upgrades it from the reviewed build like the other
+components. Verify actual LCM-context `GET /api/v1/security/host` availability after
+installation, rather than relying on a root-only status probe. The web baseline action
 records a review request only. No optional profiles are enabled by default.
-
-A helper installed before schema 16 refuses every preview once its operation journal
-holds 2,000 entries, permanently. The current helper first purges old finished entries
-([journal capacity](../deploy/security-host/README.md#recovery-and-local-approval));
-reinstall the reviewed `helper.py` with its matching `install.py` and SHA-256 to get the
-fix. LCM keeps its own record of finished host operations for `LCM_OPERATION_RETENTION`.
 
 Schema 11→13 needs an explicit upgrade with maintenance, paused automation and a
 matching DB/binary/health-artifact snapshot. Preserve notification environment and

@@ -1,0 +1,37 @@
+# Report a TLS certificate that is about to expire, no longer verifies or has
+# become unreachable. The resource needs a `tls` check (see docs/services.md);
+# the check, not this policy, decides how many days of validity are required
+# (its minValidity prop). Notifications are off until notifySecret names a
+# secret that holds a Discord webhook URL.
+#
+# The trigger takes its values when the template is instantiated; every
+# other node reads params.*.
+apiVersion: lcm/v2
+kind: Policy
+metadata:
+  name: cert-expiry
+spec:
+  params:
+    resource: my-site
+    notifySecret: ""
+  nodes:
+    - id: down
+      type: trigger.signal
+      props:
+        kinds: [check.changed]
+        resources: ["{{ params.resource }}"]
+        statuses: [down]
+      next: { out: [is_tls] }
+    - id: is_tls
+      type: flow.if
+      props: { condition: 'trigger.data.type == "tls"' }
+      next: { true: [alert] }
+
+    - id: alert
+      type: notify
+      props:
+        target: discord
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        title: "{{ params.resource }}"
+        message: "TLS check {{ trigger.data.check }} is failing: {{ trigger.data.message }}"

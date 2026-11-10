@@ -14,6 +14,7 @@ import { HostDriftNotice } from "./machine/host-drift";
 import { MachineOverview } from "./machine/monitoring";
 import { OperationCard } from "./operations";
 import { RouterOverview } from "./router";
+import { RoutePanel } from "./route";
 
 /**
  * How many checks pass, each check's state and, for a service, the
@@ -162,6 +163,7 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
             </section>
           )}
           {detail.type !== "service" && <ChecksPanel detail={detail} selector={selector} strip={false} />}
+          {detail.type === "service" && <RoutePanel detail={detail} />}
           {firing.length > 0 && (
             <section className="panel stack">
               <h2>

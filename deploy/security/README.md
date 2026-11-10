@@ -1,8 +1,10 @@
-# Restricted security host controls
+# Security component: restricted helper contract
 
-This component adds a fixed JSON RPC helper. LCM receives no arbitrary root shell,
-file read/write, service name, destination URL, or baseline acceptance operation.
-Install only as part of the reviewed console release bundle after Go and Python tests.
+The security component ([docs/security.md](../../docs/security.md#host-component)) consists
+of `install.py` (the root installer `lcm host apply` runs), `runtime.py` (the collector
+and its reports) and `helper.py`, a fixed JSON RPC helper described here. Through the
+helper LCM receives no arbitrary root shell, file read/write, service name, destination
+URL, or baseline acceptance operation.
 
 The production RPC is one no-argument Python script, invoked with `sudo -n`. Requests
 and replies use bounded JSON stdin/stdout and protocol version 1. All privileged inputs,
@@ -11,8 +13,11 @@ group/world writable or symlinks. Private collector status runs with the collect
 GID, and empty supplementary groups; root never follows collector-controlled paths.
 
 The helper lives under `/usr/local/libexec/lcm/security-host` and its policy under
-`/etc/lcm/security-host`, inside the existing curated integrity/audit roots. Installation
-does not accept resulting AIDE differences or rebuild the baseline.
+`/etc/lcm/security-host`, inside the curated integrity/audit roots. Installation does not
+accept resulting AIDE differences or rebuild the baseline. The policy (version 2) pins the
+digests of the files the component renders and nothing else: the AIDE timer and
+configuration, the managed audit rules, the Nginx observation configuration and the hook
+of every granted service and category, plus the optional files the helper writes itself.
 
 ## Fixed operations
 
@@ -20,7 +25,7 @@ does not accept resulting AIDE differences or rebuild the baseline.
 |---|---|
 | `aide.check` | Start the existing single-instance systemd comparison; poll the operation for a fresh protected report. |
 | `aide.schedule` | Change one drop-in on the existing daily timer, preserve jitter, reload/restart and verify read-back. |
-| `nginx.configure` | Change numeric thresholds in the existing fixed global/hooks, validate, reload, verify; preserve dry-run. |
+| `nginx.configure` | Render the thresholds of `auth`, `api`, `upload` and `socket` into the observation configuration and every service hook, validate, reload, verify; dry-run stays on. |
 | `audit.profile` | Select only locally approved optional rules; required core remains intact; load and verify essential keys. |
 | `aide.profile` | Record a selected approved profile set for local baseline review; keep active scope unchanged. |
 | `baseline.request` | Record a baseline review request without altering or accepting the baseline. |
@@ -35,21 +40,22 @@ reviewed helper revision after the representative traffic review.
 
 ## Deployment
 
-Use the matching `install.py` and reviewed SHA-256 of `helper.py`. The installer pins
-the existing managed files and immutable Machine ID, validates dry-run and matching
-Card policies, validates sudoers, and installs the grant last. Root upgrades require a
-reviewed migration bundle; rerunning installation never silently resets drift.
+`lcm host apply` installs and upgrades the helper with the rest of the component and
+installs the sudoers rule (exactly `python3 -I` with the helper, no other arguments)
+last, after the installer verified that the helper answers a status request. An
+installation that needs review is reported and left unchanged; the installer's
+transactions make each change reversible ([install, adopt and upgrade](../../docs/security.md#install-adopt-and-upgrade)).
 
-The existing LCM unit must permit the narrow sudo entry point. Check actual systemd
-`NoNewPrivileges`, `RestrictSUIDSGID`, capability, and namespace restrictions before
-claiming the installed control is usable. Do not broadly relax a sandbox automatically.
-A release may instead expose host controls read-only until a reviewed service policy
-allows the fixed helper. Installation and actual unprivileged status invocation must
-both pass before marking deployment complete.
+The LCM unit must permit the narrow sudo entry point: it sets neither `NoNewPrivileges`
+nor `RestrictSUIDSGID`. Do not broadly relax a sandbox automatically. Verify actual
+unprivileged status invocation (`GET /api/v1/security/host`) after installation.
 
-Nginx shares the existing immutable Card policy's fixed hooks. The helper obtains
-Card's deployment lock before re-reading and changing them. The current dry-run
-policy includes those hooks instead of storing a second threshold copy.
+The helper and the installer hold `/run/lcm-security.lock` while they change the
+component, and `nginx.configure` also takes `/run/lcm-ingress.lock`, which the ingress
+component holds while it changes Nginx, before re-reading and changing the files.
+While `/run/lcm-security.pending` (root-owned, less than an hour old) exists, a root
+installer operation is waiting for or holding the lock, and the helper refuses every
+request with `busy`. Requests nested deeper than 8 levels are refused as `invalid`.
 
 ## Recovery and local approval
 
@@ -60,8 +66,10 @@ rechecks the digest under the global control lock and persists `running` before 
 side effect. A request ID cannot change intent. A later query reconciles AIDE using
 its actual unit and a report newer than the recorded execution start. An interrupted
 configuration change becomes `indeterminate`; it is never executed again implicitly.
-Snapshots and candidate hashes remain in the protected operation journal for local
-review. Verified command failures restore only unchanged candidate files. A failed
+The protected operation journal keeps one digest of the files before the change, of
+the candidate files and of the policy before it, never their content, so that it stays
+far below its read limit whatever the number of services; the content to restore stays
+in the helper's memory. Verified command failures restore only unchanged candidate files. A failed
 rollback remains indeterminate and requires administrator review.
 
 The journal holds at most 2,000 operations. When it is full, a preview first removes
@@ -100,6 +108,6 @@ review completion without changing any active scope itself.
 
 ## Validation
 
-Run the existing Go checks for `internal/securityhost` after applying migration0013,
-and `python3 -m unittest discover -s deploy/security-host -p 'test_*.py'`. Python tests
-use only temporary files and fake OS commands; they do not invoke live sudo/systemctl.
+`make security-check` runs the Python tests of the installer, collector and helper;
+`make check` includes it. They use only temporary files and fake OS commands and never
+invoke live sudo or systemctl.

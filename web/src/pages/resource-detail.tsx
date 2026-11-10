@@ -43,7 +43,7 @@ export function tabsFor(type: ResourceTypeName): Tab[] {
   return ["overview", ...TYPE_TABS[type], "checks", "timeline", "policies", "relations", "config"];
 }
 
-const SERVICE_ACTIONS: readonly ActionName[] = ["start", "stop", "restart", "backup", "restore", "run-job", "rollback", "deploy"];
+const SERVICE_ACTIONS: readonly ActionName[] = ["start", "stop", "restart", "backup", "restore", "run-job", "apply-route", "rollback", "deploy"];
 
 interface Pending {
   action: ActionName;

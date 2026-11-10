@@ -882,7 +882,7 @@ export interface paths {
         /**
          * Host components compared with this build
          * @description Compares the root-owned files that `lcm host apply` installs (`core`,
-         *     `machine-power`, `security-host`, `deploy`) with the versions embedded in the running
+         *     `machine-power`, `security`, `deploy`) with the versions embedded in the running
          *     binary. The server only reads them as its own unprivileged account: files it
          *     cannot read are `unknown`, and nothing is ever changed through the API. An
          *     administrator brings an `outdated` or `missing` component up to date with
@@ -2631,7 +2631,7 @@ export interface components {
         /** @enum {string} */
         Health: "unknown" | "healthy" | "degraded" | "down";
         /** @enum {string} */
-        ActionName: "deploy" | "rollback" | "start" | "stop" | "restart" | "backup" | "restore" | "run-job";
+        ActionName: "deploy" | "rollback" | "start" | "stop" | "restart" | "backup" | "restore" | "run-job" | "apply-route";
         ActionRequest: {
             /** @description Commit to deploy (7 to 64 hex digits); deploy only. The head of the configured branch when omitted. */
             version?: string;
@@ -3511,12 +3511,15 @@ export interface components {
                  *     `restart`, `status`; managed: `artifact`, `start`, `startArgs`, `runtime`,
                  *     `migrate`, `keepReleases`, and a required `source` with `build` and no
                  *     `install`) plus `source`, `backup` (`command` and `timeout`; managed:
-                 *     `sources`, `mode`, `timeout`, `keep`) and `jobs`. machine:
+                 *     `sources`, `mode`, `timeout`, `keep`), `jobs` and `route` (any adapter:
+                 *     how the host's nginx site presents the service). machine:
                  *     `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
                  *     `thresholds`. router: `interval`, `staleAfter`, `thresholds`
                  *     (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).
                  */
                 config?: {
+                    route?: components["schemas"]["ServiceRoute"];
+                } & {
                     [key: string]: unknown;
                 };
                 checks?: components["schemas"]["Check"][];
@@ -3651,6 +3654,8 @@ export interface components {
             service?: {
                 deployedVersion: string;
                 lastDeployment: components["schemas"]["Deployment"] | null;
+                /** @description The outcome of sending the document's `route` section to the host; null for a service that has no route section and never had an outcome. */
+                route: components["schemas"]["ServiceRouteStatus"] | null;
             };
             /** @description Machines only. */
             machine?: {
@@ -3660,6 +3665,98 @@ export interface components {
             router?: {
                 status: components["schemas"]["RouterStatus"] | null;
             };
+        };
+        /**
+         * @description The `route` section of a service document: how the host's nginx site presents the
+         *     service. It carries no privileges; the prefix, port and static directory of the
+         *     route come from the host configuration (`services.<name>.route`). All paths are
+         *     relative to the route's prefix. Without a section the route proxies everything
+         *     below the prefix (or serves its static directory).
+         */
+        ServiceRoute: {
+            /** @description Locations below the prefix that go to the service's approved port. */
+            proxy?: components["schemas"]["ServiceRouteProxy"][];
+            static?: components["schemas"]["ServiceRouteStatic"];
+            redirects?: components["schemas"]["ServiceRouteRedirect"][];
+            headers?: components["schemas"]["ServiceRouteHeaders"];
+        };
+        ServiceRouteProxy: {
+            /** @description Relative path below the prefix; a prefix location ends with `/`. */
+            path: string;
+            /** @description Match the path alone instead of everything below it. */
+            exact?: boolean;
+            /** @description Absolute path on the service that the path maps to. */
+            upstream: string;
+            /** @description Largest request body, at most `64m` (`3m`, `512k`). */
+            bodyLimit?: string;
+            /** @description Rewrite the cookie path `/` of the service's responses to the prefix. */
+            cookiePath?: boolean;
+            /** @description Pass connection upgrades through and do not buffer. */
+            websocket?: boolean;
+            /** @description Read and write timeout, at most `1h` (`75s`, `5m`). */
+            timeout?: string;
+            /**
+             * @description Names the location for the security component's hooks; empty is `api`.
+             * @enum {string}
+             */
+            category?: "api" | "auth" | "upload" | "socket" | "health" | "static";
+        };
+        ServiceRouteStatic: {
+            /** @description Answer unknown paths with `index.html` instead of 404. */
+            spa?: boolean;
+            /** @description Page served with a 404, relative to the static directory. */
+            notFound?: string;
+            /** @description Directories whose files never change in place; cached for a year. */
+            immutable?: string[];
+            downloads?: {
+                path: string;
+                /** @description A media type from a fixed list. */
+                type: string;
+            }[];
+        };
+        ServiceRouteRedirect: {
+            /** @description Path below the prefix. */
+            from: string;
+            /** @description Path from the prefix's root; `/` is the prefix itself. */
+            to: string;
+            /**
+             * @description Default 301.
+             * @enum {integer}
+             */
+            code?: 301 | 302 | 307 | 308;
+        };
+        ServiceRouteHeaders: {
+            /** @description The Content-Security-Policy, in a restricted grammar the server validates. */
+            csp?: string;
+            /** @description Send it as Content-Security-Policy-Report-Only. */
+            cspReportOnly?: boolean;
+        };
+        ServiceRouteStatus: {
+            /** @description The document has a `route` section. */
+            configured: boolean;
+            /**
+             * @description Newest recorded outcome; empty when nothing was ever sent. `refused`: the host does not
+             *     grant what the route needs or refused the change; `failed`: the helper tried and put the site back;
+             *     `unknown`: the outcome could not be confirmed; `skipped`: the deploy helper or the ingress
+             *     component is not available. A refusal never rejects the document.
+             * @enum {string}
+             */
+            state: "" | "pending" | "applied" | "refused" | "failed" | "unknown" | "skipped";
+            /** @description The outcome concerns the route as the document says now. */
+            current: boolean;
+            /** @description The helper's message. */
+            message: string;
+            /** Format: date-time */
+            at: string | null;
+            operationId: string;
+            /** @description Digest of the nginx site the helper rendered. */
+            siteSha256: string;
+            changes: string[];
+            /**
+             * @description Stored route options of services that no longer fit `host.json` and were left out of the site
+             *     (those routes have their defaults until their options are sent again).
+             */
+            dropped: string[];
         };
         ResourcePhaseRequest: {
             phase: components["schemas"]["ResourcePhase"];
@@ -3872,7 +3969,7 @@ export interface components {
         };
         HostComponent: {
             /** @enum {string} */
-            name: "core" | "machine-power" | "security-host" | "deploy";
+            name: "core" | "machine-power" | "security" | "deploy" | "ingress";
             state: components["schemas"]["HostComponentState"];
             files: components["schemas"]["HostFile"][];
         };

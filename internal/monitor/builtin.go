@@ -5,6 +5,7 @@ func DefaultRegistry() *Registry {
 	r := NewRegistry()
 	Register(r, Spec[httpProps]{Type: "http", Description: "HTTP request; passes on an accepted status and optional body text", Build: buildHTTP})
 	Register(r, Spec[tcpProps]{Type: "tcp", Description: "TCP connect succeeds", Build: buildTCP})
+	Register(r, Spec[tlsProps]{Type: "tls", Description: "Served TLS certificate is trusted, matches the name and stays valid for minValidity", Build: buildTLS})
 	Register(r, Spec[systemdProps]{Type: "systemd", Description: "systemd unit is active", Build: buildSystemd})
 	Register(r, Spec[dockerProps]{Type: "docker", Description: "Docker container is running and healthy", Build: buildDocker})
 	Register(r, Spec[commandProps]{Type: "command", Description: "Command exits with the expected code (no shell)", Build: buildCommand})

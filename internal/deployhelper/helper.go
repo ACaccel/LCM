@@ -66,9 +66,16 @@ func budget(req Request) time.Duration {
 		return 3*(restoreWorkerSec*time.Second+buildRunMargin+systemctlTimeout) + 4*systemctlTimeout
 	case OpStart, OpStop, OpRestart, OpStatus:
 		return systemctlTimeout
+	case OpIngressApply:
+		// The ingress and legacy locks, nginx -t and a reload, the probes,
+		// and nginx -t and a reload after putting the previous site back.
+		return 2*ingressLockWait + 2*time.Minute + 2*systemctlTimeout + hostsetup.ProbePhase
 	}
 	return 0
 }
+
+// ingressLockWait bounds the wait for each ingress lock.
+const ingressLockWait = 30 * time.Second
 
 // commandEnv is added to the fixed environment of every command.
 var commandEnv = []string{"LC_ALL=C", "SYSTEMD_PAGER=cat", "SYSTEMD_COLORS=0", "SYSTEMD_LOG_COLOR=0"}
@@ -93,6 +100,13 @@ type Host struct {
 	Free func(p string) (bytes, inodes uint64, err error)
 	// Limits bound builds.
 	Limits Limits
+	// IngressLock takes the ingress lock and, while it exists, the legacy
+	// lock named; Probe, ProbeAttempts and ProbeWait check the routes after
+	// a reload.
+	IngressLock   func(legacy string) (func(), error)
+	Probe         func(ctx context.Context, p hostsetup.Probe) (int, error)
+	ProbeAttempts int
+	ProbeWait     time.Duration
 }
 
 // Helper serves deploy helper requests.
@@ -130,6 +144,8 @@ func (h *Helper) Handle(ctx context.Context, raw []byte) Response {
 	switch {
 	case req.Op == OpQuery:
 		return h.query(req)
+	case req.Op == OpIngressStatus:
+		return h.ingressStatus(req)
 	case !req.Op.Changes():
 		return h.read(ctx, req)
 	}
@@ -159,6 +175,21 @@ func (h *Helper) grant(req Request) (hostsetup.Config, hostsetup.ServiceGrant, *
 		resp := refuse(reply(req), CodeRefused, "%s is not in the services of %s; an administrator adds it with sudo bin/lcm host allow", req.Service, hostsetup.ConfigPath)
 		return cfg, g, &resp
 	}
+	if req.Op.Ingress() {
+		switch {
+		case cfg.Components.Ingress == nil:
+			resp := refuse(reply(req), CodeDisabled, "components.ingress is not configured in %s", hostsetup.ConfigPath)
+			return cfg, g, &resp
+		case g.Route == nil:
+			resp := refuse(reply(req), CodeRefused, "services.%s has no route in %s; an administrator grants one with sudo bin/lcm host allow %s --route PREFIX", req.Service, hostsetup.ConfigPath, req.Service)
+			return cfg, g, &resp
+		}
+		return cfg, g, nil
+	}
+	if g.External {
+		resp := refuse(reply(req), CodeRefused, "services.%s is external in %s: LCM only publishes its route and does not deploy, run or back it up", req.Service, hostsetup.ConfigPath)
+		return cfg, g, &resp
+	}
 	if req.Op.Changes() && !cfg.Components.Deploy {
 		resp := refuse(reply(req), CodeRefused, "components.deploy is false in %s", hostsetup.ConfigPath)
 		return cfg, g, &resp
@@ -185,6 +216,10 @@ func (h *Helper) read(ctx context.Context, req Request) Response {
 // restarted; install, activate and the unit actions share the service's.
 // Service names contain no ".".
 func lockName(service string, op Op) string {
+	if op.Ingress() {
+		// One site for every service; no service name starts with "lcm".
+		return "lcm-ingress"
+	}
 	if op == OpBuild {
 		return service + ".build"
 	}
@@ -211,8 +246,11 @@ func (h *Helper) change(ctx context.Context, req Request) Response {
 	unlock, err := h.Ledger.Lock(lockName(req.Service, req.Op))
 	if errors.Is(err, ErrBusy) {
 		what := "another operation"
-		if req.Op == OpBuild {
+		switch {
+		case req.Op == OpBuild:
 			what = "another build"
+		case req.Op.Ingress():
+			return refuse(reply(req), CodeBusy, "another change of the nginx site is running")
 		}
 		return refuse(reply(req), CodeBusy, "%s of %s is running", what, req.Service)
 	}
@@ -297,6 +335,8 @@ func (h *Helper) perform(ctx context.Context, req Request, cfg hostsetup.Config,
 		return h.restore(ctx, req, cfg, g)
 	case OpPrune:
 		return h.prune(ctx, req, cfg, g)
+	case OpIngressApply:
+		return h.ingressApply(ctx, req, cfg)
 	}
 	return h.unitAction(ctx, req)
 }

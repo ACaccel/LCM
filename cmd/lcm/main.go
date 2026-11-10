@@ -33,8 +33,11 @@ Commands:
   host upgrade [--check]      Upgrade a schema-changing build with backup and rollback (root)
   host allow <service> --port N [--runtime R] [--input NAME=PATH] [--check]
                               Add a service to the deploy allowlist and create
-                              its account and directories (root)
+                              its account and directories (root); --route P
+                              [--static DIR] [--external] publish it through ingress
   host status                 Compare installed host files with this build
+  host cert issue             Obtain the ingress domain's first certificate (root)
+  host ingress revert         Remove the ingress site, enable the adopted one (root)
 
 Commands that talk to a running server (see the README):
   apply -f <file|dir> [--dry-run] [--force]   Apply Resource, Policy and Module documents

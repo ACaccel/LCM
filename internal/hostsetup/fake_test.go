@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -391,7 +394,105 @@ type fakeRunner struct {
 	visudoHook                                      func() error
 	versionOutput, installedVersion, systemdVersion string
 	passwordInput, goVersion, analyzeStderr         string
-	installPy                                       []string
+
+	// nginx: nginxTest fails "nginx -t" when it returns an error;
+	// reloads counts reloads, failReload fails them and certbot records
+	// the arguments of the last certbot run.
+	nginxTest  func() error
+	reloads    int
+	failReload bool
+	certbot    []string
+
+	sec fakeSecurity
+	// tokens are the names of the created API tokens, ID i+1 at i.
+	tokens  []string
+	revoked map[int64]bool
+}
+
+// fakeSecurity stands for deploy/security/install.py: it records what it
+// receives and installs or removes the component's files.
+type fakeSecurity struct {
+	actions []string
+	inputs  []securityInput
+	// manual is what plan and apply report as needing the administrator.
+	manual []string
+	// replies overrides the reply of an action.
+	replies   map[string]securityReply
+	failApply bool
+}
+
+const testTransaction = "20261110T000000Z-0000abcd"
+
+func (r *fakeRunner) securityInstaller(c Command) ([]byte, error) {
+	a := c.Args
+	if len(a) < 3 || a[0] != "-I" || !strings.HasPrefix(a[1], "/tmp/lcm-security-") || path.Base(a[1]) != "install.py" {
+		return nil, fmt.Errorf("fake installer: unexpected arguments %v", a)
+	}
+	for _, name := range securityAssets {
+		n := r.fs.get(path.Dir(a[1]) + "/" + name)
+		if n == nil || n.uid != 0 || n.mode.Perm() != 0o600 || string(n.data) != string(asset("security/"+name)) {
+			return nil, fmt.Errorf("fake installer: %s is not staged root-only", name)
+		}
+	}
+	var in securityInput
+	if err := json.NewDecoder(c.Stdin).Decode(&in); err != nil {
+		return nil, err
+	}
+	action := a[2]
+	r.sec.actions = append(r.sec.actions, strings.Join(a[2:], " "))
+	r.sec.inputs = append(r.sec.inputs, in)
+	reply := securityReply{OK: true}
+	if canned, ok := r.sec.replies[action]; ok {
+		reply = canned
+		reply.OK = true
+	} else {
+		installed := r.fs.get(SecurityRuntime) != nil
+		hasToken := r.fs.get("/etc/workstation-security/ingest-token") != nil
+		switch action {
+		case "plan", "apply":
+			if len(r.sec.manual) > 0 {
+				reply.Manual = r.sec.manual
+				break
+			}
+			if !installed {
+				reply.Changes = []string{"install " + SecurityRuntime, "write a new ingest API token to /etc/workstation-security/ingest-token (root 0600)"}
+				reply.TokenMissing = !hasToken && in.Token == ""
+			}
+			if action == "plan" || installed {
+				break
+			}
+			if r.sec.failApply {
+				out, _ := json.Marshal(securityReply{Error: "nginx -t failed; the changes of transaction " + testTransaction + " were undone"})
+				return out, exit(1)
+			}
+			if reply.TokenMissing {
+				out, _ := json.Marshal(securityReply{Error: "no ingest token was supplied"})
+				return out, exit(1)
+			}
+			for _, f := range securityFiles {
+				if f.path != SecuritySudoers {
+					r.fs.file(f.path, string(asset(f.asset)), f.perm, 0, 0)
+				}
+			}
+			r.fs.file(SecurityCollector, "[Unit]\n", 0o644, 0, 0)
+			r.fs.file("/etc/workstation-security/ingest-token", in.Token+"\n", 0o600, 0, 0)
+			reply.TokenMissing = false
+			reply.Transaction = testTransaction
+		case "remove-plan", "remove":
+			if installed {
+				reply.Changes = []string{"remove " + SecurityRuntime}
+				reply.Notes = []string{"kept: the AIDE baseline"}
+			}
+			if action == "remove" {
+				for _, f := range append(slices.Clone(securityFiles), rootFile{path: SecurityCollector}) {
+					if f.path != SecuritySudoers {
+						r.fs.remove(f.path)
+					}
+				}
+			}
+		}
+	}
+	return json.Marshal(reply)
 }
 
 const (
@@ -555,7 +656,28 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		return []byte("go version go1.26.0 linux/amd64\n"), nil
 	case strings.HasSuffix(c.Path, "/bin/node"):
 		return []byte("v24.0.0\n"), nil
+	case c.Path == Binary && arg(0) == "token" && arg(1) == "list":
+		out := "ID  NAME  SCOPE  CREATED  LAST USED  STATUS\n"
+		for i, name := range r.tokens {
+			status := "active"
+			if r.revoked[int64(i+1)] {
+				status = "revoked"
+			}
+			out += fmt.Sprintf("%d  %s  ingest  2026-11-10 00:00:00  -  %s\n", i+1, name, status)
+		}
+		return []byte(out), nil
+	case c.Path == Binary && arg(0) == "token" && arg(1) == "revoke":
+		id, err := strconv.ParseInt(a[len(a)-1], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		if r.revoked == nil {
+			r.revoked = map[int64]bool{}
+		}
+		r.revoked[id] = true
+		return nil, nil
 	case c.Path == Binary && arg(0) == "token":
+		r.tokens = append(r.tokens, arg(3))
 		return []byte(testToken + "\n"), nil
 	case c.Path == Binary && arg(0) == "admin":
 		data, _ := io.ReadAll(c.Stdin)
@@ -567,12 +689,31 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		r.fs.dir(path.Dir(file), 0o700, c.As.UID, c.As.GID)
 		r.fs.file(file, string(data), 0o600, c.As.UID, c.As.GID)
 		return nil, nil
+	case c.Path == Nginx:
+		if r.nginxTest != nil {
+			if err := r.nginxTest(); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	case c.Path == Systemctl && arg(0) == "reload" && arg(1) == "nginx.service":
+		r.reloads++
+		if r.failReload {
+			return nil, &ExitError{Command: "systemctl reload nginx.service", Code: 1, Stderr: "Job for nginx.service failed"}
+		}
+		return nil, nil
+	case c.Path == "certbot":
+		r.certbot = append([]string{}, a...)
+		for i := 0; i+1 < len(a); i++ {
+			if a[i] == "-d" {
+				live := "/etc/letsencrypt/live/" + a[i+1]
+				r.fs.link(live+"/fullchain.pem", "../../archive/"+a[i+1]+"/fullchain1.pem", 0, 0)
+				r.fs.link(live+"/privkey.pem", "../../archive/"+a[i+1]+"/privkey1.pem", 0, 0)
+			}
+		}
+		return nil, nil
 	case c.Path == python3:
-		r.installPy = append([]string{}, a...)
-		r.fs.file(SecurityHelper, string(asset("security-host/helper.py")), 0o644, 0, 0)
-		r.fs.file(SecurityPolicy, fmt.Sprintf(`{"machineId":%q}`, arg(3)), 0o600, 0, 0)
-		r.fs.file(SecuritySudoers, "lcm ALL=(root) ...\n", 0o440, 0, 0)
-		return []byte(`{"installed":true}` + "\n"), nil
+		return r.securityInstaller(c)
 	}
 	return nil, fmt.Errorf("fake runner: unexpected command %s", line)
 }
@@ -620,6 +761,13 @@ type testHost struct {
 	clock *clock.Fake
 	host  Host
 	cfg   Config
+
+	mu           sync.Mutex
+	probes       []string
+	probeStatus  int
+	probeErr     error
+	locked       bool
+	lockedLegacy string
 }
 
 const (
@@ -655,10 +803,32 @@ func newTestHost(t *testing.T) *testHost {
 		"nobody": {Name: "nobody", UID: 65534, GID: 65534, Home: "/nonexistent"},
 	}}
 	clk := clock.NewFake(time.Unix(1_800_000_000, 0))
-	th := &testHost{t: t, fs: m, r: r, clock: clk}
+	th := &testHost{t: t, fs: m, r: r, clock: clk, probeStatus: 204}
 	th.host = Host{
 		FS: m, Runner: r, Clock: clk, Privileged: true, Executable: testExe,
 		OpenExecutable: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(exeData)), nil },
+		Probe: func(_ context.Context, p Probe) (int, error) {
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			th.probes = append(th.probes, p.Address+" "+p.String())
+			r.mu.Lock()
+			r.calls = append(r.calls, "probe "+p.String())
+			r.mu.Unlock()
+			return th.probeStatus, th.probeErr
+		},
+		LockIngress: func(legacy string) (func(), error) {
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if th.locked {
+				return nil, ErrIngressBusy
+			}
+			th.locked, th.lockedLegacy = true, legacy
+			return func() {
+				th.mu.Lock()
+				defer th.mu.Unlock()
+				th.locked = false
+			}, nil
+		},
 		Health: func(context.Context) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()

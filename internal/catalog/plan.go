@@ -73,6 +73,11 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 			return Plan{}, fmt.Errorf("%w: %q", ErrUnknownJob, opts.Job)
 		}
 		p.add(message.New("step.job", fmt.Sprintf("run job %s: %s", opts.Job, job.Command), "job", opts.Job, "command", job.Command))
+	case ActionApplyRoute:
+		if cfg.Route == nil {
+			return Plan{}, fmt.Errorf("%w: the service document has no route section", ErrPrecondition)
+		}
+		p.add(applyRouteStep(name))
 	case ActionDeploy, ActionRollback:
 		steps, err := m.deploySteps(ctx, rec, action, opts.Version)
 		if err != nil {

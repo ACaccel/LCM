@@ -15,13 +15,14 @@ A service's *Policy* tab lists the deployed policies that act on it or listen to
 
 ## Templates
 
-Four built-in templates ([`examples/templates/`](../examples/templates), embedded in the binary) cover the common loops. Pick one from *套用範本* on a service's Policy tab or *從範本建立* on the policy list, or use the API. The target service is the parameter `resource`.
+Five built-in templates ([`examples/templates/`](../examples/templates), embedded in the binary) cover the common loops. Pick one from *套用範本* on a service's Policy tab or *從範本建立* on the policy list, or use the API. The target service is the parameter `resource`.
 
 | Template | What it does |
 |---|---|
-| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback`; optional: one message per deployment, on Discord or a konata relay, shows the stages as they finish |
+| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback` (not after a deploy that fails with `deploy.needsUpgrade`, see [services](services.md#source); that is announced instead); optional: one message per deployment, on Discord or a konata relay, shows the stages as they finish |
 | `scheduled-backup` | Cron (default `Asia/Taipei`, runs once after downtime) -> `lifecycle.backup` with retry and backoff -> optional wait for a heartbeat check -> notify on failure |
 | `post-deploy-verify` | After any deployment of the service, wait for health and roll back on timeout |
+| `cert-expiry` | A `tls` check of the resource turns `down` (certificate close to expiry, failing verification or unreachable) -> notify; notifications are off until `notifySecret` is set, and the check's `minValidity` sets the lead time |
 | `restart-on-down` | Health turns `down` -> restart -> wait for recovery -> notify. It has no rate limit: a service that keeps failing is restarted every time |
 
 ```sh

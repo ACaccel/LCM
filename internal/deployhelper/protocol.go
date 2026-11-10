@@ -42,6 +42,8 @@
 //	restore   service, backupId, manifestSha256 (optional), restoreUsers (optional)
 //	backups   service
 //	prune     service, keep
+//	ingress.apply   service, route (optional)
+//	ingress.status  (no fields besides version, op, operationId)
 //
 // Field formats: service as in host.json; commit is a full lower-case
 // SHA-1 or SHA-256 commit ID; command is a shell script (at most 16 KiB);
@@ -58,7 +60,8 @@
 // A reply carries "version", "op" and "operationId" of the request, and:
 //
 //   - "state" for the operations that change something (build, install,
-//     activate, start, stop, restart) and for query: "succeeded", "failed",
+//     activate, start, stop, restart, backup, restore, prune, ingress.apply)
+//     and for query: "succeeded", "failed",
 //     "running" (query only: the operation is still in progress) or
 //     "interrupted" (query only: the helper stopped before it finished; what
 //     it did is unknown and must be inspected on the host).
@@ -66,8 +69,10 @@
 //     "refused" (invalid request, or not allowed by host.json or the host's
 //     state), "not_found" (unknown build, release, unit or operation),
 //     "conflict" (the operationId was used for another request), "busy"
-//     (another operation of the service is running; nothing was done) or
-//     "failed" (the operation started and failed). message is English text
+//     (another operation of the service is running; nothing was done),
+//     "disabled" (host.json does not enable the component of the operation,
+//     components.ingress for ingress.*) or "failed" (the operation started
+//     and failed). message is English text
 //     with control characters replaced.
 //   - "log": the sanitized tail (at most MaxLog bytes) of the output of the
 //     build, migration or systemctl command.
@@ -80,7 +85,10 @@
 //     skipped, started, leftStopped}, "backups" [{backupId, kind, createdAt,
 //     size, manifestSha256, mode, releaseId, sources, skipped, restoredFrom,
 //     problem}] (with "backupsTruncated" when the list is cut) or "prune"
-//     {removed, kept}.
+//     {removed, kept}, "ingressApply" {sha256, changes, dropped} or "ingress"
+//     (ingress.status) {rendered, renderError, installed, enabled, tls,
+//     adopted, reverted, last {at, outcome, message, sha256}, dropped,
+//     routes [{service, prefix, options}]}.
 //
 // A release manifest records the service, releaseId, buildId, commit,
 // build runtimes, artifact, the SHA-256 of the installed tree (over each
@@ -103,7 +111,8 @@
 // learns the outcome instead of guessing. Records of finished operations
 // are removed 90 days after they finished, and the oldest finished ones
 // beyond 10,000 records; the ledger is listed for that at most once an
-// hour. status, releases and query are not recorded.
+// hour. status, releases, backups, query and ingress.status are not
+// recorded.
 //
 // locks/<service>.build is locked (flock) for the whole of a build of that
 // service, and locks/<service> for the whole of its other changing
@@ -237,6 +246,33 @@
 // MaxResponse is cut by omitting the sources of the entries, then the
 // oldest entries, and the reply sets "backupsTruncated", as it does when
 // more than 200 sets exist.
+//
+// # Ingress
+//
+// ingress.apply and ingress.status need "components.ingress" in host.json;
+// the deploy operations above need "components.deploy", and every one of
+// them is refused for a service granted with "external": true, which LCM
+// only publishes. The ingress operations share the nginx site of the
+// domain (internal/hostsetup, ingress.go): ingress.apply takes the route
+// presentation options of one service (internal/ingress.Options; absent
+// means the service has none), refuses them unless the service's grant has
+// a route and they pass ingress.Options.Validate, renders the whole site
+// with them and with the accepted options of every other service (another
+// service's options that no longer fit its grant are left out and named in
+// "dropped"; the requested ones must fit), and applies it: under
+// /run/lcm-ingress.lock (and the configured legacy lock while it exists,
+// waiting at most 30 seconds for each), with "nginx -t" of the complete
+// configuration, a reload, a probe of the location nginx answers itself on
+// every listen address, and a full revert on any failure. The accepted
+// options are kept, root-only, in /var/lib/lcm-ingress/routes/<service>.json,
+// written before the site is applied and put back when it fails. It
+// refuses while the site was never installed, was reverted or is not
+// enabled ("lcm host apply" installs it and adopts the hand-made site, so
+// that an administrator reviews the cutover), and while the adopted site is
+// enabled again; it checks this before and again after taking the locks. Its ledger lock is "lcm-ingress", one
+// for all services. ingress.status reports the digest of the site the
+// configuration renders, the installed one and the last result; it is not
+// recorded.
 package deployhelper
 
 import (
@@ -254,6 +290,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ACaccel/lcm/internal/hostsetup"
+	"github.com/ACaccel/lcm/internal/ingress"
 )
 
 // Protocol limits.
@@ -293,13 +330,19 @@ const (
 	OpRestore Op = "restore"
 	OpBackups Op = "backups"
 	OpPrune   Op = "prune"
+	// Ingress.
+	OpIngressApply  Op = "ingress.apply"
+	OpIngressStatus Op = "ingress.status"
 )
+
+// Ingress reports whether op belongs to the ingress component.
+func (op Op) Ingress() bool { return op == OpIngressApply || op == OpIngressStatus }
 
 // Changes reports whether op changes the host and is recorded in the
 // ledger.
 func (op Op) Changes() bool {
 	switch op {
-	case OpBuild, OpInstall, OpActivate, OpStart, OpStop, OpRestart, OpBackup, OpRestore, OpPrune:
+	case OpBuild, OpInstall, OpActivate, OpStart, OpStop, OpRestart, OpBackup, OpRestore, OpPrune, OpIngressApply:
 		return true
 	}
 	return false
@@ -315,6 +358,9 @@ const (
 	CodeConflict Code = "conflict"
 	CodeFailed   Code = "failed"
 	CodeBusy     Code = "busy"
+	// CodeDisabled: the host configuration does not enable the component
+	// the operation belongs to (components.ingress for ingress.*).
+	CodeDisabled Code = "disabled"
 )
 
 // State is the state of a recorded operation.
@@ -360,6 +406,8 @@ type Request struct {
 	RestoreUsers bool `json:"restoreUsers,omitempty"`
 	// prune
 	Keep *Keep `json:"keep,omitempty"`
+	// ingress.apply
+	Route *ingress.Options `json:"route,omitempty"`
 }
 
 // Response is one helper reply.
@@ -383,8 +431,20 @@ type Response struct {
 	// BackupsTruncated reports that backups is incomplete: entries beyond the
 	// newest MaxListed were left out, or entries were cut (their sources
 	// omitted, then the oldest dropped) to keep the reply within MaxResponse.
-	BackupsTruncated bool         `json:"backupsTruncated,omitempty"`
-	Prune            *PruneResult `json:"prune,omitempty"`
+	BackupsTruncated bool                     `json:"backupsTruncated,omitempty"`
+	Prune            *PruneResult             `json:"prune,omitempty"`
+	IngressApply     *IngressApplyResult      `json:"ingressApply,omitempty"`
+	Ingress          *hostsetup.IngressStatus `json:"ingress,omitempty"`
+}
+
+// IngressApplyResult is the result of ingress.apply: the digest of the
+// site and what changed (none when it was up to date).
+type IngressApplyResult struct {
+	SHA256  string   `json:"sha256"`
+	Changes []string `json:"changes"`
+	// Dropped describes other services' stored options that no longer fit
+	// and were left out (their routes have their defaults).
+	Dropped []string `json:"dropped,omitempty"`
 }
 
 // BuildResult is the result of build.
@@ -592,6 +652,7 @@ func (r Request) fields() []string {
 	add(r.ManifestSHA256 != "", "manifestSha256")
 	add(r.RestoreUsers, "restoreUsers")
 	add(r.Keep != nil, "keep")
+	add(r.Route != nil, "route")
 	return out
 }
 
@@ -610,6 +671,9 @@ var opFields = map[Op][]string{
 	OpRestore:  {"service", "backupId", "manifestSha256", "restoreUsers"},
 	OpBackups:  {"service"},
 	OpPrune:    {"service", "keep"},
+	// ingress
+	OpIngressApply:  {"service", "route"},
+	OpIngressStatus: {},
 }
 
 // Validate checks a request's form; host.json decides what it may name.
@@ -629,7 +693,7 @@ func (r Request) Validate() error {
 			return fmt.Errorf("%s does not take %s", r.Op, f)
 		}
 	}
-	if r.Op == OpQuery {
+	if r.Op == OpQuery || r.Op == OpIngressStatus {
 		return nil
 	}
 	if err := hostsetup.ValidServiceName(r.Service); err != nil {
@@ -655,6 +719,12 @@ func (r Request) Validate() error {
 		}
 		if r.ManifestSHA256 != "" && !sha256Pattern.MatchString(r.ManifestSHA256) {
 			return errors.New("manifestSha256 must be a lower-case hex SHA-256")
+		}
+	case OpIngressApply:
+		if r.Route != nil {
+			if err := ingress.Join(r.Route.Validate()); err != nil {
+				return fmt.Errorf("route: %w", err)
+			}
 		}
 	case OpPrune:
 		k := r.Keep
@@ -817,6 +887,7 @@ var requestKeys = map[string]bool{
 	"timeoutSec": true, "runtimes": true, "buildId": true, "artifact": true, "releaseId": true,
 	"start": true, "runtime": true, "migrate": true, "keepReleases": true,
 	"sources": true, "mode": true, "backupId": true, "manifestSha256": true, "restoreUsers": true, "keep": true,
+	"route": true,
 }
 
 // DecodeRequest decodes and validates one request.
@@ -847,7 +918,7 @@ func DecodeResponse(raw []byte) (Response, error) {
 		return Response{}, fmt.Errorf("unsupported protocol version %d", r.Version)
 	}
 	switch r.Code {
-	case "", CodeRefused, CodeNotFound, CodeConflict, CodeFailed, CodeBusy:
+	case "", CodeRefused, CodeNotFound, CodeConflict, CodeFailed, CodeBusy, CodeDisabled:
 	default:
 		return Response{}, fmt.Errorf("unknown code %q", hostsetup.Printable(string(r.Code), 32))
 	}
