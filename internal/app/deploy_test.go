@@ -11,7 +11,10 @@ import (
 	"syscall"
 	"testing"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/ACaccel/lcm/deploy"
+	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/config"
 	"github.com/ACaccel/lcm/internal/configsync"
 	"github.com/ACaccel/lcm/internal/templates"
@@ -155,8 +158,8 @@ func TestDeployDocumentsApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := rec.Config.Source
-	if src == nil || src.Install != "sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm" {
-		t.Errorf("install command = %+v, want exactly the argv the sudoers rule allows", src)
+	if src == nil || !strings.HasSuffix(src.Install, "\n"+selfInstallCommand+"\n") {
+		t.Errorf("install command = %+v, want it to end with exactly the argv the sudoers rule allows", src)
 	}
 	if rule := string(readDeploy(t, "sudoers")); !strings.Contains(rule, "NOPASSWD: /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm\n") {
 		t.Errorf("deploy/sudoers does not allow the service's install command:\n%s", rule)
@@ -171,6 +174,85 @@ func TestDeployDocumentsApply(t *testing.T) {
 	}
 	if work, err := (config.Config{DataDir: "/var/lib/lcm"}).WorkPath(); err != nil || filepath.Join(work, "lcm") != "/var/lib/lcm/work/lcm" {
 		t.Errorf("work path = %q %v", work, err)
+	}
+}
+
+// selfInstallCommand is the argv the sudoers rule allows; the install script
+// of the self-deploy service ends with it.
+const selfInstallCommand = "exec sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm"
+
+// installScript returns the install script of deploy/lcm-self.service.yaml
+// with its host paths moved under root and self-install replaced by a stub
+// that reports that it ran.
+func installScript(t *testing.T, root string) string {
+	t.Helper()
+	var doc struct {
+		Spec struct {
+			Config struct {
+				Source struct {
+					Install string `yaml:"install"`
+				} `yaml:"source"`
+			} `yaml:"config"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(readDeploy(t, "lcm-self.service.yaml"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	script := doc.Spec.Config.Source.Install
+	for _, c := range []struct{ from, to string }{
+		{selfInstallCommand, "echo self-install ran"},
+		{"/usr/local/bin/lcm", filepath.Join(root, "installed")},
+		{"/var/lib/lcm/work/lcm/bin/lcm", filepath.Join(root, "candidate")},
+	} {
+		if !strings.Contains(script, c.from) {
+			t.Fatalf("the install script no longer contains %q:\n%s", c.from, script)
+		}
+		script = strings.ReplaceAll(script, c.from, c.to)
+	}
+	return script
+}
+
+// TestSelfDeployInstallStopsOnASchemaChange runs the install script of the
+// self-deploy service: a candidate with another storage schema than the
+// installed binary stops with the status that deployments report as
+// deploy.needsUpgrade, before self-install is reached.
+func TestSelfDeployInstallStopsOnASchemaChange(t *testing.T) {
+	for _, bin := range []string{"sh", "timeout"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	schema := func(n string) string { return "#!/bin/sh\n[ \"$1\" = storage-schema ] && echo " + n + "\n" }
+	for _, tc := range []struct {
+		name               string
+		installed, cand    string
+		code               int
+		wantOut, wantNoOut string
+	}{
+		{"same schema", schema("16"), schema("16"), 0, "self-install ran", "needs the operator"},
+		{"changed schema", schema("16"), schema("17"), catalog.ExitNeedsUpgrade, "storage schema 16 -> 17 needs the operator: make build && sudo bin/lcm host upgrade", "self-install ran"},
+		{"candidate without the command", schema("16"), "#!/bin/sh\nexit 2\n", catalog.ExitNeedsUpgrade, "storage schema 16 -> unknown needs the operator", "self-install ran"},
+		{"installed schema unknown", "#!/bin/sh\nexit 2\n", schema("17"), 0, "self-install ran", "needs the operator"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, body := range map[string]string{"installed": tc.installed, "candidate": tc.cand} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable test fixture
+					t.Fatal(err)
+				}
+			}
+			out, err := exec.Command("sh", "-c", installScript(t, root)).CombinedOutput() //nolint:gosec // the script under test
+			code := 0
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				code = ee.ExitCode()
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if code != tc.code || !strings.Contains(string(out), tc.wantOut) || strings.Contains(string(out), tc.wantNoOut) {
+				t.Fatalf("exit %d, output %q; want exit %d with %q and without %q", code, out, tc.code, tc.wantOut, tc.wantNoOut)
+			}
+		})
 	}
 }
 

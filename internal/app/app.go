@@ -80,6 +80,7 @@ type options struct {
 	git             trigger.GitRunner
 	connectionTrust connection.TrustCheck
 	hostStatus      api.HostStatusFunc
+	commit          string
 
 	observers []engine.Observer
 }
@@ -131,6 +132,10 @@ func WithGitRunner(g trigger.GitRunner) Option { return func(o *options) { o.git
 func WithConnectionsTrust(c connection.TrustCheck) Option {
 	return func(o *options) { o.connectionTrust = c }
 }
+
+// WithCommit replaces the commit that the process reports as its own build,
+// which the marker of "lcm host upgrade" is compared with.
+func WithCommit(c string) Option { return func(o *options) { o.commit = c } }
 
 // WithHostStatus replaces the read of the root-owned host files behind the
 // host components endpoint, for tests that must not depend on the machine
@@ -525,6 +530,11 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	} else if len(changes) > 0 {
 		log.Info("reconciled service states", "changes", len(changes))
 	}
+	commit := o.commit
+	if commit == "" {
+		commit = buildinfo.Get().Commit
+	}
+	reconcileHostUpgrade(ctx, log, a.Catalog, cfg.DataDir, commit)
 	a.automationReady = make(chan struct{})
 	if cfg.AutomationOff {
 		// Neither interrupted runs nor deployed policies are restored, and

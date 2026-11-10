@@ -1,7 +1,9 @@
 # Scenario 1: deploy every new commit of a branch once CI is green.
 #
 # trigger.git -> (CI check) -> deploy window -> lifecycle.deploy ->
-# wait for health -> notify; an unhealthy or failed deploy rolls back.
+# wait for health -> notify; an unhealthy or failed deploy rolls back, except
+# a deploy that reports deploy.needsUpgrade (the candidate needs an action by
+# the operator and nothing was changed): that is announced and not rolled back.
 # One message per deployment, on Discord (notifySecret) or a BotFleet konata
 # relay (notifyTarget: konata, notifyUrl, notifyTokenSecret), is created at
 # the start and edited as the stages finish.
@@ -111,7 +113,13 @@ spec:
       props:
         resource: "{{ params.resource }}"
         version: "{{ trigger.commit }}"
-      next: {out: [verifying], error: [rolling_back]}
+      next: {out: [verifying], error: [deploy_failed]}
+    # A rollback redeploys the version that already runs, so it is pointless
+    # when the deploy refused to change anything.
+    - id: deploy_failed
+      type: flow.if
+      props: {condition: 'nodes.deploy.message contains "deploy.needsUpgrade"'}
+      next: {true: [needs_upgrade], false: [rolling_back]}
     - id: verifying
       type: notify
       props:
@@ -258,4 +266,22 @@ spec:
           - {label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}"}
           - {label: Deploy window, state: failed}
           - {label: Build and install, state: skipped}
+          - {label: Health check, state: skipped}
+    - id: needs_upgrade
+      type: notify
+      props:
+        target: "{{ params.notifyTarget }}"
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
+        stateKey: deploy-message
+        title: "{{ params.resource }} {{ trigger.commit[:7] }}"
+        message: "{{ trigger.commit[:7] }} needs an operator action and was not installed; the running version is unchanged. {{ nodes.deploy.message }}"
+        status: failed
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - {label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}"}
+          - {label: Deploy window, state: done}
+          - {label: Build and install, state: failed}
           - {label: Health check, state: skipped}

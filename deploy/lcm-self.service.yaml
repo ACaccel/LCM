@@ -37,7 +37,20 @@ spec:
         npm_config_cache=/var/lib/lcm/cache/npm npm_config_audit=false
         npm_config_fund=false npm_config_update_notifier=false
         make build
-      install: sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm
+      # A candidate with another storage schema than the installed binary
+      # (the running server's) is refused before anything changes: exit
+      # status 75 is catalog.ExitNeedsUpgrade, which the deployment records
+      # as deploy.needsUpgrade, leaves the service running and makes the
+      # auto-deploy policy skip its rollback. self-install checks the same
+      # again as root.
+      install: |
+        running=$(timeout 10 /usr/local/bin/lcm storage-schema 2>/dev/null) || running=
+        next=$(timeout 10 /var/lib/lcm/work/lcm/bin/lcm storage-schema 2>/dev/null) || next=
+        if [ -n "$running" ] && [ "$running" != "$next" ]; then
+          echo "storage schema ${running} -> ${next:-unknown} needs the operator: make build && sudo bin/lcm host upgrade" >&2
+          exit 75
+        fi
+        exec sudo -n /usr/local/libexec/lcm/self-install /var/lib/lcm/work/lcm/bin/lcm
       timeout: 20m
   checks:
     - name: api

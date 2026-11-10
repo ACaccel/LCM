@@ -19,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ACaccel/lcm/internal/upgrademarker"
 )
 
 // "lcm host upgrade" installs a build whose storage schema differs from the
@@ -41,6 +43,9 @@ const (
 	// if the command is killed.
 	UpgradeDropInDir = "/run/systemd/system/lcm.service.d"
 	UpgradeDropIn    = UpgradeDropInDir + "/zz-lcm-upgrade.conf"
+	// UpgradeMarker is what the server reads at its next start to record the
+	// upgrade in its catalog (internal/upgrademarker).
+	UpgradeMarker = DataDir + "/" + upgrademarker.File
 
 	selfInstallPending = "/run/lcm-self-install.pending"
 	selfInstallLock    = "/run/lcm-self-install.lock"
@@ -140,6 +145,8 @@ type upgrader struct {
 	stopRequested bool
 	installed     bool
 	dropIn        bool
+	// marker is set once the upgrade marker may exist.
+	marker bool
 	// unlock releases the self-install lock.
 	unlock func()
 }
@@ -200,6 +207,7 @@ func (u *upgrader) run(ctx context.Context) error {
 		{"backup", u.backup},
 		{"binary", u.installBinary},
 		{"validate", u.validate},
+		{"record", u.leaveMarker},
 		{"restart", u.restart},
 	}
 	for _, st := range steps {
@@ -1308,6 +1316,58 @@ func (u *upgrader) expectAutomation(ctx context.Context, off bool) error {
 	return nil
 }
 
+// leaveMarker tells the upgraded server what this command attests, so that
+// it records a deployment of the self-deploy service and the catalog agrees
+// with the installed binary. It runs after the migration was validated and
+// before the final restart, which is the first start that reads it; a
+// rollback removes it, and restores the database the server wrote it to.
+// The marker is bookkeeping: a failure to write it is reported and never
+// fails or rolls back an upgrade that worked.
+//
+// The data directory belongs to lcm, so the file is written the way every
+// file this command puts there is: a temporary file created exclusively,
+// owned and moded through its descriptor, then renamed over the name, which
+// replaces a link or file lcm planted instead of following it.
+func (u *upgrader) leaveMarker(_ context.Context, s *step) error {
+	what := "leave " + UpgradeMarker + " so that LCM records this upgrade in its catalog at its next start"
+	err := s.change(what, func() error {
+		fsys := u.h.FS
+		info, err := fsys.Lstat(DataDir)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.UID != u.a.lcm.UID {
+			return fmt.Errorf("%s is not a directory owned by %s", DataDir, u.a.lcm.Name)
+		}
+		data, err := upgrademarker.Encode(upgrademarker.Marker{
+			At:   u.h.Clock.Now(),
+			From: upgrademarker.Build{Version: u.old.version, Commit: u.old.commit, Schema: u.oldSchema},
+			To:   upgrademarker.Build{Version: u.cand.version, Commit: u.cand.commit, Schema: u.candSchema},
+		})
+		if err != nil {
+			return err
+		}
+		u.marker = true
+		return fsys.WriteFile(UpgradeMarker, bytes.NewReader(data), 0o600, u.a.lcm.UID, u.a.lcm.GID)
+	})
+	if err != nil {
+		s.line("warning: " + printable(err.Error(), 400))
+		s.line(fmt.Sprintf("the catalog keeps the previous deployment; after the upgrade run: lcm resource action lcm deploy --version %s", u.cand.commit))
+	}
+	return nil
+}
+
+// removeMarker deletes the marker of an upgrade that did not complete. The
+// restored database holds no record of it either.
+func (u *upgrader) removeMarker(s *step) {
+	if !u.marker {
+		return
+	}
+	if err := u.h.FS.Remove(UpgradeMarker); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		s.line("could not remove " + UpgradeMarker + ": " + printable(err.Error(), 300))
+	}
+}
+
 func (u *upgrader) restart(ctx context.Context, s *step) error {
 	what := fmt.Sprintf("restart %s with automation on and wait up to %s for version %s", UnitName, upgradeHealthWait, u.cand.version)
 	return s.change(what, func() error {
@@ -1340,6 +1400,7 @@ func (u *upgrader) rollback(ctx context.Context, cause error) error {
 			s.line("could not remove " + UpgradeDropIn + ": " + printable(err.Error(), 300))
 		}
 	}
+	u.removeMarker(s)
 	if u.installed {
 		if _, err := u.systemctl(ctx, "stop", UnitName); err != nil {
 			return fail(fmt.Errorf("stop %s: %w", UnitName, err))

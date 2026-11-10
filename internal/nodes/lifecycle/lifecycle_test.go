@@ -230,6 +230,7 @@ func TestErrorClassification(t *testing.T) {
 		{"busy", fmt.Errorf("lock: %w", catalog.ErrLockHeld), false},
 		{"action failed", errors.New("systemctl exploded"), false},
 		{"deploy failed", &catalog.StepError{Step: "build", Err: errors.New("exit 1")}, false},
+		{"needs upgrade", &catalog.StepError{Step: "install", Err: fmt.Errorf("%w: schema 16 -> 17", catalog.ErrNeedsUpgrade)}, true},
 		{"state forbids", &catalog.StateError{Resource: "web", Action: "restart", State: catalog.StateFailed}, true},
 		{"no such service", fmt.Errorf("%w: web", catalog.ErrNotFound), true},
 		{"precondition", catalog.ErrDirtyRepo, true},
