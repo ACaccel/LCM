@@ -48,6 +48,25 @@ func TestDeployConfig(t *testing.T) {
 		`"services":{"web":{"port":3200,"inputs":{"A":"/srv/a"}}}`:            "inputs: names must match",
 		`"backup":{"dir":"/var/lib/lcm/backups"}`:                             "backup.dir must not be under /var/lib/lcm",
 		`"backup":{"dir":"/srv/b","keep":1}`:                                  `unknown key "backup.keep"`,
+		`"backup":{"dir":"/"}`:                                                "backup.dir must be an absolute",
+		`"backup":{"dir":"/var"}`:                                             "not the system directory /var",
+		`"backup":{"dir":"/var/lib"}`:                                         "not the system directory /var/lib",
+		`"backup":{"dir":"/opt"}`:                                             "not the system directory /opt",
+		`"backup":{"dir":"/home"}`:                                            "not the system directory /home",
+		`"backup":{"dir":"/etc/backups"}`:                                     "under the system tree /etc",
+		`"backup":{"dir":"/usr/local/backups"}`:                               "under the system tree /usr",
+		`"backup":{"dir":"/tmp/b"}`:                                           "under the system tree /tmp",
+		`"backup":{"dir":"/var/lib/lcm-build"}`:                               "LCM's own /var/lib/lcm",
+		`"backup":{"dir":"/var/lib/lcmx"}`:                                    "LCM's own /var/lib/lcm",
+		`"backup":{"dir":"/var/cache/lcm-build/b"}`:                           "must not overlap /var/cache/lcm-build",
+		`"backup":{"dir":"/opt/lcm/b"}`:                                       "must not overlap /opt/lcm",
+		`"services":{"web":{"port":3200}},"backup":{"dir":"/var/lib/web"}`:    "must not overlap /var/lib/web",
+		`"services":{"web":{"port":3200}},"backup":{"dir":"/var/lib/web/b"}`:  "must not overlap /var/lib/web",
+		`"services":{"web":{"port":3200}},"backup":{"dir":"/opt/web"}`:        "must not overlap /opt/web",
+		`"services":{"web":{"port":3200}},"backup":{"dir":"/opt/web/b"}`:      "must not overlap /opt/web",
+		`"services":{"web":{"port":3200}},"backup":{"dir":"/etc/web"}`:        "under the system tree /etc",
+		`"runtimes":{"node":"/srv/node"},"backup":{"dir":"/srv"}`:             "not the system directory /srv",
+		`"runtimes":{"node":"/srv/node"},"backup":{"dir":"/srv/node/b"}`:      "must not overlap /srv/node",
 		`"components":{"deploy":true,"ingress":true}`:                         `duplicate key "components"`,
 		`"services":{"web":{"port":3200,"inputs":{"a":"/srv/a","a":"/srv"}}}`: `duplicate key "services.web.inputs.a"`,
 	} {
@@ -263,6 +282,7 @@ func TestUntrustedDeploySourcesAreRefused(t *testing.T) {
 		"build root of another owner": {func(th *testHost) { th.fs.dir(BuildDir, 0o755, 5, 5) }, "/var/lib/lcm-build is not owned by root"},
 		"ledger of another owner":     {func(th *testHost) { th.fs.dir(DeployLedger, 0o700, 5, 5) }, "/var/lib/lcm-deploy is not owned by root"},
 		"backups of another owner":    {func(th *testHost) { th.fs.dir("/var/backups/lcm", 0o700, 5, 5) }, "/var/backups/lcm is not owned by root"},
+		"backups of another mode":     {func(th *testHost) { th.fs.dir("/var/backups/lcm", 0o755, 0, 0) }, "backup.dir /var/backups/lcm exists with mode 0755; apply does not change"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			th := deployHost(t)

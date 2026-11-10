@@ -104,6 +104,54 @@ func within(p, dir string) bool { return p == dir || strings.HasPrefix(p, dir+"/
 // build may read them.
 var lcmOwned = []string{DataDir, EtcDir, DeployLedger, PowerLedger}
 
+// systemDirs are directories of the system that backup.dir must not be
+// itself: apply gives the backup directory to root alone (0700), which would
+// lock everyone else out of them.
+var systemDirs = []string{
+	"/", "/boot", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/usr", "/etc", "/dev", "/proc", "/sys", "/run", "/tmp", "/snap",
+	"/var", "/var/lib", "/var/cache", "/var/log", "/var/tmp", "/var/backups", "/var/spool", "/opt", "/srv", "/mnt", "/media", "/home", "/root",
+}
+
+// systemTrees are the system's own trees, where backup.dir must not be
+// either.
+var systemTrees = []string{"/boot", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/usr", "/etc", "/dev", "/proc", "/sys", "/run", "/tmp", "/var/tmp", "/snap"}
+
+// checkBackupDir refuses a backup directory that is, contains or lies in a
+// tree that the system or LCM manages. The directory is made root-only, and
+// the helper and the services read and write the trees below.
+func (c Config) checkBackupDir(dir string) error {
+	if slices.Contains(systemDirs, dir) {
+		return fmt.Errorf("must be a directory of its own, not the system directory %s", dir)
+	}
+	for _, t := range systemTrees {
+		if within(dir, t) {
+			return fmt.Errorf("must not be under the system tree %s", t)
+		}
+	}
+	managed := []string{BuildCacheDir, OptDir}
+	for _, name := range slices.Sorted(maps.Keys(c.Services)) {
+		managed = append(managed, ServiceOptDir(name), ServiceDataDir(name), ServiceEtcDir(name), ServiceBuildDir(name))
+	}
+	for _, r := range slices.Sorted(maps.Keys(c.Runtimes)) {
+		managed = append(managed, c.Runtimes[r])
+	}
+	for _, name := range slices.Sorted(maps.Keys(c.Services)) {
+		for _, in := range slices.Sorted(maps.Keys(c.Services[name].Inputs)) {
+			managed = append(managed, c.Services[name].Inputs[in])
+		}
+	}
+	for _, d := range managed {
+		if within(dir, d) || within(d, dir) {
+			return fmt.Errorf("must not overlap %s, which LCM or a service uses", d)
+		}
+	}
+	// /var/lib/lcm, /var/lib/lcm-build, /var/lib/lcm-deploy and the like.
+	if strings.HasPrefix(dir, DataDir) {
+		return fmt.Errorf("must not be in LCM's own %s* directories", DataDir)
+	}
+	return nil
+}
+
 func (c Config) validateDeploy() []error {
 	var errs []error
 	for _, name := range slices.Sorted(maps.Keys(c.Runtimes)) {
@@ -119,6 +167,8 @@ func (c Config) validateDeploy() []error {
 			errs = append(errs, fmt.Errorf("backup.dir %w", err))
 		} else if within(b.Dir, DataDir) {
 			errs = append(errs, fmt.Errorf("backup.dir must not be under %s", DataDir))
+		} else if err := c.checkBackupDir(b.Dir); err != nil {
+			errs = append(errs, fmt.Errorf("backup.dir %w", err))
 		}
 	}
 	ports := map[int]string{}
@@ -338,6 +388,10 @@ func (a *applier) preflightDeploy(ctx context.Context) error {
 			return fmt.Errorf("%s exists but is not a directory; move it away", d)
 		case info.UID != 0 || info.Mode.Perm()&0o022 != 0:
 			return fmt.Errorf("%s is not owned by root or is writable by group or others; review its content by hand", d)
+		case a.cfg.Backup != nil && d == a.cfg.Backup.Dir && (info.Mode.Perm() != 0o700 || info.Mode&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0):
+			// Apply creates the backup directory; it never changes the mode of
+			// one that exists, which may be a directory something else uses.
+			return fmt.Errorf("backup.dir %s exists with mode %04o; apply does not change an existing directory: if it is meant for backups, run sudo chmod 700 %s and apply again", d, info.Mode.Perm(), d)
 		}
 		for _, p := range ancestry(path.Dir(d)) {
 			info, err := fsys.Lstat(p)
