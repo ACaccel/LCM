@@ -73,6 +73,10 @@ type workerSpec struct {
 	// AllowMissing lets a source whose path does not exist count as absent
 	// instead of failing: the copy of what a restore replaces.
 	AllowMissing bool `json:"allowMissing,omitempty"`
+	// Tools maps the database tools the sources need to the absolute paths
+	// the helper verified as root; the worker runs nothing it finds on its
+	// own.
+	Tools map[string]string `json:"tools,omitempty"`
 }
 
 // sourceResult is what the worker reports for a source.
@@ -94,27 +98,16 @@ type WorkerHost struct {
 	// its current release.
 	DataDir    func(service string) string
 	ReleaseDir func(service string) string
-	// Tool returns the absolute path of an external program.
-	Tool func(name string) (string, error)
+	// ToolPath maps the host path of a database tool, which the helper chose
+	// and put in the specification, to the path to run; nil keeps it.
+	ToolPath func(hostPath string) string
 }
-
-// toolDirs are the directories searched for the database tools.
-var toolDirs = []string{"/usr/bin", "/usr/local/bin"}
 
 // DefaultWorkerHost is the host layout the helper's units use.
 func DefaultWorkerHost() WorkerHost {
 	return WorkerHost{
 		DataDir:    hostsetup.ServiceDataDir,
 		ReleaseDir: func(service string) string { return hostsetup.ServiceOptDir(service) + "/current" },
-		Tool: func(name string) (string, error) {
-			for _, d := range toolDirs {
-				p := d + "/" + name
-				if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
-					return p, nil
-				}
-			}
-			return "", fmt.Errorf("%s is not installed (looked in %s)", name, strings.Join(toolDirs, ", "))
-		},
 	}
 }
 
@@ -537,13 +530,25 @@ func (w *worker) dump(ctx context.Context, tool string, args []string) error {
 	return nil
 }
 
+// toolPath returns the path the helper gave for a database tool.
+func (w *worker) toolPath(name string) (string, error) {
+	p := w.spec.Tools[name]
+	if p == "" || !path.IsAbs(p) || path.Clean(p) != p {
+		return "", fmt.Errorf("the helper gave no usable path for %s", name)
+	}
+	if w.host.ToolPath != nil {
+		p = w.host.ToolPath(p)
+	}
+	return p, nil
+}
+
 // run executes an external tool of the host. stdout, when set, receives its
 // standard output; its standard error goes to the log.
 func (w *worker) run(ctx context.Context, tool string, args []string, stdout io.Writer, dir string) error {
 	p := tool
 	if !strings.HasPrefix(tool, "/") {
 		var err error
-		if p, err = w.host.Tool(tool); err != nil {
+		if p, err = w.toolPath(tool); err != nil {
 			return err
 		}
 	}

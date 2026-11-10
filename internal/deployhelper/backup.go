@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -97,6 +98,15 @@ type setManifest struct {
 	Files        []manifestFile   `json:"files"`
 	Size         int64            `json:"size"`
 	Skipped      int              `json:"skipped"`
+}
+
+// restorableSources are the sources a restore of the set puts back.
+func (m setManifest) restorableSources() []BackupSource {
+	var out []BackupSource
+	for _, i := range restorable(m) {
+		out = append(out, m.Sources[i].BackupSource)
+	}
+	return out
 }
 
 func (m setManifest) plainSources() []BackupSource {
@@ -237,6 +247,98 @@ func (h *Helper) currentRelease(svc string) (string, string) {
 	return id, m.Commit
 }
 
+// toolDirs are the directories searched for the database tools.
+var toolDirs = []string{"/usr/bin", "/usr/local/bin"}
+
+// toolNames are the database tools a source type needs to back up or to
+// restore.
+func toolNames(s BackupSource, restore bool) []string {
+	switch {
+	case s.Type == SourcePostgres && restore:
+		return []string{"pg_restore"}
+	case s.Type == SourcePostgres:
+		return []string{"pg_dump"}
+	case s.Type == SourceMongoDB && restore:
+		return []string{"mongorestore"}
+	case s.Type == SourceMongoDB:
+		return []string{"mongodump"}
+	}
+	return nil
+}
+
+// trustedTool checks a tool path as root: every link on the way and the file
+// it ends at must be root's and in directories only root can change, and the
+// file must be executable. The path itself, not its target, is what the
+// worker runs, as some distributions dispatch on the program's name.
+func (h *Helper) trustedTool(p string) error {
+	for range 8 {
+		info, err := h.FS.Lstat(p)
+		if err != nil {
+			return err
+		}
+		if !info.IsLink() {
+			info, err := h.trustedPath(p, true)
+			if err != nil {
+				return err
+			}
+			if info.Mode.Perm()&0o111 == 0 {
+				return fmt.Errorf("%s is not executable", p)
+			}
+			return nil
+		}
+		if _, err := h.trustedPath(path.Dir(p), false); err != nil {
+			return err
+		}
+		if info.UID != h.RootUID {
+			return fmt.Errorf("%s is a link that root does not own", p)
+		}
+		target, err := h.FS.Readlink(p)
+		if err != nil {
+			return err
+		}
+		if !path.IsAbs(target) {
+			target = path.Join(path.Dir(p), target)
+		}
+		p = path.Clean(target)
+	}
+	return errors.New("too many links")
+}
+
+// resolveTools finds the database tools the sources need in the system's
+// binary directories and checks that root alone can change each. It refuses
+// before anything is changed when a tool is missing or not trustworthy.
+func (h *Helper) resolveTools(sources []BackupSource, restore bool) (map[string]string, *opErr) {
+	tools := map[string]string{}
+	for _, s := range sources {
+		for _, name := range toolNames(s, restore) {
+			if tools[name] != "" {
+				continue
+			}
+			var problems []string
+			for _, d := range toolDirs {
+				p := d + "/" + name
+				if _, err := h.FS.Lstat(p); errors.Is(err, fs.ErrNotExist) {
+					continue
+				}
+				if err := h.trustedTool(p); err != nil {
+					problems = append(problems, err.Error())
+					continue
+				}
+				tools[name] = p
+				break
+			}
+			switch {
+			case tools[name] != "":
+			case len(problems) > 0:
+				return nil, failf(CodeRefused, "%s cannot be trusted (%s); install it so that only root can change it", name, strings.Join(problems, "; "))
+			default:
+				return nil, failf(CodeRefused, "%s is not installed (looked in %s)", name, strings.Join(toolDirs, ", "))
+			}
+		}
+	}
+	return tools, nil
+}
+
 // quiesce stops the service's unit for an operation that needs its data
 // still. It always stops a unit the helper wrote, whatever its state: a unit
 // that is activating or waiting to restart after a failure (Restart=) is not
@@ -325,6 +427,9 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 			return refuse(resp, CodeRefused, "the runtime %s is not installed (%v); run sudo bin/lcm host apply", req.Runtime, err)
 		}
 		p.rtBin = rt + "/bin"
+	}
+	if _, e := h.resolveTools(p.sources, false); e != nil {
+		return respond(resp, e)
 	}
 	stopped := false
 	if p.mode == ModeStopped {
@@ -473,6 +578,10 @@ func (h *Helper) makeSet(ctx context.Context, p setParams) (setManifest, string,
 	spec := workerSpec{Version: Version, Mode: "backup", Service: p.svc, MaxBytes: lim.MaxBytes, MaxEntries: lim.MaxEntries, AllowMissing: p.allowMissing}
 	for _, s := range p.sources {
 		spec.Sources = append(spec.Sources, specSource{BackupSource: s})
+	}
+	var e *opErr
+	if spec.Tools, e = h.resolveTools(p.sources, false); e != nil {
+		return zero, "", "", e
 	}
 	stage, e := h.newStage(p.backupEnv, name, spec)
 	if e != nil {
@@ -838,6 +947,10 @@ func (h *Helper) stageSet(env backupEnv, name string, m setManifest, maxEntries 
 		}
 		spec.Sources = append(spec.Sources, ss)
 	}
+	var e *opErr
+	if spec.Tools, e = h.resolveTools(m.restorableSources(), true); e != nil {
+		return "", e
+	}
 	stage, e := h.newStage(env, name, spec)
 	if e != nil {
 		return "", e
@@ -934,6 +1047,12 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	}
 	defer func() { _ = h.FS.RemoveAll(stage) }()
 
+	// The tools of the restore were checked by staging the set; the copy of
+	// the current data needs its own, which must be there before the service
+	// is stopped.
+	if _, e := h.resolveTools(m.restorableSources(), false); e != nil {
+		return respond(resp, e)
+	}
 	active, e := h.quiesce(ctx, env.svc)
 	if e != nil {
 		return respond(resp, e)

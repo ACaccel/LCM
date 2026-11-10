@@ -373,9 +373,7 @@ func TestRestoreRunsTheDatabaseTools(t *testing.T) {
 	bin := t.TempDir()
 	argsFile := filepath.Join(bin, "args")
 	script := func(name, body string) string {
-		p := filepath.Join(bin, name)
-		e.writeReal(p, "#!/bin/sh\n"+body, 0o755)
-		return p
+		return e.installTool(name, body)
 	}
 	record := `echo "$(basename $0) $@" >> ` + argsFile + "\n"
 	e.tools = map[string]string{

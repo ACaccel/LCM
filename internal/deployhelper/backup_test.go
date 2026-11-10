@@ -20,6 +20,24 @@ import (
 	"github.com/ACaccel/lcm/internal/execx"
 )
 
+// installTool writes a test program as a trusted tool of the host and
+// returns its real path.
+func (e *env) installTool(name, body string) string {
+	e.t.Helper()
+	e.mkdir("/usr/local/bin", 0o755)
+	e.writeReal(e.real("/usr/local/bin/"+name), "#!/bin/sh\n"+body, 0o755)
+	return e.real("/usr/local/bin/" + name)
+}
+
+// uninstallTools removes the programs installed with installTool, which
+// e.tools lists.
+func (e *env) uninstallTools() {
+	for _, p := range e.tools {
+		_ = os.Remove(p)
+	}
+	e.tools = nil
+}
+
 // worker runs the backup worker in place of systemd-run, over the staging
 // directories the unit would bind.
 func (e *env) worker(c execx.Cmd) (string, int) {
@@ -38,12 +56,7 @@ func (e *env) worker(c execx.Cmd) (string, int) {
 		host := WorkerHost{
 			DataDir:    func(s string) string { return e.real("/var/lib/" + s) },
 			ReleaseDir: func(s string) string { return e.real("/opt/" + s + "/current") },
-			Tool: func(n string) (string, error) {
-				if p, ok := e.tools[n]; ok {
-					return p, nil
-				}
-				return "", fmt.Errorf("%s is not installed", n)
-			},
+			ToolPath:   e.real,
 		}
 		if err := RunWorker(context.Background(), host, e.real(in), e.real(out), &buf); err != nil {
 			return buf.String() + "error: " + err.Error() + "\n", 1
@@ -491,9 +504,7 @@ func TestBackupToolsAndCommand(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	script := func(name, body string) string {
-		p := filepath.Join(bin, name)
-		e.writeReal(p, "#!/bin/sh\n"+body, 0o755)
-		return p
+		return e.installTool(name, body)
 	}
 	e.tools = map[string]string{
 		"pg_dump":   script("pg_dump", `echo "$@" >> `+argsFile+"\nfor a in \"$@\"; do case $a in --file=*) echo dump > ${a#--file=};; esac; done\n"),
@@ -548,14 +559,65 @@ func TestBackupToolsAndCommand(t *testing.T) {
 
 	// A missing tool is a clear refusal of the backup, and the program of a
 	// command source must be an executable of the release.
-	e.tools = nil
-	e.refused(backupReq(sources[0]), CodeFailed, "the backup worker exited with status 1")
-	if resp := e.call(backupReq(sources[0])); !strings.Contains(resp.Log, "pg_dump is not installed") {
-		t.Errorf("log %q", resp.Log)
-	}
+	e.uninstallTools()
+	e.refused(backupReq(sources[0]), CodeRefused, "pg_dump is not installed")
 	e.write("/opt/web/current/bin/plain", "x", 0o644)
 	if resp := e.call(backupReq(BackupSource{Type: SourceCommand, Argv: []string{"bin/plain"}})); !strings.Contains(resp.Log, "not an executable file of the release") {
 		t.Errorf("log %q", resp.Log)
+	}
+}
+
+// The tools run as the service's account, so the helper picks them as root
+// and refuses any that someone other than root could have replaced.
+func TestBackupToolsMustBeTrusted(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	src := backupReq(BackupSource{Type: SourcePostgres, Database: "app"})
+	good := "for a in \"$@\"; do case $a in --file=*) echo dump > ${a#--file=};; esac; done\n"
+	setMode := func(p string, mode os.FileMode) {
+		t.Helper()
+		if err := os.Chmod(e.real(p), mode); err != nil { //nolint:gosec // loosening a test host path to be refused
+			t.Fatal(err)
+		}
+	}
+
+	e.installTool("pg_dump", good)
+	setMode("/usr/local/bin/pg_dump", 0o775)
+	e.refused(src, CodeRefused, "pg_dump cannot be trusted")
+	setMode("/usr/local/bin/pg_dump", 0o755)
+	setMode("/usr/local/bin", 0o777)
+	e.refused(src, CodeRefused, "is not root's alone")
+	setMode("/usr/local/bin", 0o755)
+	setMode("/usr/local/bin/pg_dump", 0o644)
+	e.refused(src, CodeRefused, "is not executable")
+	setMode("/usr/local/bin/pg_dump", 0o755)
+	e.ok(src)
+
+	// A link is fine when everything it leads through is root's, and the
+	// worker runs the link, not its target (pg_wrapper dispatches on its
+	// name). One to a file others can write is not.
+	e.mkdir("/usr/share/wrapper", 0o755)
+	e.mkdir("/usr/bin", 0o755)
+	e.write("/usr/share/wrapper/pg_wrapper", "#!/bin/sh\n"+good, 0o755)
+	if err := os.Remove(e.real("/usr/local/bin/pg_dump")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../share/wrapper/pg_wrapper", e.real("/usr/bin/pg_dump")); err != nil {
+		t.Fatal(err)
+	}
+	e.ok(src)
+	setMode("/usr/share/wrapper/pg_wrapper", 0o777)
+	e.refused(src, CodeRefused, "pg_dump cannot be trusted")
+
+	// The restore needs its own tools, and checks them before it stops the
+	// service.
+	setMode("/usr/share/wrapper/pg_wrapper", 0o755)
+	a := e.ok(src).Backup
+	e.active = true
+	before := len(e.systemctlCalls())
+	e.refused(e.restoreReq(a.BackupID), CodeRefused, "pg_restore is not installed")
+	if calls := e.systemctlCalls()[before:]; len(calls) != 0 || !e.active {
+		t.Errorf("the service was touched: %v", calls)
 	}
 }
 
