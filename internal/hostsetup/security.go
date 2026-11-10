@@ -11,6 +11,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,6 +51,9 @@ var securityAssets = []string{"install.py", "helper.py", "runtime.py"}
 
 // securityDropIn adds the component's LCM settings to lcm.service.
 const securityDropIn = "[Service]\nEnvironmentFile=" + SecurityEnvFile + "\n"
+
+// maxSecurityServices is the installer's limit of observed services.
+const maxSecurityServices = 64
 
 // securityTokenName names the ingest token apply creates for the collector.
 const securityTokenName = "security-collector"
@@ -122,10 +126,10 @@ func (a *applier) securityInstalled() bool {
 
 // securityInput describes the wanted component: the Machine, the services
 // whose locations get observation hooks and every watched path. The
-// directories of the services LCM deploys are deploy watches, except their
-// releases for AIDE: they are root-owned and every deploy changes them, and
-// LCM records each one. An external grant has a route, and so hooks, but no
-// directories of LCM's.
+// directories of the services LCM deploys are deploy watches. AIDE skips
+// /opt/<service>: every deploy changes it, its releases are root-owned and
+// LCM records each deploy; the audit watch stays. An external grant has a
+// route, and so hooks, but no directories of LCM's.
 func (a *applier) securityInput(sec *Security) securityInput {
 	watch := map[string][]string{}
 	for category, paths := range sec.Watch {
@@ -136,7 +140,7 @@ func (a *applier) securityInput(sec *Security) securityInput {
 	for _, name := range services {
 		if !a.cfg.Services[name].External {
 			watch["deploy"] = append(watch["deploy"], ServiceOptDir(name), ServiceEtcDir(name))
-			ignore = append(ignore, ServiceReleases(name))
+			ignore = append(ignore, ServiceOptDir(name))
 		}
 	}
 	for category, paths := range watch {
@@ -169,6 +173,9 @@ func (a *applier) securityComponent(ctx context.Context, s *step) error {
 		return a.removeSecurity(ctx, s)
 	}
 	in := a.securityInput(sec)
+	if len(in.Services) > maxSecurityServices {
+		return fmt.Errorf("the security component observes at most %d services; services has %d", maxSecurityServices, len(in.Services))
+	}
 	plan, err := runSecurityInstaller(ctx, a.h, "plan", in)
 	if err != nil {
 		return err
@@ -187,13 +194,22 @@ func (a *applier) securityComponent(ctx context.Context, s *step) error {
 		}
 		s.installerReport(securityReply{Notes: plan.Notes})
 	} else if len(plan.Changes) > 0 {
+		var tokenID int64
 		if plan.TokenMissing {
-			if in.Token, err = a.securityToken(ctx); err != nil {
+			if in.Token, tokenID, err = a.securityToken(ctx); err != nil {
 				return fmt.Errorf("create the collector's ingest token: %w", err)
 			}
 		}
 		applied, err := runSecurityInstaller(ctx, a.h, "apply", in)
 		if err != nil {
+			// The installer undid its changes; the token it would have kept
+			// must not stay valid.
+			if tokenID > 0 {
+				if rerr := a.revokeSecurityToken(ctx, tokenID); rerr != nil {
+					return fmt.Errorf("%w; revoking the new ingest token %d failed too, revoke it by hand: %w", err, tokenID, rerr)
+				}
+				return fmt.Errorf("%w; the new ingest token %d was revoked", err, tokenID)
+			}
 			return err
 		}
 		for _, c := range applied.Changes {
@@ -217,22 +233,69 @@ func (a *applier) securityComponent(ctx context.Context, s *step) error {
 // securityToken creates an ingest-scope API token with the installed lcm
 // binary, as lcm, the account that owns the database. The token reaches
 // the installer on stdin only.
-func (a *applier) securityToken(ctx context.Context) (string, error) {
+func (a *applier) securityToken(ctx context.Context) (string, int64, error) {
 	if a.lcm == nil {
-		return "", errors.New("the account lcm does not exist")
+		return "", 0, errors.New("the account lcm does not exist")
+	}
+	before, err := a.securityTokenIDs(ctx)
+	if err != nil {
+		return "", 0, err
 	}
 	out, err := a.run(ctx, Command{
 		Path: Binary, Args: []string{"token", "create", "--name", securityTokenName, "--scope", "ingest", "--data-dir", DataDir},
 		As: a.lcm, MaxOutput: 4096, Timeout: time.Minute,
 	})
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	token := strings.TrimSpace(string(out))
 	if token == "" || strings.ContainsAny(token, " \t\n") {
-		return "", errors.New("lcm token create printed no token")
+		return "", 0, errors.New("lcm token create printed no token")
 	}
-	return token, nil
+	// The new token is the one active collector token that was not there
+	// before; without it a failed apply cannot revoke the token.
+	after, err := a.securityTokenIDs(ctx)
+	if err != nil {
+		return "", 0, err
+	}
+	var id int64
+	for candidate := range after {
+		if !before[candidate] && candidate > id {
+			id = candidate
+		}
+	}
+	if id == 0 {
+		return "", 0, errors.New("the new ingest token is not in lcm token list")
+	}
+	return token, id, nil
+}
+
+// securityTokenIDs lists the active tokens named securityTokenName.
+func (a *applier) securityTokenIDs(ctx context.Context) (map[int64]bool, error) {
+	out, err := a.run(ctx, Command{
+		Path: Binary, Args: []string{"token", "list", "--data-dir", DataDir}, As: a.lcm, MaxOutput: 1 << 20, Timeout: time.Minute,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ids := map[int64]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 || f[1] != securityTokenName || f[len(f)-1] != "active" {
+			continue
+		}
+		if id, err := strconv.ParseInt(f[0], 10, 64); err == nil && id > 0 {
+			ids[id] = true
+		}
+	}
+	return ids, nil
+}
+
+func (a *applier) revokeSecurityToken(ctx context.Context, id int64) error {
+	_, err := a.run(ctx, Command{
+		Path: Binary, Args: []string{"token", "revoke", "--data-dir", DataDir, strconv.FormatInt(id, 10)}, As: a.lcm, Timeout: time.Minute,
+	})
+	return err
 }
 
 // securitySettings makes LCM itself read the security settings: a drop-in

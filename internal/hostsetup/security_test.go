@@ -3,6 +3,7 @@ package hostsetup
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -97,7 +98,7 @@ func TestSecurityInputWatchesGrantedServices(t *testing.T) {
 	if want := []string{"/etc/site", "/etc/web", "/opt/extra", "/opt/site", "/opt/web"}; !slices.Equal(in.Watch["deploy"], want) {
 		t.Errorf("deploy watches = %v, want %v", in.Watch["deploy"], want)
 	}
-	if want := []string{"/opt/site/releases", "/opt/web/releases"}; !slices.Equal(in.AIDEIgnore, want) {
+	if want := []string{"/opt/site", "/opt/web"}; !slices.Equal(in.AIDEIgnore, want) {
 		t.Errorf("AIDE exclusions = %v, want %v", in.AIDEIgnore, want)
 	}
 	if !slices.Equal(in.Watch["cron"], []string{"/etc/cron.extra"}) {
@@ -126,6 +127,23 @@ func TestSecurityInstallerFailureKeepsTheGrantAway(t *testing.T) {
 	}
 	if th.fs.get(SecuritySudoers) != nil {
 		t.Fatal("the grant was installed after a failed installation")
+	}
+	// The token created for the failed run is revoked.
+	if !strings.Contains(err.Error(), "the new ingest token 2 was revoked") || !th.r.revoked[2] || th.r.revoked[1] {
+		t.Errorf("tokens %v revoked %v: %v", th.r.tokens, th.r.revoked, err)
+	}
+}
+
+func TestSecurityServiceLimit(t *testing.T) {
+	th := securityHost(t)
+	th.cfg.Services = map[string]ServiceGrant{}
+	for i := range maxSecurityServices + 1 {
+		th.cfg.Services[fmt.Sprintf("svc%02d", i)] = ServiceGrant{External: true, Route: &RouteGrant{Prefix: fmt.Sprintf("/s%02d/", i), Static: "/srv/site"}}
+	}
+	a := &applier{cfg: th.cfg, h: th.host}
+	err := a.securityComponent(context.Background(), &step{a: a, name: "security"})
+	if err == nil || !strings.Contains(err.Error(), "at most 64 services") || len(th.r.sec.actions) != 0 {
+		t.Fatalf("err = %v, installer actions %v", err, th.r.sec.actions)
 	}
 }
 

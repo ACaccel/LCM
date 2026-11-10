@@ -14,6 +14,7 @@ import (
 	"path"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -403,6 +404,9 @@ type fakeRunner struct {
 	certbot    []string
 
 	sec fakeSecurity
+	// tokens are the names of the created API tokens, ID i+1 at i.
+	tokens  []string
+	revoked map[int64]bool
 }
 
 // fakeSecurity stands for deploy/security/install.py: it records what it
@@ -652,7 +656,28 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		return []byte("go version go1.26.0 linux/amd64\n"), nil
 	case strings.HasSuffix(c.Path, "/bin/node"):
 		return []byte("v24.0.0\n"), nil
+	case c.Path == Binary && arg(0) == "token" && arg(1) == "list":
+		out := "ID  NAME  SCOPE  CREATED  LAST USED  STATUS\n"
+		for i, name := range r.tokens {
+			status := "active"
+			if r.revoked[int64(i+1)] {
+				status = "revoked"
+			}
+			out += fmt.Sprintf("%d  %s  ingest  2026-11-10 00:00:00  -  %s\n", i+1, name, status)
+		}
+		return []byte(out), nil
+	case c.Path == Binary && arg(0) == "token" && arg(1) == "revoke":
+		id, err := strconv.ParseInt(a[len(a)-1], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		if r.revoked == nil {
+			r.revoked = map[int64]bool{}
+		}
+		r.revoked[id] = true
+		return nil, nil
 	case c.Path == Binary && arg(0) == "token":
+		r.tokens = append(r.tokens, arg(3))
 		return []byte(testToken + "\n"), nil
 	case c.Path == Binary && arg(0) == "admin":
 		data, _ := io.ReadAll(c.Stdin)
