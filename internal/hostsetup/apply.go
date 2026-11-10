@@ -176,11 +176,14 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 		{"service", a.service},
 		{"health", a.health},
 		{ComponentMachinePower, a.machinePower},
-		{ComponentSecurity, a.securityComponent},
 	}
 	steps = append(steps, a.deploySteps()...)
+	// Security comes last of the components: it watches the deploy helper's
+	// files, and its adoption removes hook files that a hand-made site may
+	// include until ingress has replaced that site.
 	steps = append(steps, []namedStep{
 		{ComponentIngress, a.ingressStep},
+		{ComponentSecurity, a.securityComponent},
 		{"admin password", a.adminPassword},
 		{"token", a.token},
 		{"tailscale serve", a.tailscaleServe},

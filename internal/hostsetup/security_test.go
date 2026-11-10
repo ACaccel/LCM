@@ -88,6 +88,23 @@ func TestSecurityInstall(t *testing.T) {
 	th.expectConverged()
 }
 
+// TestSecurityAfterIngress: the security component converges after the
+// deploy helper and the ingress site, so that it sees the helper's files
+// and the hand-made site no longer includes the hooks adoption removes.
+func TestSecurityAfterIngress(t *testing.T) {
+	th := ingressHost(t, true)
+	th.cfg.Components.Security = &Security{MachineID: "m-1"}
+	th.writeConfig(th.cfg)
+	_, out, err := th.apply(Options{Check: true})
+	if err != nil {
+		t.Fatalf("check: %v\n%s", err, out)
+	}
+	helper, site, security := strings.Index(out, DeployHelper), strings.Index(out, "ingress:"), strings.Index(out, "security:")
+	if helper < 0 || site < 0 || security < 0 || helper > security || site > security {
+		t.Fatalf("order: helper %d, ingress %d, security %d\n%s", helper, site, security, out)
+	}
+}
+
 func TestSecurityInputWatchesGrantedServices(t *testing.T) {
 	a := &applier{cfg: Config{Services: map[string]ServiceGrant{"web": {Port: 3000}, "site": {Port: 3001}, "docs": {External: true}}}}
 	in := a.securityInput(&Security{MachineID: "m-1", Watch: map[string][]string{"deploy": {"/opt/web", "/opt/extra"}, "cron": {"/etc/cron.extra"}}})

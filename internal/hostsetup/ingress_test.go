@@ -267,6 +267,13 @@ func TestIngressRefusesFilesItDidNotMake(t *testing.T) {
 			th.fs.remove(SitesEnabled + "/example.org")
 			th.fs.file(SitesEnabled+"/example.org", handMadeSite, 0o644, 0, 0)
 		}, "is not a link"},
+		{"adopted site revert could not enable again", func(th *testHost) {
+			th.fs.file(SitesAvailable+"/example.org", handMadeSite, 0o666, 0, 0)
+		}, "the adopted site example.org cannot be enabled again"},
+		{"adopted site outside sites-available", func(th *testHost) {
+			th.fs.remove(SitesEnabled + "/example.org")
+			th.fs.link(SitesEnabled+"/example.org", "/srv/site/index.html", 0, 0)
+		}, "is not in /etc/nginx/sites-available"},
 		{"static directory of another account", func(th *testHost) {
 			th.fs.dir("/srv/site", 0o755, aliceUID, aliceUID)
 		}, "services.site.route.static: /srv/site is not owned by root"},

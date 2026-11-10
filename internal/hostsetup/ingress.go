@@ -460,6 +460,11 @@ func PlanSite(env IngressEnv, cfg Config, ro RouteOptions, strict string) (SiteP
 			return SitePlan{}, err
 		}
 		if target != "" {
+			// Adopting a site that revert could not enable again would
+			// leave no way back.
+			if err := restorable(fsys, env.RootUID, adoptedRecord{Name: i.Adopt, Target: target}); err != nil {
+				return SitePlan{}, err
+			}
 			plan.Adopt, plan.adoptTarget = i.Adopt, target
 		}
 	}
@@ -646,6 +651,24 @@ func adoptedLink(fsys FS, name string) (string, error) {
 		return "", fmt.Errorf("%s is not a link; make it a link to its file in %s before ingress adopts it", p, SitesAvailable)
 	}
 	return fsys.Readlink(p)
+}
+
+// restorable checks that revert can put the adopted link rec back: its
+// target is a file in sites-available that only root can write. The link is
+// put back as it was; a relative target is resolved from sites-enabled,
+// which like sites-available is root's and no link.
+func restorable(fsys FS, rootUID int, rec adoptedRecord) error {
+	resolved := rec.Target
+	if !path.IsAbs(resolved) {
+		resolved = path.Join(SitesEnabled, resolved)
+	}
+	if resolved == "" || !within(resolved, SitesAvailable) || path.Dir(resolved) != SitesAvailable {
+		return fmt.Errorf("the link target %q of %s is not in %s; restore the link by hand", printable(rec.Target, 200), rec.Name, SitesAvailable)
+	}
+	if _, err := trustedAs(fsys, resolved, rootUID, true); err != nil {
+		return fmt.Errorf("the adopted site %s cannot be enabled again: %w", rec.Name, err)
+	}
+	return nil
 }
 
 // writeState writes a root-only file of the state directory.
@@ -1053,18 +1076,8 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 		if target != "" {
 			continue
 		}
-		// The link is put back as it was; a relative target is resolved
-		// from sites-enabled, which like sites-available is root's and no
-		// link.
-		resolved := rec.Target
-		if !path.IsAbs(resolved) {
-			resolved = path.Join(SitesEnabled, resolved)
-		}
-		if resolved == "" || !within(resolved, SitesAvailable) || path.Dir(resolved) != SitesAvailable {
-			return nil, fmt.Errorf("the recorded link target %q of %s is not in %s; restore the link by hand", printable(rec.Target, 200), rec.Name, SitesAvailable)
-		}
-		if _, err := trustedAs(fsys, resolved, env.RootUID, true); err != nil {
-			return nil, fmt.Errorf("the adopted site %s cannot be enabled again: %w", rec.Name, err)
+		if err := restorable(fsys, env.RootUID, rec); err != nil {
+			return nil, err
 		}
 		restore = append(restore, rec)
 	}
