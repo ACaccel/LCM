@@ -39,6 +39,12 @@ func TestStatus(t *testing.T) {
 	th.fs.resetOps()
 	got := statusOf(t, th)
 	for name, c := range got {
+		if name == ComponentIngress {
+			if c.State != StateNotInstalled {
+				t.Errorf("converged without ingress: %s is %s", name, c.State)
+			}
+			continue
+		}
 		if c.State != StateUpToDate {
 			t.Errorf("converged: %s is %s: %+v", name, c.State, c.Files)
 		}

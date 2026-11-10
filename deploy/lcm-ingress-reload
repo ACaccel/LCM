@@ -1,0 +1,10 @@
+#!/bin/sh
+# Installed by "lcm host apply" (components.ingress) at
+# /etc/letsencrypt/renewal-hooks/deploy/lcm-ingress-reload as root:root 0755.
+# certbot runs it after it saved a renewed certificate: nginx loads the new
+# certificate only on reload, and a configuration that does not pass
+# "nginx -t" is never loaded.
+set -eu
+
+/usr/sbin/nginx -t -q
+exec /usr/bin/systemctl reload nginx.service

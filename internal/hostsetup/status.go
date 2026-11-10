@@ -61,7 +61,7 @@ func Status(h Host) ([]ComponentStatus, error) {
 		cs.State = componentState(cs.Files)
 		out = append(out, cs)
 	}
-	return out, nil
+	return append(out, ingressStatus(h)), nil
 }
 
 func fileStatus(fsys FS, f rootFile, want Content) FileStatus {

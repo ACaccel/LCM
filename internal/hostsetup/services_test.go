@@ -26,7 +26,7 @@ func TestDeployConfig(t *testing.T) {
 		t.Fatalf("round trip: %+v %v", again, err)
 	}
 	for in, want := range map[string]string{
-		`"services":{"web":{"port":3200,"route":"/web/"}}`:                    `"services.web.route" is reserved for the ingress component`,
+		`"services":{"web":{"port":3200,"route":"/web/"}}`:                    `services.web.route must be an object`,
 		`"services":{"web":{"port":3200,"extraPaths":[]}}`:                    `"services.web.extraPaths" is reserved`,
 		`"services":{"web":{"port":3200,"Port":3201}}`:                        `unknown key "services.web.Port"`,
 		`"services":{"web":{"port":3200},"web":{"port":3201}}`:                `duplicate key "services.web"`,

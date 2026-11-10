@@ -392,6 +392,14 @@ type fakeRunner struct {
 	versionOutput, installedVersion, systemdVersion string
 	passwordInput, goVersion, analyzeStderr         string
 	installPy                                       []string
+
+	// nginx: nginxTest fails "nginx -t" when it returns an error;
+	// reloads counts reloads, failReload fails them and certbot records
+	// the arguments of the last certbot run.
+	nginxTest  func() error
+	reloads    int
+	failReload bool
+	certbot    []string
 }
 
 const (
@@ -567,6 +575,29 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		r.fs.dir(path.Dir(file), 0o700, c.As.UID, c.As.GID)
 		r.fs.file(file, string(data), 0o600, c.As.UID, c.As.GID)
 		return nil, nil
+	case c.Path == Nginx:
+		if r.nginxTest != nil {
+			if err := r.nginxTest(); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	case c.Path == Systemctl && arg(0) == "reload" && arg(1) == "nginx.service":
+		r.reloads++
+		if r.failReload {
+			return nil, &ExitError{Command: "systemctl reload nginx.service", Code: 1, Stderr: "Job for nginx.service failed"}
+		}
+		return nil, nil
+	case c.Path == "certbot":
+		r.certbot = append([]string{}, a...)
+		for i := 0; i+1 < len(a); i++ {
+			if a[i] == "-d" {
+				live := "/etc/letsencrypt/live/" + a[i+1]
+				r.fs.link(live+"/fullchain.pem", "../../archive/"+a[i+1]+"/fullchain1.pem", 0, 0)
+				r.fs.link(live+"/privkey.pem", "../../archive/"+a[i+1]+"/privkey1.pem", 0, 0)
+			}
+		}
+		return nil, nil
 	case c.Path == python3:
 		r.installPy = append([]string{}, a...)
 		r.fs.file(SecurityHelper, string(asset("security-host/helper.py")), 0o644, 0, 0)
@@ -620,6 +651,13 @@ type testHost struct {
 	clock *clock.Fake
 	host  Host
 	cfg   Config
+
+	mu           sync.Mutex
+	probes       []string
+	probeStatus  int
+	probeErr     error
+	locked       bool
+	lockedLegacy string
 }
 
 const (
@@ -655,10 +693,32 @@ func newTestHost(t *testing.T) *testHost {
 		"nobody": {Name: "nobody", UID: 65534, GID: 65534, Home: "/nonexistent"},
 	}}
 	clk := clock.NewFake(time.Unix(1_800_000_000, 0))
-	th := &testHost{t: t, fs: m, r: r, clock: clk}
+	th := &testHost{t: t, fs: m, r: r, clock: clk, probeStatus: 200}
 	th.host = Host{
 		FS: m, Runner: r, Clock: clk, Privileged: true, Executable: testExe,
 		OpenExecutable: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(exeData)), nil },
+		Probe: func(_ context.Context, p Probe) (int, error) {
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			th.probes = append(th.probes, p.Address+" "+p.String())
+			r.mu.Lock()
+			r.calls = append(r.calls, "probe "+p.String())
+			r.mu.Unlock()
+			return th.probeStatus, th.probeErr
+		},
+		LockIngress: func(legacy string) (func(), error) {
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if th.locked {
+				return nil, ErrIngressBusy
+			}
+			th.locked, th.lockedLegacy = true, legacy
+			return func() {
+				th.mu.Lock()
+				defer th.mu.Unlock()
+				th.locked = false
+			}, nil
+		},
 		Health: func(context.Context) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()

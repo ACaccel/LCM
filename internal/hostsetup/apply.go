@@ -186,6 +186,7 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 	}
 	steps = append(steps, a.deploySteps()...)
 	steps = append(steps, []namedStep{
+		{ComponentIngress, a.ingressStep},
 		{"admin password", a.adminPassword},
 		{"token", a.token},
 		{"tailscale serve", a.tailscaleServe},
@@ -622,7 +623,7 @@ func (a *applier) preflightStage(ctx context.Context) error {
 	if a.cfg.Components.MachinePower {
 		rules["machine-power-sudoers"] = stage + "/machine-power-sudoers"
 	}
-	if a.cfg.Components.Deploy {
+	if a.cfg.Components.helper() {
 		rules["lcm-deploy-sudoers"] = stage + "/lcm-deploy-sudoers"
 	}
 	for name, p := range rules {

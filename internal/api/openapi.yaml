@@ -6184,7 +6184,7 @@ components:
       additionalProperties: false
       required: [name, state, files]
       properties:
-        name: { type: string, enum: [core, machine-power, security-host, deploy] }
+        name: { type: string, enum: [core, machine-power, security-host, deploy, ingress] }
         state: { $ref: "#/components/schemas/HostComponentState" }
         files:
           type: array

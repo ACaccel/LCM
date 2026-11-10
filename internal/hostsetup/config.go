@@ -50,11 +50,27 @@ type Backup struct {
 // ServiceGrant is what one managed service may use. Documents name a
 // service but can never widen its grant.
 type ServiceGrant struct {
-	Port     int      `json:"port"`
+	// Port is where the service listens on 127.0.0.1; an external grant
+	// with a static route needs none.
+	Port     int      `json:"port,omitempty"`
 	Runtimes []string `json:"runtimes,omitempty"`
 	// Inputs are read-only directories outside the repository that a build
 	// may read, by name.
 	Inputs map[string]string `json:"inputs,omitempty"`
+	// External marks a service whose process and accounts LCM does not
+	// own: host setup creates nothing for it and the deploy helper refuses
+	// its deploy and backup operations; only its route is used.
+	External bool `json:"external,omitempty"`
+	// Route publishes the service through the ingress component.
+	Route *RouteGrant `json:"route,omitempty"`
+}
+
+// RouteGrant is the part of a route only the host configuration decides.
+type RouteGrant struct {
+	// Prefix is the path below the domain, "/" or ending with "/".
+	Prefix string `json:"prefix"`
+	// Static is a root-owned directory served at the prefix.
+	Static string `json:"static,omitempty"`
 }
 
 // Toolchains are the Go and Node.js installations that self-deploy builds
@@ -77,6 +93,9 @@ type Components struct {
 	// Deploy installs the deploy helper, its sudoers rule and the build
 	// account.
 	Deploy bool `json:"deploy"`
+	// Ingress renders and applies LCM's nginx site for the services'
+	// routes; nil leaves nginx alone.
+	Ingress *Ingress `json:"ingress,omitempty"`
 }
 
 // SecurityHost enables the restricted security host helper.
@@ -112,6 +131,7 @@ func (c Config) Validate() error {
 		errs = append(errs, fmt.Errorf("components.securityHost.machineId must be the Machine's immutable ID (got %q)", sh.MachineID))
 	}
 	errs = append(errs, c.validateDeploy()...)
+	errs = append(errs, c.validateIngress()...)
 	return errors.Join(errs...)
 }
 
@@ -130,12 +150,15 @@ var configKeys = keys{
 	"repository": nil,
 	"toolchains": {"go": nil, "node": nil},
 	"tailscale":  {"port": nil},
-	"components": {"machinePower": nil, "securityHost": {"machineId": nil}, "deploy": nil},
-	"runtimes":   {anyKey: nil},
-	"backup":     {"dir": nil},
+	"components": {"machinePower": nil, "securityHost": {"machineId": nil}, "deploy": nil, "ingress": {
+		"domain": nil, "listen": nil, "acmeWebroot": nil, "tls": {"email": nil, "keyType": nil}, "hsts": nil,
+		"wellKnown": {anyKey: nil}, "adopt": nil, "legacyLock": nil,
+	}},
+	"runtimes": {anyKey: nil},
+	"backup":   {"dir": nil},
 	"services": {anyKey: {
-		"port": nil, "runtimes": nil, "inputs": {anyKey: nil},
-		"route": reservedKey, "extraPaths": reservedKey,
+		"port": nil, "runtimes": nil, "inputs": {anyKey: nil}, "external": nil,
+		"route": {"prefix": nil, "static": nil}, "extraPaths": reservedKey,
 	}},
 }
 
@@ -207,7 +230,7 @@ func checkKeys(dec *json.Decoder, want keys, at string) error {
 		case !known:
 			return fmt.Errorf("unknown key %q", name)
 		case isReserved(sub):
-			return fmt.Errorf("%q is reserved for the ingress component of a later version; remove it", name)
+			return fmt.Errorf("%q is reserved for a later version; remove it", name)
 		case seen[key]:
 			return fmt.Errorf("duplicate key %q", name)
 		}

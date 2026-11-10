@@ -20,7 +20,10 @@ func (l *listFlag) Set(v string) error {
 }
 
 func (a *app) hostAllow(ctx context.Context, fs *flag.FlagSet, args []string) error {
-	port := fs.Int("port", 0, "port the service listens on, on 127.0.0.1 (1024-65535)")
+	port := fs.Int("port", 0, "port the service listens on, on 127.0.0.1 (1024-65535); optional with --external --static")
+	route := fs.String("route", "", "publish the service through the ingress component at this path prefix (\"/\" or ending with \"/\")")
+	static := fs.String("static", "", "root-owned directory the route serves (needs --route)")
+	external := fs.Bool("external", false, "LCM does not own the service's process or accounts; only its route is published (needs --route)")
 	var runtimes, inputs listFlag
 	fs.Var(&runtimes, "runtime", "runtime of the host configuration the service may use (repeatable)")
 	fs.Var(&inputs, "input", "read-only build input as NAME=PATH (repeatable)")
@@ -33,10 +36,18 @@ func (a *app) hostAllow(ctx context.Context, fs *flag.FlagSet, args []string) er
 	if len(pos) != 1 {
 		return usagef("host allow: expected one service name")
 	}
-	if *port == 0 {
-		return usagef("host allow: --port is required")
+	switch {
+	case *static != "" && *route == "":
+		return usagef("host allow: --static needs --route")
+	case *external && *route == "":
+		return usagef("host allow: --external needs --route")
+	case *port == 0 && (!*external || *static == ""):
+		return usagef("host allow: --port is required (unless --external with --static)")
 	}
-	grant := hostsetup.ServiceGrant{Port: *port, Runtimes: runtimes}
+	grant := hostsetup.ServiceGrant{Port: *port, Runtimes: runtimes, External: *external}
+	if *route != "" {
+		grant.Route = &hostsetup.RouteGrant{Prefix: *route, Static: *static}
+	}
 	for _, in := range inputs {
 		name, dir, ok := strings.Cut(in, "=")
 		if !ok || name == "" || dir == "" {

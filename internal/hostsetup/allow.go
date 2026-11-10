@@ -95,14 +95,16 @@ func (a *applier) allow(ctx context.Context, name string, g ServiceGrant) error 
 		return err
 	}
 	a.uidMin = uidMin(h.FS)
-	st, err := a.checkGrant(ctx, name, g, a.uidMin)
-	if err != nil {
-		return err
+	if !g.External {
+		st, err := a.checkGrant(ctx, name, g, a.uidMin)
+		if err != nil {
+			return err
+		}
+		if st.problem != "" {
+			return fmt.Errorf("cannot allow %s: %s", name, st.problem)
+		}
+		a.grants = map[string]grantState{name: st}
 	}
-	if st.problem != "" {
-		return fmt.Errorf("cannot allow %s: %s", name, st.problem)
-	}
-	a.grants = map[string]grantState{name: st}
 	data, err := setService(raw, name, g)
 	if err != nil {
 		return err
@@ -139,8 +141,13 @@ func (a *applier) allow(ctx context.Context, name string, g ServiceGrant) error 
 	gs.finish()
 
 	var later []string
-	if !next.Components.Deploy {
+	if !next.Components.Deploy && !g.External {
 		later = append(later, "components.deploy is false, so the deploy helper is not installed")
+	}
+	if g.Route != nil && next.Components.Ingress == nil {
+		later = append(later, "components.ingress is null, so the route is not published")
+	} else if g.Route != nil {
+		later = append(later, "the route is not published yet")
 	}
 	for _, r := range g.Runtimes {
 		if _, err := h.FS.Lstat(RuntimesDir + "/" + r); err != nil {

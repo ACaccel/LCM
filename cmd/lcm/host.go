@@ -18,7 +18,7 @@ import (
 
 func (a *app) host(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usagef("host: expected subcommand init, apply, allow, upgrade or status")
+		return usagef("host: expected subcommand init, apply, allow, upgrade, status, cert or ingress")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("host "+sub, flag.ContinueOnError)
@@ -34,6 +34,10 @@ func (a *app) host(ctx context.Context, args []string) error {
 		return a.hostStatus(ctx, fs, rest)
 	case "allow":
 		return a.hostAllow(ctx, fs, rest)
+	case "cert":
+		return a.hostCert(ctx, fs, rest)
+	case "ingress":
+		return a.hostIngress(ctx, fs, rest)
 	}
 	return usagef("host: unknown subcommand %q", sub)
 }
@@ -159,6 +163,10 @@ func (a *app) hostStatus(ctx context.Context, fs *flag.FlagSet, args []string) e
 			detail := strings.Join(parts, ", ")
 			if f.Detail != "" {
 				detail = strings.TrimSpace(detail + " (" + f.Detail + ")")
+			}
+			if detail == "" {
+				_, _ = fmt.Fprintf(tw, "  %s\t%s\n", f.Path, f.State)
+				continue
 			}
 			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", f.Path, f.State, detail)
 		}

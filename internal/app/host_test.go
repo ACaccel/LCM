@@ -71,7 +71,7 @@ func TestHostComponentsEndpoint(t *testing.T) {
 	for _, c := range body.Items {
 		got[c.Name] = c.State
 	}
-	want := map[string]string{"core": "outdated", "machine-power": "not_installed", "security-host": "unknown", "deploy": "not_installed"}
+	want := map[string]string{"core": "outdated", "machine-power": "not_installed", "security-host": "unknown", "deploy": "not_installed", "ingress": "not_installed"}
 	if len(got) != len(want) {
 		t.Fatalf("components = %v", got)
 	}

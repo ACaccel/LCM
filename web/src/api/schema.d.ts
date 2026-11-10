@@ -3872,7 +3872,7 @@ export interface components {
         };
         HostComponent: {
             /** @enum {string} */
-            name: "core" | "machine-power" | "security-host" | "deploy";
+            name: "core" | "machine-power" | "security-host" | "deploy" | "ingress";
             state: components["schemas"]["HostComponentState"];
             files: components["schemas"]["HostFile"][];
         };
