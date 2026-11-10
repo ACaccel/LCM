@@ -641,8 +641,11 @@ class Transaction:
         self.host = host
         self.id = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + os.urandom(4).hex()
         self.dir = TRANSACTIONS / self.id
-        self.manifest = {'version': 1, 'id': self.id, 'kind': kind, 'createdAt': stamp(), 'state': 'running',
-                         'entries': []}
+        # IDs of one second differ only in random digits; the sequence orders
+        # transactions for revert and pruning.
+        sequence = 1 + max((sequence_of(host, name) for name in transactions(host)), default=0)
+        self.manifest = {'version': 1, 'id': self.id, 'sequence': sequence, 'kind': kind, 'createdAt': stamp(),
+                         'state': 'running', 'entries': []}
         for path, mode in ((BASE, 0o755), (BASE / 'backups', 0o700), (TRANSACTIONS, 0o700), (self.dir, 0o700)):
             if not host.exists(path):
                 host.mkdir(path, mode)
@@ -736,7 +739,17 @@ def write_data(host: Host, path, data: bytes, mode: int, uid: int = 0, gid: int 
 
 
 def transactions(host: Host) -> list[str]:
-    return [name for name in host.listdir(TRANSACTIONS) if TRANSACTION_ID.fullmatch(name)]
+    """Transaction IDs, oldest first."""
+    names = [name for name in host.listdir(TRANSACTIONS) if TRANSACTION_ID.fullmatch(name)]
+    return sorted(names, key=lambda name: (sequence_of(host, name), name))
+
+
+def sequence_of(host: Host, name: str) -> int:
+    try:
+        value = load_manifest(host, name).get('sequence', 0)
+    except (Failure, OSError, ValueError):
+        return 0
+    return value if type(value) is int and value >= 0 else 0
 
 
 def load_manifest(host: Host, identity: str) -> dict:

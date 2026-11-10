@@ -380,6 +380,23 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(self.system.units[unit], {'enabled': True, 'active': True}, unit)
         self.assertTrue(self.exists(H.NGINX_CONF))
 
+    def test_transactions_are_ordered_by_sequence_not_by_id(self):
+        # Two transactions of one second differ only in random digits: make
+        # the removal's ID sort first and check that revert still takes it.
+        self.install()
+        self.run_action('remove')
+        first, second = I.transactions(self.host)
+        for old, new in ((second, '20000101T000000Z-00000000'), (first, '20991231T235959Z-ffffffff')):
+            directory = self.root / str(I.TRANSACTIONS).lstrip('/')
+            (directory / old).rename(directory / new)
+            manifest = json.loads((directory / new / 'manifest.json').read_text())
+            manifest['id'] = new
+            (directory / new / 'manifest.json').write_text(json.dumps(manifest))
+        self.assertEqual(I.transactions(self.host), ['20991231T235959Z-ffffffff', '20000101T000000Z-00000000'])
+        self.run_action('revert')
+        self.assertTrue(self.exists(I.HELPER))
+        self.assertEqual(json.loads(self.read(I.TRANSACTIONS / '20000101T000000Z-00000000' / 'manifest.json'))['state'], 'reverted')
+
     def test_busy_ingress_lock_is_waited_for_then_refused(self):
         self.install()
         descriptor = I.lock(self.host, H.NGINX_LOCK, 'busy')
