@@ -258,7 +258,8 @@ func uidMin(fsys FS) int {
 	}
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
-		f := strings.Fields(sc.Text())
+		line, _, _ := strings.Cut(sc.Text(), "#")
+		f := strings.Fields(line)
 		if len(f) == 2 && f[0] == "UID_MIN" {
 			if n, err := strconv.Atoi(f[1]); err == nil && n > 0 {
 				return n

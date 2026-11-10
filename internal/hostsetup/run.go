@@ -258,7 +258,14 @@ func lookupAccount(ctx context.Context, r Runner, name string) (Account, bool, e
 	if err != nil {
 		return Account{}, false, err
 	}
-	f := strings.Split(strings.TrimSpace(string(out)), ":")
+	return ParsePasswd(string(out), name)
+}
+
+// ParsePasswd parses the output of "getent passwd name" into an Account,
+// including its comment (GECOS), which identifies the accounts host setup
+// created.
+func ParsePasswd(out, name string) (Account, bool, error) {
+	f := strings.Split(strings.TrimSpace(out), ":")
 	if len(f) != 7 || f[0] != name {
 		return Account{}, false, fmt.Errorf("getent passwd %s: unexpected output", name)
 	}

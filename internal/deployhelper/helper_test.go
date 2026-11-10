@@ -909,14 +909,20 @@ func TestServeLocalNeedsRoot(t *testing.T) {
 	}
 }
 
-func TestParsePasswd(t *testing.T) {
-	acc, ok, err := parsePasswd("web:x:120:121::/var/lib/web:/usr/sbin/nologin\n", "web")
-	if err != nil || !ok || acc.UID != 120 || acc.GID != 121 || acc.Home != "/var/lib/web" || acc.Shell != "/usr/sbin/nologin" {
+func TestLookupKeepsTheAccountComment(t *testing.T) {
+	run := func(out string, code int) (hostsetup.Account, bool, error) {
+		return lookup(context.Background(), (&execx.Fake{}).Reply("getent passwd web", out, code), "web")
+	}
+	acc, ok, err := run("web:x:120:121:LCM service web:/var/lib/web:/usr/sbin/nologin\n", 0)
+	if err != nil || !ok || acc.UID != 120 || acc.GID != 121 || acc.Home != "/var/lib/web" || acc.Shell != "/usr/sbin/nologin" || acc.GECOS != "LCM service web" {
 		t.Fatalf("%+v %v %v", acc, ok, err)
 	}
 	for _, out := range []string{"other:x:1:1::/:/bin/sh", "web:x:a:1::/:/bin/sh", "web:x:1:1::relative:/bin/sh", "web:x:1:1"} {
-		if _, _, err := parsePasswd(out, "web"); err == nil {
+		if _, _, err := run(out, 0); err == nil {
 			t.Errorf("%q accepted", out)
 		}
+	}
+	if _, ok, err := run("", 2); err != nil || ok {
+		t.Errorf("missing account: ok %v err %v", ok, err)
 	}
 }

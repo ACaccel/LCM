@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -116,18 +114,5 @@ func lookup(ctx context.Context, r execx.Runner, name string) (hostsetup.Account
 	if err != nil {
 		return hostsetup.Account{}, false, fmt.Errorf("getent passwd %s: %w", name, err)
 	}
-	return parsePasswd(res.Output, name)
-}
-
-func parsePasswd(out, name string) (hostsetup.Account, bool, error) {
-	f := strings.Split(strings.TrimSpace(out), ":")
-	if len(f) != 7 || f[0] != name {
-		return hostsetup.Account{}, false, fmt.Errorf("getent passwd %s: unexpected output", name)
-	}
-	uid, err1 := strconv.Atoi(f[2])
-	gid, err2 := strconv.Atoi(f[3])
-	if err1 != nil || err2 != nil || uid < 0 || gid < 0 || !filepath.IsAbs(f[5]) {
-		return hostsetup.Account{}, false, fmt.Errorf("getent passwd %s: unexpected output", name)
-	}
-	return hostsetup.Account{Name: name, UID: uid, GID: gid, Home: filepath.Clean(f[5]), Shell: f[6]}, true, nil
+	return hostsetup.ParsePasswd(res.Output, name)
 }
