@@ -197,8 +197,14 @@
 // measured while it runs. When it ends, root changes the output directory's
 // owner to itself (mode 0700) through a descriptor checked against the
 // directory it looked at, because the account may still hold a descriptor of
-// it, measures it again, and refuses any entry but the result and the
-// expected regular artifacts. Root then copies the artifacts into the new
+// it, and does the same for every directory below it (bounded in depth,
+// entries and time), measures it again, and refuses any entry but the result
+// and the expected regular artifacts. A staging tree that still cannot be
+// removed is renamed .del-stuck-* and a leftover the sweep cannot remove is
+// skipped and named in the reply's log, so neither blocks later operations.
+// A file the account already had open for writing can still grow until root
+// has copied it (the copy takes the size it saw), so backup.dir should be on
+// the same file system as /var/lib or have a quota. Root then copies the artifacts into the new
 // set while hashing them. The backup file system must have the reserve
 // of StopFreeBytes and StopFreeInodes for those copies beyond the set's size.
 //

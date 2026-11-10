@@ -13,12 +13,12 @@ func TestDeployConfig(t *testing.T) {
 		`"toolchains":{"go":"/g","node":"/n"},"tailscale":{"port":9443},"components":{"deploy":true}`
 	c, err := ParseConfig([]byte(`{` + base + `,
 		"runtimes":{"node24":"/home/alice/.local/node"},
-		"backup":{"dir":"/var/backups/lcm"},
+		"backup":{"dir":"/var/backups/lcm-services"},
 		"services":{"web":{"port":3200,"runtimes":["node24"],"inputs":{"assets":"/srv/inputs/web/assets"}}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Components.Deploy || c.Runtimes["node24"] != "/home/alice/.local/node" || c.Backup.Dir != "/var/backups/lcm" ||
+	if !c.Components.Deploy || c.Runtimes["node24"] != "/home/alice/.local/node" || c.Backup.Dir != "/var/backups/lcm-services" ||
 		c.Services["web"].Port != 3200 || c.Services["web"].Inputs["assets"] != testInput {
 		t.Fatalf("parsed %+v", c)
 	}
@@ -56,6 +56,7 @@ func TestDeployConfig(t *testing.T) {
 		`"backup":{"dir":"/etc/backups"}`:                                     "under the system tree /etc",
 		`"backup":{"dir":"/usr/local/backups"}`:                               "under the system tree /usr",
 		`"backup":{"dir":"/tmp/b"}`:                                           "under the system tree /tmp",
+		`"backup":{"dir":"/var/backups/lcm"}`:                                 "must not be /var/backups/lcm, where host upgrade keeps its sets; use /var/backups/lcm-services",
 		`"backup":{"dir":"/var/lib/lcm-build"}`:                               "LCM's own /var/lib/lcm",
 		`"backup":{"dir":"/var/lib/lcmx"}`:                                    "LCM's own /var/lib/lcm",
 		`"backup":{"dir":"/var/cache/lcm-build/b"}`:                           "must not overlap /var/cache/lcm-build",
@@ -87,7 +88,7 @@ func deployHost(t *testing.T) *testHost {
 	th.fs.dir("/srv/inputs/web", 0o755, aliceUID, aliceUID)
 	th.cfg.Components.Deploy = true
 	th.cfg.Runtimes = map[string]string{"node24": "/home/alice/.local/node"}
-	th.cfg.Backup = &Backup{Dir: "/var/backups/lcm"}
+	th.cfg.Backup = &Backup{Dir: "/var/backups/lcm-services"}
 	th.cfg.Services = map[string]ServiceGrant{"web": {Port: 3200, Runtimes: []string{"node24"}, Inputs: map[string]string{"assets": testInput}}}
 	th.writeConfig(th.cfg)
 	return th
@@ -143,7 +144,7 @@ func TestDeployComponentAndGrants(t *testing.T) {
 		perm     fs.FileMode
 		uid, gid int
 	}{
-		{BuildDir, 0o755, 0, 0}, {BuildCacheDir, 0o755, 0, 0}, {DeployLedger, 0o700, 0, 0}, {"/var/backups/lcm", 0o700, 0, 0},
+		{BuildDir, 0o755, 0, 0}, {BuildCacheDir, 0o755, 0, 0}, {DeployLedger, 0o700, 0, 0}, {"/var/backups/lcm-services", 0o700, 0, 0},
 		{"/var/lib/lcm-build/web", 0o750, 0, build.GID}, {"/var/cache/lcm-build/web", 0o750, build.UID, build.GID},
 		{RuntimesDir, 0o755, 0, 0}, {"/opt/web", 0o755, 0, 0}, {"/opt/web/releases", 0o755, 0, 0},
 		{"/var/lib/web", 0o750, web.UID, web.GID}, {"/etc/web", 0o750, 0, web.GID},
@@ -265,6 +266,22 @@ func TestGrantProblemsNeedManualAction(t *testing.T) {
 	})
 }
 
+// A file a service keeps open for writing can grow past the limits of a
+// backup, which only the same file system or a quota bounds.
+func TestApplyWarnsWhenBackupsAreOnAnotherFilesystem(t *testing.T) {
+	th := deployHost(t)
+	th.fs.dir("/var/backups/lcm-services", 0o700, 0, 0)
+	th.fs.get("/var/backups/lcm-services").dev = 42
+	if _, out, err := th.apply(Options{}); err != nil || !strings.Contains(out, "backup.dir is on another file system than /var/lib") {
+		t.Errorf("%v\n%s", err, out)
+	}
+	th = deployHost(t)
+	th.fs.dir("/var/backups/lcm-services", 0o700, 0, 0)
+	if _, out, err := th.apply(Options{}); err != nil || strings.Contains(out, "another file system") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
 func TestUntrustedDeploySourcesAreRefused(t *testing.T) {
 	for name, tc := range map[string]struct {
 		setup func(th *testHost)
@@ -281,8 +298,8 @@ func TestUntrustedDeploySourcesAreRefused(t *testing.T) {
 		}, "runtimes.node24: link /home/alice/rt/lib -> ../../.. points outside"},
 		"build root of another owner": {func(th *testHost) { th.fs.dir(BuildDir, 0o755, 5, 5) }, "/var/lib/lcm-build is not owned by root"},
 		"ledger of another owner":     {func(th *testHost) { th.fs.dir(DeployLedger, 0o700, 5, 5) }, "/var/lib/lcm-deploy is not owned by root"},
-		"backups of another owner":    {func(th *testHost) { th.fs.dir("/var/backups/lcm", 0o700, 5, 5) }, "/var/backups/lcm is not owned by root"},
-		"backups of another mode":     {func(th *testHost) { th.fs.dir("/var/backups/lcm", 0o755, 0, 0) }, "backup.dir /var/backups/lcm exists with mode 0755; apply does not change"},
+		"backups of another owner":    {func(th *testHost) { th.fs.dir("/var/backups/lcm-services", 0o700, 5, 5) }, "/var/backups/lcm-services is not owned by root"},
+		"backups of another mode":     {func(th *testHost) { th.fs.dir("/var/backups/lcm-services", 0o755, 0, 0) }, "backup.dir /var/backups/lcm-services exists with mode 0755; apply does not change"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			th := deployHost(t)

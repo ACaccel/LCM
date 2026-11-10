@@ -545,7 +545,7 @@ type stuckFS struct {
 }
 
 func (f stuckFS) RemoveAll(name string) error {
-	if _, err := f.OS.Lstat(name); err != nil {
+	if _, err := f.Lstat(name); err != nil {
 		return nil
 	}
 	if *f.stuck && (strings.Contains(name, "/.stage-") || strings.Contains(name, "/.del-stuck-")) {

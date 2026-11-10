@@ -120,6 +120,9 @@ var systemTrees = []string{"/boot", "/bin", "/sbin", "/lib", "/lib32", "/lib64",
 // tree that the system or LCM manages. The directory is made root-only, and
 // the helper and the services read and write the trees below.
 func (c Config) checkBackupDir(dir string) error {
+	if dir == BackupRoot {
+		return fmt.Errorf("must not be %s, where host upgrade keeps its sets; use %s-services", BackupRoot, BackupRoot)
+	}
 	if slices.Contains(systemDirs, dir) {
 		return fmt.Errorf("must be a directory of its own, not the system directory %s", dir)
 	}
@@ -477,10 +480,31 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 		if err := a.ensureDir(s, b.Dir, 0o700, 0, 0, "root:root"); err != nil {
 			return err
 		}
+		if a.otherFilesystem(b.Dir, "/var/lib") {
+			s.note("backup.dir is on another file system than /var/lib; a service can keep a file of a backup open for writing and grow it past the limits, which only a quota or the same file system bounds (docs/operations.md#backups)")
+		}
 	}
 	// The grant comes last: it is useless before the wrapper and the
 	// pinned helper are in place.
 	return a.ensureGrant(ctx, s, DeploySudoers, asset("lcm-deploy-sudoers"))
+}
+
+// otherFilesystem reports whether p, or its nearest existing ancestor, is on
+// another file system than dir's.
+func (a *applier) otherFilesystem(p, dir string) bool {
+	dev := func(p string) (uint64, bool) {
+		for q := p; ; q = path.Dir(q) {
+			if info, err := a.h.FS.Lstat(q); err == nil {
+				return info.Dev, true
+			}
+			if q == "/" {
+				return 0, false
+			}
+		}
+	}
+	d1, ok1 := dev(p)
+	d2, ok2 := dev(dir)
+	return ok1 && ok2 && d1 != d2
 }
 
 // addSystemAccount creates a system account with its own group, the comment

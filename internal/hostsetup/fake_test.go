@@ -37,6 +37,7 @@ type memNode struct {
 	data     []byte
 	target   string
 	ino      uint64
+	dev      uint64
 }
 
 var inodes atomic.Uint64
@@ -146,7 +147,7 @@ func (m *memFS) Lstat(p string) (Info, error) {
 	if !ok {
 		return Info{}, notExist("lstat", p)
 	}
-	return Info{Mode: n.mode, UID: n.uid, GID: n.gid, Size: int64(len(n.data)), Ino: n.ino}, nil
+	return Info{Mode: n.mode, UID: n.uid, GID: n.gid, Size: int64(len(n.data)), Ino: n.ino, Dev: n.dev}, nil
 }
 
 func (m *memFS) Open(p string) (io.ReadCloser, error) {
