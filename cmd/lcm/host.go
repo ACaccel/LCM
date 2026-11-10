@@ -31,7 +31,7 @@ func (a *app) host(ctx context.Context, args []string) error {
 	case "upgrade":
 		return a.hostUpgrade(ctx, fs, rest)
 	case "status":
-		return a.hostStatus(fs, rest)
+		return a.hostStatus(ctx, fs, rest)
 	case "allow":
 		return a.hostAllow(ctx, fs, rest)
 	}
@@ -127,7 +127,7 @@ func (a *app) hostApply(ctx context.Context, fs *flag.FlagSet, args []string) er
 	return nil
 }
 
-func (a *app) hostStatus(fs *flag.FlagSet, args []string) error {
+func (a *app) hostStatus(ctx context.Context, fs *flag.FlagSet, args []string) error {
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -145,6 +145,7 @@ func (a *app) hostStatus(fs *flag.FlagSet, args []string) error {
 	}
 	tw := tabwriter.NewWriter(a.stdout, 0, 4, 2, ' ', 0)
 	pending := false
+	var limits []string
 	for _, c := range components {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\n", c.Name, c.State)
 		for _, f := range c.Files {
@@ -162,9 +163,15 @@ func (a *app) hostStatus(fs *flag.FlagSet, args []string) error {
 			_, _ = fmt.Fprintf(tw, "  %s\t%s\t%s\n", f.Path, f.State, detail)
 		}
 		pending = pending || c.State == hostsetup.StateOutdated || c.State == hostsetup.StateMissing
+		if c.Name == hostsetup.ComponentDeploy && c.State != hostsetup.StateNotInstalled {
+			limits = hostsetup.SandboxLimits(ctx, h)
+		}
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	for _, l := range limits {
+		_, _ = fmt.Fprintln(a.stdout, "\nnote: "+l)
 	}
 	if pending {
 		_, err = fmt.Fprintln(a.stdout, "\nTo install the versions of this build: sudo bin/lcm host apply (from a reviewed checkout, after make build)")

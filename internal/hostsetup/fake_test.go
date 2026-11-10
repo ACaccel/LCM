@@ -384,11 +384,11 @@ type fakeRunner struct {
 	origin                      string
 	healthy                     bool
 
-	failVisudo, failVisudoStaged, failAnalyze bool
-	visudoHook                                func() error
-	versionOutput, installedVersion           string
-	passwordInput, goVersion, analyzeStderr   string
-	installPy                                 []string
+	failVisudo, failVisudoStaged, failAnalyze       bool
+	visudoHook                                      func() error
+	versionOutput, installedVersion, systemdVersion string
+	passwordInput, goVersion, analyzeStderr         string
+	installPy                                       []string
 }
 
 const (
@@ -576,6 +576,11 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 
 func (r *fakeRunner) systemctl(a []string) ([]byte, error) {
 	switch a[0] {
+	case "--version":
+		if r.systemdVersion != "" {
+			return []byte(r.systemdVersion), nil
+		}
+		return []byte("systemd 255 (255.4-1ubuntu8.18)\n+PAM +AUDIT +SELINUX +APPARMOR +BPF_FRAMEWORK -XKBCOMMON\n"), nil
 	case "show":
 		if r.needReload {
 			return []byte("yes\n"), nil
@@ -627,6 +632,7 @@ func newTestHost(t *testing.T) *testHost {
 		m.dir(d, 0o755, 0, 0)
 	}
 	m.dir("/tmp", 0o777|fs.ModeSticky, 0, 0)
+	m.file("/sys/fs/cgroup/cgroup.controllers", "cpu memory pids\n", 0o444, 0, 0)
 	m.file(python3, "python", 0o755, 0, 0)
 	m.file(visudo, "visudo", 0o755, 0, 0)
 	m.dir("/home/alice", 0o750, aliceUID, aliceUID)

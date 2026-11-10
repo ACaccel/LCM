@@ -485,6 +485,9 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 			s.note("backup.dir is on another file system than /var/lib; a service can keep a file of a backup open for writing and grow it past the limits, which only a quota or the same file system bounds (docs/operations.md#backups)")
 		}
 	}
+	for _, limit := range SandboxLimits(ctx, a.h) {
+		s.note(limit)
+	}
 	// The grant comes last: it is useless before the wrapper and the
 	// pinned helper are in place.
 	return a.ensureGrant(ctx, s, DeploySudoers, asset("lcm-deploy-sudoers"))
