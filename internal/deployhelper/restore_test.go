@@ -346,6 +346,42 @@ func TestRestoreReservesRoomForTheCopyAndTheUndo(t *testing.T) {
 	})
 }
 
+// The data directory is the service's, so sizing what a restore replaces
+// must not follow its links out of it, as root.
+func TestRestoreSizingStaysInsideTheDataDirectory(t *testing.T) {
+	e := newEnv(t)
+	e.write("/var/lib/web/real/sub/f", strings.Repeat("x", 5000), 0o644)
+	e.write("/srv/secret/x/big", strings.Repeat("y", 100000), 0o644)
+	if err := os.Symlink(e.real("/srv/secret"), e.real("/var/lib/web/a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", e.real("/var/lib/web/inner")); err != nil {
+		t.Fatal(err)
+	}
+	size := func(path string) uint64 {
+		t.Helper()
+		m := setManifest{Sources: []manifestSource{{BackupSource: BackupSource{Type: SourceFiles, Path: path}}}}
+		n, err := e.h.currentSize(backupEnv{svc: "web"}, m, []int{0}, Limits{}.withDefaults())
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		return n
+	}
+	if n := size("real"); n < 5000 || n > 20000 {
+		t.Errorf("real: %d", n)
+	}
+	// Through a link to a directory outside, to one inside, and as the last
+	// component: nothing is measured, and nothing tells whether the target exists.
+	for _, p := range []string{"a/x", "a/x/big", "a/nope", "a", "inner/sub", "inner"} {
+		if n := size(p); n != 0 {
+			t.Errorf("%s: %d bytes through a link", p, n)
+		}
+	}
+	if n := size("missing/x"); n != 0 {
+		t.Errorf("missing: %d", n)
+	}
+}
+
 func TestFailedRestoreIsUndone(t *testing.T) {
 	setup := func() (*env, string, string) {
 		e := newEnv(t)

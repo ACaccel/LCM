@@ -1114,7 +1114,7 @@ func (h *Helper) currentSize(env backupEnv, m setManifest, idx []int, lim Limits
 				names = append(names, s.Path+"-wal", s.Path+"-shm")
 			}
 			for _, n := range names {
-				size, err := h.pathSize(hostsetup.ServiceDataDir(env.svc)+"/"+n, lim)
+				size, err := h.pathSize(hostsetup.ServiceDataDir(env.svc), n, lim)
 				if err != nil {
 					return 0, err
 				}
@@ -1129,25 +1129,51 @@ func (h *Helper) currentSize(env backupEnv, m setManifest, idx []int, lim Limits
 	return total, nil
 }
 
-// pathSize is the size of a file or of the files below a directory, with the
-// archive's overhead of a header for each; 0 when it does not exist.
-func (h *Helper) pathSize(p string, lim Limits) (uint64, error) {
-	info, err := h.FS.Lstat(p)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return 0, nil
-	case err != nil:
+// pathSize is the size of the file or of the files below the directory rel
+// of root, with the archive's overhead of a header for each; 0 when it does
+// not exist. The data directory belongs to the service, so rel is resolved
+// inside root only: a link in any component counts as 0 (the worker would
+// not follow it either), and nothing outside root is looked at.
+func (h *Helper) pathSize(root, rel string, lim Limits) (uint64, error) {
+	t, err := h.FS.OpenTree(root)
+	if err != nil {
 		return 0, err
-	case info.IsRegular():
-		return uint64(info.Size), nil //nolint:gosec // a file size is not negative
-	case !info.IsDir():
+	}
+	parts := strings.Split(rel, "/")
+	var last hostsetup.Info
+	var cur string
+	for i, part := range parts {
+		cur = path.Join(cur, part)
+		info, err := t.Lstat(cur)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			_ = t.Close()
+			return 0, nil
+		case err != nil:
+			_ = t.Close()
+			return 0, err
+		case info.IsLink() || (i < len(parts)-1 && !info.IsDir()):
+			_ = t.Close()
+			return 0, nil
+		}
+		last = info
+	}
+	_ = t.Close()
+	switch {
+	case last.IsRegular():
+		return uint64(last.Size), nil //nolint:gosec // a file size is not negative
+	case !last.IsDir():
 		return 0, nil
 	}
-	u := h.usage(lim, p)
-	if u.stopped != "" || u.entries >= lim.MaxEntries {
-		return 0, fmt.Errorf("%s is too large or too deep to copy (%s)", p, cmp.Or(u.stopped, fmt.Sprintf("%d entries", u.entries)))
+	deadline := h.Clock.Now().Add(lim.MeasureTimeout)
+	u, err := hostsetup.MeasureTreeBelow(h.FS, root, rel, hostsetup.MeasureLimits{
+		MaxDepth: lim.MaxDepth, MaxEntries: lim.MaxEntries,
+		Expired: func() bool { return !h.Clock.Now().Before(deadline) },
+	})
+	if err != nil {
+		return 0, fmt.Errorf("%s/%s is too large, too deep or unreadable to size: %w", root, rel, err)
 	}
-	return uint64(u.bytes) + 1024*uint64(u.entries), nil //nolint:gosec // measured sizes are not negative
+	return uint64(u.Bytes) + 1024*uint64(u.Entries), nil //nolint:gosec // measured sizes are not negative
 }
 
 // restore puts a backup set back. The order protects the data: the set is
