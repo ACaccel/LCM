@@ -322,8 +322,11 @@ func TestRestore(t *testing.T) {
 	if _, err := e.mgr.Restore(e.ctx, "app", catalog.ActionOptions{BackupID: first.BackupID}); !errors.Is(err, catalog.ErrUnknownBackup) {
 		t.Errorf("restore of a removed set = %v", err)
 	}
-	if len(h.Requests()) != before {
-		t.Errorf("the helper was called: %v", opsAfter(h, before))
+	// Unknown IDs are looked up in the helper's listing, never restored.
+	for _, op := range opsAfter(h, before) {
+		if op == deployhelper.OpRestore {
+			t.Errorf("an unknown set was restored: %v", opsAfter(h, before))
+		}
 	}
 
 	// The audit trail names the sets.

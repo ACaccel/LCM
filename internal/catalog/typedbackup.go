@@ -127,30 +127,52 @@ func (s *session) prune(ctx context.Context, keep model.BackupKeep) string {
 	return ""
 }
 
-// restoreTarget picks the set a restore puts back.
-func (c *Catalog) restoreTarget(ctx context.Context, name, backupID string) (BackupRecord, error) {
-	var (
-		rec BackupRecord
-		err error
-	)
+// restoreTarget picks the set a restore puts back: the named one, or the
+// newest. A set LCM has no record of (copied from another machine, or made
+// before the records existed) is taken from the helper's listing; adopted
+// reports that the returned record is not stored yet.
+func (m *Manager) restoreTarget(ctx context.Context, name, backupID string) (rec BackupRecord, adopted bool, err error) {
+	c := m.cat
+	if backupID != "" && !ValidBackupID(backupID) {
+		return rec, false, fmt.Errorf("%w: %q is not a backup ID", ErrUnknownBackup, backupID)
+	}
 	if backupID == "" {
 		rec, err = c.LatestBackup(ctx, name)
 	} else {
-		if !ValidBackupID(backupID) {
-			return rec, fmt.Errorf("%w: %q is not a backup ID", ErrUnknownBackup, backupID)
-		}
 		rec, err = c.Backup(ctx, name, backupID)
 	}
 	if errors.Is(err, ErrBackupNotFound) {
-		return rec, fmt.Errorf("%w: %w", ErrUnknownBackup, err)
+		if found, ok := m.helperSet(ctx, name, backupID); ok {
+			return found, true, nil
+		}
+		return rec, false, fmt.Errorf("%w: %w", ErrUnknownBackup, err)
 	}
 	if err != nil {
-		return rec, err
+		return rec, false, err
 	}
 	if !rec.Restorable() {
-		return rec, fmt.Errorf("%w: %s did not finish, was removed by retention, or is not a set of this service", ErrUnknownBackup, rec.BackupID)
+		return rec, false, fmt.Errorf("%w: %s did not finish, was removed by retention, or is not a set of this service", ErrUnknownBackup, rec.BackupID)
 	}
-	return rec, nil
+	return rec, false, nil
+}
+
+// helperSet looks a set up in the helper's listing: the one named, or the
+// newest backup. Only sets with a readable manifest count.
+func (m *Manager) helperSet(ctx context.Context, name, backupID string) (BackupRecord, bool) {
+	resp, err := rt.CallHelper(ctx, m.deploy, deployhelper.Request{Op: deployhelper.OpBackups, Service: name, OperationID: rt.NewOperationID()})
+	if err != nil {
+		return BackupRecord{}, false
+	}
+	for _, info := range resp.Backups { // newest first
+		if info.Problem != "" || (backupID == "" && info.Kind != deployhelper.KindBackup) || (backupID != "" && info.BackupID != backupID) {
+			continue
+		}
+		at := time.UnixMilli(info.CreatedAt).UTC()
+		return BackupRecord{Resource: name, Kind: info.Kind, BackupID: info.BackupID, StartedAt: at, FinishedAt: at, Outcome: OutcomeSucceeded,
+			Size: info.Size, Sources: modelSources(info.Sources), ManifestSHA256: info.ManifestSHA256, Skipped: info.Skipped,
+			Error: "found on the host; LCM had no record of this set"}, true
+	}
+	return BackupRecord{}, false
 }
 
 // Restore puts a backup set of a managed service back. The helper verifies
@@ -168,9 +190,15 @@ func (s *session) restore(ctx context.Context, res *ActionResult) error {
 	if b == nil || !b.Typed() || !b.Restorable() {
 		return ErrNoRestore
 	}
-	target, err := s.m.cat.restoreTarget(ctx, s.name, s.opts.BackupID)
+	target, adopted, err := s.m.restoreTarget(ctx, s.name, s.opts.BackupID)
 	if err != nil {
 		return err
+	}
+	if adopted {
+		target.Actor, target.RunID = s.actor, s.opts.RunID
+		if _, err := s.m.cat.AddBackup(ctx, target); err != nil {
+			return err
+		}
 	}
 	res.BackupID = target.BackupID
 	wasRunning := s.cur == StateRunning
@@ -319,7 +347,7 @@ func (m *Manager) restoreSteps(ctx context.Context, rec *Record, backupID string
 	if b == nil || !b.Typed() || !b.Restorable() {
 		return nil, ErrNoRestore
 	}
-	target, err := m.cat.restoreTarget(ctx, rec.Name, backupID)
+	target, _, err := m.restoreTarget(ctx, rec.Name, backupID)
 	if err != nil {
 		return nil, err
 	}
