@@ -21,7 +21,7 @@ func TestHostComponents(t *testing.T) {
 		{Name: hostsetup.ComponentMachinePower, State: hostsetup.StateNotInstalled, Files: []hostsetup.FileStatus{
 			{Path: hostsetup.PowerWrapper, State: hostsetup.StateMissing},
 		}},
-		{Name: hostsetup.ComponentSecurityHost, State: hostsetup.StateUpToDate, Files: []hostsetup.FileStatus{
+		{Name: hostsetup.ComponentSecurity, State: hostsetup.StateUpToDate, Files: []hostsetup.FileStatus{
 			{Path: hostsetup.SecurityHelper, State: hostsetup.StateUpToDate, Installed: fullSum, Embedded: fullSum},
 		}},
 	}

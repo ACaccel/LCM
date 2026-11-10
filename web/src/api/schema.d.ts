@@ -882,7 +882,7 @@ export interface paths {
         /**
          * Host components compared with this build
          * @description Compares the root-owned files that `lcm host apply` installs (`core`,
-         *     `machine-power`, `security-host`, `deploy`) with the versions embedded in the running
+         *     `machine-power`, `security`, `deploy`) with the versions embedded in the running
          *     binary. The server only reads them as its own unprivileged account: files it
          *     cannot read are `unknown`, and nothing is ever changed through the API. An
          *     administrator brings an `outdated` or `missing` component up to date with
@@ -3872,7 +3872,7 @@ export interface components {
         };
         HostComponent: {
             /** @enum {string} */
-            name: "core" | "machine-power" | "security-host" | "deploy" | "ingress";
+            name: "core" | "machine-power" | "security" | "deploy" | "ingress";
             state: components["schemas"]["HostComponentState"];
             files: components["schemas"]["HostFile"][];
         };

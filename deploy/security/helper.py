@@ -18,6 +18,9 @@ import sys
 import tempfile
 
 VERSION = 1
+# Policy version 2 pins only files this component renders. Version 1 also
+# pinned another project's Nginx snippet; install.py converts it on adoption.
+POLICY_VERSION = 2
 BASE = Path('/var/lib/lcm-security-host')
 POLICY = Path('/etc/lcm/security-host/policy.json')
 LIB = Path('/usr/local/lib/workstation-security')
@@ -28,15 +31,26 @@ AIDE_CONFIG = Path('/etc/workstation-security/aide.conf')
 BASELINE = Path('/var/lib/workstation-security/aide/aide.db')
 AUDIT_OPTIONAL = Path('/etc/audit/rules.d/60-lcm-security-optional.rules')
 AUDIT_CORE = Path('/etc/audit/rules.d/50-workstation-security.rules')
-GLOBAL = Path('/etc/nginx/conf.d/20-workstation-security.conf')
-API_HOOK = Path('/etc/nginx/workstation-security/card-api-10-observation.conf')
-SOCKET_HOOK = Path('/etc/nginx/workstation-security/card-socket-10-observation.conf')
-CARD_LIVE = Path('/etc/nginx/snippets/card-together.conf')
-CARD_POLICY = Path('/usr/local/lib/card-together-local-deploy/deploy/nginx/card-together.conf')
-CARD_LOCK = Path('/run/card-together-local-deploy.lock')
+NGINX_CONF = Path('/etc/nginx/conf.d/20-workstation-security.conf')
+HOOKS = Path('/etc/nginx/lcm/hooks')
+NGINX_LOG = '/var/log/nginx/workstation-security.jsonl'
+# The ingress component holds this lock while it changes Nginx; taking it too
+# keeps either side from testing or reloading the other's half-written files.
+NGINX_LOCK = Path('/run/lcm-ingress.lock')
+CONTROL_LOCK = Path('/run/lcm-security.lock')
 ACTIONS = ('aide.check', 'aide.schedule', 'nginx.configure', 'audit.profile', 'aide.profile', 'baseline.request')
+# Categories with observation thresholds. Ingress names the category of every
+# location in $lcm_category; health and static locations have no thresholds.
 CATEGORIES = ('auth', 'api', 'upload', 'socket')
-ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'}
+DEFAULT_LIMITS = (
+    {'category': 'api', 'rate': '30r/s', 'burst': 600, 'connections': 256},
+    {'category': 'auth', 'rate': '120r/m', 'burst': 120, 'connections': 64},
+    {'category': 'socket', 'rate': '15r/s', 'burst': 300, 'connections': 256},
+    {'category': 'upload', 'rate': '30r/m', 'burst': 120, 'connections': 64},
+)
+SERVICE = re.compile(r'[a-z][a-z0-9-]{0,62}')
+MAX_SERVICES = 64
+ENV ={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'TZ': 'UTC'}
 MAX_JSON = 65536
 # The operation journal holds at most OPERATION_CAP entries. When it is full,
 # finished entries last updated more than FINISHED_RETENTION ago are removed
@@ -146,6 +160,24 @@ def atomic(path, value, mode=0o600):
             os.unlink(temporary)
 
 
+def lock_file(path):
+    """Take an exclusive lock on a root-only file in a root-owned directory."""
+    trusted(path.parent)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o077:
+            raise Failure()
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(descriptor)
+        raise Failure('busy') from None
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def run(argv, timeout=STEP_SECONDS, account=None):
     kwargs = {}
     if account is not None:
@@ -217,6 +249,98 @@ def integer(value, lower, upper):
     return type(value) is int and lower <= value <= upper
 
 
+def valid_limits(limits):
+    """Exactly one threshold set per category, in category order."""
+    if not isinstance(limits, list) or len(limits) != len(CATEGORIES):
+        raise Failure('invalid')
+    seen = set()
+    for item in limits:
+        exact(item, ('category', 'rate', 'burst', 'connections'))
+        category = item['category']
+        if category not in CATEGORIES or category in seen or not isinstance(item['rate'], str):
+            raise Failure('invalid')
+        seen.add(category)
+        if (not re.fullmatch(r'[1-9][0-9]{0,4}r/[ms]', item['rate']) or not integer(item['burst'], 1, 10000)
+                or not integer(item['connections'], 1, 4096)):
+            raise Failure('invalid')
+    return sorted(({key: item[key] for key in ('category', 'rate', 'burst', 'connections')} for item in limits),
+                  key=lambda v: v['category'])
+
+
+def valid_services(services):
+    if (not isinstance(services, list) or len(services) > MAX_SERVICES or services != sorted(set(services))
+            or not all(isinstance(name, str) and SERVICE.fullmatch(name) for name in services)):
+        raise Failure('invalid')
+    return services
+
+
+def valid_nginx(nginx):
+    """The Nginx section of the policy: null when Nginx observation is off."""
+    if nginx is None:
+        return None
+    exact(nginx, ('services', 'limits'))
+    return {'services': valid_services(nginx['services']), 'limits': valid_limits(nginx['limits'])}
+
+
+def render_nginx_conf(limits):
+    """The http-level observation configuration. Nothing in it rejects traffic.
+
+    The ingress component sets $lcm_service and $lcm_category in each of its
+    locations; the maps give both an empty default elsewhere, so requests
+    outside ingress locations are neither logged nor counted."""
+    lines = ['# Managed by the LCM security component; observation only, nothing here rejects traffic.',
+             'map $uri $lcm_service { default ""; }',
+             'map $uri $lcm_category { default ""; }',
+             'map $lcm_category $lcm_security_loggable {',
+             '    "" 0;',
+             '    health 0;',
+             '    default 1;',
+             '}']
+    for item in valid_limits(limits):
+        category = item['category']
+        lines += ['map $lcm_category $lcm_security_{0}_key {{ default ""; {0} $binary_remote_addr; }}'.format(category),
+                  'limit_req_zone $lcm_security_{0}_key zone=lcm_security_{0}:2m rate={1};'.format(category, item['rate']),
+                  'limit_conn_zone $lcm_security_{0}_key zone=lcm_security_{0}_conn:2m;'.format(category)]
+    lines += ['log_format lcm_security escape=json',
+              '    \'{"time":"$time_iso8601","source_ip":"$remote_addr",\'',
+              '    \'"service":"$lcm_service","category":"$lcm_category","method":"$request_method",\'',
+              '    \'"status":$status,"request_time":$request_time,\'',
+              '    \'"request_limit":"$limit_req_status","connection_limit":"$limit_conn_status",\'',
+              '    \'"request_length":$request_length,"bytes_sent":$bytes_sent}\';',
+              'access_log {} lcm_security if=$lcm_security_loggable;'.format(NGINX_LOG)]
+    return ('\n'.join(lines) + '\n').encode()
+
+
+def render_hook(item):
+    category = item['category']
+    return ('# Managed by the LCM security component; thresholds stay in observation (dry-run) mode.\n'
+            'limit_req_dry_run on;\nlimit_conn_dry_run on;\nlimit_req_status 429;\nlimit_conn_status 429;\n'
+            '# Dry-run notices contain raw requests; keep them below the default error-log level.\n'
+            'limit_req_log_level info;\nlimit_conn_log_level info;\n'
+            'limit_req zone=lcm_security_{0} burst={1} nodelay;\n'
+            'limit_conn lcm_security_{0}_conn {2};\n').format(category, item['burst'], item['connections']).encode()
+
+
+def hook_path(service, category):
+    return HOOKS / service / (category + '-10-observation.conf')
+
+
+def nginx_files(nginx):
+    """Every Nginx file of the component, rendered from the policy section."""
+    if nginx is None:
+        return {}
+    files = {NGINX_CONF: render_nginx_conf(nginx['limits'])}
+    for service in nginx['services']:
+        for item in nginx['limits']:
+            files[hook_path(service, item['category'])] = render_hook(item)
+    return files
+
+
+def pinned_paths(policy):
+    """The files whose digests the policy pins: all rendered by this component."""
+    return {str(path) for path in (AIDE_TIMER, AIDE_CONFIG, AUDIT_CORE)} | {str(path) for path in nginx_files(policy.get('nginx'))}
+
+
 def typed_settings(action, settings, policy):
     if action in ('aide.check', 'baseline.request'):
         exact(settings, ())
@@ -226,20 +350,7 @@ def typed_settings(action, settings, policy):
             raise Failure('invalid')
     elif action == 'nginx.configure':
         exact(settings, ('limits',))
-        limits = settings['limits']
-        if not isinstance(limits, list) or len(limits) != 4:
-            raise Failure('invalid')
-        seen = set()
-        for item in limits:
-            exact(item, ('category', 'rate', 'burst', 'connections'))
-            category = item['category']
-            if category not in CATEGORIES or category in seen or not isinstance(item['rate'], str):
-                raise Failure('invalid')
-            seen.add(category)
-            match = re.fullmatch(r'([1-9][0-9]{0,4})r/([ms])', item['rate'])
-            if not match or not integer(item['burst'], 1, 10000) or not integer(item['connections'], 1, 4096):
-                raise Failure('invalid')
-        settings = {'limits': sorted(limits, key=lambda v: v['category'])}
+        settings = {'limits': valid_limits(settings['limits'])}
     elif action in ('audit.profile', 'aide.profile'):
         exact(settings, ('profiles',))
         if not isinstance(settings['profiles'], list) or len(settings['profiles']) > 16:
@@ -341,9 +452,10 @@ def number(value, maximum=10**12):
 class Controls:
     def __init__(self):
         self.policy = read_json(POLICY)
-        if self.policy.get('version') != VERSION or not valid_id(self.policy.get('machineId')):
+        if self.policy.get('version') != POLICY_VERSION or not valid_id(self.policy.get('machineId')):
             raise Failure()
-        if set(self.policy.get('files', {})) != set(str(p) for p in (AIDE_TIMER, AIDE_CONFIG, GLOBAL, API_HOOK, SOCKET_HOOK, CARD_LIVE, CARD_POLICY, AUDIT_CORE)):
+        self.nginx = valid_nginx(self.policy.get('nginx'))
+        if not isinstance(self.policy.get('files'), dict) or set(self.policy['files']) != pinned_paths(self.policy):
             raise Failure()
         self.files = {name: read(Path(name)) for name in self.policy['files']}
         self.drift = any(digest(content) != self.policy['files'][name] for name, content in self.files.items())
@@ -371,34 +483,12 @@ class Controls:
                 for name, value in sorted(self.profiles[kind].items())]
 
     def limits(self):
-        result = []
-        for category in CATEGORIES:
-            global_config = self.files[str(GLOBAL)].decode()
-            hook = self.files[str(SOCKET_HOOK if category == 'socket' else API_HOOK)].decode()
-            rate = re.findall(r'limit_req_zone \$ws_security_' + category + r'_key zone=ws_security_' + category + r':2m rate=([1-9][0-9]*r/[ms]);', global_config)
-            burst = re.findall(r'limit_req zone=ws_security_' + category + r' burst=([0-9]+) nodelay;', hook)
-            connections = re.findall(r'limit_conn ws_security_' + category + r'_conn ([0-9]+);', hook)
-            if len(rate) != 1 or len(burst) != 1 or len(connections) != 1:
-                raise Failure()
-            result.append({'category': category, 'rate': rate[0], 'burst': int(burst[0]), 'connections': int(connections[0])})
-        return result
+        return [dict(item) for item in self.nginx['limits']] if self.nginx else []
 
     def nginx_ready(self):
-        # The immutable Card policy includes the same fixed hooks. No duplicate
-        # threshold copy exists for a later Card deployment to overwrite.
-        if self.files[str(CARD_LIVE)] != self.files[str(CARD_POLICY)]:
-            return False
-        required = ('include /etc/nginx/workstation-security/card-api-*.conf;',
-                    'include /etc/nginx/workstation-security/card-socket-*.conf;')
-        snippet = self.files[str(CARD_POLICY)].decode()
-        if not all(value in snippet for value in required):
-            return False
-        hooks = {entry.name for entry in API_HOOK.parent.iterdir()}
-        if hooks != {API_HOOK.name, SOCKET_HOOK.name}:
-            return False
-        return all('limit_req_dry_run on;' in self.files[str(path)].decode()
-                   and 'limit_conn_dry_run on;' in self.files[str(path)].decode()
-                   for path in (API_HOOK, SOCKET_HOOK))
+        # The pinned files are rendered from the policy, so without drift
+        # they hold exactly its dry-run thresholds.
+        return self.nginx is not None
 
     def status(self):
         aide = {'targets': aide_targets(self.files[str(AIDE_CONFIG)]), 'result': None, 'lastRunAt': None, 'nextRunAt': None, 'baselineCreatedAt': None,
@@ -464,7 +554,7 @@ class Controls:
             if self.drift and action not in ('aide.check', 'baseline.request'):
                 enabled, reason = False, 'Managed configuration drift requires local review.'
             elif action == 'nginx.configure' and not nginx_ready:
-                enabled, reason = False, 'The immutable Card policy or dry-run hooks require local review.'
+                enabled, reason = False, 'Nginx traffic observation is not installed on this host.'
             elif action in ('audit.profile', 'aide.profile') and not any(not item['required'] for item in self.profiles[action.split('.')[0]].values()):
                 enabled, reason = False, 'No optional profiles have been approved by the local administrator.'
             capabilities.append({'action': action, 'enabled': enabled, 'reason': reason})
@@ -628,17 +718,9 @@ class Controls:
         elif action == 'nginx.configure':
             if not self.nginx_ready():
                 raise Failure()
-            targets = {path: self.files[str(path)] for path in (GLOBAL, API_HOOK, SOCKET_HOOK)}
-            for item in settings['limits']:
-                category = item['category']
-                hook = SOCKET_HOOK if category == 'socket' else API_HOOK
-                replacements = ((GLOBAL, rb'(limit_req_zone \$ws_security_' + category.encode() + rb'_key zone=ws_security_' + category.encode() + rb':2m rate=)[1-9][0-9]*r/[ms](;)', item['rate']),
-                                (hook, rb'(limit_req zone=ws_security_' + category.encode() + rb' burst=)[0-9]+( nodelay;)', str(item['burst'])),
-                                (hook, rb'(limit_conn ws_security_' + category.encode() + rb'_conn )[0-9]+(;)', str(item['connections'])))
-                for target, pattern, value in replacements:
-                    targets[target], count = re.subn(pattern, lambda match: match[1] + value.encode() + match[2], targets[target])
-                    if count != 1:
-                        raise Failure()
+            targets = nginx_files({'services': self.nginx['services'], 'limits': settings['limits']})
+            if set(targets) != set(nginx_files(self.nginx)):
+                raise Failure()
         elif action == 'audit.profile':
             parts = []
             for profile in settings['profiles']:
@@ -664,14 +746,12 @@ class Controls:
             lines = {line for line in run(['/usr/sbin/auditctl', '-l']).splitlines() if line and line != 'No rules'}
             journal['auditForeignBefore'] = sorted(line for line in lines if 'wssec_optional_' not in line)
         atomic(journal_path, canonical(journal))
-        card_fd = None
+        nginx_fd = None
         written = []
         try:
             if action == 'nginx.configure':
-                trusted(CARD_LOCK, missing=True)
-                card_fd = os.open(CARD_LOCK, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-                fcntl.flock(card_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # Re-read under the same lock used by Card's privileged deployer.
+                nginx_fd = lock_file(NGINX_LOCK)
+                # Re-read under the lock the ingress component changes Nginx with.
                 if Controls().effective != self.effective:
                     raise Failure('conflict')
                 run(['/usr/sbin/nginx', '-t'])
@@ -701,6 +781,8 @@ class Controls:
                 self.policy.setdefault(key, {})[str(path)] = digest(value)
             if action == 'aide.schedule':
                 self.policy['schedule'] = settings
+            elif action == 'nginx.configure':
+                self.policy['nginx']['limits'] = settings['limits']
             elif action == 'audit.profile':
                 for profile in settings['profiles']:
                     self.policy['profiles']['audit'][profile['name']]['enabled'] = profile['enabled']
@@ -740,8 +822,8 @@ class Controls:
                 journal['operation'].update(state='indeterminate', error='Rollback could not be verified; local administrator review is required.')
             raise
         finally:
-            if card_fd is not None:
-                os.close(card_fd)
+            if nginx_fd is not None:
+                os.close(nginx_fd)
 
     def dispatch(self, request):
         if request.get('version') != VERSION or request.get('machineId') != self.policy['machineId']:
@@ -776,12 +858,9 @@ def main():
         raise Failure()
     trusted(Path(__file__))
     trusted(BASE)
-    lock = os.open(BASE / 'control.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    # The installer holds the same lock while it changes the component.
+    lock = lock_file(CONTROL_LOCK)
     try:
-        info = os.fstat(lock)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o077:
-            raise Failure()
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         raw = sys.stdin.buffer.read(16385)
         if len(raw) > 16384:
             raise Failure('invalid')

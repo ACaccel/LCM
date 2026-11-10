@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -391,7 +393,6 @@ type fakeRunner struct {
 	visudoHook                                      func() error
 	versionOutput, installedVersion, systemdVersion string
 	passwordInput, goVersion, analyzeStderr         string
-	installPy                                       []string
 
 	// nginx: nginxTest fails "nginx -t" when it returns an error;
 	// reloads counts reloads, failReload fails them and certbot records
@@ -400,6 +401,94 @@ type fakeRunner struct {
 	reloads    int
 	failReload bool
 	certbot    []string
+
+	sec fakeSecurity
+}
+
+// fakeSecurity stands for deploy/security/install.py: it records what it
+// receives and installs or removes the component's files.
+type fakeSecurity struct {
+	actions []string
+	inputs  []securityInput
+	// manual is what plan and apply report as needing the administrator.
+	manual []string
+	// replies overrides the reply of an action.
+	replies   map[string]securityReply
+	failApply bool
+}
+
+const testTransaction = "20261110T000000Z-0000abcd"
+
+func (r *fakeRunner) securityInstaller(c Command) ([]byte, error) {
+	a := c.Args
+	if len(a) < 3 || a[0] != "-I" || !strings.HasPrefix(a[1], "/tmp/lcm-security-") || path.Base(a[1]) != "install.py" {
+		return nil, fmt.Errorf("fake installer: unexpected arguments %v", a)
+	}
+	for _, name := range securityAssets {
+		n := r.fs.get(path.Dir(a[1]) + "/" + name)
+		if n == nil || n.uid != 0 || n.mode.Perm() != 0o600 || string(n.data) != string(asset("security/"+name)) {
+			return nil, fmt.Errorf("fake installer: %s is not staged root-only", name)
+		}
+	}
+	var in securityInput
+	if err := json.NewDecoder(c.Stdin).Decode(&in); err != nil {
+		return nil, err
+	}
+	action := a[2]
+	r.sec.actions = append(r.sec.actions, strings.Join(a[2:], " "))
+	r.sec.inputs = append(r.sec.inputs, in)
+	reply := securityReply{OK: true}
+	if canned, ok := r.sec.replies[action]; ok {
+		reply = canned
+		reply.OK = true
+	} else {
+		installed := r.fs.get(SecurityRuntime) != nil
+		hasToken := r.fs.get("/etc/workstation-security/ingest-token") != nil
+		switch action {
+		case "plan", "apply":
+			if len(r.sec.manual) > 0 {
+				reply.Manual = r.sec.manual
+				break
+			}
+			if !installed {
+				reply.Changes = []string{"install " + SecurityRuntime, "write a new ingest API token to /etc/workstation-security/ingest-token (root 0600)"}
+				reply.TokenMissing = !hasToken && in.Token == ""
+			}
+			if action == "plan" || installed {
+				break
+			}
+			if r.sec.failApply {
+				out, _ := json.Marshal(securityReply{Error: "nginx -t failed; the changes of transaction " + testTransaction + " were undone"})
+				return out, exit(1)
+			}
+			if reply.TokenMissing {
+				out, _ := json.Marshal(securityReply{Error: "no ingest token was supplied"})
+				return out, exit(1)
+			}
+			for _, f := range securityFiles {
+				if f.path != SecuritySudoers {
+					r.fs.file(f.path, string(asset(f.asset)), f.perm, 0, 0)
+				}
+			}
+			r.fs.file(SecurityCollector, "[Unit]\n", 0o644, 0, 0)
+			r.fs.file("/etc/workstation-security/ingest-token", in.Token+"\n", 0o600, 0, 0)
+			reply.TokenMissing = false
+			reply.Transaction = testTransaction
+		case "remove-plan", "remove":
+			if installed {
+				reply.Changes = []string{"remove " + SecurityRuntime}
+				reply.Notes = []string{"kept: the AIDE baseline"}
+			}
+			if action == "remove" {
+				for _, f := range append(slices.Clone(securityFiles), rootFile{path: SecurityCollector}) {
+					if f.path != SecuritySudoers {
+						r.fs.remove(f.path)
+					}
+				}
+			}
+		}
+	}
+	return json.Marshal(reply)
 }
 
 const (
@@ -599,11 +688,7 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		}
 		return nil, nil
 	case c.Path == python3:
-		r.installPy = append([]string{}, a...)
-		r.fs.file(SecurityHelper, string(asset("security-host/helper.py")), 0o644, 0, 0)
-		r.fs.file(SecurityPolicy, fmt.Sprintf(`{"machineId":%q}`, arg(3)), 0o600, 0, 0)
-		r.fs.file(SecuritySudoers, "lcm ALL=(root) ...\n", 0o440, 0, 0)
-		return []byte(`{"installed":true}` + "\n"), nil
+		return r.securityInstaller(c)
 	}
 	return nil, fmt.Errorf("fake runner: unexpected command %s", line)
 }

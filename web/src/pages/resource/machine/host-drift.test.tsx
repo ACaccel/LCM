@@ -53,7 +53,7 @@ describe("host drift notice", () => {
   it("shows nothing when everything is current, not installed, or unreadable by the server", async () => {
     const asked = answer([
       { name: "core", state: "unknown", files: [{ path: "/usr/local/libexec/lcm/self-install", state: "up_to_date" }, { path: "/etc/sudoers.d/lcm", state: "unknown", detail: "not readable as this user" }] },
-      { name: "security-host", state: "not_installed", files: [{ path: "/usr/local/libexec/lcm/security-host/helper.py", state: "missing" }] },
+      { name: "security", state: "not_installed", files: [{ path: "/usr/local/libexec/lcm/security-host/helper.py", state: "missing" }] },
     ]);
     const { container } = show();
     await waitFor(() => expect(asked.length).toBe(1));

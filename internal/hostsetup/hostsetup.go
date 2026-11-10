@@ -6,8 +6,9 @@
 // fixed sequence of steps. Each step compares the host with the wanted state
 // and reports "unchanged", "would change: ..." (check mode) or
 // "changed: ...". It never removes a component that the configuration
-// turns off, and never runs the self-deployed binary as root: whoever can
-// push to the deployed branch controls that binary.
+// turns off, except the security component when asked to (--remove), and
+// never runs the self-deployed binary as root: whoever can push to the
+// deployed branch controls that binary.
 //
 // Every effect goes through Host, so that tests run against a fake
 // filesystem and fake commands instead of the machine.
