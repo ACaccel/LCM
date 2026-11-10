@@ -20,6 +20,11 @@ const (
 	// Marker is the first line of the rendered site; a file without it was
 	// not written by LCM and is never replaced.
 	Marker = "# Written by LCM ingress from /etc/lcm/host.json and the route options of services; do not edit."
+	// ProbePath is answered with 204 by nginx itself in every server of the
+	// site; it is not a well-known file name a configuration may use.
+	ProbePath = "/.well-known/lcm-probe"
+	// MaxSite bounds the rendered site.
+	MaxSite = 1 << 20
 )
 
 // Site is everything the site file is rendered from. Values come from the
@@ -234,7 +239,21 @@ func Render(s Site) ([]byte, error) {
 	if w.err != nil {
 		return nil, w.err
 	}
+	if w.b.Len() > MaxSite {
+		return nil, fmt.Errorf("the rendered site has %d bytes, more than the limit of %d; use fewer routes or route options", w.b.Len(), MaxSite)
+	}
 	return []byte(w.b.String()), nil
+}
+
+// probeLocation answers the probe after a reload from nginx itself, so that
+// no service's answer decides whether the site is kept.
+func probeLocation(w *writer) {
+	w.blank()
+	w.line("# Answered by nginx for LCM's check after a reload.")
+	w.open("location = " + ProbePath)
+	w.line("access_log off;")
+	w.line("return 204;")
+	w.close()
 }
 
 func (s Site) listen(w *writer, port int, ssl string) {
@@ -269,6 +288,7 @@ func (s Site) httpServer(w *writer) {
 	w.line("default_type text/plain;")
 	w.line("try_files $uri =404;")
 	w.close()
+	probeLocation(w)
 	w.blank()
 	w.open("location /")
 	w.line("return 308 " + w.qv(lit("https://"), val(s.Domain), lit("$request_uri")) + ";")
@@ -284,6 +304,7 @@ func (s Site) httpsServer(w *writer, routes []Route, locs []location) {
 	w.line("ssl_protocols TLSv1.2 TLSv1.3;")
 	w.line(`set $lcm_service "";`)
 	w.line(`set $lcm_category "";`)
+	probeLocation(w)
 	wk := slices.Clone(s.WellKnown)
 	slices.SortFunc(wk, func(a, b WellKnown) int { return cmp.Compare(a.Name, b.Name) })
 	for _, f := range wk {

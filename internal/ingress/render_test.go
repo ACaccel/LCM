@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -331,5 +332,33 @@ func TestLimits(t *testing.T) {
 	ok := Options{Proxy: []Proxy{{Path: "a/", Upstream: "/", BodyLimit: "64m", Timeout: "1h"}, {Path: "b", Exact: true, Upstream: "/b", Timeout: "3600"}}}
 	if is := ok.Validate(); len(is) > 0 {
 		t.Errorf("the limits themselves were refused: %v", is)
+	}
+}
+
+func TestRenderProbeLocationAndSize(t *testing.T) {
+	out, err := Render(liveShape())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(out), "location = "+ProbePath+" {\n        access_log off;\n        return 204;\n    }"); n != 2 {
+		t.Fatalf("%d probe locations:\n%s", n, out)
+	}
+	s := liveShape()
+	s.WellKnown = append(s.WellKnown, WellKnown{Name: "lcm-probe", Path: "/var/www/x"})
+	if _, err := Render(s); err == nil {
+		t.Fatal("the probe path was accepted as a well-known file")
+	}
+	// A site beyond MaxSite is refused, not truncated.
+	big := Site{Domain: "example.org", ACMEWebroot: "/var/www/lcm-acme", TLS: ptr(CertificateFiles("example.org"))}
+	csp := "default-src 'self'; img-src " + strings.Repeat("https://a.example.org ", 150)
+	for n := range 40 {
+		o := Options{Headers: &Headers{CSP: csp}}
+		for p := range MaxProxies {
+			o.Proxy = append(o.Proxy, Proxy{Path: "p" + strconv.Itoa(p) + "/", Upstream: "/"})
+		}
+		big.Routes = append(big.Routes, Route{Service: "s" + strconv.Itoa(n), Prefix: "/s" + strconv.Itoa(n) + "/", Port: 3000 + n, Options: o})
+	}
+	if _, err := Render(big); err == nil || !strings.Contains(err.Error(), "more than the limit") {
+		t.Fatalf("oversized site: %v", err)
 	}
 }

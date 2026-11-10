@@ -22,7 +22,14 @@ func shutdownSignals(args []string) []os.Signal {
 // changesHost reports whether args name a host command that changes the
 // machine.
 func changesHost(args []string) bool {
-	return len(args) >= 2 && args[0] == "host" && (args[1] == "apply" || args[1] == "upgrade")
+	if len(args) < 2 || args[0] != "host" {
+		return false
+	}
+	switch args[1] {
+	case "apply", "upgrade", "cert", "ingress":
+		return true
+	}
+	return false
 }
 
 // protectHostChange keeps a vanished terminal from ending the process

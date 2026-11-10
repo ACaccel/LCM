@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"slices"
 	"strings"
@@ -50,10 +51,10 @@ func newIngressEnv(t *testing.T) *ingressTestEnv {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.probes = append(e.probes, p.String())
-		return 200, nil
+		return 204, nil
 	}
 	env := e.h.ingressEnv()
-	plan, err := hostsetup.PlanSite(env, e.cfg, nil)
+	plan, err := hostsetup.PlanSite(env, e.cfg, hostsetup.RouteOptions{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestIngressApplyStoresOptionsAndAppliesTheSite(t *testing.T) {
 	if !slices.Contains(e.systemctlCalls(), "reload nginx.service") {
 		t.Errorf("no reload: %v", e.systemctlCalls())
 	}
-	if strings.Join(e.probes, " ") != "https://example.org/ https://example.org/web/" {
+	if strings.Join(e.probes, " ") != "http://example.org/.well-known/lcm-probe https://example.org/.well-known/lcm-probe" {
 		t.Errorf("probes %v", e.probes)
 	}
 
@@ -266,4 +267,72 @@ func TestIngressStaticReleaseLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.refused(Request{Op: OpIngressApply, Service: "site"}, CodeRefused, "/srv/site/releases/latest is a symbolic link")
+}
+
+// TestIngressApplyChecksTheSiteUnderTheLock covers a revert or a manual
+// disable that happens while the request waits for the lock, and a site
+// disabled by hand.
+func TestIngressApplyChecksTheSiteUnderTheLock(t *testing.T) {
+	e := newIngressEnv(t)
+	lock := e.h.IngressLock
+	e.h.IngressLock = func(legacy string) (func(), error) {
+		e.write(hostsetup.IngressState+"/reverted.json", "{}", 0o600)
+		return lock(legacy)
+	}
+	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeRefused, "was reverted")
+	if err := os.Remove(e.real(hostsetup.IngressState + "/reverted.json")); err != nil {
+		t.Fatal(err)
+	}
+	e.h.IngressLock = func(legacy string) (func(), error) {
+		_ = os.Remove(e.real(hostsetup.SiteLink))
+		return lock(legacy)
+	}
+	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeRefused, "is not enabled")
+	e.h.IngressLock = lock
+	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeRefused, "is not enabled")
+	if e.exists(hostsetup.SiteLink) || len(e.systemctlCalls()) != 0 {
+		t.Fatal("the helper enabled the site again")
+	}
+}
+
+// TestIngressUndoOutlivesCancellation cancels the request while the probe
+// runs: the previous site is still put back and reloaded.
+func TestIngressUndoOutlivesCancellation(t *testing.T) {
+	e := newIngressEnv(t)
+	site := e.read(hostsetup.SiteFile)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	e.h.Probe = func(context.Context, hostsetup.Probe) (int, error) {
+		cancel()
+		return 0, context.Canceled
+	}
+	raw, err := json.Marshal(Request{Version: Version, Op: OpIngressApply, OperationID: "00000000-0000-4000-8000-000000000099", Service: "web", Route: &webOptions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := e.h.Handle(ctx, raw)
+	if resp.Code != CodeFailed || !strings.Contains(resp.Message, "the previous site was put back") || strings.Contains(resp.Message, "after putting the previous site back") {
+		t.Fatalf("reply %+v", resp)
+	}
+	if e.read(hostsetup.SiteFile) != site {
+		t.Fatal("the previous site was not put back")
+	}
+	if n := slices.Index(e.systemctlCalls(), "reload nginx.service"); n < 0 || strings.Count(strings.Join(e.systemctlCalls(), "\n"), "reload nginx.service") != 2 {
+		t.Fatalf("reloads %v", e.systemctlCalls())
+	}
+}
+
+func TestIngressApplyLeavesStaleOptionsOfOthersOut(t *testing.T) {
+	e := newIngressEnv(t)
+	stale := ingress.Options{Proxy: []ingress.Proxy{{Path: "api/", Upstream: "/api/"}}}
+	e.write(hostsetup.RouteOptionsFile("site"), string(hostsetup.EncodeRouteOptions(stale)), 0o600)
+	resp := e.ok(Request{Op: OpIngressApply, Service: "web", Route: &webOptions})
+	if len(resp.IngressApply.Dropped) != 1 || !strings.Contains(resp.IngressApply.Dropped[0], "services.site") {
+		t.Fatalf("result %+v", resp.IngressApply)
+	}
+	if e.read(hostsetup.SiteFile) != e.rendered(map[string]ingress.Options{"web": webOptions}) {
+		t.Fatal("the site was not applied without the stale options")
+	}
+	// The requested service's own options must fit.
+	e.refused(Request{Op: OpIngressApply, Service: "site", Route: &stale}, CodeRefused, "needs a port")
 }

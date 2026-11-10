@@ -246,7 +246,7 @@ With `components.ingress` set, LCM owns one nginx site for the domain and render
 |---|---|---|
 | `/etc/nginx/sites-available/lcm-ingress.conf` | root 0644 | The rendered site; its first line is LCM's marker, and a file without it is never replaced |
 | `/etc/nginx/sites-enabled/lcm-ingress.conf` | root link | Link to the site |
-| `/var/lib/lcm-ingress/` | root 0700 | `routes/<service>.json` (accepted route options), `last-apply.json`, `previous.conf` (the site before the last change), `adopted.json` (the link cutover disabled), `reverted.json` |
+| `/var/lib/lcm-ingress/` | root 0700 | `routes/<service>.json` (accepted route options), `last-apply.json`, `previous.conf` (the site before the last change), `adopted.json` (every link cutover disabled), `renewal-original.json` (the renewal configuration before `apply` first changed it), `reverted.json` |
 | `/var/www/lcm-ingress/well-known/` | root 0755 | Copies of the domain-level files nginx serves |
 | `<acmeWebroot>` (`/var/www/lcm-acme`) | root 0755 | certbot's webroot challenges, served on port 80 |
 | `/etc/letsencrypt/renewal-hooks/deploy/lcm-ingress-reload` | root 0755 | [`deploy/lcm-ingress-reload`](../deploy/lcm-ingress-reload): `nginx -t`, then reload, after certbot saved a renewed certificate |
@@ -271,12 +271,12 @@ With `components.ingress` set, LCM owns one nginx site for the domain and render
 |---|---|
 | `domain` | Lower-case domain name, the site's `server_name` |
 | `listen` | IP addresses (canonical form, at most 8) both servers bind to; empty binds all addresses (IPv4 and IPv6) |
-| `acmeWebroot` | Default `/var/www/lcm-acme`; not in a system tree, home directories or `/var/lib`, and not overlapping a static directory |
+| `acmeWebroot` | Default `/var/www/lcm-acme`; not in a system tree, home directories or `/var/lib`, and not overlapping a static directory. On a host that already has a certificate, set it to the webroot certbot uses now (`webroot_path` in the renewal configuration), so that cutover changes nothing in certbot's files |
 | `tls.email`, `tls.keyType` | certbot's account email and key type (`ecdsa`, the default, or `rsa`) |
 | `hsts` | Send `Strict-Transport-Security: max-age=31536000` from every location (default off) |
 | `wellKnown` | Domain-level files: `assetlinks.json`, `security.txt` or `apple-app-site-association`, each naming a root-owned file of at most 64 KiB; the content is copied and served at `/.well-known/<name>` with a fixed media type. The rest of `/.well-known/` answers 404 |
 | `adopt` | The hand-made site in `sites-enabled` whose link the first application disables ([cutover](#cutover-and-revert)) |
-| `legacyLock` | A lock file below `/run` that hand-made scripts still take while they edit nginx; while it exists, every change of the site takes it too |
+| `legacyLock` | A lock file below `/run` that hand-made scripts still take while they edit nginx; while it exists, every change of the site except a revert waits for it (at most a minute for `host` commands, 30 s for the deploy helper) and is refused as busy after that. Anyone who can read the file can hold it, so remove `legacyLock` from `host.json` once the projects no longer edit nginx |
 
 `apply` needs nginx (`/usr/sbin/nginx`) and reports certbot when it is missing. With the component on it also installs the [deploy helper](#deploy-helper) files (wrapper, pinned helper, sudoers rule, ledger), through which LCM applies route changes; with `components.deploy` false the helper refuses every deploy and backup operation.
 
@@ -300,17 +300,17 @@ Without route options a route proxies everything below the prefix to `http://127
 
 **Applying.** `apply`, `host cert issue`, `host ingress revert` and the deploy helper's `ingress.apply` change the site the same way, holding `/run/lcm-ingress.lock` (and `legacyLock` while it exists):
 
-1. Render the whole site; refuse it when a value, a static directory or a well-known file fails its checks.
+1. Render the whole site; refuse it when a value, a static directory, a well-known file or a hook file in `/etc/nginx/lcm/hooks` (which must be root's, like its directories) fails its checks. Stored route options of a service that no longer fit (its grant changed, or the file cannot be decoded) are left out, so that route has its defaults: `apply` reports them as a manual action, `ingress.status` and `ingress.apply` as `dropped`. The site is at most 1 MiB.
 2. Copy the well-known files, write the site file atomically (the previous content goes to `previous.conf`), enable it and disable the adopted link.
 3. Test the complete configuration with `nginx -t`, exactly what a reload loads.
-4. Reload nginx and probe every route on the first listen address (or `127.0.0.1`) with the domain as `Host` and TLS server name; a probe passes with any answer except a server error of nginx itself (`502`-`504` mean the service is not answering yet and pass).
+4. Reload nginx and probe the location `/.well-known/lcm-probe`, which nginx answers itself with `204` in both servers, on every listen address (or `127.0.0.1`), over HTTP and, with a certificate, HTTPS, with the domain as `Host` and TLS server name. No service's answer decides whether the site is kept. `lcm-probe` is not a name `wellKnown` accepts.
 5. On any failure put the previous file and links back, and reload again if nginx had loaded the change. The result is recorded in `last-apply.json`.
 
-`host apply --check` prints the rendered file when it would change it, together with the adoption. LCM sends a service's route options to the deploy helper (`ingress.apply`, see the [protocol](../internal/deployhelper/protocol.go)); the helper keeps them in `/var/lib/lcm-ingress/routes/` and puts the previous ones back when the site fails. It refuses while the site has never been installed or was reverted, and while the adopted site is enabled again, so that cutover stays an administrator's step. `ingress.status` reports the digest of the site the configuration renders, the installed one and the last result; `lcm host status` run as root compares them too (as another user it only checks that the installed site is LCM's).
+`host apply --check` prints the rendered file when it would change it, together with the adoption. LCM sends a service's route options to the deploy helper (`ingress.apply`, see the [protocol](../internal/deployhelper/protocol.go)); the helper keeps them in `/var/lib/lcm-ingress/routes/` and puts the previous ones back when the site fails. It refuses while the site has never been installed, was reverted or is not enabled, and while the adopted site is enabled again, so that cutover stays an administrator's step; it checks again after taking the locks. The options of the service it applies must fit. `ingress.status` reports the digest of the site the configuration renders, the installed one and the last result; `lcm host status` run as root compares them too (as another user it only checks that the installed site is LCM's).
 
 #### Certificates
 
-certbot keeps the certificate and renews it with its own timer. `apply` makes the renewal configuration `/etc/letsencrypt/renewal/<domain>.conf` use the webroot: it sets `authenticator = webroot`, `webroot_path = <acmeWebroot>,` and the domain's `[[webroot_map]]` entry, keeps every other line, and reports an `installer` other than `None` (certbot would edit nginx's files on renewal) as a manual action. It installs the deploy hook above and reports other deploy hooks, such as a hand-made reload, without removing them.
+certbot keeps the certificate and renews it with its own timer. Once the site is applied (so the ACME location serves the webroot), `apply` makes the renewal configuration `/etc/letsencrypt/renewal/<domain>.conf` use the webroot: it sets `authenticator = webroot`, `webroot_path = <acmeWebroot>,` and the domain's `[[webroot_map]]` entry, keeps every other line and the file's version before its first change (`renewal-original.json`, which `host ingress revert` puts back), and reports an `installer` other than `None` (certbot would edit nginx's files on renewal) as a manual action. When the site cannot be applied, the renewal configuration is left alone. It installs the deploy hook above and reports other deploy hooks, such as a hand-made reload, without removing them.
 
 On a new machine, after `apply` (which serves port 80 with the ACME location until a certificate exists):
 
@@ -326,7 +326,8 @@ To take over a host whose site was written by hand, name that site in `adopt`, t
 
 1. `sudo bin/lcm host apply --check`: review the rendered site and the line that disables the adopted site (its file in `sites-available` stays).
 2. Stop the scripts that still edit nginx, or set `legacyLock` to the lock they take. Avoid the days around a certificate renewal.
-3. `sudo bin/lcm host apply`: the first application disables the adopted link and records it in `adopted.json`.
+3. `sudo bin/lcm host apply`: the first application disables the adopted link and records it in `adopted.json` (a later `adopt` is added to the record).
+4. Once the projects no longer edit nginx, remove `legacyLock` from `host.json`.
 
 To go back:
 
@@ -334,7 +335,7 @@ To go back:
 sudo bin/lcm host ingress revert
 ```
 
-It disables LCM's site, enables the adopted site again with the link it recorded (or `sites-available/<adopt>`), tests and reloads nginx (putting LCM's site back when that fails), then removes `lcm-ingress.conf` (kept as `previous.conf`) and marks the site reverted: the deploy helper refuses `ingress.apply` from then on. The next `apply` installs the site again; set `components.ingress` to `null` first to stay reverted.
+It disables LCM's site, enables every adopted site again with the link it recorded (or `sites-available/<adopt>` without a record), tests and reloads nginx (putting LCM's site back when that fails), then removes `lcm-ingress.conf` (a copy goes to `previous.conf` when it can be read; the removal only checks the marker line), puts back the renewal configuration as it was before `apply` changed it, and marks the site reverted: the deploy helper refuses `ingress.apply` from then on. It does not wait for `legacyLock`, so going back stays possible while the lock is held. The next `apply` installs the site again; set `components.ingress` to `null` first to stay reverted.
 
 ## Uninstall
 
