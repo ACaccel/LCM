@@ -280,7 +280,11 @@ type Response struct {
 	Backup   *BackupResult   `json:"backup,omitempty"`
 	Restore  *RestoreResult  `json:"restore,omitempty"`
 	Backups  []BackupInfo    `json:"backups,omitempty"`
-	Prune    *PruneResult    `json:"prune,omitempty"`
+	// BackupsTruncated reports that backups is incomplete: entries beyond the
+	// newest MaxListed were left out, or entries were cut (their sources
+	// omitted, then the oldest dropped) to keep the reply within MaxResponse.
+	BackupsTruncated bool         `json:"backupsTruncated,omitempty"`
+	Prune            *PruneResult `json:"prune,omitempty"`
 }
 
 // BuildResult is the result of build.
@@ -761,10 +765,46 @@ func encodeResponse(r Response) []byte {
 	if err == nil && len(raw) <= MaxResponse {
 		return raw
 	}
+	if raw, ok := fitBackups(r); ok {
+		return raw
+	}
 	r.Log, r.Releases, r.Backups = "", nil, nil
 	r.Message = strings.TrimSpace(r.Message + " (the reply was too large; details were dropped)")
 	raw, _ = marshal(r)
 	return raw
+}
+
+// fitBackups cuts a listing to fit MaxResponse: it omits the sources of the
+// entries first, then drops the oldest entries (the listing is newest first),
+// and flags the cut. It reports false when even an empty listing does not fit.
+func fitBackups(r Response) ([]byte, bool) {
+	if len(r.Backups) == 0 {
+		return nil, false
+	}
+	r.BackupsTruncated = true
+	list := slices.Clone(r.Backups)
+	for i := range list {
+		list[i].Sources = nil
+	}
+	fits := func(n int) ([]byte, bool) {
+		r.Backups = list[:n]
+		raw, err := marshal(r)
+		return raw, err == nil && len(raw) <= MaxResponse
+	}
+	if raw, ok := fits(len(list)); ok {
+		return raw, true
+	}
+	// Whether n entries fit never improves as n grows.
+	lo, hi := 0, len(list)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if _, ok := fits(mid); ok {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return fits(lo)
 }
 
 func marshal(v any) ([]byte, error) {

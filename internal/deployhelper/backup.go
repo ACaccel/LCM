@@ -902,7 +902,7 @@ func (h *Helper) backups(req Request, cfg hostsetup.Config, g hostsetup.ServiceG
 		return respond(resp, e)
 	}
 	if len(list) > maxListed {
-		list = list[:maxListed]
+		list, resp.BackupsTruncated = list[:maxListed], true
 	}
 	resp.Backups = list
 	return resp

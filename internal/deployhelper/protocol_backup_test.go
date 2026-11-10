@@ -1,8 +1,10 @@
 package deployhelper
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBackupRequestsDecode(t *testing.T) {
@@ -77,17 +79,63 @@ func TestBackupOperationsChange(t *testing.T) {
 	}
 }
 
-func TestOversizedListingIsDropped(t *testing.T) {
-	resp := Response{Version: Version, Op: OpBackups, OperationID: "0b7c4a1e-3f2d-4c5b-9a8e-123456789abc"}
-	for range 300 {
-		resp.Backups = append(resp.Backups, BackupInfo{BackupID: "20261101T120000Z-0a1b2c3d", Kind: KindBackup, Problem: strings.Repeat("x", 1000)})
+const listingOp = "0b7c4a1e-3f2d-4c5b-9a8e-123456789abc"
+
+// An oversized listing keeps what fits: sources go first, then the oldest
+// entries, and the reply says so.
+func TestOversizedListingIsTrimmed(t *testing.T) {
+	t.Run("sources are omitted first", func(t *testing.T) {
+		resp := Response{Version: Version, Op: OpBackups, OperationID: listingOp}
+		src := BackupSource{Type: SourceCommand, Argv: append([]string{"bin/dump"}, strings.Repeat("a", 200), strings.Repeat("b", 200), strings.Repeat("c", 200))}
+		for i := range 200 {
+			resp.Backups = append(resp.Backups, BackupInfo{BackupID: fmt.Sprintf("20261101T120000Z-%08x", i), Kind: KindBackup,
+				Sources: []BackupSource{src, src, src, src}})
+		}
+		raw := encodeResponse(resp)
+		got, err := DecodeResponse(raw)
+		if err != nil || len(raw) > MaxResponse || len(got.Backups) != 200 || !got.BackupsTruncated || got.Backups[0].Sources != nil || got.Message != "" {
+			t.Errorf("reply of %d bytes with %d entries, truncated %v, %v", len(raw), len(got.Backups), got.BackupsTruncated, err)
+		}
+	})
+	t.Run("then the oldest entries", func(t *testing.T) {
+		resp := Response{Version: Version, Op: OpBackups, OperationID: listingOp}
+		for i := range 300 {
+			resp.Backups = append(resp.Backups, BackupInfo{BackupID: fmt.Sprintf("20261101T120000Z-%08x", i), Kind: KindBackup, Problem: strings.Repeat("x", 1000)})
+		}
+		raw := encodeResponse(resp)
+		got, err := DecodeResponse(raw)
+		if err != nil || len(raw) > MaxResponse || !got.BackupsTruncated || len(got.Backups) < 200 || len(got.Backups) >= 300 {
+			t.Fatalf("reply of %d bytes with %d entries, truncated %v, %v", len(raw), len(got.Backups), got.BackupsTruncated, err)
+		}
+		// The newest come first, so the oldest are the ones cut, and the
+		// listing is not cut further than it must be.
+		if got.Backups[0].BackupID != resp.Backups[0].BackupID || got.Backups[len(got.Backups)-1].BackupID != resp.Backups[len(got.Backups)-1].BackupID {
+			t.Error("the newest entries were not kept")
+		}
+		resp.Backups = resp.Backups[:len(got.Backups)+1]
+		if next, _ := marshal(resp); len(next) <= MaxResponse {
+			t.Error("an entry that fits was dropped")
+		}
+	})
+	t.Run("a listing that fits is untouched", func(t *testing.T) {
+		resp := Response{Version: Version, Op: OpBackups, OperationID: listingOp, Backups: []BackupInfo{{BackupID: "20261101T120000Z-0a1b2c3d", Kind: KindBackup}}}
+		got, err := DecodeResponse(encodeResponse(resp))
+		if err != nil || got.BackupsTruncated || len(got.Backups) != 1 {
+			t.Errorf("reply %+v, %v", got, err)
+		}
+	})
+}
+
+func TestListingIsLimitedAndFlagged(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	src := BackupSource{Type: SourceFiles, Path: "media"}
+	for range maxListed + 2 {
+		e.ok(backupReq(src))
+		e.clock.Advance(time.Hour)
 	}
-	raw := encodeResponse(resp)
-	if len(raw) > MaxResponse {
-		t.Fatalf("reply of %d bytes", len(raw))
-	}
-	got, err := DecodeResponse(raw)
-	if err != nil || got.Backups != nil || !strings.Contains(got.Message, "too large") {
-		t.Errorf("reply %+v, %v", got, err)
+	got := e.ok(Request{Op: OpBackups, Service: "web"})
+	if len(got.Backups) != maxListed || !got.BackupsTruncated {
+		t.Errorf("%d entries, truncated %v", len(got.Backups), got.BackupsTruncated)
 	}
 }
