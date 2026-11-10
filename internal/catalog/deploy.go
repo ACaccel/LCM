@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
@@ -97,6 +98,28 @@ func (l *stepLog) note(format string, args ...any) { fmt.Fprintf(&l.b, format+"\
 func (s *session) git(dir string, timeout time.Duration, args ...string) execx.Cmd {
 	env := append(execx.GitEnv(), "GIT_CEILING_DIRECTORIES="+s.m.workDir)
 	return execx.Cmd{Argv: append([]string{s.m.git}, args...), Dir: dir, Env: env, Timeout: timeout}
+}
+
+// reasonLimit bounds the part of a command's output that an error carries.
+const reasonLimit = 200
+
+// withReason adds the last line of a failed command's output to err, so that
+// the deployment error says why the command failed ("dubious ownership")
+// and not only its exit status. The output comes from a repository LCM does
+// not control: control characters are replaced and the line is shortened.
+func withReason(err error, output string) error {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	last = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return '?'
+		}
+		return r
+	}, strings.ToValidUTF8(last, "?"))
+	if last == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, headCap(last, reasonLimit))
 }
 
 // needsClone reports whether the build checkout dir must be cloned: it does
@@ -235,7 +258,7 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, co checkout, 
 		log.add(c, r.Output)
 		if err != nil {
 			log.note("error: %v", err)
-			return r, &StepError{Step: step, Err: err}
+			return r, &StepError{Step: step, Err: withReason(err, r.Output)}
 		}
 		return r, nil
 	}

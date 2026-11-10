@@ -294,6 +294,9 @@ func TestDeployOtherFailures(t *testing.T) {
 		if !errors.As(err, &se) || se.Step != "clone" || e.state("app") != catalog.StateFailed {
 			t.Fatalf("err = %v, state %s", err, e.state("app"))
 		}
+		if msg := err.Error(); !strings.Contains(msg, "exit status 128: fatal: ") || !strings.Contains(msg, "does not exist") || strings.Contains(msg, "\n") {
+			t.Fatalf("the error does not carry the last line of the output: %q", msg)
+		}
 		if d := deployments(t, e, "app")[0]; !strings.Contains(d.LogExcerpt, "git clone -- "+g.remote+".missing") {
 			t.Fatalf("deployment log = %s", d.LogExcerpt)
 		}
