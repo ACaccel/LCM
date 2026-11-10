@@ -30,8 +30,9 @@
 //	op        fields besides version, op, operationId
 //	build     service, commit, command, timeoutSec, runtimes (optional)
 //	install   service, buildId, artifact
-//	activate  service, releaseId, start, runtime (optional), migrate (optional),
-//	          keepReleases (optional, 2-20, default 3)
+//	activate  service, releaseId, start (optional, see below), runtime (optional),
+//	          migrate (optional), keepReleases (optional, 2-20, default 3),
+//	          publish (optional), limits (optional)
 //	start     service
 //	stop      service
 //	restart   service
@@ -54,8 +55,15 @@
 // program followed by at most 32 arguments, the program being a
 // release-relative executable or the name of a program in the runtime's
 // bin directory. Paths use letters, digits and "._-/" without ".."
-// components; arguments also allow "=:,@+". The fields of backup, restore
-// and prune are described under "Backups".
+// components; arguments also allow "=:,@+". publish is {dir, retain,
+// retainDays}: dir a release-relative directory ("." is the whole release),
+// retain at most 16 directories below it that end with "/" and have no
+// component starting with ".", retainDays 1-90 (default 14, only with
+// retain). limits is {memoryHigh, memoryMax, stopTimeoutSec}: sizes of
+// digits with K, M or G between 1M and 16G, memoryHigh not above
+// memoryMax, stopTimeoutSec 1-600. An activate without start publishes
+// only: it needs publish and takes neither migrate nor limits. The fields
+// of backup, restore and prune are described under "Backups".
 //
 // A reply carries "version", "op" and "operationId" of the request, and:
 //
@@ -77,7 +85,8 @@
 //   - "log": the sanitized tail (at most MaxLog bytes) of the output of the
 //     build, migration or systemctl command.
 //   - one result object: "build" {buildId, commit}, "install" {releaseId,
-//     manifest}, "activate" {releaseId, previous, switched, unitChanged},
+//     manifest}, "activate" {releaseId, previous, switched, unitChanged,
+//     published {written, replaced, unchanged, deleted, retained, skipped}},
 //     "unit" (status) {loadState, activeState, subState, unitFileState,
 //     mainPid, release}, "releases" [{releaseId, current, previous,
 //     manifest}], "backup" {backupId, manifestSha256, size, files, skipped,
@@ -140,13 +149,38 @@
 // /opt/<service>/releases/<releaseId>, root-owned, directories 0755 and
 // files 0644 or 0755, refusing links that leave it, and writes the
 // manifest next to it as <releaseId>.json. activate runs the optional
-// migration as the service account in the new release, writes
-// /etc/systemd/system/<service>.service from the built-in template,
-// switches the /opt/<service>/current and previous links, reloads systemd
-// when the unit changed, enables and restarts the unit, and prunes releases
-// beyond keepReleases, never the current or previous one. start, stop,
-// restart and status act on <service>.service only, and only on a unit the
-// helper wrote.
+// migration as the service account in the new release, publishes the
+// release's static content (see Publishing), writes
+// /etc/systemd/system/<service>.service from the built-in template (with
+// limits as MemoryHigh=, MemoryMax= and TimeoutStopSec=), switches the
+// /opt/<service>/current and previous links, reloads systemd when the unit
+// changed, enables and restarts the unit, and prunes releases beyond
+// keepReleases, never the current or previous one. A service whose grant
+// has no port runs no process: its activate has no start, publishes and
+// switches the links, and writes no unit; a grant with a port needs start.
+// start, stop, restart and status act on <service>.service only, and only
+// on a unit the helper wrote.
+//
+// # Publishing
+//
+// publish copies the directory dir of the release to the service's publish
+// directory /opt/<service>/www (root 0755, made by "lcm host allow" and
+// "lcm host apply"), which needs the grant's route.static to name it. The
+// source must hold only root-owned directories and regular files: a
+// symbolic link anywhere in it, or in dir, refuses the activate; entries
+// whose name starts with "." are skipped; the bounds of install apply.
+// Files that are new or changed are written first through a temporary file
+// and a rename, every one but the .html files, and then the .html files one
+// by one, so that a page never names an asset that is not there yet. Every
+// published file gets the time of the activate as its modification time.
+// Then what the release does not contain is removed, except files below a
+// retain directory, which stay until their modification time is retainDays
+// old: an asset stays that long after the last release that had it. A
+// failure before the removal answers "failed" and switches nothing; the new
+// files it wrote stay unreferenced and the .html files not yet replaced are
+// the old ones. A failure to remove is noted in the log only. A rollback
+// activates the earlier release, so it publishes that release's content
+// again.
 //
 // # Backups
 //
@@ -286,6 +320,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -389,11 +424,13 @@ type Request struct {
 	BuildID  string `json:"buildId,omitempty"`
 	Artifact string `json:"artifact,omitempty"`
 	// activate
-	ReleaseID    string   `json:"releaseId,omitempty"`
-	Start        []string `json:"start,omitempty"`
-	Runtime      string   `json:"runtime,omitempty"`
-	Migrate      []string `json:"migrate,omitempty"`
-	KeepReleases int      `json:"keepReleases,omitempty"`
+	ReleaseID    string      `json:"releaseId,omitempty"`
+	Start        []string    `json:"start,omitempty"`
+	Runtime      string      `json:"runtime,omitempty"`
+	Migrate      []string    `json:"migrate,omitempty"`
+	KeepReleases int         `json:"keepReleases,omitempty"`
+	Publish      *Publish    `json:"publish,omitempty"`
+	Limits       *UnitLimits `json:"limits,omitempty"`
 	// backup (with timeoutSec and runtime)
 	Sources []BackupSource `json:"sources,omitempty"`
 	Mode    string         `json:"mode,omitempty"`
@@ -481,6 +518,37 @@ type ActivateResult struct {
 	Previous    string `json:"previous,omitempty"`
 	Switched    bool   `json:"switched"`
 	UnitChanged bool   `json:"unitChanged"`
+	// Published counts what publishing changed, when the request had
+	// publish.
+	Published *PublishResult `json:"published,omitempty"`
+}
+
+// Publish is the static content of a release to publish.
+type Publish struct {
+	Dir        string   `json:"dir"`
+	Retain     []string `json:"retain,omitempty"`
+	RetainDays int      `json:"retainDays,omitempty"`
+}
+
+// UnitLimits tighten the unit of a service.
+type UnitLimits struct {
+	MemoryHigh     string `json:"memoryHigh,omitempty"`
+	MemoryMax      string `json:"memoryMax,omitempty"`
+	StopTimeoutSec int    `json:"stopTimeoutSec,omitempty"`
+}
+
+// PublishResult counts the files of a publish: written (new), replaced
+// (changed), unchanged, deleted (not in the release), retained (not in the
+// release but below a retain directory and younger than retainDays) and
+// skipped (entries of the source starting with ".", with what is below
+// them).
+type PublishResult struct {
+	Written   int `json:"written"`
+	Replaced  int `json:"replaced"`
+	Unchanged int `json:"unchanged"`
+	Deleted   int `json:"deleted"`
+	Retained  int `json:"retained"`
+	Skipped   int `json:"skipped"`
 }
 
 // UnitStatus is the result of status.
@@ -646,6 +714,8 @@ func (r Request) fields() []string {
 	add(r.Runtime != "", "runtime")
 	add(r.Migrate != nil, "migrate")
 	add(r.KeepReleases != 0, "keepReleases")
+	add(r.Publish != nil, "publish")
+	add(r.Limits != nil, "limits")
 	add(r.Sources != nil, "sources")
 	add(r.Mode != "", "mode")
 	add(r.BackupID != "", "backupId")
@@ -660,7 +730,7 @@ func (r Request) fields() []string {
 var opFields = map[Op][]string{
 	OpBuild:    {"service", "commit", "command", "timeoutSec", "runtimes"},
 	OpInstall:  {"service", "buildId", "artifact"},
-	OpActivate: {"service", "releaseId", "start", "runtime", "migrate", "keepReleases"},
+	OpActivate: {"service", "releaseId", "start", "runtime", "migrate", "keepReleases", "publish", "limits"},
 	OpStart:    {"service"},
 	OpStop:     {"service"},
 	OpRestart:  {"service"},
@@ -844,11 +914,29 @@ func (r Request) validateActivate() error {
 	if !idPattern.MatchString(r.ReleaseID) {
 		return errors.New("releaseId is not a release ID")
 	}
-	if len(r.Start) == 0 || !relPath(r.Start[0]) || r.Start[0] == "." {
+	switch {
+	case r.Start == nil:
+		// Static content only: no process to start, migrate or limit.
+		if r.Publish == nil || r.Migrate != nil || r.Limits != nil {
+			return errors.New("an activate without start needs publish and takes neither migrate nor limits")
+		}
+	case len(r.Start) == 0 || !relPath(r.Start[0]) || r.Start[0] == ".":
 		return errors.New("start must begin with a release-relative file")
 	}
-	if err := validArgs(r.Start[1:]); err != nil {
-		return fmt.Errorf("start: %w", err)
+	if len(r.Start) > 0 {
+		if err := validArgs(r.Start[1:]); err != nil {
+			return fmt.Errorf("start: %w", err)
+		}
+	}
+	if r.Publish != nil {
+		if err := r.Publish.validate(); err != nil {
+			return fmt.Errorf("publish: %w", err)
+		}
+	}
+	if r.Limits != nil {
+		if err := r.Limits.validate(); err != nil {
+			return fmt.Errorf("limits: %w", err)
+		}
 	}
 	if r.Runtime != "" && !hostsetup.ValidRuntimeName(r.Runtime) {
 		return errors.New("runtime is not a runtime name")
@@ -863,6 +951,99 @@ func (r Request) validateActivate() error {
 	}
 	if r.KeepReleases != 0 && (r.KeepReleases < 2 || r.KeepReleases > MaxKeepReleases) {
 		return fmt.Errorf("keepReleases must be between 2 and %d", MaxKeepReleases)
+	}
+	return nil
+}
+
+// Bounds of publish and limits.
+const (
+	DefaultRetainDays = 14
+	MaxRetainDays     = 90
+	MaxRetain         = 16
+	minUnitMemory     = 1 << 20
+	maxUnitMemory     = 16 << 30
+	MaxStopTimeoutSec = 600
+)
+
+func (p Publish) validate() error {
+	if !relPath(p.Dir) {
+		return errors.New("dir must be a clean relative path of letters, digits and ._-/ without \"..\" components")
+	}
+	if len(p.Retain) > MaxRetain {
+		return fmt.Errorf("at most %d retain directories", MaxRetain)
+	}
+	seen := map[string]bool{}
+	for _, r := range p.Retain {
+		if !retainPrefix(r) || seen[r] {
+			return fmt.Errorf("retain %q must be a relative directory ending with \"/\" without components that start with \".\", listed once", hostsetup.Printable(r, 64))
+		}
+		seen[r] = true
+	}
+	switch {
+	case p.RetainDays != 0 && len(p.Retain) == 0:
+		return errors.New("retainDays needs retain")
+	case p.RetainDays < 0 || p.RetainDays > MaxRetainDays:
+		return fmt.Errorf("retainDays must be between 1 and %d", MaxRetainDays)
+	}
+	return nil
+}
+
+// retainDays returns retainDays with its default.
+func (p Publish) retainDays() int {
+	if p.RetainDays == 0 {
+		return DefaultRetainDays
+	}
+	return p.RetainDays
+}
+
+// retainPrefix accepts a directory such as "assets/": a relative path
+// ending with "/" whose components do not start with ".".
+func retainPrefix(r string) bool {
+	dir, ok := strings.CutSuffix(r, "/")
+	if !ok || !relPath(dir) {
+		return false
+	}
+	for _, c := range strings.Split(dir, "/") {
+		if strings.HasPrefix(c, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+var unitSizePattern = regexp.MustCompile(`^([1-9][0-9]{0,8})([KMG])$`)
+
+// unitSize returns the bytes of a size such as 768M; the value is written
+// to the unit as it is, so only this form is accepted.
+func unitSize(s string) (int64, bool) {
+	m := unitSizePattern.FindStringSubmatch(s)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n << map[string]uint{"K": 10, "M": 20, "G": 30}[m[2]], true
+}
+
+func (l UnitLimits) validate() error {
+	var sizes [2]int64
+	for i, v := range []string{l.MemoryHigh, l.MemoryMax} {
+		if v == "" {
+			continue
+		}
+		n, ok := unitSize(v)
+		if !ok || n < minUnitMemory || n > maxUnitMemory {
+			return errors.New("memoryHigh and memoryMax must be sizes such as 768M or 1G between 1M and 16G")
+		}
+		sizes[i] = n
+	}
+	if sizes[0] > 0 && sizes[1] > 0 && sizes[0] > sizes[1] {
+		return errors.New("memoryHigh must not be larger than memoryMax")
+	}
+	if l.StopTimeoutSec < 0 || l.StopTimeoutSec > MaxStopTimeoutSec {
+		return fmt.Errorf("stopTimeoutSec must be between 1 and %d", MaxStopTimeoutSec)
 	}
 	return nil
 }
@@ -885,7 +1066,7 @@ func (r Request) Hash() string {
 var requestKeys = map[string]bool{
 	"version": true, "op": true, "operationId": true, "service": true, "commit": true, "command": true,
 	"timeoutSec": true, "runtimes": true, "buildId": true, "artifact": true, "releaseId": true,
-	"start": true, "runtime": true, "migrate": true, "keepReleases": true,
+	"start": true, "runtime": true, "migrate": true, "keepReleases": true, "publish": true, "limits": true,
 	"sources": true, "mode": true, "backupId": true, "manifestSha256": true, "restoreUsers": true, "keep": true,
 	"route": true,
 }

@@ -40,8 +40,9 @@ func serviceSandbox(svc string, port int, backup string) []string {
 }
 
 // renderUnit is the built-in unit template. Every value in it is checked
-// to need no quoting or escaping.
-func renderUnit(svc string, port int, execStart []string, rtBin, backup string) string {
+// to need no quoting or escaping: the limits were validated with the
+// request.
+func renderUnit(svc string, port int, execStart []string, rtBin, backup string, limits *UnitLimits) string {
 	lines := []string{
 		hostsetup.ServiceUnitMarker,
 		"[Unit]",
@@ -61,6 +62,17 @@ func renderUnit(svc string, port int, execStart []string, rtBin, backup string) 
 		lines = append(lines, "Environment=PATH="+rtBin+":"+systemPath)
 	}
 	lines = append(lines, "Restart=on-failure", "RestartSec=5")
+	if l := limits; l != nil {
+		if l.MemoryHigh != "" {
+			lines = append(lines, "MemoryHigh="+l.MemoryHigh)
+		}
+		if l.MemoryMax != "" {
+			lines = append(lines, "MemoryMax="+l.MemoryMax)
+		}
+		if l.StopTimeoutSec != 0 {
+			lines = append(lines, "TimeoutStopSec="+strconv.Itoa(l.StopTimeoutSec))
+		}
+	}
 	lines = append(lines, serviceSandbox(svc, port, backup)...)
 	lines = append(lines, "", "[Install]", "WantedBy=multi-user.target")
 	return strings.Join(lines, "\n") + "\n"
@@ -68,7 +80,9 @@ func renderUnit(svc string, port int, execStart []string, rtBin, backup string) 
 
 // activate makes a release current and (re)starts the service with a unit
 // from the built-in template. The optional migration runs first, in the new
-// release; when it fails nothing is switched.
+// release, then the release's static content is published; when either
+// fails nothing is switched. A service granted no port runs no process: its
+// release is published and made current without a unit.
 func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config, g hostsetup.ServiceGrant) Response {
 	resp, svc := reply(req), req.Service
 	releases := hostsetup.ServiceReleases(svc)
@@ -85,6 +99,27 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 	if _, err := h.trustedPath(relDir, false); err != nil || m.Service != svc || m.ReleaseID != req.ReleaseID {
 		return refuse(resp, CodeFailed, "release %s is incomplete or not this service's", req.ReleaseID)
 	}
+	static := req.Start == nil
+	switch {
+	case static && g.Port != 0:
+		return refuse(resp, CodeRefused, "services.%s has the port %d in %s, so it runs a process: the request needs start", svc, g.Port, hostsetup.ConfigPath)
+	case !static && g.Port == 0:
+		return refuse(resp, CodeRefused, "services.%s has no port in %s: it only publishes static content, so the request must not have start", svc, hostsetup.ConfigPath)
+	case req.Publish != nil && (g.Route == nil || g.Route.Static != hostsetup.ServicePublishDir(svc)):
+		return refuse(resp, CodeRefused, "publish needs services.%s.route.static to be %s in %s; an administrator sets it with sudo bin/lcm host allow %s --route PREFIX --publish",
+			svc, hostsetup.ServicePublishDir(svc), hostsetup.ConfigPath, svc)
+	}
+	if req.Runtime != "" && !slices.Contains(g.Runtimes, req.Runtime) {
+		return refuse(resp, CodeRefused, "the runtime %s is not granted to %s in %s", req.Runtime, svc, hostsetup.ConfigPath)
+	}
+	if static {
+		published, notes, err := h.publish(svc, relDir, *req.Publish)
+		if err != nil {
+			return refuse(resp, CodeFailed, "%v; nothing was switched", err)
+		}
+		resp.Log = sanitizeLog(strings.Join(notes, "\n"))
+		return h.switchAndRestart(ctx, req, resp, "", published)
+	}
 	acc, err := h.account(ctx, svc, hostsetup.ServiceDataDir(svc), hostsetup.ServiceComment(svc))
 	if err != nil {
 		return refuse(resp, CodeRefused, "%v", err)
@@ -99,9 +134,6 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 	}
 	rtBin := ""
 	if req.Runtime != "" {
-		if !slices.Contains(g.Runtimes, req.Runtime) {
-			return refuse(resp, CodeRefused, "the runtime %s is not granted to %s in %s", req.Runtime, svc, hostsetup.ConfigPath)
-		}
 		rt := hostsetup.RuntimesDir + "/" + req.Runtime
 		if _, err := h.trustedPath(rt, false); err != nil {
 			return refuse(resp, CodeRefused, "the runtime %s is not installed (%v); run sudo bin/lcm host apply", req.Runtime, err)
@@ -125,14 +157,25 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 			return refuse(resp, CodeFailed, "%s; nothing was switched", commandFailure("the migration", err))
 		}
 	}
-	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin, backupDir(cfg)))
+	var published *PublishResult
+	if req.Publish != nil {
+		var notes []string
+		if published, notes, err = h.publish(svc, relDir, *req.Publish); err != nil {
+			return refuse(resp, CodeFailed, "%v; nothing was switched", err)
+		}
+		if len(notes) > 0 {
+			resp.Log = sanitizeLog(strings.TrimRight(resp.Log, "\n") + "\n" + strings.Join(notes, "\n"))
+		}
+	}
+	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin, backupDir(cfg), req.Limits), published)
 }
 
 // switchAndRestart installs the unit, switches the current and previous
 // links, reloads systemd when the unit changed or systemd reports an
 // outdated copy, and restarts the service. A unit that does not verify or
-// load is put back together with the links.
-func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Response, unit string) Response {
+// load is put back together with the links. Without a unit (static content
+// only) it switches the links and prunes the releases.
+func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Response, unit string, published *PublishResult) Response {
 	svc, id := req.Service, req.ReleaseID
 	opt := hostsetup.ServiceOptDir(svc)
 	cur, prev, unitPath := opt+"/current", opt+"/previous", hostsetup.ServiceUnit(svc)
@@ -146,13 +189,14 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 	}
 	var oldUnit []byte
 	hadUnit := false
-	if _, err := h.FS.Lstat(unitPath); err == nil {
+	// Without a unit to write, an existing one is left alone.
+	if _, err := h.FS.Lstat(unitPath); err == nil && unit != "" {
 		if oldUnit, err = h.readFile(unitPath); err != nil {
 			return refuse(resp, CodeFailed, "%v", err)
 		}
 		hadUnit = true
 	}
-	result := &ActivateResult{ReleaseID: id, Previous: oldCur, UnitChanged: !hadUnit || string(oldUnit) != unit}
+	result := &ActivateResult{ReleaseID: id, Previous: oldCur, UnitChanged: unit != "" && (!hadUnit || string(oldUnit) != unit), Published: published}
 	if oldCur == id {
 		result.Previous = oldPrev
 	}
@@ -190,6 +234,14 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 		}
 	}
 	result.Switched = true
+	keep := req.KeepReleases
+	if keep == 0 {
+		keep = DefaultKeepReleases
+	}
+	if unit == "" {
+		h.pruneReleases(svc, keep, id, result.Previous)
+		return resp
+	}
 	if result.UnitChanged {
 		if res, err := h.run(ctx, analyzeTimeout, systemdAnalyze, "verify", unitPath); err != nil {
 			resp.Log = sanitizeLog(res.Output)
@@ -228,10 +280,6 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 	if res, err := h.run(ctx, systemctlTimeout, systemctl, "restart", unitName(svc)); err != nil {
 		resp.Log = sanitizeLog(res.Output)
 		return refuse(resp, CodeFailed, "%s; the release is current", commandFailure("systemctl restart", err))
-	}
-	keep := req.KeepReleases
-	if keep == 0 {
-		keep = DefaultKeepReleases
 	}
 	h.pruneReleases(svc, keep, id, result.Previous)
 	return resp

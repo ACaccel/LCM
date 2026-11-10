@@ -20,7 +20,8 @@ func TestRenderedUnitVerifies(t *testing.T) {
 	if _, err := os.Stat(systemdAnalyze); err != nil {
 		t.Skip("no systemd-analyze; the container end-to-end test verifies the unit")
 	}
-	unit := renderUnit("web", 3200, []string{"/bin/true", "--listen"}, "/opt/lcm/runtimes/node24/bin", "/var/backups/lcm")
+	unit := renderUnit("web", 3200, []string{"/bin/true", "--listen"}, "/opt/lcm/runtimes/node24/bin", "/var/backups/lcm",
+		&UnitLimits{MemoryHigh: "768M", MemoryMax: "1G", StopTimeoutSec: 60})
 	unit = strings.NewReplacer("User=web\n", "User=root\n", "Group=web\n", "Group=root\n",
 		"WorkingDirectory=/opt/web/current\n", "WorkingDirectory=/\n", "EnvironmentFile=/etc/web/env\n", "EnvironmentFile=-/etc/web/env\n").Replace(unit)
 	verifyUnit(t, "web.service", unit)

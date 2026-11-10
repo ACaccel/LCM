@@ -10,6 +10,13 @@ import (
 // which acts as root on trees that other accounts own and must keep the
 // same guarantees as host setup.
 
+// MaxTreeEntries and MaxTreeBytes bound a confined tree copy, such as a
+// release, and every walk the deploy helper makes over one.
+const (
+	MaxTreeEntries = maxTreeEntries
+	MaxTreeBytes   = maxTreeBytes
+)
+
 // CopyOptions describe a confined tree copy.
 type CopyOptions struct {
 	// Owners are the accepted owners of source entries; an entry of another

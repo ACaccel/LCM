@@ -50,6 +50,11 @@ func ServiceCheckout(name string) string { return WorkDir + "/" + name }
 func ServiceBuildDir(name string) string { return BuildDir + "/" + name }
 func ServiceCacheDir(name string) string { return BuildCacheDir + "/" + name }
 
+// ServicePublishDir is where the deploy helper publishes the static content
+// of a managed service's releases; the only static directory such a
+// service's route may serve.
+func ServicePublishDir(name string) string { return "/opt/" + name + "/www" }
+
 // BuildAccount is the account that builds service name: every service has
 // its own, so that one service's build cannot read or change another's.
 // Service names are short enough for it to stay within the 32 characters of
