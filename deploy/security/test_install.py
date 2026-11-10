@@ -266,6 +266,7 @@ class InstallerTests(unittest.TestCase):
         plan = self.run_action('plan')
         self.assertIn('install the packages auditd aide with apt-get', plan['changes'])
         self.assertIn('create the system account workstation-security (no login shell)', plan['changes'])
+        self.assertTrue(plan['tokenMissing'])
         self.assertEqual(self.system.mutating(), [])
         result = self.install()
         self.assertEqual(result['changes'][:3], ['install the packages auditd aide with apt-get',

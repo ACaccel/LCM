@@ -1156,6 +1156,9 @@ class Component:
             ids = self.collector_account(plan)
             if ids is None:
                 # The rest depends on the new account; apply plans it again.
+                # The caller still learns now that a token is needed, since
+                # it supplies one only when the plan asks for it.
+                plan.token_missing = self.host.info(TOKEN) is None and self.inputs.get('token') is None
                 plan.notes.append('the remaining steps are planned after the account exists')
                 return plan
             self.converge(plan, ids)
