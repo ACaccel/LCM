@@ -55,10 +55,6 @@ const (
 	RouteSkipped = "skipped"
 )
 
-// ingressOffPrefix starts the helper's refusal while components.ingress is
-// not configured in the host configuration (internal/deployhelper).
-const ingressOffPrefix = "components.ingress is not configured"
-
 // maxRouteMessage bounds the helper's message kept in a timeline entry.
 const maxRouteMessage = 1 << 10
 
@@ -84,6 +80,7 @@ type routeEntry struct {
 	OperationID string
 	SiteSHA256  string
 	Changes     []string
+	Dropped     []string
 	Trigger     string
 	Actor       string
 	At          time.Time
@@ -103,6 +100,9 @@ func (e routeEntry) data() map[string]any {
 	if len(e.Changes) > 0 {
 		d["changes"] = e.Changes
 	}
+	if len(e.Dropped) > 0 {
+		d["dropped"] = e.Dropped
+	}
 	return d
 }
 
@@ -120,13 +120,17 @@ func routeEntryOf(e Entry) routeEntry {
 		State: str("state"), Digest: str("digest"), Message: str("message"), OperationID: str("operationId"),
 		SiteSHA256: str("siteSha256"), Trigger: str("trigger"), Actor: str("actor"), At: e.Time,
 	}
-	if list, ok := e.Data["changes"].([]any); ok {
-		for _, c := range list {
+	strs := func(k string) []string {
+		var list []string
+		raw, _ := e.Data[k].([]any)
+		for _, c := range raw {
 			if s, ok := c.(string); ok {
-				out.Changes = append(out.Changes, s)
+				list = append(list, s)
 			}
 		}
+		return list
 	}
+	out.Changes, out.Dropped = strs("changes"), strs("dropped")
 	return out
 }
 
@@ -159,6 +163,9 @@ type RouteStatus struct {
 	OperationID string     `json:"operationId"`
 	SiteSHA256  string     `json:"siteSha256"`
 	Changes     []string   `json:"changes"`
+	// Dropped describes stored route options of services that no longer
+	// fit the host configuration and were left out of the site.
+	Dropped []string `json:"dropped"`
 }
 
 // RouteStatus describes the route of rec. It is nil for a service that has
@@ -172,12 +179,13 @@ func (m *Manager) RouteStatus(ctx context.Context, rec *Record) (*RouteStatus, e
 	if !configured && !found {
 		return nil, nil
 	}
-	st := &RouteStatus{Configured: configured, Changes: []string{}}
+	st := &RouteStatus{Configured: configured, Changes: []string{}, Dropped: []string{}}
 	if found {
 		at := latest.At
 		st.State, st.Message, st.At, st.OperationID, st.SiteSHA256 = latest.State, latest.Message, &at, latest.OperationID, latest.SiteSHA256
 		st.Current = latest.Digest == routeDigest(rec.Config.Route)
 		st.Changes = append(st.Changes, latest.Changes...)
+		st.Dropped = append(st.Dropped, latest.Dropped...)
 	}
 	return st, nil
 }
@@ -188,7 +196,7 @@ func routeFromError(err error) (state, msg string) {
 	switch {
 	case errors.As(err, &he) && he.Unknown:
 		return RouteUnknown, he.Error()
-	case errors.As(err, &he) && he.Code == deployhelper.CodeRefused && strings.HasPrefix(he.Message, ingressOffPrefix):
+	case errors.As(err, &he) && he.Code == deployhelper.CodeDisabled:
 		return RouteSkipped, "the ingress component is not enabled on this host (components.ingress in host.json)"
 	case errors.As(err, &he) && he.Code == deployhelper.CodeRefused:
 		return RouteRefused, he.Message
@@ -271,6 +279,7 @@ func (m *Manager) pushRouteLocked(ctx context.Context, name string, o *ingress.O
 		entry.State, entry.Message = RouteUnknown, "the deploy helper's reply has no result"
 	default:
 		entry.State, entry.SiteSHA256, entry.Changes = RouteApplied, resp.IngressApply.SHA256, resp.IngressApply.Changes
+		entry.Dropped = resp.IngressApply.Dropped
 		entry.Message = "the site is up to date"
 		if len(entry.Changes) > 0 {
 			entry.Message = strings.Join(entry.Changes, "; ")
@@ -298,7 +307,7 @@ func (m *Manager) settlePending(ctx context.Context, name string, p routeEntry) 
 	case resp.State == deployhelper.StateSucceeded:
 		done.State, done.Message = RouteApplied, "confirmed from the helper ledger after a restart of LCM"
 		if r := resp.IngressApply; r != nil {
-			done.SiteSHA256, done.Changes = r.SHA256, r.Changes
+			done.SiteSHA256, done.Changes, done.Dropped = r.SHA256, r.Changes, r.Dropped
 		}
 	case resp.State == deployhelper.StateFailed:
 		done.State, done.Message = RouteFailed, resp.Message

@@ -23,6 +23,7 @@ const status = (over: Partial<ServiceRouteStatus> = {}): ServiceRouteStatus => (
   operationId: "op-1",
   siteSha256: "c".repeat(64),
   changes: [],
+  dropped: [],
   ...over,
 });
 
@@ -61,6 +62,13 @@ describe("RoutePanel", () => {
     expect(screen.getAllByText("service web has no route in host.json").length).toBeGreaterThan(0);
     expect(screen.getByText("這是先前設定的結果；目前的設定還沒有送出")).toBeTruthy();
     expect(screen.getByText(/重新套用路由/)).toBeTruthy();
+  });
+
+  it("lists stored options the site left out", () => {
+    const dropped = "services.api: the stored route options no longer fit (no port); the route has its defaults until they are sent again";
+    render(<RoutePanel detail={detailWith(status({ dropped: [dropped] }))} />);
+    expect(screen.getByText(/因 host.json 變更而略過的設定/)).toBeTruthy();
+    expect(screen.getByText(dropped)).toBeTruthy();
   });
 
   it("renders nothing without a route status", () => {

@@ -80,6 +80,12 @@ func completeIngress(cs hostsetup.ComponentStatus, st hostsetup.IngressStatus) h
 		default:
 			f.State = hostsetup.StateUpToDate
 		}
+		if len(st.Dropped) > 0 {
+			if f.State == hostsetup.StateUpToDate {
+				f.State = hostsetup.StateOutdated
+			}
+			notes = append(notes, st.Dropped...)
+		}
 	}
 	if l := st.Last; l != nil {
 		note := fmt.Sprintf("last apply %s: %s", time.UnixMilli(l.At).UTC().Format(time.RFC3339), l.Outcome)

@@ -178,7 +178,7 @@ func (h *Helper) grant(req Request) (hostsetup.Config, hostsetup.ServiceGrant, *
 	if req.Op.Ingress() {
 		switch {
 		case cfg.Components.Ingress == nil:
-			resp := refuse(reply(req), CodeRefused, "components.ingress is not configured in %s", hostsetup.ConfigPath)
+			resp := refuse(reply(req), CodeDisabled, "components.ingress is not configured in %s", hostsetup.ConfigPath)
 			return cfg, g, &resp
 		case g.Route == nil:
 			resp := refuse(reply(req), CodeRefused, "services.%s has no route in %s; an administrator grants one with sudo bin/lcm host allow %s --route PREFIX", req.Service, hostsetup.ConfigPath, req.Service)

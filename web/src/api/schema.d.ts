@@ -3752,6 +3752,11 @@ export interface components {
             /** @description Digest of the nginx site the helper rendered. */
             siteSha256: string;
             changes: string[];
+            /**
+             * @description Stored route options of services that no longer fit `host.json` and were left out of the site
+             *     (those routes have their defaults until their options are sent again).
+             */
+            dropped: string[];
         };
         ResourcePhaseRequest: {
             phase: components["schemas"]["ResourcePhase"];

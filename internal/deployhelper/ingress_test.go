@@ -195,8 +195,8 @@ func TestIngressApplyRefusals(t *testing.T) {
 
 	// Without the component nothing is done.
 	e.cfg.Components.Ingress = nil
-	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeRefused, "components.ingress is not configured")
-	e.refused(Request{Op: OpIngressStatus}, CodeRefused, "components.ingress is not configured")
+	e.refused(Request{Op: OpIngressApply, Service: "web"}, CodeDisabled, "components.ingress is not configured")
+	e.refused(Request{Op: OpIngressStatus}, CodeDisabled, "components.ingress is not configured")
 }
 
 func TestIngressWithoutDeployComponent(t *testing.T) {

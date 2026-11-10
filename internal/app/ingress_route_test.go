@@ -189,6 +189,37 @@ func TestHostComponentsShowTheIngressStatus(t *testing.T) {
 	}
 }
 
+// TestHostComponentsShowDroppedRouteOptions: a site that matches what
+// host.json renders is still outdated while stored options are left out.
+func TestHostComponentsShowDroppedRouteOptions(t *testing.T) {
+	helper := newFakeDeployHelper()
+	digest := strings.Repeat("a", 64)
+	dropped := "services.api: the stored route options no longer fit (no port); the route has its defaults until they are sent again"
+	helper.ingress = &hostsetup.IngressStatus{Rendered: digest, Installed: digest, Enabled: true, Dropped: []string{dropped}}
+	var status api.HostStatusFunc = func() ([]hostsetup.ComponentStatus, error) {
+		return []hostsetup.ComponentStatus{{Name: hostsetup.ComponentIngress, State: hostsetup.StateUpToDate, Files: []hostsetup.FileStatus{
+			{Path: hostsetup.SiteFile, State: hostsetup.StateUpToDate, Installed: digest},
+		}}}, nil
+	}
+	h := newHarness(t, func(o *testOpts) { o.deployHelper, o.hostStatus = helper, status })
+	srv := httptest.NewServer(h.app.Handler())
+	defer srv.Close()
+
+	raw, _ := json.Marshal(apiCall(t, h, srv, "GET", "/api/v1/host/components"))
+	var got struct {
+		Items []struct {
+			State string
+			Files []struct{ State, Detail string }
+		}
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || len(got.Items) != 1 || len(got.Items[0].Files) != 1 {
+		t.Fatalf("components = %s, %v", raw, err)
+	}
+	if c := got.Items[0]; c.State != "outdated" || c.Files[0].State != "outdated" || !strings.Contains(c.Files[0].Detail, dropped) {
+		t.Fatalf("component = %+v", c)
+	}
+}
+
 // TestServiceRouteLoop: the running app sends a saved route by itself and
 // retries the routes of earlier starts.
 func TestServiceRouteLoop(t *testing.T) {

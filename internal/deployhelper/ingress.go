@@ -32,7 +32,7 @@ func (h *Helper) ingressStatus(req Request) Response {
 		return refuse(reply(req), CodeRefused, "the host configuration cannot be used: %v", err)
 	}
 	if cfg.Components.Ingress == nil {
-		return refuse(reply(req), CodeRefused, "components.ingress is not configured in %s", hostsetup.ConfigPath)
+		return refuse(reply(req), CodeDisabled, "components.ingress is not configured in %s", hostsetup.ConfigPath)
 	}
 	st, err := hostsetup.SiteStatus(h.ingressEnv(), cfg)
 	if err != nil {

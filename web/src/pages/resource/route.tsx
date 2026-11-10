@@ -69,6 +69,20 @@ export function RoutePanel({ detail }: { detail: ResourceDetail }) {
             <dd>{status.changes.join("; ")}</dd>
           </>
         )}
+        {status.dropped.length > 0 && (
+          <>
+            <dt>{s.route.dropped}</dt>
+            <dd>
+              <ul className="plain-list">
+                {status.dropped.map((d) => (
+                  <li key={d} className="meta">
+                    {d}
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </>
+        )}
       </dl>
       {route ? (
         groups.length > 0 ? (

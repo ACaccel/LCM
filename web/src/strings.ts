@@ -485,6 +485,7 @@ export const s = {
     result: "最近結果",
     site: "Site SHA-256",
     changes: "變更",
+    dropped: "因 host.json 變更而略過的設定（這些路由暫用預設值，重新送出後恢復）",
     retry: "狀態不是「已套用」時，可用「重新套用路由」再送一次。",
     defaults: "沒有 route 區段：代理前綴下的所有路徑，或提供靜態目錄。",
     proxy: "反向代理",

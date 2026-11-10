@@ -6016,7 +6016,7 @@ components:
         cspReportOnly: { type: boolean, description: Send it as Content-Security-Policy-Report-Only. }
     ServiceRouteStatus:
       type: object
-      required: [configured, state, current, message, at, operationId, siteSha256, changes]
+      required: [configured, state, current, message, at, operationId, siteSha256, changes, dropped]
       properties:
         configured: { type: boolean, description: The document has a `route` section. }
         state:
@@ -6035,6 +6035,12 @@ components:
         changes:
           type: array
           items: { type: string }
+        dropped:
+          type: array
+          items: { type: string }
+          description: |
+            Stored route options of services that no longer fit `host.json` and were left out of the site
+            (those routes have their defaults until their options are sent again).
     ResourcePhaseRequest:
       type: object
       required: [phase]

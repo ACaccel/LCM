@@ -165,7 +165,8 @@ func TestRouteFailureStates(t *testing.T) {
 	}{
 		{"failed", deployhelper.CodeFailed, "", catalog.RouteFailed},
 		{"busy", deployhelper.CodeBusy, "", catalog.RouteFailed},
-		{"component off", deployhelper.CodeRefused, "components.ingress is not configured in /etc/lcm/host.json", catalog.RouteSkipped},
+		{"component off", deployhelper.CodeDisabled, "components.ingress is not configured in /etc/lcm/host.json", catalog.RouteSkipped},
+		{"refused with the same text", deployhelper.CodeRefused, "components.ingress is not configured in /etc/lcm/host.json", catalog.RouteRefused},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -190,6 +191,27 @@ func TestRouteFailureStates(t *testing.T) {
 				t.Fatalf("status = %+v", st)
 			}
 		})
+	}
+}
+
+func TestRouteRecordsDroppedOptions(t *testing.T) {
+	e, h := routeEnv(t)
+	dropped := "services.api: the stored route options no longer fit (no port); the route has its defaults until they are sent again"
+	h.intercept = func(req deployhelper.Request) (deployhelper.Response, error, bool) {
+		if req.Op != deployhelper.OpIngressApply {
+			return deployhelper.Response{}, nil, false
+		}
+		resp := helperReply(req)
+		resp.State = deployhelper.StateSucceeded
+		resp.IngressApply = &deployhelper.IngressApplyResult{SHA256: strings.Repeat("a", 64), Changes: []string{}, Dropped: []string{dropped}}
+		return resp, nil, true
+	}
+	e.put(svcDoc("web", routeA), 0)
+	if err := e.mgr.SyncRoute(e.ctx, "web", false); err != nil {
+		t.Fatal(err)
+	}
+	if st := routeStatus(t, e, "web"); st.State != catalog.RouteApplied || !slices.Equal(st.Dropped, []string{dropped}) {
+		t.Fatalf("status = %+v", st)
 	}
 }
 

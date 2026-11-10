@@ -69,8 +69,10 @@
 //     "refused" (invalid request, or not allowed by host.json or the host's
 //     state), "not_found" (unknown build, release, unit or operation),
 //     "conflict" (the operationId was used for another request), "busy"
-//     (another operation of the service is running; nothing was done) or
-//     "failed" (the operation started and failed). message is English text
+//     (another operation of the service is running; nothing was done),
+//     "disabled" (host.json does not enable the component of the operation,
+//     components.ingress for ingress.*) or "failed" (the operation started
+//     and failed). message is English text
 //     with control characters replaced.
 //   - "log": the sanitized tail (at most MaxLog bytes) of the output of the
 //     build, migration or systemctl command.
@@ -356,6 +358,9 @@ const (
 	CodeConflict Code = "conflict"
 	CodeFailed   Code = "failed"
 	CodeBusy     Code = "busy"
+	// CodeDisabled: the host configuration does not enable the component
+	// the operation belongs to (components.ingress for ingress.*).
+	CodeDisabled Code = "disabled"
 )
 
 // State is the state of a recorded operation.
@@ -913,7 +918,7 @@ func DecodeResponse(raw []byte) (Response, error) {
 		return Response{}, fmt.Errorf("unsupported protocol version %d", r.Version)
 	}
 	switch r.Code {
-	case "", CodeRefused, CodeNotFound, CodeConflict, CodeFailed, CodeBusy:
+	case "", CodeRefused, CodeNotFound, CodeConflict, CodeFailed, CodeBusy, CodeDisabled:
 	default:
 		return Response{}, fmt.Errorf("unknown code %q", hostsetup.Printable(string(r.Code), 32))
 	}
