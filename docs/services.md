@@ -115,13 +115,13 @@ config:
 
 The command form `backup: {command, timeout}` stays for every other adapter, and `sources` are refused for them; a managed service takes only `sources`. Paths are clean relative paths (no `..`, not absolute, not `.`) and may not overlap; at most 16 sources.
 
-**How a backup runs.** The [deploy helper](operations.md#backups) starts an unprivileged worker as the service's own account in a sandbox like its unit's (data directory read-only, the backup directory hidden, no port to bind, bounded time, memory and file size). Root only moves the finished files into `<backup.dir>/<name>/<id>/`, which only root can enter, writes a `manifest.json` with the size and SHA-256 of every file, and keeps the set read-only to the service. LCM stores the checksum of the manifest. Sources and what each produces:
+**How a backup runs.** The [deploy helper](operations.md#backups) starts an unprivileged worker as the service's own account in a sandbox like its unit's (the service's own data directory the only place it can write besides its staging output, the backup directory hidden, no port to bind, bounded time, memory and file size). Root only moves the finished files into `<backup.dir>/<name>/<id>/`, which only root can enter, writes a `manifest.json` with the size and SHA-256 of every file, and keeps the set read-only to the service. LCM stores the checksum of the manifest. Sources and what each produces:
 
 | Source | Artifact | Notes |
 |---|---|---|
 | `files` | one tar of regular files and directories | Links, devices, sockets and pipes are skipped and counted (`skipped`); group/other write and special mode bits are dropped; ownership is not stored |
 | `sqlite` | `VACUUM INTO` copy, checked with `quick_check` | Needs no `sqlite3` binary. `-wal`, `-shm` and `-journal` files are not part of the copy |
-| `postgres` | `pg_dump -Fc` | `pg_dump` must be installed (`/usr/bin` or `/usr/local/bin`); otherwise the backup fails with that message |
+| `postgres` | `pg_dump -Fc` | `pg_dump` must be installed and owned by root (`/usr/bin` or `/usr/local/bin`); otherwise the backup is refused with that message |
 | `mongodb` | `mongodump --gzip` archive, plus users and roles of `admin` with `users: true` | `MONGODB_URI` in the service's env file reaches the tools in a private `--config` file, never in their arguments. `users: true` dumps the whole instance's `admin.system.users` and `admin.system.roles`, so use it only when the service has its own `mongod` |
 | `command` | the program's standard output | Kept, but never restored by LCM: it has no restore command |
 

@@ -39,7 +39,7 @@
 //	releases  service
 //	query     (operationId names the operation to look up)
 //	backup    service, sources, mode (optional), timeoutSec, runtime (optional)
-//	restore   service, backupId, manifestSha256 (optional)
+//	restore   service, backupId, manifestSha256 (optional), restoreUsers (optional)
 //	backups   service
 //	prune     service, keep
 //
@@ -77,9 +77,10 @@
 //     mainPid, release}, "releases" [{releaseId, current, previous,
 //     manifest}], "backup" {backupId, manifestSha256, size, files, skipped,
 //     createdAt, releaseId}, "restore" {backupId, preRestoreId, restored,
-//     skipped, started}, "backups" [{backupId, kind, createdAt, size,
-//     manifestSha256, mode, releaseId, sources, skipped, restoredFrom,
-//     problem}] or "prune" {removed, kept}.
+//     skipped, started, leftStopped}, "backups" [{backupId, kind, createdAt,
+//     size, manifestSha256, mode, releaseId, sources, skipped, restoredFrom,
+//     problem}] (with "backupsTruncated" when the list is cut) or "prune"
+//     {removed, kept}.
 //
 // A release manifest records the service, releaseId, buildId, commit,
 // build runtimes, artifact, the SHA-256 of the installed tree (over each
@@ -137,6 +138,99 @@
 // beyond keepReleases, never the current or previous one. start, stop,
 // restart and status act on <service>.service only, and only on a unit the
 // helper wrote.
+//
+// # Backups
+//
+// backup, restore, backups and prune need "backup.dir" in host.json (an
+// absolute directory of its own, root-owned 0700; see lcm host apply) and
+// take the service's lock. They work on the service's data directory
+// /var/lib/<service> and its current release, and never on anything else.
+//
+// Fields. backup: sources (1-16), mode ("online", the default, or "stopped"),
+// timeoutSec (1-7200) and runtime (optional; a runtime granted to the
+// service, whose bin directory is put on the worker's PATH). A source is
+// {type, ...} with files {path}, sqlite {path}, postgres {database},
+// mongodb {database, users} or command {argv}. A path is a clean relative
+// path below the data directory (not ".") and the paths of files and sqlite
+// sources may not overlap; a database is a name of letters, digits, "_" and
+// "-"; argv is a release-relative executable and arguments, as for start.
+// restore: backupId, manifestSha256 (refused when the set's manifest has
+// another checksum, so that LCM restores the set it recorded) and
+// restoreUsers. restoreUsers (default false) also restores the "admin" users
+// and roles of a mongodb source saved with users: true. Those are the whole
+// mongod instance's accounts: a plain restore replaces only the database and
+// does not copy the accounts either, and users: true is meant for a service
+// with a mongod of its own. prune: keep {daily, weekly}, the newest set of
+// each of that many UTC days and ISO weeks stays (never the newest set, a
+// set whose manifest cannot be read, or a pre-restore set younger than 7
+// days).
+//
+// Layout. <backup.dir>/<service>/<id>/ (root 0700; id as for releases, with
+// "pre-restore-" before it for the copy a restore takes) holds manifest.json
+// and one artifact per source: NNN-files.tar, NNN-sqlite.db, NNN-postgres.dump,
+// NNN-mongodb.archive (with NNN-mongodb-users.archive and
+// NNN-mongodb-roles.archive), NNN-command.out, all root 0600. The manifest
+// records the service, id, kind, mode, creation time, release, the sources
+// with their artifacts (or "absent", for a pre-restore copy of a path that
+// did not exist) and each artifact's size and SHA-256. A set is built in
+// .tmp-* and renamed into place; .stage-*, .tmp-* and .del-* are leftovers
+// that every changing backup operation removes first.
+//
+// Worker. The artifacts are made by "lcm backup-worker", started with
+// systemd-run as the service's own account in a sandbox like its unit's: the
+// file system is read-only except the staging output and the data directory
+// (which the account owns; a read-only SQLite connection to a cleanly closed
+// WAL database must create its -shm file there), the backup directory is
+// replaced by an empty read-only one with only this operation's staging
+// directories bound back, no ports, 2 GiB of memory, 512 tasks, the
+// timeoutSec, and files of at most BackupBytes (32 GiB). The specification is
+// written by root; the database tools (pg_dump, pg_restore, mongodump,
+// mongorestore) are named in it by absolute path, found by the helper in
+// /usr/bin or /usr/local/bin and checked to be root's, with every link and
+// directory only root can change, and the worker runs nothing else it finds.
+// A MongoDB connection string from the service's environment reaches the
+// tools in a 0600 --config file in the worker's private /tmp, not in their
+// arguments. The worker marks itself undumpable; programs it starts are
+// dumpable again, so this only narrows what the account can reach.
+//
+// Everything in the staging output is untrusted input. The worker's output is
+// measured while it runs. When it ends, root changes the output directory's
+// owner to itself (mode 0700) through a descriptor checked against the
+// directory it looked at, because the account may still hold a descriptor of
+// it, measures it again, and refuses any entry but the result and the
+// expected regular artifacts. Root then copies the artifacts into the new
+// set while hashing them. The backup file system must have the reserve
+// of StopFreeBytes and StopFreeInodes for those copies beyond the set's size.
+//
+// mode "stopped" stops the unit first and starts it again afterwards if it
+// was running. Every stopping operation always issues the stop for a unit the
+// helper wrote, whatever its state: a unit that is activating or waiting to
+// restart is not "active" yet would start the service again. It then
+// requires the unit to be inactive or failed and otherwise refuses with
+// nothing changed.
+//
+// Restore. The order protects the data. The set's manifest and artifacts are
+// verified against their checksums while they are copied to staging; the
+// tools are resolved; the free space is checked for the staged set, the
+// pre-restore copy (sized from the data being replaced) and the staging of
+// an undo; the unit is stopped; a pre-restore set of exactly the restored
+// sources is made (reported as preRestoreId); room for an undo is checked
+// again; and only then is anything replaced. Files are extracted beside
+// their target and swapped in, SQLite databases are swapped in without their
+// journal files, and databases are restored with pg_restore --clean and
+// mongorestore --drop. Archive entries that are links, devices, special mode
+// bits, absolute, with "..", or outside the source are refused before the
+// target is touched. A failed replacement is undone by restoring the
+// pre-restore set and the unit is started again if it was running. If the
+// undo fails too, the unit is left stopped (leftStopped) and the message
+// names the set to restore by hand: the data is neither the old nor the new.
+// A command source is kept but never restored.
+//
+// backups lists at most 200 sets, newest first; a set whose manifest cannot
+// be used has "problem" instead of details. A listing that does not fit in
+// MaxResponse is cut by omitting the sources of the entries, then the
+// oldest entries, and the reply sets "backupsTruncated", as it does when
+// more than 200 sets exist.
 package deployhelper
 
 import (
