@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -70,20 +71,35 @@ type Tailscale struct {
 }
 
 // Components selects the optional host components. Turning one off never
-// removes it.
+// removes it, except the security component with "host apply --remove".
 type Components struct {
-	MachinePower bool          `json:"machinePower"`
-	SecurityHost *SecurityHost `json:"securityHost"`
+	MachinePower bool `json:"machinePower"`
+	// Security installs the security component: audit watches, AIDE, the
+	// sanitized collector, Nginx observation and the restricted helper.
+	Security *Security `json:"security"`
+	// LegacySecurityHost is the key earlier versions used for the security
+	// helper; only null is accepted, so that their files keep loading.
+	LegacySecurityHost json.RawMessage `json:"securityHost,omitempty"`
 	// Deploy installs the deploy helper, its sudoers rule and the build
 	// account.
 	Deploy bool `json:"deploy"`
 }
 
-// SecurityHost enables the restricted security host helper.
-type SecurityHost struct {
-	// MachineID is the immutable ID of the registered Machine resource.
+// Security configures the security component.
+type Security struct {
+	// MachineID is the immutable ID of the registered Machine resource the
+	// collector reports for.
 	MachineID string `json:"machineId"`
+	// Watch adds absolute paths to the fixed watched categories. The
+	// directories of every granted service are watched as deploy already.
+	Watch map[string][]string `json:"watch,omitempty"`
 }
+
+// SecurityWatchCategories are the categories Security.Watch may extend.
+var SecurityWatchCategories = []string{"accounts", "ssh", "sudoers", "cron", "systemd", "deploy", "nginx"}
+
+// maxSecurityWatch bounds the extra paths of one category.
+const maxSecurityWatch = 32
 
 var (
 	accountName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
@@ -108,11 +124,41 @@ func (c Config) Validate() error {
 	if c.Tailscale.Port < 1 || c.Tailscale.Port > 65535 {
 		errs = append(errs, fmt.Errorf("tailscale.port must be between 1 and 65535 (got %d)", c.Tailscale.Port))
 	}
-	if sh := c.Components.SecurityHost; sh != nil && !machineID.MatchString(sh.MachineID) {
-		errs = append(errs, fmt.Errorf("components.securityHost.machineId must be the Machine's immutable ID (got %q)", sh.MachineID))
+	if len(c.Components.LegacySecurityHost) > 0 && string(c.Components.LegacySecurityHost) != "null" {
+		errs = append(errs, errors.New(`components.securityHost was replaced by components.security: move {"machineId": ...} there and remove securityHost`))
+	}
+	if sec := c.Components.Security; sec != nil {
+		errs = append(errs, sec.validate()...)
 	}
 	errs = append(errs, c.validateDeploy()...)
 	return errors.Join(errs...)
+}
+
+func (s *Security) validate() []error {
+	var errs []error
+	if !machineID.MatchString(s.MachineID) {
+		errs = append(errs, fmt.Errorf("components.security.machineId must be the Machine's immutable ID (got %q)", s.MachineID))
+	}
+	for category, paths := range s.Watch {
+		if !slices.Contains(SecurityWatchCategories, category) {
+			errs = append(errs, fmt.Errorf("components.security.watch: %q is not a watched category (%s)", category, strings.Join(SecurityWatchCategories, ", ")))
+			continue
+		}
+		if len(paths) > maxSecurityWatch {
+			errs = append(errs, fmt.Errorf("components.security.watch.%s: at most %d paths", category, maxSecurityWatch))
+		}
+		seen := map[string]bool{}
+		for _, p := range paths {
+			if err := checkHostPath(p); err != nil {
+				errs = append(errs, fmt.Errorf("components.security.watch.%s: %w", category, err))
+			}
+			if seen[p] {
+				errs = append(errs, fmt.Errorf("components.security.watch.%s: %s is listed twice", category, p))
+			}
+			seen[p] = true
+		}
+	}
+	return errs
 }
 
 // Encode returns the configuration as the indented JSON file content.
@@ -130,9 +176,13 @@ var configKeys = keys{
 	"repository": nil,
 	"toolchains": {"go": nil, "node": nil},
 	"tailscale":  {"port": nil},
-	"components": {"machinePower": nil, "securityHost": {"machineId": nil}, "deploy": nil},
-	"runtimes":   {anyKey: nil},
-	"backup":     {"dir": nil},
+	"components": {
+		"machinePower": nil, "deploy": nil,
+		"security":     {"machineId": nil, "watch": {anyKey: nil}},
+		"securityHost": {"machineId": nil},
+	},
+	"runtimes": {anyKey: nil},
+	"backup":   {"dir": nil},
 	"services": {anyKey: {
 		"port": nil, "runtimes": nil, "inputs": {anyKey: nil},
 		"route": reservedKey, "extraPaths": reservedKey,
@@ -171,6 +221,9 @@ func ParseConfig(data []byte) (Config, error) {
 	strict.DisallowUnknownFields()
 	if err := strict.Decode(&c); err != nil {
 		return Config{}, err
+	}
+	if string(c.Components.LegacySecurityHost) == "null" {
+		c.Components.LegacySecurityHost = nil
 	}
 	return c, c.Validate()
 }

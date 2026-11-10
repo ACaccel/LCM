@@ -27,6 +27,9 @@ type Options struct {
 	// ReplaceBinary installs the running executable as /usr/local/bin/lcm
 	// even when one is installed (self-deploy keeps that one current).
 	ReplaceBinary bool
+	// Remove removes an installed security component that the
+	// configuration turns off; without it apply only reports it.
+	Remove bool
 	// Out receives one line per step result.
 	Out io.Writer
 	// Password, when set, asks the administrator for the web console's
@@ -79,7 +82,6 @@ type applier struct {
 	unitChanged bool
 	dnsName     string
 	serveState  string
-	security    securityState
 	// planned holds the directories check mode reported as created, so
 	// that their children do not report them again.
 	planned map[string]bool
@@ -138,14 +140,6 @@ func parseVersion(out []byte) (buildVersion, bool) {
 	return buildVersion{version: string(m[1]), commit: string(m[2]), time: t}, true
 }
 
-type securityState struct {
-	present   bool
-	complete  bool
-	helperSum string
-	machineID string
-	readErr   error
-}
-
 // Apply converges the host with the configuration and the embedded files.
 // It validates everything first and changes nothing until that passes; with
 // Options.Check it changes nothing at all. Errors stop the sequence.
@@ -182,7 +176,7 @@ func Apply(ctx context.Context, h Host, o Options) (Result, error) {
 		{"service", a.service},
 		{"health", a.health},
 		{ComponentMachinePower, a.machinePower},
-		{ComponentSecurityHost, a.securityHost},
+		{ComponentSecurity, a.securityComponent},
 	}
 	steps = append(steps, a.deploySteps()...)
 	steps = append(steps, []namedStep{
@@ -335,7 +329,7 @@ func (a *applier) preflight(ctx context.Context) error {
 	case err != nil:
 		return err
 	}
-	return a.preflightSecurityHost()
+	return a.preflightSecurity()
 }
 
 // CheckExecutable refuses to run the self-deployed binary as root.
@@ -625,6 +619,9 @@ func (a *applier) preflightStage(ctx context.Context) error {
 	if a.cfg.Components.Deploy {
 		rules["lcm-deploy-sudoers"] = stage + "/lcm-deploy-sudoers"
 	}
+	if a.cfg.Components.Security != nil {
+		rules["security/sudoers"] = stage + "/security-sudoers"
+	}
 	for name, p := range rules {
 		if err := a.writeContent(p, bytesContent(asset(name)), 0o440, 0, 0); err != nil {
 			return err
@@ -661,47 +658,6 @@ func (a *applier) preflightCheckout(ctx context.Context) error {
 	if origin := strings.TrimSpace(string(out)); origin != a.cfg.Repository {
 		return fmt.Errorf("%s tracks %q, not the configured repository %s", Checkout, printable(origin, 200), a.cfg.Repository)
 	}
-	return nil
-}
-
-func (a *applier) preflightSecurityHost() error {
-	fsys := a.h.FS
-	if a.cfg.Components.SecurityHost != nil {
-		for _, p := range []string{python3, visudo} {
-			if info, err := fsys.Lstat(p); err != nil || info.IsDir() {
-				return fmt.Errorf("the security host installer needs %s", p)
-			}
-		}
-	}
-	st := &a.security
-	n := 0
-	for _, p := range []string{SecurityHelper, SecurityPolicy, SecuritySudoers} {
-		_, err := fsys.Lstat(p)
-		switch {
-		case err == nil:
-			n++
-		case !errors.Is(err, fs.ErrNotExist):
-			return err
-		}
-	}
-	st.present, st.complete = n > 0, n == 3
-	if !st.complete {
-		return nil
-	}
-	if st.helperSum, st.readErr = hashFile(fsys, SecurityHelper); st.readErr != nil {
-		return nil
-	}
-	f, err := fsys.Open(SecurityPolicy)
-	if err != nil {
-		st.readErr = err
-		return nil
-	}
-	defer func() { _ = f.Close() }()
-	var policy struct {
-		MachineID string `json:"machineId"`
-	}
-	st.readErr = json.NewDecoder(io.LimitReader(f, maxConfigSize)).Decode(&policy)
-	st.machineID = policy.MachineID
 	return nil
 }
 
@@ -1141,64 +1097,6 @@ func (a *applier) machinePower(ctx context.Context, s *step) error {
 		if _, err := a.h.FS.Lstat(p); errors.Is(err, fs.ErrNotExist) {
 			s.note(p + " is not provisioned; see docs/operations.md#local-machine-power-helper")
 		}
-	}
-	return nil
-}
-
-func (a *applier) securityHost(ctx context.Context, s *step) error {
-	want := a.cfg.Components.SecurityHost
-	st := a.security
-	if want == nil {
-		if st.present {
-			s.note("installed but disabled; components.securityHost is null and nothing is removed")
-		}
-		return nil
-	}
-	helper := bytesContent(asset("security-host/helper.py"))
-	switch {
-	case !st.present:
-		return s.change("install the security host helper with the embedded install.py", func() error {
-			return a.installSecurityHost(ctx, want.MachineID, helper.Sum)
-		})
-	case !st.complete:
-		s.manual("the installation is incomplete (helper, policy or sudoers rule missing); review it as described in deploy/security-host/README.md")
-	case st.readErr != nil:
-		s.manual("cannot read the installation: " + st.readErr.Error())
-	case st.machineID != want.MachineID:
-		s.manual(fmt.Sprintf("the installed policy is for Machine %q, the configuration names %q; install.py does not change an existing installation", st.machineID, want.MachineID))
-	case st.helperSum != helper.Sum:
-		s.manual("the installed helper.py differs from the embedded one; install.py does not upgrade an existing installation, so follow the reviewed upgrade in deploy/security-host/README.md")
-	}
-	return nil
-}
-
-// installSecurityHost runs the embedded installer from a root-only
-// directory. It validates the host's security configuration itself and
-// installs its sudoers rule last.
-func (a *applier) installSecurityHost(ctx context.Context, machineID, helperSum string) error {
-	fsys := a.h.FS
-	dir, err := fsys.MkdirTemp("/tmp", "lcm-security-host-")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = fsys.RemoveAll(dir) }()
-	for _, name := range []string{"install.py", "helper.py"} {
-		if err := a.writeContent(dir+"/"+name, bytesContent(asset("security-host/"+name)), 0o600, 0, 0); err != nil {
-			return err
-		}
-	}
-	out, err := a.run(ctx, Command{
-		Path: python3, Args: []string{"-I", dir + "/install.py", "--machine-id", machineID, "--helper-sha256", helperSum},
-		Env: []string{"LANG=C.UTF-8"}, Timeout: 3 * time.Minute,
-	})
-	if err != nil {
-		return err
-	}
-	var reply struct {
-		Installed bool `json:"installed"`
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &reply); err != nil || !reply.Installed {
-		return errors.New("install.py did not report an installation")
 	}
 	return nil
 }

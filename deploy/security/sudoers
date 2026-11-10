@@ -1,0 +1,1 @@
+lcm ALL=(root) NOPASSWD:NOSETENV: /usr/bin/python3 -I /usr/local/libexec/lcm/security-host/helper.py

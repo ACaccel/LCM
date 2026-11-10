@@ -63,7 +63,7 @@ func TestHostStatus(t *testing.T) {
 	if r.code != 0 {
 		t.Fatalf("%+v", r)
 	}
-	for _, c := range []string{"core", "machine-power", "security-host"} {
+	for _, c := range []string{"core", "machine-power", "security"} {
 		if got := statusLine(r.stdout, c); got != c+" not installed" {
 			t.Errorf("%s: %q\n%s", c, got, r.stdout)
 		}

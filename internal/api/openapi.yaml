@@ -1318,7 +1318,7 @@ paths:
       summary: Host components compared with this build
       description: |
         Compares the root-owned files that `lcm host apply` installs (`core`,
-        `machine-power`, `security-host`, `deploy`) with the versions embedded in the running
+        `machine-power`, `security`, `deploy`) with the versions embedded in the running
         binary. The server only reads them as its own unprivileged account: files it
         cannot read are `unknown`, and nothing is ever changed through the API. An
         administrator brings an `outdated` or `missing` component up to date with
@@ -6184,7 +6184,7 @@ components:
       additionalProperties: false
       required: [name, state, files]
       properties:
-        name: { type: string, enum: [core, machine-power, security-host, deploy] }
+        name: { type: string, enum: [core, machine-power, security, deploy] }
         state: { $ref: "#/components/schemas/HostComponentState" }
         files:
           type: array

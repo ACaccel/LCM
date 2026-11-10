@@ -18,7 +18,7 @@ import (
 
 func (a *app) host(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usagef("host: expected subcommand init, apply, allow, upgrade or status")
+		return usagef("host: expected subcommand init, apply, allow, upgrade, security or status")
 	}
 	sub, rest := args[0], args[1:]
 	fs := flag.NewFlagSet("host "+sub, flag.ContinueOnError)
@@ -34,6 +34,8 @@ func (a *app) host(ctx context.Context, args []string) error {
 		return a.hostStatus(ctx, fs, rest)
 	case "allow":
 		return a.hostAllow(ctx, fs, rest)
+	case "security":
+		return a.hostSecurity(ctx, rest)
 	}
 	return usagef("host: unknown subcommand %q", sub)
 }
@@ -53,7 +55,7 @@ func (a *app) hostInit(ctx context.Context, fs *flag.FlagSet, args []string) err
 	nodeRoot := fs.String("node-root", "", "Node.js toolchain to copy (default: ~OPERATOR/.local/node)")
 	port := fs.Int("ts-port", hostsetup.DefaultTailscalePort, "HTTPS port of tailscale serve")
 	power := fs.Bool("machine-power", false, "install the machine power helper component")
-	machineID := fs.String("security-host-machine-id", "", "install the security host helper for the Machine with this immutable ID")
+	machineID := fs.String("security-machine-id", "", "install the security component for the Machine with this immutable ID")
 	path := fs.String("config", hostsetup.ConfigPath, "host configuration file to write")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
@@ -86,7 +88,7 @@ func (a *app) hostInit(ctx context.Context, fs *flag.FlagSet, args []string) err
 		cfg.Toolchains.Node = *nodeRoot
 	}
 	if *machineID != "" {
-		cfg.Components.SecurityHost = &hostsetup.SecurityHost{MachineID: *machineID}
+		cfg.Components.Security = &hostsetup.Security{MachineID: *machineID}
 	}
 	if err := hostsetup.Init(h, *path, cfg); err != nil {
 		return err
@@ -99,6 +101,7 @@ func (a *app) hostApply(ctx context.Context, fs *flag.FlagSet, args []string) er
 	check := fs.Bool("check", false, "report what would change without changing anything (exit status 3 when something would)")
 	path := fs.String("config", hostsetup.ConfigPath, "host configuration file")
 	replace := fs.Bool("replace-binary", false, "install this executable as /usr/local/bin/lcm even if one is installed")
+	remove := fs.Bool("remove", false, "remove the security component when components.security is null (baseline, reports and journal are kept)")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -110,7 +113,7 @@ func (a *app) hostApply(ctx context.Context, fs *flag.FlagSet, args []string) er
 	if err != nil {
 		return err
 	}
-	opts := hostsetup.Options{ConfigPath: *path, Check: *check, ReplaceBinary: *replace, Out: a.stdout}
+	opts := hostsetup.Options{ConfigPath: *path, Check: *check, ReplaceBinary: *replace, Remove: *remove, Out: a.stdout}
 	if f, ok := a.stdin.(*os.File); ok && a.interactive() {
 		opts.Password = func() (string, error) { return a.promptRestoring(f) }
 	}
@@ -205,4 +208,53 @@ func (a *app) promptRestoring(f *os.File) (string, error) {
 		}
 	}()
 	return a.promptPassword(f)
+}
+
+// hostSecurity runs the security component's maintenance: "cleanup" removes
+// the known leftovers of the installers it replaced, "revert" undoes the
+// last recorded installer transaction.
+func (a *app) hostSecurity(ctx context.Context, args []string) error {
+	if len(args) == 0 || (args[0] != "cleanup" && args[0] != "revert") {
+		return usagef("host security: expected subcommand cleanup or revert")
+	}
+	sub := args[0]
+	fs := flag.NewFlagSet("host security "+sub, flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	check := fs.Bool("check", false, "report what would change without changing anything (exit status 3 when something would)")
+	apply := fs.Bool("apply", false, "make the changes")
+	var transaction *string
+	if sub == "revert" {
+		transaction = fs.String("transaction", "", "the transaction to undo (default: the last applied one)")
+	}
+	pos, err := parseArgs(fs, args[1:])
+	if err != nil {
+		return err
+	}
+	if len(pos) > 0 {
+		return usagef("host security %s: unexpected argument %q", sub, pos[0])
+	}
+	if *check == *apply {
+		return usagef("host security %s: give exactly one of --check and --apply", sub)
+	}
+	h, err := a.hostEnv()
+	if err != nil {
+		return err
+	}
+	opts := hostsetup.SecurityOptions{Check: *check, Out: a.stdout}
+	run := hostsetup.SecurityCleanup
+	if sub == "revert" {
+		opts.Transaction = *transaction
+		run = hostsetup.SecurityRevert
+	}
+	res, err := run(ctx, h, opts)
+	if err != nil {
+		return err
+	}
+	switch {
+	case *check && res.Changes+res.Manual > 0:
+		return problemError{fmt.Sprintf("%d changes pending and %d differences that need manual action", res.Changes, res.Manual)}
+	case res.Manual > 0:
+		return fmt.Errorf("%d differences need manual action; see the lines above", res.Manual)
+	}
+	return nil
 }

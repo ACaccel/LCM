@@ -269,7 +269,7 @@ func TestRefusedBeforeAnyWrite(t *testing.T) {
 		{"relative toolchain", func(th *testHost) { th.cfg.Toolchains.Go = "go"; th.writeConfig(th.cfg) }, "toolchains.go must be an absolute"},
 		{"port", func(th *testHost) { th.cfg.Tailscale.Port = 0; th.writeConfig(th.cfg) }, "tailscale.port must be between"},
 		{"machine id", func(th *testHost) {
-			th.cfg.Components.SecurityHost = &SecurityHost{MachineID: "../x"}
+			th.cfg.Components.Security = &Security{MachineID: "../x"}
 			th.writeConfig(th.cfg)
 		}, "machineId must be"},
 		{"config writable", func(th *testHost) { th.fs.get(ConfigPath).mode = 0o664 }, "host.json is writable by group or others"},
@@ -323,11 +323,16 @@ func TestRefusedBeforeAnyWrite(t *testing.T) {
 			th.r.origin = "https://example.com/fork.git"
 		}, `tracks "https://example.com/fork.git", not the configured repository`},
 		{"checkout without git", func(th *testHost) { th.fs.dir(Checkout, 0o750, 990, 990) }, "is not a git checkout"},
-		{"no python for the security host", func(th *testHost) {
+		{"no python for the security component", func(th *testHost) {
 			th.fs.remove(python3)
-			th.cfg.Components.SecurityHost = &SecurityHost{MachineID: "m-1"}
+			th.cfg.Components.Security = &Security{MachineID: "m-1"}
 			th.writeConfig(th.cfg)
-		}, "the security host installer needs /usr/bin/python3"},
+		}, "the security component needs /usr/bin/python3"},
+		{"security sudoers rule rejected", func(th *testHost) {
+			th.cfg.Components.Security = &Security{MachineID: "m-1"}
+			th.writeConfig(th.cfg)
+			th.r.failVisudoStaged = true
+		}, "does not pass visudo"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			th := newTestHost(t)
@@ -523,10 +528,9 @@ func TestHealthWaitIsBounded(t *testing.T) {
 func TestOptionalComponents(t *testing.T) {
 	th := converged(t)
 	th.cfg.Components.MachinePower = true
-	th.cfg.Components.SecurityHost = &SecurityHost{MachineID: "m-1"}
 	th.writeConfig(th.cfg)
 	res, out, err := th.apply(Options{Check: true})
-	if err != nil || res.Changes != 4 {
+	if err != nil || res.Changes != 3 {
 		t.Fatalf("check: %+v %v\n%s", res, err, out)
 	}
 	_, out, err = th.apply(Options{})
@@ -549,27 +553,7 @@ func TestOptionalComponents(t *testing.T) {
 	if !strings.Contains(out, "/etc/lcm/machine-power.json is not provisioned") {
 		t.Errorf("no note about the machine power configuration:\n%s", out)
 	}
-	py := strings.Join(th.r.installPy, " ")
-	if !strings.HasPrefix(py, "-I /tmp/lcm-security-host-") || !strings.HasSuffix(py, "/install.py --machine-id m-1 --helper-sha256 "+sha(string(asset("security-host/helper.py")))) {
-		t.Errorf("install.py invocation: %s", py)
-	}
 	th.expectConverged()
-
-	// An installed helper that differs needs the reviewed upgrade.
-	th.fs.file(SecurityHelper, "older helper", 0o644, 0, 0)
-	res, out, err = th.apply(Options{})
-	if err != nil || res.Manual != 1 || !strings.Contains(out, "security-host:   needs manual action: the installed helper.py differs") {
-		t.Fatalf("outdated helper: %+v %v\n%s", res, err, out)
-	}
-	if th.fs.content(SecurityHelper) != "older helper" || len(th.r.called(python3)) != 1 {
-		t.Fatal("apply touched an existing security host installation")
-	}
-	th.fs.file(SecurityHelper, string(asset("security-host/helper.py")), 0o644, 0, 0)
-	th.cfg.Components.SecurityHost.MachineID = "m-2"
-	th.writeConfig(th.cfg)
-	if res, out, _ := th.apply(Options{Check: true}); res.Manual != 1 || !strings.Contains(out, `the installed policy is for Machine "m-1"`) {
-		t.Fatalf("other machine: %+v\n%s", res, out)
-	}
 
 	// Turning components off keeps them.
 	th.cfg.Components = Components{}
@@ -579,25 +563,12 @@ func TestOptionalComponents(t *testing.T) {
 	if err != nil || res.Changes != 0 || res.Manual != 0 {
 		t.Fatalf("off: %+v %v\n%s", res, err, out)
 	}
-	for _, want := range []string{"machine-power:   unchanged (installed but disabled", "security-host:   unchanged (installed but disabled"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("no %q:\n%s", want, out)
-		}
+	if !strings.Contains(out, "machine-power:   unchanged (installed but disabled") {
+		t.Errorf("no note about the disabled component:\n%s", out)
 	}
 	th.expectConverged()
-	if th.fs.get(PowerSudoers) == nil || th.fs.get(SecuritySudoers) == nil {
+	if th.fs.get(PowerSudoers) == nil {
 		t.Fatal("a disabled component was removed")
-	}
-}
-
-func TestSecurityHostIncompleteNeedsReview(t *testing.T) {
-	th := converged(t)
-	th.cfg.Components.SecurityHost = &SecurityHost{MachineID: "m-1"}
-	th.writeConfig(th.cfg)
-	th.fs.file(SecurityPolicy, `{"machineId":"m-1"}`, 0o600, 0, 0)
-	res, out, err := th.apply(Options{})
-	if err != nil || res.Manual != 1 || !strings.Contains(out, "the installation is incomplete") || len(th.r.called(python3)) != 0 {
-		t.Fatalf("%+v %v\n%s", res, err, out)
 	}
 }
 

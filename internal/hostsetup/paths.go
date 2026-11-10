@@ -38,18 +38,29 @@ const (
 	PowerConfig     = "/etc/lcm/machine-power.json"
 	PowerLedger     = "/var/lib/lcm-machine-power"
 	SecurityHelper  = LibexecDir + "/security-host/helper.py"
-	SecurityPolicy  = "/etc/lcm/security-host/policy.json"
 	SecuritySudoers = "/etc/sudoers.d/lcm-security-host"
-	// The security host installer runs these by absolute path.
+	// The security installer runs these by absolute path.
 	python3 = "/usr/bin/python3"
 	visudo  = "/usr/sbin/visudo"
+)
+
+// Paths of the security component. It keeps the paths of the installation
+// it adopts (docs/security.md#host-component).
+const (
+	SecurityRuntime   = "/usr/local/lib/workstation-security/runtime.py"
+	SecurityInstaller = "/usr/local/lib/workstation-security/install.py"
+	SecurityCollector = "/etc/systemd/system/workstation-security-collector.service"
+	SecurityEnvFile   = EtcDir + "/workstation-security.env"
+	SecurityDropInDir = "/etc/systemd/system/lcm.service.d"
+	SecurityDropIn    = SecurityDropInDir + "/60-workstation-security.conf"
+	SecurityEndpoint  = ServeTarget + "/api/v1/hooks/security"
 )
 
 // Component names, as status and apply report them.
 const (
 	ComponentCore         = "core"
 	ComponentMachinePower = "machine-power"
-	ComponentSecurityHost = "security-host"
+	ComponentSecurity     = "security"
 )
 
 // rootFile is a file installed as root with fixed content, owner and mode.
@@ -73,7 +84,10 @@ var (
 		{path: PowerSudoers, perm: 0o440, asset: "machine-power-sudoers"},
 	}
 	securityFiles = []rootFile{
-		{path: SecurityHelper, perm: 0o644, asset: "security-host/helper.py"},
+		{path: SecurityHelper, perm: 0o644, asset: "security/helper.py"},
+		{path: SecurityRuntime, perm: 0o644, asset: "security/runtime.py"},
+		{path: SecurityInstaller, perm: 0o644, asset: "security/install.py"},
+		{path: SecuritySudoers, perm: 0o440, asset: "security/sudoers"},
 	}
 )
 

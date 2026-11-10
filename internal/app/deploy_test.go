@@ -34,7 +34,7 @@ func readDeploy(t *testing.T, name string) []byte {
 // identical to the reviewed files in deploy/.
 func TestDeployEmbedsTheDeployFiles(t *testing.T) {
 	names := []string{"lcm.service", "lcm.env", "sudoers", "self-install", "machine-power",
-		"machine-power-sudoers", "lcm-deploy", "lcm-deploy-sudoers", "security-host/helper.py", "security-host/install.py"}
+		"machine-power-sudoers", "lcm-deploy", "lcm-deploy-sudoers", "security/helper.py", "security/install.py", "security/runtime.py", "security/sudoers"}
 	for _, name := range names {
 		got, err := fs.ReadFile(deploy.Files, name)
 		if err != nil {
