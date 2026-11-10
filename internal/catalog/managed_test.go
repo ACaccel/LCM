@@ -155,6 +155,9 @@ func (s *simHelper) perform(req deployhelper.Request) deployhelper.Response {
 			return fail(deployhelper.CodeNotFound, "there is no release "+req.ReleaseID)
 		}
 		resp.Activate = &deployhelper.ActivateResult{ReleaseID: req.ReleaseID, Previous: s.current, Switched: true}
+		if req.Publish != nil {
+			resp.Activate.Published = &deployhelper.PublishResult{Written: 3, Retained: 1}
+		}
 		s.previous, s.current, s.active = s.current, req.ReleaseID, true
 	case deployhelper.OpStart, deployhelper.OpRestart, deployhelper.OpStop:
 		if s.current == "" {
@@ -852,4 +855,121 @@ func TestManagedRollbackOnlyReusesMatchingReleases(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestManagedPublishAndLimits: the document's publish and limits reach the
+// activate request, and the deployment log records what was published.
+func TestManagedPublishAndLimits(t *testing.T) {
+	g := newGitFixture(t)
+	h := newSimHelper()
+	e := newEnv(t, realGit(g), withHelper(h))
+	e.put(managedDocWith(g.remote, "    publish: { dir: client/dist, retain: [assets/] }\n    limits: { memoryMax: 1G, stopTimeout: 90s }\n"), 0)
+	p, err := e.mgr.Plan(e.ctx, "app", catalog.ActionDeploy, catalog.ActionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := p.StepMessages[7]
+	if act.Code != "step.helperActivate" || act.Params["publish"] != "client/dist" || act.Params["target"] != "/opt/app/www" ||
+		!strings.Contains(act.Message, "run the migration node scripts/migrate.mjs, then publish client/dist of the new release to /opt/app/www, then switch") {
+		t.Fatalf("activate step = %+v", act)
+	}
+	if _, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	req := lastRequest(h, deployhelper.OpActivate)
+	if req.Publish == nil || req.Publish.Dir != "client/dist" || !slices.Equal(req.Publish.Retain, []string{"assets/"}) || req.Publish.RetainDays != 0 ||
+		req.Limits == nil || *req.Limits != (deployhelper.UnitLimits{MemoryMax: "1G", StopTimeoutSec: 90}) || len(req.Start) != 2 {
+		t.Fatalf("activate = %+v", req)
+	}
+	if d := deployments(t, e, "app")[0]; !strings.Contains(d.LogExcerpt, "published client/dist to /opt/app/www: 3 written, 0 replaced, 0 unchanged, 0 removed, 1 retained") {
+		t.Fatalf("log:\n%s", d.LogExcerpt)
+	}
+}
+
+// TestManagedStaticOnly: a managed service without start publishes only. It
+// has no process actions, its status is unknown, and a rollback publishes
+// the earlier release again.
+func TestManagedStaticOnly(t *testing.T) {
+	g := newGitFixture(t)
+	h := newSimHelper()
+	e := newEnv(t, realGit(g), withHelper(h))
+	e.put(serviceDoc("site", "managed", fmt.Sprintf(
+		"    source: { url: %s, branch: main, build: 'npm run build' }\n    artifact: dist\n    publish: { dir: . }\n", g.remote), ""), 0)
+
+	p, err := e.mgr.Plan(e.ctx, "site", catalog.ActionDeploy, catalog.ActionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := p.StepMessages[len(p.StepMessages)-2]; last.Code != "step.helperPublish" || last.Params["target"] != "/opt/site/www" {
+		t.Fatalf("steps = %v", p.Steps)
+	}
+	if _, err := e.mgr.Deploy(e.ctx, "site", catalog.ActionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r1 := lastRequest(h, deployhelper.OpActivate)
+	if r1.Op != deployhelper.OpActivate || r1.Start != nil || r1.Migrate != nil || r1.Limits != nil || r1.Publish == nil || r1.Publish.Dir != "." {
+		t.Fatalf("activate = %+v", r1)
+	}
+	if e.state("site") != catalog.StateRunning {
+		t.Fatalf("state = %s", e.state("site"))
+	}
+	rec, _ := e.cat.Get(context.Background(), "site")
+	ad, _ := rt.NewRegistry(&execx.Fake{}, rt.Options{Deploy: h}).For(rec.Runtime())
+	before := len(h.Requests())
+	if st, err := ad.Status(context.Background(), rec.Runtime()); err != nil || st.State != rt.StateUnknown || !strings.Contains(st.Detail["reason"], "static content only") {
+		t.Fatalf("status = %+v, %v", st, err)
+	}
+	if err := ad.Restart(context.Background(), rec.Runtime()); !errors.Is(err, rt.ErrUnsupported) {
+		t.Fatalf("restart = %v", err)
+	}
+	if len(h.Requests()) != before {
+		t.Fatal("the status or restart of a static-only service called the helper")
+	}
+	if caps := rt.CapabilitiesOf(rec.Runtime()); caps != (rt.Capabilities{}) {
+		t.Fatalf("capabilities = %+v", caps)
+	}
+	for _, act := range []func(context.Context, string, catalog.ActionOptions) (catalog.ActionResult, error){e.mgr.Stop, e.mgr.Restart} {
+		if _, err := act(e.ctx, "site", catalog.ActionOptions{}); !errors.Is(err, catalog.ErrUnsupported) {
+			t.Fatalf("err = %v", err)
+		}
+	}
+	for _, a := range catalog.AvailableActions(rec, h.Ready()) {
+		switch a.Action {
+		case catalog.ActionStart, catalog.ActionStop, catalog.ActionRestart:
+			if a.Allowed || a.Reason != catalog.ReasonUnsupported {
+				t.Errorf("%s: %+v", a.Action, a)
+			}
+		}
+	}
+
+	g.commit("v2")
+	if _, err := e.mgr.Deploy(e.ctx, "site", catalog.ActionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	p, err = e.mgr.Plan(e.ctx, "site", catalog.ActionRollback, catalog.ActionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := p.StepMessages[len(p.StepMessages)-1]; last.Code != "step.helperActivatePrevious" || last.Params["static"] != "true" ||
+		last.Params["publish"] != "." || !strings.Contains(last.Message, "publish the static content of the installed release "+r1.ReleaseID) {
+		t.Fatalf("rollback step = %+v", last)
+	}
+	before = len(h.Requests())
+	if _, err := e.mgr.Rollback(e.ctx, "site", catalog.ActionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := h.Requests()[before:]; reqs[len(reqs)-1].ReleaseID != r1.ReleaseID || reqs[len(reqs)-1].Publish == nil || reqs[len(reqs)-1].Start != nil {
+		t.Fatalf("rollback = %+v", reqs)
+	}
+}
+
+// lastRequest is the last request of op the helper received.
+func lastRequest(h *simHelper, op deployhelper.Op) deployhelper.Request {
+	reqs := h.Requests()
+	for i := len(reqs) - 1; i >= 0; i-- {
+		if reqs[i].Op == op {
+			return reqs[i]
+		}
+	}
+	return deployhelper.Request{}
 }

@@ -26,6 +26,23 @@ describe("server messages", () => {
     expect(translate({ code: "step.helperActivate", params: { service: "web", start: "server.mjs", migrate: "" }, message: "switch …" })).toBe(
       "將 web 切換到新 release，以 server.mjs 重啟",
     );
+    expect(
+      translate({
+        code: "step.helperActivate",
+        params: { service: "web", start: "server.mjs", migrate: "", publish: "client/dist", target: "/opt/web/www" },
+        message: "publish …",
+      }),
+    ).toBe("把新 release 的 client/dist 發布到 /opt/web/www，再將 web 切換到新 release，以 server.mjs 重啟");
+    expect(translate({ code: "step.helperPublish", params: { service: "site", publish: ".", target: "/opt/site/www" }, message: "publish …" })).toBe(
+      "把新 release 的 . 發布到 /opt/site/www，並將 site 切換到新 release；這個服務不執行程序",
+    );
+    expect(
+      translate({
+        code: "step.helperActivatePrevious",
+        params: { service: "site", release: "r1", commit: "abc", publish: ".", static: "true" },
+        message: "publish …",
+      }),
+    ).toBe("重新發布 site 已安裝的 release r1（commit abc）的靜態內容並切回該 release");
   });
 
   it("labels enumerated parameters it knows and shows unknown ones as they are", () => {

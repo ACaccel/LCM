@@ -182,6 +182,9 @@ type managed struct {
 }
 
 func (m *managed) Status(ctx context.Context, r model.Runtime) (Status, error) {
+	if r.Start == "" {
+		return Status{State: StateUnknown, Detail: map[string]string{"reason": staticOnly}}, nil
+	}
 	if m.helper == nil {
 		return Status{State: StateUnknown, Detail: map[string]string{"reason": ErrHelperUnavailable.Error()}}, nil
 	}
@@ -224,7 +227,13 @@ func (m *managed) Status(ctx context.Context, r model.Runtime) (Status, error) {
 	return st, nil
 }
 
+// staticOnly explains the status of a managed service without start.
+const staticOnly = "static content only: the service runs no process"
+
 func (m *managed) action(ctx context.Context, r model.Runtime, op deployhelper.Op) error {
+	if r.Start == "" {
+		return fmt.Errorf("%w: %s (%s)", ErrUnsupported, op, staticOnly)
+	}
 	_, err := CallHelper(ctx, m.helper, deployhelper.Request{Op: op, OperationID: NewOperationID(), Service: r.Service})
 	return err
 }

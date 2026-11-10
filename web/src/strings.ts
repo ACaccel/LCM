@@ -1322,7 +1322,8 @@ export const msg: Record<string, (p: Params) => string> = {
   "step.helperBuild": (p) => `由 deploy helper 在沙箱中以 lcmb-${p.service} 建置${p.runtime ? `（runtime ${p.runtime}）` : ""}：${p.command}`,
   "step.helperInstall": (p) => `把建置結果的 ${p.artifact} 安裝為 ${p.service} 的新 release`,
   "step.helperActivate": (p) =>
-    `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}將 ${p.service} 切換到新 release，以 ${p.start} 重啟`,
+    `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}${p.publish ? `把新 release 的 ${p.publish} 發布到 ${p.target}，再` : ""}將 ${p.service} 切換到新 release，以 ${p.start} 重啟`,
+  "step.helperPublish": (p) => `把新 release 的 ${p.publish} 發布到 ${p.target}，並將 ${p.service} 切換到新 release；這個服務不執行程序`,
   "step.applyRoute": (p) => `把 ${p.service} 的 route 設定送交 deploy helper，由它產生並套用 nginx site`,
   "step.helperBackup": (p) => `由 deploy helper 備份 ${p.sources}（${p.mode === "stopped" ? "停機" : "線上"}模式），存成備份目錄中的新備份`,
   "step.helperPrune": (p) => `依保留規則移除舊備份：保留最近 ${p.daily} 天與 ${p.weekly} 週各自最新的一份，最新的備份一律保留`,
@@ -1332,7 +1333,10 @@ export const msg: Record<string, (p: Params) => string> = {
   "step.restoreApply": (p) => `用 ${p.backup} 取代 ${p.sources}；失敗時自動換回還原前副本`,
   "step.restoreStart": (p) => `${p.service} 原本在執行時重新啟動`,
   "step.restoreCheck": () => "確認服務恢復執行；沒有恢復時還原「還原前副本」",
-  "step.helperActivatePrevious": (p) => `將 ${p.service} 切回已安裝的 release ${p.release}（commit ${p.commit}）並重啟，不執行 migration`,
+  "step.helperActivatePrevious": (p) =>
+    p.static
+      ? `重新發布 ${p.service} 已安裝的 release ${p.release}（commit ${p.commit}）的靜態內容並切回該 release`
+      : `${p.publish ? `重新發布已安裝 release ${p.release} 的靜態內容，再` : ""}將 ${p.service} 切回已安裝的 release ${p.release}（commit ${p.commit}）並重啟，不執行 migration`,
   "timeline.configSaved": (p) => `${p.actor} 儲存了設定版本 ${p.version}`,
   "timeline.configRestored": (p) => `${p.actor} 將版本 ${p.from} 還原為設定版本 ${p.version}`,
   "timeline.phase": (p) =>

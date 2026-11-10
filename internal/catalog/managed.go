@@ -9,8 +9,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/deployhelper"
+	"github.com/ACaccel/lcm/internal/hostsetup"
 	"github.com/ACaccel/lcm/internal/message"
 	"github.com/ACaccel/lcm/internal/model"
 	rt "github.com/ACaccel/lcm/internal/runtime"
@@ -133,18 +135,39 @@ func buildTimeoutSec(src *model.Source) int {
 
 // activateRequest is the activate request for release. Rollbacks run no
 // migration: the migration of the release being left may already have
-// changed the data, and running an older one again cannot undo that.
+// changed the data, and running an older one again cannot undo that. A
+// service without start only publishes.
 func (s *session) activateRequest(release string) deployhelper.Request {
 	cfg := s.cfg
 	req := deployhelper.Request{
 		Op: deployhelper.OpActivate, ReleaseID: release,
-		Start:   append([]string{cfg.Start}, cfg.StartArgs...),
 		Runtime: cfg.RuntimeName, KeepReleases: cfg.KeepReleases,
+		Publish: publishRequest(cfg.Publish), Limits: limitsRequest(cfg.Limits),
+	}
+	if cfg.Start != "" {
+		req.Start = append([]string{cfg.Start}, cfg.StartArgs...)
 	}
 	if s.action != ActionRollback {
 		req.Migrate = cfg.Migrate
 	}
 	return req
+}
+
+// publishRequest is the publish field of an activate request.
+func publishRequest(p *model.Publish) *deployhelper.Publish {
+	if p == nil {
+		return nil
+	}
+	return &deployhelper.Publish{Dir: p.Dir, Retain: p.Retain, RetainDays: p.RetainDays}
+}
+
+// limitsRequest is the limits field of an activate request; limits that
+// set nothing are left out.
+func limitsRequest(l *model.UnitLimits) *deployhelper.UnitLimits {
+	if l == nil || *l == (model.UnitLimits{}) {
+		return nil
+	}
+	return &deployhelper.UnitLimits{MemoryHigh: l.MemoryHigh, MemoryMax: l.MemoryMax, StopTimeoutSec: int(l.StopTimeout.D() / time.Second)}
 }
 
 // managedPipeline builds, installs and activates commit sha, which LCM's
@@ -192,6 +215,10 @@ func (s *session) activate(ctx context.Context, release string, log *stepLog, id
 	}
 	if resp.Activate == nil || resp.Activate.ReleaseID != release {
 		return &StepError{Step: "activate", Err: errors.New("the deploy helper's reply does not confirm the release")}
+	}
+	if p := resp.Activate.Published; p != nil {
+		log.note("published %s to %s: %d written, %d replaced, %d unchanged, %d removed, %d retained, %d hidden entries skipped",
+			s.cfg.Publish.Dir, hostsetup.ServicePublishDir(s.name), p.Written, p.Replaced, p.Unchanged, p.Deleted, p.Retained, p.Skipped)
 	}
 	if resp.Activate.Previous != "" {
 		log.note("previous release %s", resp.Activate.Previous)
@@ -348,29 +375,67 @@ func (m *Manager) managedRollbackSteps(ctx context.Context, rec *Record) ([]mess
 	return []message.Message{
 		message.New("step.recordDeployment", fmt.Sprintf("set state %s and record the deployment", StateRollingBack), "state", string(StateRollingBack)),
 		message.New("step.rollbackTarget", "resolve rollback target "+shortSHA(target), "commit", shortSHA(target)),
-		message.New("step.helperActivatePrevious",
-			fmt.Sprintf("switch %s back to its installed release %s and restart it, without running the migration", rec.Name, release),
-			"service", rec.Name, "release", release, "commit", shortSHA(target)),
+		message.New("step.helperActivatePrevious", previousText(rec, release),
+			"service", rec.Name, "release", release, "commit", shortSHA(target), "publish", publishDir(rec.Config), "static", staticParam(rec.Config)),
 	}, nil
+}
+
+// previousText is the English text of step.helperActivatePrevious.
+func previousText(rec *Record, release string) string {
+	if rec.Config.Start == "" {
+		return fmt.Sprintf("publish the static content of the installed release %s of %s again and switch back to it", release, rec.Name)
+	}
+	text := fmt.Sprintf("switch %s back to its installed release %s and restart it, without running the migration", rec.Name, release)
+	if rec.Config.Publish != nil {
+		text = fmt.Sprintf("publish the static content of the installed release %s of %s again, then %s", release, rec.Name, text)
+	}
+	return text
+}
+
+// publishDir is the published directory of a release, empty when the
+// service publishes nothing.
+func publishDir(cfg *model.ServiceConfig) string {
+	if cfg.Publish == nil {
+		return ""
+	}
+	return cfg.Publish.Dir
+}
+
+// staticParam reports a managed service without a process as a step parameter.
+func staticParam(cfg *model.ServiceConfig) string {
+	if cfg.Start == "" {
+		return "true"
+	}
+	return ""
 }
 
 // managedDeploySteps are the helper steps that follow the checkout.
 func managedDeploySteps(rec *Record, action string) []message.Message {
 	cfg := rec.Config
+	build := message.New("step.helperBuild", "build in the deploy helper's sandbox as lcmb-"+rec.Name+": "+cfg.Source.Build,
+		"command", cfg.Source.Build, "runtime", cfg.RuntimeName, "service", rec.Name)
+	install := message.New("step.helperInstall", fmt.Sprintf("install %s of the build as a new release of %s", cfg.Artifact, rec.Name),
+		"artifact", cfg.Artifact, "service", rec.Name)
+	dst, published := hostsetup.ServicePublishDir(rec.Name), publishDir(cfg)
+	if cfg.Start == "" {
+		return []message.Message{build, install, message.New("step.helperPublish",
+			fmt.Sprintf("publish %s of the new release to %s and switch %s to it; it runs no process", published, dst, rec.Name),
+			"service", rec.Name, "publish", published, "target", dst)}
+	}
 	start := strings.Join(append([]string{cfg.Start}, cfg.StartArgs...), " ")
 	migrate := ""
 	if cfg.Migrate != nil && action != ActionRollback {
 		migrate = strings.Join(cfg.Migrate, " ")
 	}
-	activate := fmt.Sprintf("switch %s to the new release and restart it with %s", rec.Name, start)
+	var parts []string
 	if migrate != "" {
-		activate = fmt.Sprintf("run the migration %s, then %s", migrate, activate)
+		parts = append(parts, "run the migration "+migrate)
 	}
-	return []message.Message{
-		message.New("step.helperBuild", "build in the deploy helper's sandbox as lcmb-"+rec.Name+": "+cfg.Source.Build,
-			"command", cfg.Source.Build, "runtime", cfg.RuntimeName, "service", rec.Name),
-		message.New("step.helperInstall", fmt.Sprintf("install %s of the build as a new release of %s", cfg.Artifact, rec.Name),
-			"artifact", cfg.Artifact, "service", rec.Name),
-		message.New("step.helperActivate", activate, "service", rec.Name, "start", start, "migrate", migrate),
+	params := []string{"service", rec.Name, "start", start, "migrate", migrate}
+	if cfg.Publish != nil {
+		parts = append(parts, fmt.Sprintf("publish %s of the new release to %s", published, dst))
+		params = append(params, "publish", published, "target", dst)
 	}
+	parts = append(parts, fmt.Sprintf("switch %s to the new release and restart it with %s", rec.Name, start))
+	return []message.Message{build, install, message.New("step.helperActivate", strings.Join(parts, ", then "), params...)}
 }

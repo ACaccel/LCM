@@ -63,12 +63,17 @@ type Capabilities struct {
 }
 
 // CapabilitiesOf derives the capabilities from the runtime configuration
-// alone. External services support nothing; a command runtime supports the
-// actions that have a command, and restart also when it can stop and start.
+// alone. External services and managed services without start (static
+// content only) support nothing; a command runtime supports the actions
+// that have a command, and restart also when it can stop and start.
 func CapabilitiesOf(r model.Runtime) Capabilities {
 	switch r.Type {
 	case model.RuntimeExternal:
 		return Capabilities{}
+	case model.RuntimeManaged:
+		if r.Start == "" {
+			return Capabilities{}
+		}
 	case model.RuntimeCommand:
 		start, stop := r.Start != "", r.Stop != ""
 		return Capabilities{Start: start, Stop: stop, Restart: r.Restart != "" || (start && stop)}
