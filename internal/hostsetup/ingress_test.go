@@ -265,7 +265,7 @@ func TestIngressRefusesFilesItDidNotMake(t *testing.T) {
 		{"static directory is a link", func(th *testHost) {
 			th.fs.remove("/srv/site")
 			th.fs.link("/srv/site", "/home/alice", 0, 0)
-		}, "/srv/site is a symbolic link"},
+		}, "/srv/site links to /home/alice, which must not be in /home"},
 		{"writable static directory", func(th *testHost) {
 			th.fs.dir("/srv/site", 0o777, 0, 0)
 		}, "writable by group or others"},
@@ -611,5 +611,104 @@ func TestAllowExternalRoute(t *testing.T) {
 	grant.Port = 3300
 	if _, _, err := th.allow(AllowOptions{Name: "docs", Grant: grant}); err == nil || !strings.Contains(err.Error(), "is also the prefix of") {
 		t.Fatalf("duplicate prefix: %v", err)
+	}
+}
+
+// releaseHost is an ingress host whose static site is published through a
+// root-owned "current" link to a release directory.
+func releaseHost(t *testing.T) *testHost {
+	t.Helper()
+	th := ingressHost(t, true)
+	th.fs.dir("/srv/site/releases/r1", 0o755, 0, 0)
+	th.fs.dir("/srv/site/releases/r2", 0o755, 0, 0)
+	th.fs.link("/srv/site/current", "releases/r1", 0, 0)
+	th.cfg.Services["site"].Route.Static = "/srv/site/current"
+	th.writeConfig(th.cfg)
+	return th
+}
+
+func TestIngressStaticSymlink(t *testing.T) {
+	th := releaseHost(t)
+	th.converge()
+	site := th.fs.content(SiteFile)
+	if !strings.Contains(site, `root "/srv/site/current";`) || strings.Contains(site, "releases/r1") {
+		t.Fatalf("the site does not name the link:\n%s", site)
+	}
+	// A release switch replaces the link; the site stays as it is.
+	th.fs.remove("/srv/site/current")
+	th.fs.link("/srv/site/current", "/srv/site/releases/r2", 0, 0)
+	th.expectConverged()
+
+	for _, tc := range []struct {
+		name  string
+		setup func(th *testHost)
+		want  string
+	}{
+		{"link in a writable directory", func(th *testHost) {
+			th.fs.dir("/srv/site", 0o777, 0, 0)
+		}, "/srv/site is writable by group or others"},
+		{"link in a directory of another account", func(th *testHost) {
+			th.fs.dir("/srv/site", 0o755, aliceUID, aliceUID)
+		}, "/srv/site is not owned by root"},
+		{"link of another account", func(th *testHost) {
+			th.fs.remove("/srv/site/current")
+			th.fs.link("/srv/site/current", "releases/r1", aliceUID, aliceUID)
+		}, "/srv/site/current is a symbolic link that is not owned by root"},
+		{"target in an excluded area", func(th *testHost) {
+			th.fs.remove("/srv/site/current")
+			th.fs.link("/srv/site/current", "/etc/lcm", 0, 0)
+		}, "links to /etc/lcm, which must not be in /etc"},
+		{"target of another account", func(th *testHost) {
+			th.fs.dir("/srv/site/releases/r1", 0o755, aliceUID, aliceUID)
+		}, "/srv/site/releases/r1 is not owned by root"},
+		{"writable target directory", func(th *testHost) {
+			th.fs.dir("/srv/site/releases", 0o777, 0, 0)
+		}, "/srv/site/releases is writable by group or others"},
+		{"missing target", func(th *testHost) {
+			th.fs.remove("/srv/site/releases/r1")
+		}, "links to /srv/site/releases/r1"},
+		{"target is a file", func(th *testHost) {
+			th.fs.remove("/srv/site/releases/r1")
+			th.fs.file("/srv/site/releases/r1", "x", 0o644, 0, 0)
+		}, "/srv/site/releases/r1 is not a directory"},
+		{"chained link", func(th *testHost) {
+			th.fs.link("/srv/site/releases/latest", "r1", 0, 0)
+			th.fs.remove("/srv/site/current")
+			th.fs.link("/srv/site/current", "releases/latest", 0, 0)
+		}, "/srv/site/releases/latest is a symbolic link"},
+		{"link in the target's path", func(th *testHost) {
+			th.fs.link("/srv/rel", "/srv/site/releases", 0, 0)
+			th.fs.remove("/srv/site/current")
+			th.fs.link("/srv/site/current", "/srv/rel/r1", 0, 0)
+		}, "/srv/rel is a symbolic link"},
+		{"target with ..", func(th *testHost) {
+			th.fs.remove("/srv/site/current")
+			th.fs.link("/srv/site/current", "releases/../releases/r1", 0, 0)
+		}, `without ".."`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			th := releaseHost(t)
+			tc.setup(th)
+			res, out, err := th.apply(Options{})
+			if err == nil && res.Manual == 0 {
+				t.Fatalf("applied:\n%s", out)
+			}
+			if msg := out + errString(err); !strings.Contains(msg, tc.want) {
+				t.Fatalf("want %q:\n%s", tc.want, msg)
+			}
+			if th.fs.get(SiteFile) != nil || th.r.reloads != 0 {
+				t.Error("the site was applied")
+			}
+		})
+	}
+
+	// The link is checked at every render: after a switch to a refused
+	// target the next change is refused and the installed site stays.
+	th.fs.remove("/srv/site/current")
+	th.fs.link("/srv/site/current", "/home/alice", 0, 0)
+	th.cfg.Components.Ingress.HSTS = true
+	th.writeConfig(th.cfg)
+	if res, out, err := th.apply(Options{}); err == nil && res.Manual == 0 || th.fs.content(SiteFile) != site {
+		t.Fatalf("applied with a refused target: %v\n%s", err, out)
 	}
 }

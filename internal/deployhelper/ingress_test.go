@@ -239,3 +239,31 @@ func TestIngressRequestDecoding(t *testing.T) {
 		t.Error("the ingress ledger lock could be a service's")
 	}
 }
+
+// TestIngressStaticReleaseLink publishes the static site through a
+// "current" link on a real file system: the site names the link, and a
+// chained link is refused.
+func TestIngressStaticReleaseLink(t *testing.T) {
+	e := newIngressEnv(t)
+	e.mkdir("/srv/site/releases/r1", 0o755)
+	e.write("/srv/site/releases/r1/index.html", "r1", 0o644)
+	if err := os.Symlink("releases/r1", e.real("/srv/site/current")); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Services["site"].Route.Static = "/srv/site/current"
+	opts := ingress.Options{Static: &ingress.Static{SPA: true}}
+	e.ok(Request{Op: OpIngressApply, Service: "site", Route: &opts})
+	if site := e.read(hostsetup.SiteFile); !strings.Contains(site, `root "/srv/site/current";`) {
+		t.Fatalf("site:\n%s", site)
+	}
+	if err := os.Symlink("r1", e.real("/srv/site/releases/latest")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(e.real("/srv/site/current")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("releases/latest", e.real("/srv/site/current")); err != nil {
+		t.Fatal(err)
+	}
+	e.refused(Request{Op: OpIngressApply, Service: "site"}, CodeRefused, "/srv/site/releases/latest is a symbolic link")
+}

@@ -346,7 +346,7 @@ func PlanSite(env IngressEnv, cfg Config, options map[string]ingress.Options) (S
 	var problems []error
 	for _, name := range slices.Sorted(maps.Keys(cfg.Services)) {
 		if r := cfg.Services[name].Route; r != nil && r.Static != "" {
-			if _, err := trustedAs(fsys, r.Static, env.RootUID, false); err != nil {
+			if err := staticRoot(env, cfg, r.Static); err != nil {
 				problems = append(problems, fmt.Errorf("services.%s.route.static: %w", name, err))
 			}
 		}
@@ -405,6 +405,51 @@ func PlanSite(env IngressEnv, cfg Config, options map[string]ingress.Options) (S
 		plan.Reverted = true
 	}
 	return plan, nil
+}
+
+// staticRoot checks the static directory p of a route at every render. p
+// and every directory above it must be root's alone. p may be a symbolic
+// link, such as a "current" link that a release switch replaces: the link
+// must be root's (only root can swap it in a directory only root can
+// write), and its target, resolved once without ".." components, must
+// satisfy every rule of a static directory itself, with no further link in
+// its path. The site keeps naming p, so nginx follows the link per request
+// and a release switch needs no new site; it is checked again whenever the
+// site is rendered.
+func staticRoot(env IngressEnv, cfg Config, p string) error {
+	parent := path.Dir(p)
+	if _, err := trustedAs(env.FS, parent, env.RootUID, false); err != nil {
+		return err
+	}
+	info, err := env.FS.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if !info.IsLink() {
+		_, err := trustedAs(env.FS, p, env.RootUID, false)
+		return err
+	}
+	if info.UID != env.RootUID {
+		return fmt.Errorf("%s is a symbolic link that is not owned by root", p)
+	}
+	target, err := env.FS.Readlink(p)
+	if err != nil {
+		return err
+	}
+	if target == "" || slices.Contains(strings.Split(target, "/"), "..") {
+		return fmt.Errorf("%s links to %q; a static link must name its target without \"..\"", p, printable(target, 200))
+	}
+	resolved := path.Clean(target)
+	if !path.IsAbs(target) {
+		resolved = path.Join(parent, target)
+	}
+	if err := cfg.checkPublicDir(resolved); err != nil {
+		return fmt.Errorf("%s links to %s, which %w", p, printable(resolved, 200), err)
+	}
+	if _, err := trustedAs(env.FS, resolved, env.RootUID, false); err != nil {
+		return fmt.Errorf("%s links to %s: %w", p, printable(resolved, 200), err)
+	}
+	return nil
 }
 
 // installedSite reads the site file, nil when there is none. A file
