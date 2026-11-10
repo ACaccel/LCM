@@ -76,6 +76,8 @@ class FakeSystem:
                 state['active'] = True
                 if unit == I.AUDIT_STATUS:
                     put(self.root, str(I.BASE / 'reports' / 'audit-status.json'), '{}', 0o640)
+            elif verb == 'stop':
+                state['active'] = False
             return I.Result(0, '')
         if program == '/usr/sbin/auditctl':
             if args == ['-s']:
@@ -299,6 +301,156 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(self.exists(H.POLICY))
         manifest = json.loads(self.read(I.TRANSACTIONS / I.transactions(self.host)[-1] / 'manifest.json'))
         self.assertEqual(manifest['state'], 'reverted')
+
+    def test_failed_first_install_stops_what_it_started(self):
+        # The helper check is the last step: everything before it ran.
+        with patch.object(I.Component, 'verify', side_effect=I.Failure('helper unavailable')):
+            with self.assertRaises(I.Failure):
+                self.install()
+        for unit in (I.COLLECTOR, I.AUDIT_TIMER, I.AIDE_TIMER, I.ROTATE_TIMER, 'auditd.service'):
+            self.assertEqual(self.system.units[unit], {'enabled': False, 'active': False}, unit)
+        self.assertFalse(any('wssec_' in rule for rule in self.system.rules))
+        self.assertIn('-a always,exit -F arch=b64 -S execve -k unrelated', self.system.rules)
+        self.assertFalse(self.exists(I.SYSTEMD / I.COLLECTOR))
+
+    def test_rollback_restores_watches_and_restarts_the_collector(self):
+        self.legacy()
+        self.system.rules |= {'-w /etc/passwd -p wa -k wssec_accounts', '-w /opt/old-tool -p wa -k wssec_deploy'}
+        put(self.root, str(H.AUDIT_CORE), '-w /etc/passwd -p wa -k wssec_accounts\n-w /opt/old-tool -p wa -k wssec_deploy\n', 0o600)
+        before = set(self.system.rules)
+        self.system.calls.clear()
+        with patch.object(I.Component, 'verify', side_effect=I.Failure('helper unavailable')):
+            with self.assertRaises(I.Failure):
+                self.run_action('apply')
+        self.assertEqual(self.system.rules, before)
+        restarts = [argv for argv in self.system.calls if argv[1:] == ['try-restart', I.COLLECTOR]]
+        self.assertEqual(len(restarts), 1)
+        self.assertEqual(self.read(I.LIB / 'runtime.py') if self.exists(I.LIB / 'runtime.py') else None, None)
+
+    def test_watches_change_without_a_gap(self):
+        self.install()
+        rules = self.read(H.AUDIT_CORE).decode()
+        put(self.root, '/opt/new-tool/x', 'x')
+        self.system.calls.clear()
+        self.run_action('apply', watch=dict(INPUT['watch'], deploy=INPUT['watch']['deploy'] + ['/opt/new-tool']))
+        auditctl = [argv[1:] for argv in self.system.calls if argv[0] == '/usr/sbin/auditctl' and argv[1] in ('-w', '-W')]
+        self.assertEqual(auditctl, [['-w', '/opt/new-tool', '-p', 'wa', '-k', 'wssec_deploy']])
+        self.assertNotEqual(rules, self.read(H.AUDIT_CORE).decode())
+
+    def test_nginx_changes_and_rollback_hold_the_ingress_lock(self):
+        events = []
+        real_hold, real_release = I.hold, I.release
+        def hold(host, paths, busy, wait=None):
+            events.append(('hold', [str(path) for path in paths]))
+            return real_hold(host, paths, busy, wait)
+        def release(descriptors):
+            events.append(('release', len(descriptors)))
+            real_release(descriptors)
+        self.legacy()
+        put(self.root, str(I.LEGACY_HELPER_LOCK), '', 0o600)
+        original = self.system.__call__
+        def record(argv, timeout=120, stdin=None):
+            if argv[:1] == [str(I.NGINX)]:
+                events.append(('nginx', argv[1]))
+            return original(argv, timeout, stdin)
+        self.host.runner = record
+        with patch.object(I, 'hold', hold), patch.object(I, 'release', release), \
+                patch.object(I.Component, 'verify', side_effect=I.Failure('helper unavailable')), self.assertRaises(I.Failure):
+            self.run_action('apply')
+        self.assertEqual(events[0], ('hold', [str(I.LEGACY_HELPER_LOCK), str(H.NGINX_LOCK)]))
+        # Both nginx tests, the change's and the rollback's, ran while held.
+        self.assertEqual([e for e in events if e[0] == 'nginx'], [('nginx', '-t'), ('nginx', '-t')])
+        self.assertEqual(events[-1], ('release', 2))
+        # The lock files stay usable; nothing else holds them now.
+        os.close(I.lock(self.host, H.NGINX_LOCK, 'busy'))
+
+    def test_removal_and_revert_hold_the_ingress_lock(self):
+        self.install()
+        held = []
+        real_hold = I.hold
+        def hold(host, paths, busy, wait=None):
+            held.append([str(path) for path in paths])
+            return real_hold(host, paths, busy, wait)
+        with patch.object(I, 'hold', hold):
+            self.run_action('remove')
+            self.run_action('revert')
+        self.assertEqual(held, [[str(H.NGINX_LOCK)], [str(H.NGINX_LOCK)]])
+        # The revert of a removal enables and starts the units again.
+        for unit in (I.COLLECTOR, I.AUDIT_TIMER, I.AIDE_TIMER, I.ROTATE_TIMER):
+            self.assertEqual(self.system.units[unit], {'enabled': True, 'active': True}, unit)
+        self.assertTrue(self.exists(H.NGINX_CONF))
+
+    def test_busy_ingress_lock_is_waited_for_then_refused(self):
+        self.install()
+        descriptor = I.lock(self.host, H.NGINX_LOCK, 'busy')
+        try:
+            with patch.object(I, 'LOCK_WAIT', 0.6), self.assertRaises(I.Failure) as error:
+                self.run_action('remove')
+        finally:
+            os.close(descriptor)
+        self.assertIn('retry', str(error.exception))
+        self.assertTrue(self.exists(I.HELPER))
+
+    def test_root_operation_marks_itself_pending(self):
+        self.assertEqual((I.PENDING, I.CONTROL_LOCK), (H.PENDING, H.CONTROL_LOCK))
+        with I.root_operation(self.host):
+            self.assertTrue(self.exists(I.PENDING))
+        self.assertFalse(self.exists(I.PENDING))
+        held = I.lock(self.host, I.CONTROL_LOCK, 'busy')
+        try:
+            with patch.object(I, 'LOCK_WAIT', 0.6), self.assertRaises(I.Failure):
+                with I.root_operation(self.host):
+                    pass
+        finally:
+            os.close(held)
+        self.assertFalse(self.exists(I.PENDING))
+
+    def test_invalid_policy_values_need_review_not_a_crash(self):
+        self.install()
+        policy = json.loads(self.read(H.POLICY))
+        policy['nginx']['limits'][0]['rate'] = '1r/s; include /x'
+        put(self.root, str(H.POLICY), json.dumps(policy), 0o600)
+        result = self.run_action('plan')
+        self.assertEqual(result['changes'], [])
+        self.assertIn('values the helper refuses', result['manual'][0])
+
+    def test_old_transactions_are_pruned(self):
+        with patch.object(I, 'KEEP_TRANSACTIONS', 2):
+            self.install()
+            for _ in range(2):
+                self.run_action('remove')
+                self.run_action('apply', token='lcm_example-token')
+        self.assertEqual(len(I.transactions(self.host)), 2)
+
+    def test_aide_skips_ignored_service_trees(self):
+        self.run_action('apply', token='lcm_example-token', aideIgnore=['/opt/web'])
+        aide = self.read(H.AIDE_CONFIG).decode()
+        self.assertNotIn('/opt/web(/|$) SEC', aide)
+        self.assertIn('\n!/opt/web(/|$)\n', aide)
+        self.assertIn('/etc/web(/|$) SEC', aide)
+        self.assertIn('-w /opt/web -p wa -k wssec_deploy', self.read(H.AUDIT_CORE).decode())
+
+    def test_review_reads_only_lcm_tools_without_following_links(self):
+        (self.root / 'var/lib/workstation-security').mkdir(parents=True)
+        put(self.root, '/usr/local/libexec/lcm/self-install', 'script', 0o755)
+        put(self.root, '/usr/local/libexec/lcm-deploy', 'helper', 0o755)
+        put(self.root, '/usr/local/libexec/other-tool', 'other', 0o755)
+        put(self.root, '/opt/web/releases/1/app.js', 'service code')
+        put(self.root, '/root-secret', 'SECRET')
+        (self.root / 'usr/local/libexec/lcm/escape').symlink_to(self.root / 'root-secret')
+        (self.root / 'usr/local/libexec/lcm/tree').symlink_to(self.root / 'opt/web')
+        os.mkfifo(self.root / 'usr/local/libexec/lcm/fifo')
+        with patch('builtins.print'):
+            I.review_sources(self.host)
+        report = json.loads(self.read(I.BASE / 'source-review.json'))
+        paths = {tool['path']: tool for tool in report['tools']}
+        self.assertIn('/usr/local/libexec/lcm/self-install', paths)
+        self.assertIn('/usr/local/libexec/lcm-deploy', paths)
+        self.assertEqual(paths['/usr/local/libexec/lcm/escape'], {'path': '/usr/local/libexec/lcm/escape', 'symlink': True})
+        self.assertEqual(paths['/usr/local/libexec/lcm/tree'], {'path': '/usr/local/libexec/lcm/tree', 'symlink': True})
+        self.assertEqual(paths['/usr/local/libexec/lcm/fifo']['type'], 'not a regular file')
+        self.assertFalse(any('other-tool' in path or '/opt/' in path for path in paths))
+        self.assertNotIn('SECRET', json.dumps(report))
 
     def test_inputs_are_validated(self):
         for field, value in (('aideIgnore', ['/opt/../etc']), ('aideIgnore', '/opt/web/releases'), ('machineId', '../x'), ('endpoint', 'http://192.0.2.10:7800/api/v1/hooks/security'),

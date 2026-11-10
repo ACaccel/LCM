@@ -22,6 +22,7 @@ operator actions that never run from LCM: baseline, verify, review, status.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import fcntl
 import grp
@@ -71,6 +72,21 @@ DEFAULT_TIMERS = ('aidecheck.timer', 'aide.timer', 'dailyaidecheck.timer', 'aide
 PACKAGES = ('auditd', 'aide')
 PACKAGE_TOOLS = ('/usr/sbin/auditd', '/usr/sbin/auditctl', '/usr/sbin/augenrules', '/usr/sbin/ausearch', '/usr/bin/aide')
 ENDPOINT_PATH = '/api/v1/hooks/security'
+# Root operations hold CONTROL_LOCK; PENDING tells the helper, which the lcm
+# account can start through sudo at any time, to refuse new requests until
+# the root operation has the lock and is done.
+CONTROL_LOCK = Path('/run/lcm-security.lock')
+PENDING = Path('/run/lcm-security.pending')
+# The lock of the helper this component replaces; adoption holds it so the
+# old helper cannot change files meanwhile.
+LEGACY_HELPER_LOCK = HELPER_STATE / 'control.lock'
+LOCK_WAIT = 60
+# Finished transactions kept for review and revert; older ones are removed,
+# with the file copies (including a token) they hold.
+KEEP_TRANSACTIONS = 10
+# LCM's own root tools, the only trees "review" reads.
+TOOL_PATHS = ('/usr/local/bin/lcm', str(LIB))
+TOOL_DIRS = ('/usr/local/libexec',)
 # Files of the installers this component replaces. Adoption converts or
 # removes them in its first recorded transaction.
 LEGACY_HOOKS = Path('/etc/nginx/workstation-security')
@@ -317,14 +333,23 @@ class Result:
         self.out = out
 
 
-def lock(host: Host, path: Path, busy: str) -> int:
+def lock(host: Host, path: Path, busy: str, wait: float = 0) -> int:
+    """Take an exclusive lock, waiting at most wait seconds for it."""
     host.trusted(path.parent)
     descriptor = os.open(host.p(path), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (host.real and (info.st_uid != 0 or info.st_mode & 0o077)):
             raise Failure('{} is not a root-only lock file'.format(path))
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise Failure(busy) from None
+                time.sleep(0.5)
     except OSError:
         os.close(descriptor)
         raise Failure(busy) from None
@@ -332,6 +357,23 @@ def lock(host: Host, path: Path, busy: str) -> int:
         os.close(descriptor)
         raise
     return descriptor
+
+
+def hold(host: Host, paths, busy: str, wait: float | None = None) -> list[int]:
+    wait = LOCK_WAIT if wait is None else wait
+    descriptors = []
+    try:
+        for path in paths:
+            descriptors.append(lock(host, Path(path), busy, wait))
+    except BaseException:
+        release(descriptors)
+        raise
+    return descriptors
+
+
+def release(descriptors: list[int]) -> None:
+    for descriptor in reversed(descriptors):
+        os.close(descriptor)
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +703,31 @@ def remove_path(tx: Transaction, path) -> None:
     tx.after(entry)
 
 
+def unit_now(host: Host, unit: str) -> dict:
+    enabled = host.run(['/usr/bin/systemctl', 'is-enabled', '--quiet', unit], check=False).code == 0
+    active = host.run(['/usr/bin/systemctl', 'is-active', '--quiet', unit], check=False).code == 0
+    return {'enabled': enabled, 'active': active}
+
+
+def put_unit(host: Host, unit: str, want: dict, now: dict) -> None:
+    if want['enabled'] != now['enabled']:
+        host.run(['/usr/bin/systemctl', 'enable' if want['enabled'] else 'disable', unit])
+    if want['active'] != now['active']:
+        host.run(['/usr/bin/systemctl', 'start' if want['active'] else 'stop', unit])
+
+
+def set_unit(tx: Transaction, unit: str, enabled: bool, active: bool) -> None:
+    """Enable, disable, start or stop a unit as a recorded entry, so that a
+    rollback or revert puts back the state it found."""
+    before = unit_now(tx.host, unit)
+    entry = {'path': 'unit:' + unit, 'kind': 'unit', 'unit': unit, 'before': before}
+    tx.manifest['entries'].append(entry)
+    tx.save()
+    put_unit(tx.host, unit, {'enabled': enabled, 'active': active}, before)
+    entry['after'] = {'enabled': enabled, 'active': active}
+    tx.save()
+
+
 def write_data(host: Host, path, data: bytes, mode: int, uid: int = 0, gid: int = 0) -> None:
     """Write a file that the component's programs change later (state and
     records). It is not part of a transaction: a revert would always find it
@@ -690,6 +757,21 @@ def restore_entries(host: Host, manifest: dict, dry: bool) -> tuple[list[str], l
     keys = ('exists', 'dir', 'sha256', 'mode')
     for entry in reversed(manifest['entries']):
         path, kind, before, after = Path(entry['path']), entry.get('kind'), entry['before'], entry.get('after')
+        if kind == 'unit':
+            unit = entry.get('unit', '')
+            if not re.fullmatch(r'[A-Za-z0-9@._-]+\.(service|timer)', unit):
+                raise Failure('transaction {} names an invalid unit'.format(manifest['id']))
+            now = unit_now(host, unit)
+            want = {'enabled': bool(before.get('enabled')), 'active': bool(before.get('active'))}
+            if now == want:
+                continue
+            done.append('restore {} ({}, {})'.format(unit, 'enabled' if want['enabled'] else 'disabled',
+                                                    'active' if want['active'] else 'inactive'))
+            if not dry:
+                # Its unit file may have been restored just before.
+                host.run(['/usr/bin/systemctl', 'daemon-reload'], check=False)
+                put_unit(host, unit, want, now)
+            continue
         if kind not in ('file', 'meta', 'dir'):
             raise Failure('transaction {} has an entry this installer cannot undo'.format(manifest['id']))
         now = describe(host, path, kind)
@@ -738,6 +820,9 @@ class Step:
 
 class Plan:
     def __init__(self):
+        # Locks execute() holds from the first step to the end of a rollback.
+        self.locks: list[Path] = []
+        self.helper = None
         self.steps: list[Step] = []
         self.manual: list[str] = []
         self.notes: list[str] = []
@@ -749,6 +834,54 @@ class Plan:
     def result(self) -> dict:
         return {'ok': True, 'changes': [step.what for step in self.steps], 'manual': self.manual,
                 'notes': self.notes, 'tokenMissing': self.token_missing}
+
+
+def runtime_rules(host: Host) -> set[str]:
+    """The managed watches loaded in the kernel; optional ones are the helper's."""
+    if not host.exists('/usr/sbin/auditctl'):
+        return set()
+    out = host.run(['/usr/sbin/auditctl', '-l'], check=False).out
+    return {line for line in out.splitlines() if re.fullmatch(r'-w /[A-Za-z0-9_./-]+ -p [rwxa]+ -k wssec_[a-z]+', line)}
+
+
+def load_rules(host: Host, helper) -> None:
+    """Make the kernel's managed watches those of the rules file (none when it
+    is gone): add the missing ones first, then remove the extra ones, so that
+    coverage never drops in between. Unrelated rules are never flushed."""
+    if not host.exists('/usr/sbin/auditctl'):
+        return
+    wanted = set()
+    for line in (host.read_optional(helper.AUDIT_CORE) or b'').decode().splitlines():
+        if not line or line.startswith('#'):
+            continue
+        if not re.fullmatch(r'-w /[A-Za-z0-9_./-]+ -p wa -k wssec_[a-z]+', line):
+            raise Failure('unexpected managed audit rule')
+        wanted.add(line)
+    current = runtime_rules(host)
+    for line in sorted(wanted - current):
+        host.run(['/usr/sbin/auditctl', *line.split()])
+    for line in sorted(current - wanted):
+        parts = line.split()
+        host.run(['/usr/sbin/auditctl', '-W', parts[1], '-p', parts[3], '-k', parts[5]])
+    # Generate the boot rules without --load, which could flush unrelated rules.
+    host.run(['/usr/sbin/augenrules'])
+
+
+COLLECTOR_FILES = (str(LIB / 'runtime.py'), str(COLLECTOR_CONFIG), str(SYSTEMD / COLLECTOR), str(TOKEN))
+
+
+def after_restore(host: Host, helper, manifest: dict, strict: bool) -> None:
+    """Bring running state in line with restored files: units, Nginx, the
+    kernel's watches and the collector."""
+    paths = {entry['path'] for entry in manifest['entries']}
+    host.run(['/usr/bin/systemctl', 'daemon-reload'], check=strict)
+    if manifest.get('nginx') and host.exists(NGINX):
+        if host.run([str(NGINX), '-t'], check=strict).code == 0:
+            host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'], check=strict)
+    if str(helper.AUDIT_CORE) in paths:
+        load_rules(host, helper)
+    if paths & set(COLLECTOR_FILES) and host.exists(SYSTEMD / COLLECTOR):
+        host.run(['/usr/bin/systemctl', 'try-restart', COLLECTOR], check=False)
 
 
 class Component:
@@ -938,7 +1071,8 @@ class Component:
             LIB / 'install.py': (self.sources['install.py'], 0o644, 0, 0),
             HELPER: (self.sources['helper.py'], 0o644, 0, 0),
             COLLECTOR_CONFIG: (json.dumps(config, indent=2).encode() + b'\n', 0o640, 0, gid),
-            self.H.AIDE_CONFIG: (aide_config(self.critical(watches), self.inputs.get('aideIgnore', [])).encode(), 0o600, 0, 0),
+            self.H.AIDE_CONFIG: (aide_config([path for path in self.critical(watches) if path not in self.inputs.get('aideIgnore', [])],
+                                             self.inputs.get('aideIgnore', [])).encode(), 0o600, 0, 0),
             self.H.AUDIT_CORE: (audit_rules(watches).encode(), 0o600, 0, 0),
         }
         for name, content in unit_files(self.nginx).items():
@@ -998,10 +1132,7 @@ class Component:
         return enabled, active
 
     def runtime_rules(self) -> set[str]:
-        if not self.host.exists('/usr/sbin/auditctl'):
-            return set()
-        out = self.host.run(['/usr/sbin/auditctl', '-l'], check=False).out
-        return {line for line in out.splitlines() if re.fullmatch(r'-w /[A-Za-z0-9_./-]+ -p [rwxa]+ -k wssec_[a-z]+', line)}
+        return runtime_rules(self.host)
 
     def plan(self) -> Plan:
         plan = Plan()
@@ -1018,6 +1149,9 @@ class Component:
         except Failure as error:
             # Nothing is changed while a difference needs the administrator.
             plan.manual.append(str(error))
+            plan.steps = []
+        except self.H.Failure:
+            plan.manual.append('{} holds values the helper refuses (such as Nginx thresholds); review it'.format(self.H.POLICY))
             plan.steps = []
         return plan
 
@@ -1069,7 +1203,7 @@ class Component:
         enabled, active = self.unit_state('auditd.service')
         if not (enabled and active):
             plan.add('enable and start auditd.service', lambda tx: (
-                self.host.run(['/usr/bin/systemctl', 'enable', '--now', 'auditd.service']),
+                set_unit(tx, 'auditd.service', True, True),
                 self.host.run(['/usr/sbin/auditctl', '--signal', 'reload'], check=False)))
         wanted_rules = {line for line in files[self.H.AUDIT_CORE][0].decode().splitlines() if line and not line.startswith('#')}
         if changed[self.H.AUDIT_CORE] or self.runtime_rules() != wanted_rules:
@@ -1099,8 +1233,7 @@ class Component:
             enabled, active = self.unit_state(unit)
             if not (enabled and active):
                 started.add(unit)
-                plan.add('enable and start ' + unit, lambda tx, unit=unit: self.host.run(
-                    ['/usr/bin/systemctl', 'enable', '--now', unit]))
+                plan.add('enable and start ' + unit, lambda tx, unit=unit: set_unit(tx, unit, True, True))
         if not self.host.exists(BASE / 'reports' / 'audit-status.json'):
             plan.add('write a first audit status report', lambda tx: self.host.run(
                 ['/usr/bin/systemctl', 'start', AUDIT_STATUS]))
@@ -1149,8 +1282,7 @@ class Component:
                      lambda tx: write_data(self.host, VENDOR_TIMERS_RECORD, record, 0o600))
         for unit, state in states.items():
             if state['enabled'] or state['active']:
-                plan.add('disable the vendor timer ' + unit, lambda tx, unit=unit: self.host.run(
-                    ['/usr/bin/systemctl', 'disable', '--now', unit]))
+                plan.add('disable the vendor timer ' + unit, lambda tx, unit=unit: set_unit(tx, unit, False, False))
 
     def audit_log_steps(self, plan: Plan, gid: int) -> None:
         info = self.host.info(AUDIT_LOG_DIR)
@@ -1182,18 +1314,7 @@ class Component:
         plan.add('let the group {} read {} (root:{} 0750, logs 0640)'.format(USER, AUDIT_LOG_DIR, USER), grant)
 
     def load_rules(self) -> None:
-        """Change only our kernel watches; never flush unrelated runtime rules."""
-        for line in sorted(self.runtime_rules()):
-            parts = line.split()
-            self.host.run(['/usr/sbin/auditctl', '-W', parts[1], '-p', parts[3], '-k', parts[5]])
-        for line in self.host.read(self.H.AUDIT_CORE).decode().splitlines():
-            if not line or line.startswith('#'):
-                continue
-            if not re.fullmatch(r'-w /[A-Za-z0-9_./-]+ -p wa -k wssec_[a-z]+', line):
-                raise Failure('unexpected managed audit rule')
-            self.host.run(['/usr/sbin/auditctl', *line.split()])
-        # Generate the boot rules without --load, which could flush unrelated rules.
-        self.host.run(['/usr/sbin/augenrules'])
+        load_rules(self.host, self.H)
 
     def nginx_steps(self, plan: Plan, policy: dict, legacy_hooks: list[str]) -> None:
         """The Nginx files, ordered so that every state between two steps
@@ -1233,17 +1354,16 @@ class Component:
         for step in steps:
             plan.add(step.what, None)
 
+        # execute() holds the ingress lock across these steps and any rollback.
+        plan.locks.append(self.H.NGINX_LOCK)
+
         def apply_nginx(tx):
-            descriptor = lock(self.host, self.H.NGINX_LOCK, 'the ingress component is changing Nginx; retry')
-            try:
-                for step in steps:
-                    step.action(tx)
-                tx.manifest['nginx'] = True
-                tx.save()
-                self.host.run([str(NGINX), '-t'])
-                self.host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'])
-            finally:
-                os.close(descriptor)
+            tx.manifest['nginx'] = True
+            tx.save()
+            for step in steps:
+                step.action(tx)
+            self.host.run([str(NGINX), '-t'])
+            self.host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'])
         plan.add('validate (nginx -t) and reload nginx.service', apply_nginx)
 
     def log_step(self):
@@ -1294,8 +1414,7 @@ def removal_plan(host: Host, helper) -> Plan:
     units = [name for name in (*ENABLED_UNITS, ROTATE_TIMER, AUDIT_STATUS, AIDE_SERVICE, ROTATE_SERVICE)
              if host.exists(SYSTEMD / name)]
     for unit in units:
-        plan.add('stop and disable ' + unit, lambda tx, unit=unit: host.run(
-            ['/usr/bin/systemctl', 'disable', '--now', unit], check=False))
+        plan.add('stop and disable ' + unit, lambda tx, unit=unit: set_unit(tx, unit, False, False))
     policy = None
     if host.exists(helper.POLICY):
         try:
@@ -1328,16 +1447,24 @@ def removal_plan(host: Host, helper) -> Plan:
     plan.add('reload the systemd configuration', lambda tx: host.run(['/usr/bin/systemctl', 'daemon-reload']))
     if host.exists('/usr/sbin/auditctl'):
         def unload(tx):
+            # The rules files are gone: managed watches go; optional ones too.
+            load_rules(host, helper)
             out = host.run(['/usr/sbin/auditctl', '-l'], check=False).out
             for line in sorted(out.splitlines()):
-                match = re.fullmatch(r'-w (/[A-Za-z0-9_./-]+) -p ([rwxa]+) -k (wssec_[a-z0-9_]+)', line)
+                match = re.fullmatch(r'-w (/[A-Za-z0-9_./-]+) -p ([rwxa]+) -k (wssec_optional_[a-z0-9_]+)', line)
                 if match:
                     host.run(['/usr/sbin/auditctl', '-W', match[1], '-p', match[2], '-k', match[3]])
             host.run(['/usr/sbin/augenrules'])
         plan.add('remove the managed audit watches from the kernel (unrelated rules are kept)', unload)
     if nginx:
-        plan.add('validate (nginx -t) and reload nginx.service', lambda tx: (
-            host.run([str(NGINX), '-t']), host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'])))
+        plan.locks.append(helper.NGINX_LOCK)
+
+        def reload_nginx(tx):
+            tx.manifest['nginx'] = True
+            tx.save()
+            host.run([str(NGINX), '-t'])
+            host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'])
+        plan.add('validate (nginx -t) and reload nginx.service', reload_nginx)
     if host.exists(VENDOR_TIMERS_RECORD):
         try:
             vendor = json.loads(host.read(VENDOR_TIMERS_RECORD, 65536))
@@ -1345,8 +1472,8 @@ def removal_plan(host: Host, helper) -> Plan:
             vendor = {}
         for unit, state in sorted(vendor.items()) if isinstance(vendor, dict) else ():
             if unit in DEFAULT_TIMERS and isinstance(state, dict) and state.get('enabled'):
-                plan.add('enable the vendor timer ' + unit + ' again', lambda tx, unit=unit: host.run(
-                    ['/usr/bin/systemctl', 'enable', '--now', unit], check=False))
+                plan.add('enable the vendor timer ' + unit + ' again',
+                         lambda tx, unit=unit, state=state: set_unit(tx, unit, True, bool(state.get('active'))))
     if host.exists(AUDIT_DIR_RECORD):
         try:
             record = json.loads(host.read(AUDIT_DIR_RECORD, 65536))
@@ -1403,7 +1530,7 @@ def cleanup_plan(host: Host) -> Plan:
         enabled, active = (host.run(['/usr/bin/systemctl', command, '--quiet', unit], check=False).code == 0
                            for command in ('is-enabled', 'is-active'))
         if enabled or active:
-            plan.add('stop and disable ' + unit, lambda tx, unit=unit: host.run(['/usr/bin/systemctl', 'disable', '--now', unit]))
+            plan.add('stop and disable ' + unit, lambda tx, unit=unit: set_unit(tx, unit, False, False))
         plan.add('remove ' + str(path), lambda tx, path=path: remove_path(tx, path))
     if plan.steps:
         plan.add('reload the systemd configuration', lambda tx: host.run(['/usr/bin/systemctl', 'daemon-reload']))
@@ -1463,18 +1590,12 @@ def revert_plan(host: Host, helper, identity: str | None) -> Plan:
     if not done:
         return plan
 
+    if manifest.get('nginx'):
+        plan.locks.append(helper.NGINX_LOCK)
+
     def revert(tx):
         restore_entries(host, manifest, dry=False)
-        host.run(['/usr/bin/systemctl', 'daemon-reload'])
-        if manifest.get('nginx') and host.exists(NGINX):
-            host.run([str(NGINX), '-t'])
-            host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'])
-        if any(entry['path'] == str(helper.AUDIT_CORE) for entry in manifest['entries']) and host.exists('/usr/sbin/augenrules'):
-            component = Component(host, helper, {'machineId': 'revert', 'services': []}, {})
-            if host.exists(helper.AUDIT_CORE):
-                component.load_rules()
-        if host.exists(SYSTEMD / COLLECTOR):
-            host.run(['/usr/bin/systemctl', 'try-restart', COLLECTOR], check=False)
+        after_restore(host, helper, manifest, strict=True)
         manifest['state'] = 'reverted'
         manifest['revertedAt'] = stamp()
         host.write(TRANSACTIONS / identity / 'manifest.json', json.dumps(manifest, indent=1, sort_keys=True).encode(), 0o600)
@@ -1491,30 +1612,40 @@ def execute(host: Host, plan: Plan, kind: str, after=None) -> dict:
         result['changes'] = []
     if plan.manual or not plan.steps:
         return result
-    tx = Transaction(host, kind)
-    result['transaction'] = tx.id
+    descriptors = hold(host, plan.locks, 'the ingress component or the previous helper is changing the host; retry')
     try:
-        for step in plan.steps:
-            if step.action is not None:
-                step.action(tx)
-        if after is not None:
-            after()
-        tx.finish('applied')
-    except BaseException as error:
-        tx.finish('failed')
-        message = str(error) if isinstance(error, (Failure, OSError)) else type(error).__name__
+        tx = Transaction(host, kind)
+        result['transaction'] = tx.id
         try:
-            _, conflicts = restore_entries(host, tx.manifest, dry=False)
-            host.run(['/usr/bin/systemctl', 'daemon-reload'], check=False)
-            if tx.manifest.get('nginx') and host.exists(NGINX):
-                if host.run([str(NGINX), '-t'], check=False).code == 0:
-                    host.run(['/usr/bin/systemctl', 'reload', 'nginx.service'], check=False)
-            tx.finish('reverted' if not conflicts else 'indeterminate')
-        except (Failure, OSError, subprocess.SubprocessError) as revert_error:
-            tx.finish('indeterminate')
-            raise Failure('{}; undoing it failed too ({}): review transaction {}'.format(message, revert_error, tx.id)) from None
-        raise Failure('{}; the changes of transaction {} were undone'.format(message, tx.id)) from None
+            for step in plan.steps:
+                if step.action is not None:
+                    step.action(tx)
+            if after is not None:
+                after()
+            tx.finish('applied')
+        except BaseException as error:
+            tx.finish('failed')
+            message = str(error) if isinstance(error, (Failure, OSError)) else type(error).__name__
+            try:
+                _, conflicts = restore_entries(host, tx.manifest, dry=False)
+                after_restore(host, plan.helper, tx.manifest, strict=False)
+                tx.finish('reverted' if not conflicts else 'indeterminate')
+            except Exception as revert_error:  # noqa: BLE001 - reported with the transaction to review
+                tx.finish('indeterminate')
+                raise Failure('{}; undoing it failed too ({}): review transaction {}'.format(message, revert_error, tx.id)) from None
+            raise Failure('{}; the changes of transaction {} were undone'.format(message, tx.id)) from None
+    finally:
+        release(descriptors)
+    prune(host)
     return result
+
+
+def prune(host: Host) -> None:
+    """Keep the newest KEEP_TRANSACTIONS transactions."""
+    names = transactions(host)
+    for name in names[:-KEEP_TRANSACTIONS]:
+        host.trusted(TRANSACTIONS)
+        shutil.rmtree(host.p(TRANSACTIONS / name))
 
 
 # ---------------------------------------------------------------------------
@@ -1555,9 +1686,31 @@ def baseline(host: Host, args) -> None:
                       'baselineDigest': digest(host.read(database, 128 * 1024 * 1024))}))
 
 
-def deploy_targets(host: Host) -> list[str]:
-    rules = host.read_optional(AUDIT_RULES / '50-workstation-security.rules') or b''
-    return re.findall(r'^-w (/[A-Za-z0-9_./-]+) -p wa -k wssec_deploy$', rules.decode(), re.M)
+def tool_paths(host: Host) -> list[str]:
+    """LCM's own root tools: the binary, /usr/local/libexec/lcm* and the
+    component's programs. Service directories are never read."""
+    paths = [path for path in TOOL_PATHS]
+    for directory in TOOL_DIRS:
+        paths += [directory + '/' + name for name in host.listdir(directory) if name.startswith('lcm')]
+    return sorted(set(paths))
+
+
+def digest_file(host: Host, path: str, limit: int) -> dict:
+    """Hash a regular file opened without following a link."""
+    descriptor = os.open(host.p(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return {'path': path, 'type': 'not a regular file'}
+        if info.st_size > limit:
+            raise Failure('Root-tool review exceeds file size budget')
+        hashed, read = hashlib.sha256(), 0
+        while chunk := stream.read(1 << 20):
+            read += len(chunk)
+            if read > limit:
+                raise Failure('Root-tool review exceeds file size budget')
+            hashed.update(chunk)
+    return {'path': path, 'uid': info.st_uid, 'mode': oct(stat.S_IMODE(info.st_mode)), 'sha256': hashed.hexdigest()}
 
 
 def review_sources(host: Host) -> None:
@@ -1566,21 +1719,24 @@ def review_sources(host: Host) -> None:
         result = host.run(['/usr/bin/dpkg', '--verify', package], check=False)
         # Verification can flag legitimate conffile edits; only the operator accepts them.
         report['packages'][package] = {'exitCode': result.code, 'findings': result.out.splitlines()[:200]}
-    for directory in (*deploy_targets(host), str(LIB)):
-        parent = host.p(directory)
-        if not parent.exists():
+    for top in tool_paths(host):
+        info = host.info(top)
+        if info is None:
             continue
-        for path in ([parent] if parent.is_file() else parent.rglob('*')):
+        if not stat.S_ISDIR(info.st_mode):
+            entries = [top]
+        else:
+            entries = []
+            for directory, dirs, files in os.walk(host.p(top), followlinks=False):
+                relative = '/' + os.path.relpath(directory, host.root) if host.root != Path('/') else directory
+                entries += [relative.rstrip('/') + '/' + name for name in sorted(files + [d for d in dirs if os.path.islink(os.path.join(directory, d))])]
+        for path in entries:
             if len(report['tools']) >= 3000:
                 raise Failure('Root-tool source review exceeds file budget')
-            if path.is_symlink():
-                report['tools'].append({'path': str(path), 'symlink': True})
-            elif path.is_file():
-                info = path.stat()
-                if info.st_size > 128 * 1024 * 1024:
-                    raise Failure('Root-tool review exceeds file size budget')
-                report['tools'].append({'path': str(path), 'uid': info.st_uid, 'mode': oct(stat.S_IMODE(info.st_mode)),
-                                        'sha256': digest(path.read_bytes())})
+            if stat.S_ISLNK(host.info(path).st_mode):
+                report['tools'].append({'path': path, 'symlink': True})
+            else:
+                report['tools'].append(digest_file(host, path, 128 * 1024 * 1024))
     target = BASE / 'source-review.json'
     host.write(target, json.dumps(report, indent=2).encode(), 0o600)
     print(json.dumps({'report': str(target), 'reviewRequired': True,
@@ -1653,6 +1809,7 @@ def run_action(host: Host, helper, action: str, inputs: dict, sources: dict[str,
     if action in ('plan', 'apply'):
         component = Component(host, helper, inputs, sources)
         plan = component.plan()
+        plan.helper = helper
         if action == 'plan':
             return plan.result()
         if plan.token_missing:
@@ -1661,21 +1818,27 @@ def run_action(host: Host, helper, action: str, inputs: dict, sources: dict[str,
             # Packages and the account come first; everything else depends on them.
             first = Plan()
             first.steps = [step for step in plan.steps if step.what.startswith(('install the packages', 'create the system'))]
+            first.helper = helper
             result = execute(host, first, 'prepare')
             plan = component.plan()
+            plan.helper = helper
             plan.steps = [step for step in plan.steps if not step.what.startswith(('install the packages', 'create the system'))]
             plan.notes = result['notes'] + plan.notes
             prepared = result['changes']
         else:
             prepared = []
+        if host.exists(LEGACY_HELPER_LOCK):
+            plan.locks.insert(0, LEGACY_HELPER_LOCK)
         result = execute(host, plan, 'apply', after=(lambda: component.verify(plan)) if plan.steps else None)
         result['changes'] = prepared + result['changes']
         return result
     if action in ('remove-plan', 'remove'):
         plan = removal_plan(host, helper)
+        plan.helper = helper
         return plan.result() if action == 'remove-plan' else execute(host, plan, 'remove')
     if action in ('cleanup-plan', 'cleanup'):
         plan = cleanup_plan(host)
+        plan.helper = helper
         return plan.result() if action == 'cleanup-plan' else execute(host, plan, 'cleanup')
     if action in ('revert-plan', 'revert'):
         plan = revert_plan(host, helper, transaction)
@@ -1683,11 +1846,33 @@ def run_action(host: Host, helper, action: str, inputs: dict, sources: dict[str,
             return plan.result()
         # Restoring is the step itself; it is not recorded again.
         result = plan.result()
-        for step in plan.steps:
-            if step.action is not None:
-                step.action(None)
+        descriptors = hold(host, plan.locks, 'the ingress component is changing Nginx; retry')
+        try:
+            for step in plan.steps:
+                if step.action is not None:
+                    step.action(None)
+        finally:
+            release(descriptors)
         return result
     raise Failure('unknown action ' + action)
+
+
+@contextlib.contextmanager
+def root_operation(host: Host):
+    """Hold the component's lock for a root operation. The pending file makes
+    the helper, which the lcm account can start through sudo at any time,
+    refuse new requests, so that the lock is free within the wait."""
+    host.write(PENDING, '{} {}\n'.format(os.getpid(), int(time.time())).encode(), 0o600)
+    try:
+        descriptor = lock(host, CONTROL_LOCK, 'another security component change is running; retry', LOCK_WAIT)
+    except BaseException:
+        host.remove(PENDING)
+        raise
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+        host.remove(PENDING)
 
 
 ACTIONS = ('plan', 'apply', 'remove-plan', 'remove', 'cleanup-plan', 'cleanup', 'revert-plan', 'revert',
@@ -1709,8 +1894,7 @@ def main() -> int:
         if args.action == 'status':
             print(json.dumps(local_status(host)))
             return 0
-        descriptor = lock(host, Path('/run/lcm-security.lock'), 'another security component change is running; retry')
-        try:
+        with root_operation(host):
             if args.action == 'baseline':
                 baseline(host, args)
                 return 0
@@ -1730,11 +1914,10 @@ def main() -> int:
             if args.action in ('remove-plan', 'remove', 'cleanup-plan', 'cleanup', 'revert-plan', 'revert') and helper is None:
                 raise Failure('helper.py is missing next to install.py')
             print(json.dumps(run_action(host, helper, args.action, inputs, sources, args.transaction)))
-        finally:
-            os.close(descriptor)
         return 0
-    except (Failure, OSError, ValueError, subprocess.SubprocessError) as error:
-        print(json.dumps({'ok': False, 'error': str(error)[:1000]}))
+    except Exception as error:  # noqa: BLE001 - every failure is reported as JSON
+        message = str(error) if isinstance(error, (Failure, OSError, ValueError)) else type(error).__name__
+        print(json.dumps({'ok': False, 'error': message[:1000]}))
         return 1
 
 
