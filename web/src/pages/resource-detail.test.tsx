@@ -93,6 +93,7 @@ describe("type-specific tabs", () => {
       service: {
         deployedVersion: "abcdef0123456789",
         lastDeployment: { id: 1, resource: "web", action: "deploy", version: "abcdef0123456789", previousVersion: "", startedAt: "2026-11-01T00:00:00Z", finishedAt: "2026-11-01T00:01:00Z", outcome: "succeeded", actor: { kind: "user", id: "u", name: "Test admin" }, runId: "", error: "", logExcerpt: "" },
+        route: null,
       },
     });
     setup(detail, "/resources/web");

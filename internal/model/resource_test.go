@@ -491,3 +491,69 @@ func TestManagedService(t *testing.T) {
 		assertIssue(t, err, "spec.config."+name, "not valid for adapter systemd")
 	}
 }
+
+const routeService = resourceHead + `spec:
+  type: service
+  adapter: external
+  config:
+    route:
+      proxy:
+        - { path: api/, upstream: /api/, bodyLimit: 3m, cookiePath: true, category: api }
+        - { path: socket.io/, upstream: /socket.io/, websocket: true, timeout: 75s, category: socket }
+      static: { spa: true, notFound: 404.html, immutable: [assets/] }
+      redirects: [{ from: en/, to: /, code: 301 }]
+      headers: { csp: "default-src 'self'" }
+`
+
+func TestServiceRoute(t *testing.T) {
+	r, err := model.DecodeResource([]byte(routeService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := r.Service()
+	if cfg.Route == nil || len(cfg.Route.Proxy) != 2 || !cfg.Route.Static.SPA || cfg.Route.Headers.CSP != "default-src 'self'" {
+		t.Fatalf("route = %+v", cfg.Route)
+	}
+	b, err := model.Encode(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2, err := model.DecodeResource(b); err != nil || !reflect.DeepEqual(r, r2) {
+		t.Fatalf("round trip: %v\n%s", err, b)
+	}
+
+	// The section is valid for every adapter.
+	for _, adapter := range []string{"systemd", "docker", "compose", "command"} {
+		doc := strings.Replace(routeService, "adapter: external", "adapter: "+adapter, 1)
+		switch adapter {
+		case "systemd":
+			doc = strings.Replace(doc, "config:\n", "config:\n    unit: app.service\n", 1)
+		case "docker":
+			doc = strings.Replace(doc, "config:\n", "config:\n    container: app\n", 1)
+		case "compose":
+			doc = strings.Replace(doc, "config:\n", "config:\n    project: app\n    file: /srv/app/compose.yaml\n", 1)
+		case "command":
+			doc = strings.Replace(doc, "config:\n", "config:\n    start: app start\n", 1)
+		}
+		if _, err := model.DecodeResource([]byte(doc)); err != nil {
+			t.Errorf("%s: %v", adapter, err)
+		}
+	}
+
+	head := resourceHead + "spec:\n  type: service\n  adapter: external\n  config:\n    route:\n"
+	bad := []struct{ name, route, path, msg string }{
+		{"proxy path", "      proxy: [{ path: '../x/', upstream: / }]\n", "spec.config.route.proxy[0].path", ""},
+		{"unknown category", "      proxy: [{ path: api/, upstream: /, category: other }]\n", "spec.config.route.proxy[0].category", ""},
+		{"body limit", "      proxy: [{ path: api/, upstream: /, bodyLimit: 65m }]\n", "spec.config.route.proxy[0].bodyLimit", ""},
+		{"redirect code", "      redirects: [{ from: a/, to: /, code: 200 }]\n", "spec.config.route.redirects[0].code", ""},
+		{"csp injection", "      headers: { csp: \"default-src 'self'; }\" }\n", "spec.config.route.headers.csp", ""},
+		{"unknown field", "      proxy: [{ path: api/, upstream: /, regex: x }]\n", "", "field regex not found"},
+		{"unknown section", "      upstreams: []\n", "", "field upstreams not found"},
+	}
+	for _, tt := range bad {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := model.DecodeResource([]byte(head + tt.route))
+			assertIssue(t, err, tt.path, tt.msg)
+		})
+	}
+}

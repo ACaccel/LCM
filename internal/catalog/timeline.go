@@ -21,6 +21,7 @@ const (
 	KindAction     = "action"
 	KindBackup     = "backup"
 	KindJob        = "job"
+	KindRoute      = "route"
 )
 
 // Page sizes of timeline queries.

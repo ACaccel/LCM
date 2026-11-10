@@ -127,6 +127,19 @@ export function deploymentOutcomeView(outcome: Deployment["outcome"]): StatusVie
   return { ...deploymentGlyph[outcome], label: s.deployments.outcomes[outcome] };
 }
 
+const routeGlyph: Record<string, Omit<StatusView, "label">> = {
+  applied: { tone: "ok", icon: "✓" },
+  pending: { tone: "info", icon: "↻" },
+  refused: { tone: "bad", icon: "✕" },
+  failed: { tone: "bad", icon: "✕" },
+  unknown: { tone: "warn", icon: "?" },
+  skipped: { tone: "neutral", icon: "○" },
+};
+/** The outcome of sending a service's route section to the host. */
+export function routeStateView(state: string): StatusView {
+  return { ...(routeGlyph[state] ?? { tone: "neutral", icon: "○" }), label: s.route.states[state] ?? state };
+}
+
 export function backupOutcomeView(outcome: Backup["outcome"]): StatusView {
   return { ...deploymentGlyph[outcome], label: s.backups.outcomes[outcome] };
 }

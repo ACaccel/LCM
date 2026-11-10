@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/ingress"
 )
 
 // RuntimeType selects how LCM controls a service's process. The adapter of a
@@ -73,6 +74,10 @@ type ServiceConfig struct {
 	Source *Source            `yaml:"source,omitempty" json:"source,omitempty"`
 	Backup *Backup            `yaml:"backup,omitempty" json:"backup,omitempty"`
 	Jobs   map[string]Command `yaml:"jobs,omitempty" json:"jobs,omitempty"`
+	// Route is how the service is presented by the host's nginx site. It is
+	// valid for every adapter and carries no privileges: the prefix, port
+	// and static directory of the route come from the host configuration.
+	Route *ingress.Options `yaml:"route,omitempty" json:"route,omitempty"`
 }
 
 func (*ServiceConfig) resourceConfig() {}
@@ -302,6 +307,15 @@ func (c *ServiceConfig) validate(adapter string, base string, is *Issues) {
 	}
 	if c.Backup != nil {
 		validateBackup(c.Backup, RuntimeType(adapter), base+".backup", is)
+	}
+	if c.Route != nil {
+		for _, i := range c.Route.Validate() {
+			at := base + ".route"
+			if i.Path != "" {
+				at += "." + i.Path
+			}
+			is.addf(at, "%s", i.Message)
+		}
 	}
 	if len(c.Jobs) > MaxJobs {
 		is.addf(base+".jobs", "at most %d jobs are allowed", MaxJobs)

@@ -70,7 +70,7 @@ export function resourceFixture(over: Partial<ResourceDetail> = {}): ResourceDet
     operation: null,
     managedBy: null,
     unresolvedRelations: [],
-    service: { deployedVersion: "", lastDeployment: null },
+    service: { deployedVersion: "", lastDeployment: null, route: null },
     ...over,
   };
 }

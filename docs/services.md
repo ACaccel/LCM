@@ -23,6 +23,8 @@ spec:
     backup: { command: ./backup.sh }   # optional: enables the backup action (managed services: typed sources, see below)
     jobs:                          # optional: named commands for run-job
       reindex: { command: ./reindex.sh, timeout: 10m }
+    route:                         # optional: how the host's nginx site presents the service (see Route)
+      proxy: [{ path: api/, upstream: /api/ }]
   checks:
     - { name: http, type: http, props: { url: http://127.0.0.1:8080/health } }
   relations:
@@ -135,6 +137,65 @@ After every successful backup LCM asks the helper to apply `keep`: the newest se
 
 An outcome LCM cannot determine (lost reply, helper still running, interrupted) is recorded as `interrupted` with the operation ID to query; it is never assumed to have succeeded.
 
+## Route
+
+The optional `route` section of `config` (valid for every adapter) describes how the host's [nginx site](operations.md#ingress) presents the service. It carries no privileges: the domain, the prefix, the port and the static directory of a route come only from `services.<name>` in `/etc/lcm/host.json` ([routes](operations.md#routes)), and the root helper validates the section again. All paths are relative to the route's prefix. The section is strictly decoded: unknown fields are errors, and issues are reported under `spec.config.route`.
+
+```yaml
+config:
+  route:
+    proxy:                          # extra locations to the approved port
+      - { path: api/, upstream: /api/, bodyLimit: 3m, cookiePath: true, category: api }
+      - { path: socket.io/, upstream: /socket.io/, websocket: true, timeout: 75s, category: socket }
+      - { path: health, exact: true, upstream: /health, category: health }
+    static:                         # needs route.static in host.json
+      spa: true
+      notFound: 404.html
+      immutable: [assets/, _astro/]
+      downloads: [{ path: download/app.apk, type: application/vnd.android.package-archive }]
+    redirects: [{ from: en/, to: /, code: 301 }]
+    headers:
+      csp: "default-src 'self'; img-src 'self' data:"
+      cspReportOnly: false
+```
+
+With prefix `/web/` on `example.org`, `path: api/` serves `https://example.org/web/api/` and sends it to `http://127.0.0.1:<port>/api/`.
+
+| Field | Meaning | Default and limits |
+|---|---|---|
+| `proxy[].path` | Location below the prefix; ends with `/` unless `exact` | at most 32 entries; components of letters, digits and `._-`, none starting with `.` |
+| `proxy[].exact` | Match the path alone instead of everything below it | `false` |
+| `proxy[].upstream` | Absolute path on the service; ends with `/` like `path` unless `exact` | required |
+| `proxy[].bodyLimit` | Largest request body (`512k`, `3m`) | nginx default; at most `64m` |
+| `proxy[].cookiePath` | Rewrite the cookie path `/` of the responses to the prefix | `false` |
+| `proxy[].websocket` | Pass connection upgrades through, no buffering | `false` |
+| `proxy[].timeout` | Read and send timeout (`75s`, `5m`) | nginx default; at most `1h` |
+| `proxy[].category` | `api`, `auth`, `upload`, `socket`, `health` or `static`: names the location for the [security component's](security.md) hooks | `api` |
+| `static.spa` | Unknown paths answer `index.html` instead of 404 | `false` |
+| `static.notFound` | Page served with a 404, relative to the static directory | none |
+| `static.immutable` | Directories (`assets/`) cached for a year; never fall back to `index.html` | at most 16 |
+| `static.downloads` | Files served as attachments with a fixed `type` (a short allowlist: `application/vnd.android.package-archive`, `application/zip`, `application/pdf`, ...) | at most 16 |
+| `redirects[]` | `from` (below the prefix) to `to` (written from the prefix's root, `/` is the prefix) with `code` | `301`; `302`, `307`, `308`; at most 32 |
+| `headers.csp` | Content-Security-Policy in a strict subset of the CSP grammar: printable ASCII directives with quoted keywords or plain sources; no `"`, `\`, `$`, braces or line breaks | at most 4096 characters, 64 directives |
+| `headers.cspReportOnly` | Send it as `Content-Security-Policy-Report-Only` | `false` |
+
+Without a `route` section the route proxies everything below the prefix to the service's port, or serves its static directory; `proxy` locations take precedence over the static directory, and `static` needs a static directory in the grant. A `proxy` entry needs a port in the grant. Locations may not collide with another route.
+
+**Applying.** LCM sends the section to the [deploy helper](operations.md#deploy-helper) (`ingress.apply`) in the background after a document is saved, restored or synced from Git, when its `route` differs from the last recorded outcome (removing the section sends "no options" so that the host drops them), and once at every start for routes whose last outcome was not `applied`. The helper renders the whole site, tests it with nginx and reloads it, or puts the previous site back. Each send records its operation ID on the timeline before the call, so a lost reply is settled from the helper's ledger; an outcome that cannot be confirmed stays `unknown` and is never taken as success. Every send writes an audit entry (`service.apply-route`).
+
+**The host decides.** A refusal (no route granted in `host.json`, the site never installed, a location that collides) or a failed apply never rejects the document write. The outcome is the `route` object of the resource detail and the *路由* panel of the service overview, with the helper's message and whether it concerns the current section:
+
+| State | Meaning |
+|---|---|
+| `applied` | The helper applied the site (`changes` empty: it was up to date) |
+| `refused` | The host does not grant what the route needs, or refused the change |
+| `failed` | nginx rejected the site or a probe failed; the previous site was put back |
+| `unknown` | The reply was lost and the ledger could not confirm the outcome |
+| `skipped` | Nothing was sent: the deploy helper is not installed or `components.ingress` is off |
+| `pending` | A request is in flight, or LCM stopped before recording its outcome |
+
+After fixing the cause on the host (for example `sudo bin/lcm host allow web --route /web/`), run the `apply-route` action (`lcm resource action web apply-route`, console button *重新套用路由*). It sends the section again, is offered only for a service that has a `route` section and a callable helper, and fails when the route is not applied. Restarting LCM also retries.
+
 ## Lifecycle states and actions
 
 The lifecycle state is what LCM did to the service; health (below) is what the checks observe. The console shows both side by side.
@@ -156,6 +217,7 @@ The lifecycle state is what LCM did to the service; health (below) is what the c
 | `backup` | registered, running, stopped, failed | `backup` | run the command (in the build checkout when the service has a source); managed services: the [typed backup](#backup-and-restore-of-managed-services) and its retention |
 | `restore` | registered, running, stopped, failed | typed `backup` with a restorable source | [restore](#backup-and-restore-of-managed-services) a set (`--backup-id`, the newest when omitted) |
 | `run-job` | registered, running, stopped, failed | `jobs` | run the named job |
+| `apply-route` | registered, running, stopped, failed | `route` and a callable deploy helper | send the [route](#route) to the helper again; the state does not change |
 
 Run an action with `lcm resource action <service> <action> [--version <commit>] [--job <job>] [--backup-id <id>] [--dry-run] [--wait]` or `POST /api/v1/resources/{resource}/actions/{action}` (202 and an id for `GET /api/v1/actions/{id}`). Every action takes the lock `resource:<name>`, so actions on one service never overlap, and writes an audit entry and a timeline entry. The action renews its lock every third of `LCM_LOCK_TTL` while it runs, so the TTL only bounds a lock left by a crashed process, not the length of an action. Once the runtime has done the work, the new state is recorded even if the request is cancelled. `?dryRun=true` (console: *預覽*) returns the steps and the [impact](resources.md#relations) without locking or changing anything; `stop`, `restart`, `deploy`, `rollback`, `restore` and `run-job` on a service that others depend on or are controlled through need `acknowledgeImpact`. Build, install, backup and job commands run with `sh -c`; step timeouts default to 15 minutes (`source.timeout`) and 30 minutes (`timeout` of backup and jobs).
 

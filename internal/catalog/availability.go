@@ -31,7 +31,7 @@ const (
 
 // Actions lists every action of the manager.
 var Actions = []string{
-	ActionStart, ActionStop, ActionRestart, ActionDeploy, ActionRollback, ActionBackup, ActionRestore, ActionRunJob,
+	ActionStart, ActionStop, ActionRestart, ActionDeploy, ActionRollback, ActionBackup, ActionRestore, ActionRunJob, ActionApplyRoute,
 }
 
 // Availability tells whether an action can start on a service now.
@@ -104,6 +104,8 @@ func configured(action string, cfg *model.ServiceConfig) bool {
 		return cfg.Backup != nil && cfg.Backup.Typed() && cfg.Backup.Restorable()
 	case ActionRunJob:
 		return len(cfg.Jobs) > 0
+	case ActionApplyRoute:
+		return cfg.Route != nil
 	}
 	return true
 }
@@ -133,7 +135,14 @@ func checkRuntime(action string, r model.Runtime) error {
 // service while the helper cannot be called (ready says why), before
 // anything is recorded.
 func checkHelper(action string, r model.Runtime, ready error) error {
-	if r.Type != model.RuntimeManaged || ready == nil {
+	if ready == nil {
+		return nil
+	}
+	// Presenting a service is the helper's work for every runtime.
+	if action == ActionApplyRoute {
+		return fmt.Errorf("%w: %w", ErrHelperUnavailable, ready)
+	}
+	if r.Type != model.RuntimeManaged {
 		return nil
 	}
 	switch action {

@@ -173,6 +173,7 @@ type App struct {
 	Runtimes       *rt.Registry
 	Catalog        *catalog.Catalog
 	Manager        *catalog.Manager
+	Routes         *catalog.RouteSync
 	Monitor        *monitor.Monitor
 	Modules        *modules.Store
 	Registry       *node.Registry
@@ -415,6 +416,10 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Resources.RegisterHooks(model.ResourceService, a.Manager.Hooks())
 	a.Resources.RegisterHooks(model.ResourceMachine, a.Machines.Hooks())
 	a.Resources.RegisterHooks(model.ResourceRouter, a.Routers.Hooks())
+	// A saved service document whose route changed is sent to the host in
+	// the background (Run); the write itself never waits for the helper.
+	a.Routes = catalog.NewRouteSync(a.Manager)
+	a.Resources.Subscribe(a.Routes.Changed)
 	a.follower = a.Catalog.FollowSignals(a.ctx, a.Bus)
 	ready("catalog", "work", workDir)
 	if cfg.SelfBackupKeep > 0 {
@@ -560,7 +565,7 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 		TrustedProxies: proxies,
 		Machines:       a.Machines,
 		Connections:    a.Connections,
-		HostStatus:     o.hostStatus,
+		HostStatus:     withIngressStatus(o.hostStatus, helper),
 		Resources:      a.Resources,
 		ResourceTypes:  resourceTypes,
 		Security:       a.Security,
@@ -618,6 +623,17 @@ func (a *App) SyncMonitor(ctx context.Context) error {
 	return a.syncer.Sync(ctx)
 }
 
+// SyncRoutes sends the route options of changed service documents to the
+// deploy helper now. The resource change subscription does this in the
+// background; callers that need the outcome before they continue use this.
+func (a *App) SyncRoutes(ctx context.Context) error {
+	if err := a.Resources.Flush(ctx); err != nil {
+		return err
+	}
+	a.Routes.Drain(ctx)
+	return nil
+}
+
 // Run starts the background loops and serves HTTP until ctx ends or the
 // server fails, then stops them. It may be called once. Stopping the
 // components themselves is Close's job.
@@ -651,7 +667,7 @@ func (a *App) Run(ctx context.Context) error {
 			fn()
 		}()
 	}
-	a.log.Info("starting background loops", "loops", []string{"triggers", "machines", "routers", "lock releaser", "monitor sync", "config sync", "retention", "reconcile"})
+	a.log.Info("starting background loops", "loops", []string{"triggers", "machines", "routers", "lock releaser", "monitor sync", "config sync", "retention", "reconcile", "ingress routes"})
 	afterRecovery := func(fn func(context.Context)) {
 		select {
 		case <-runCtx.Done():
@@ -691,6 +707,14 @@ func (a *App) Run(ctx context.Context) error {
 	})
 	spawn("reconcile", func() {
 		every(runCtx, a.Clock, reconcileInterval, nil, a.reconcileStates)
+	})
+	spawn("ingress routes", func() {
+		// The first pass also retries routes the host refused or could not
+		// take before this start.
+		if err := a.Routes.EnqueueAll(runCtx); err != nil && runCtx.Err() == nil {
+			a.log.Warn("queue routes failed", "error", err)
+		}
+		every(runCtx, a.Clock, reconcileInterval, a.Routes.Kick(), a.Routes.Drain)
 	})
 
 	serveErr := make(chan error, 1)

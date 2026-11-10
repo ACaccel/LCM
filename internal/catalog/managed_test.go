@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -52,11 +53,14 @@ type simHelper struct {
 	pruneKeeps    int
 	restoreActive []bool
 	restoreFails  bool
+	// routes are the accepted route options per service, as JSON.
+	routes map[string]string
 }
 
 func newSimHelper() *simHelper {
 	s := &simHelper{builds: map[string]string{}, runtimes: map[string][]string{}, ledger: map[string]deployhelper.Response{},
-		lose: map[deployhelper.Op]bool{}, hang: map[deployhelper.Op]bool{}, refuse: map[deployhelper.Op]deployhelper.Code{}}
+		lose: map[deployhelper.Op]bool{}, hang: map[deployhelper.Op]bool{}, refuse: map[deployhelper.Op]deployhelper.Code{},
+		routes: map[string]string{}}
 	s.Handle = s.handle
 	return s
 }
@@ -166,6 +170,18 @@ func (s *simHelper) perform(req deployhelper.Request) deployhelper.Response {
 			state = "active"
 		}
 		resp.Unit = &deployhelper.UnitStatus{LoadState: "loaded", ActiveState: state, SubState: "running", Release: s.current}
+	case deployhelper.OpIngressApply:
+		raw, _ := json.Marshal(req.Route)
+		changes := []string{}
+		if prev, ok := s.routes[req.Service]; ok != (req.Route != nil) || (ok && prev != string(raw)) {
+			changes = append(changes, "write lcm-ingress.conf", "reload nginx")
+		}
+		if req.Route == nil {
+			delete(s.routes, req.Service)
+		} else {
+			s.routes[req.Service] = string(raw)
+		}
+		resp.IngressApply = &deployhelper.IngressApplyResult{SHA256: fmt.Sprintf("%064x", len(s.routes)), Changes: changes}
 	case deployhelper.OpBackup:
 		id := s.id()
 		info := deployhelper.BackupInfo{BackupID: id, Kind: deployhelper.KindBackup, CreatedAt: int64(1000 + s.n), Size: 4096, ManifestSHA256: strings.Repeat("a", 63) + fmt.Sprint(s.n%10),
@@ -559,7 +575,7 @@ func TestManagedWithoutHelper(t *testing.T) {
 	for _, a := range catalog.AvailableActions(rec, h.Ready()) {
 		want := catalog.ReasonHelperUnavailable
 		switch a.Action {
-		case catalog.ActionBackup, catalog.ActionRestore, catalog.ActionRunJob:
+		case catalog.ActionBackup, catalog.ActionRestore, catalog.ActionRunJob, catalog.ActionApplyRoute:
 			want = catalog.ReasonNotConfigured
 		}
 		if a.Reason != want {

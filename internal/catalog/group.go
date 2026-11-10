@@ -43,6 +43,8 @@ func (m *Manager) Do(ctx context.Context, name, action string, opts ActionOption
 		return m.Restore(ctx, name, opts)
 	case ActionRunJob:
 		return m.RunJob(ctx, name, opts)
+	case ActionApplyRoute:
+		return m.ApplyRoute(ctx, name, opts)
 	}
 	return ActionResult{}, fmt.Errorf("%w: unknown action %q", ErrPrecondition, action)
 }
