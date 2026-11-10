@@ -118,19 +118,27 @@ func (m *measurer) secureFD(fd, depth, uid, gid int) error {
 			if err := m.count(); err != nil {
 				return err
 			}
+			// The parent is secured, so its entries can no longer change: a
+			// directory that cannot be opened, or is not the one looked at,
+			// is an error rather than a directory left unsecured.
 			var st unix.Stat_t
-			if unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || st.Mode&unix.S_IFMT != unix.S_IFDIR {
+			if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				if errors.Is(err, unix.ENOENT) {
+					continue
+				}
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			if st.Mode&unix.S_IFMT != unix.S_IFDIR {
 				continue
 			}
 			child, err := unix.Openat(fd, name, dirFlags, 0)
 			if err != nil {
-				continue
+				return fmt.Errorf("%s: %w", name, err)
 			}
-			// The directory opened must be the one looked at.
 			var got unix.Stat_t
-			if unix.Fstat(child, &got) != nil || got.Dev != st.Dev || got.Ino != st.Ino {
+			if err := unix.Fstat(child, &got); err != nil || got.Dev != st.Dev || got.Ino != st.Ino {
 				_ = unix.Close(child)
-				continue
+				return fmt.Errorf("%s changed while it was secured", name)
 			}
 			if err := m.secureFD(child, depth+1, uid, gid); err != nil {
 				return err

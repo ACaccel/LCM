@@ -114,3 +114,25 @@ func TestMeasureTreeBelowResolvesInsideTheRoot(t *testing.T) {
 		t.Errorf("missing: %v", err)
 	}
 }
+
+func TestSecureTreeFailsOnADirectoryItCannotOpen(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a directory of mode 0000")
+	}
+	root := filepath.Join(t.TempDir(), "root")
+	locked := filepath.Join(root, "locked")
+	mkdirs(t, 0o700, root, locked)
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // a directory needs its search bit for t.TempDir to remove it
+	fsys := OS{}
+	want, err := fsys.Lstat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory left unsecured must not look like a secured tree.
+	if err := SecureTree(fsys, root, want, os.Getuid(), os.Getgid(), MeasureLimits{MaxDepth: 10, MaxEntries: 100}); err == nil {
+		t.Fatal("SecureTree reported success with a directory it could not open")
+	}
+}
