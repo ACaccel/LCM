@@ -44,6 +44,11 @@ type env struct {
 	needReload bool
 	enabled    bool
 	active     bool
+	// activeState, when set, is what is-active prints for web.service until
+	// it is stopped (unless stopStuck): "activating" is a unit waiting to
+	// restart after a failure.
+	activeState string
+	stopStuck   bool
 	// workerWrap, when set, runs in place of the backup worker: it gets the
 	// worker's mode and a function that runs the real one.
 	workerWrap func(mode string, run func() (string, int)) (string, int)
@@ -216,6 +221,9 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		e.systemctls = append(e.systemctls, line)
 		switch c.Argv[1] {
 		case "is-active":
+			if e.activeState != "" {
+				return result(e.activeState+"\n", 3)
+			}
 			if e.active {
 				return result("active\n", 0)
 			}
@@ -223,6 +231,9 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		case "stop", "start":
 			if c.Argv[2] == "web.service" {
 				e.active = c.Argv[1] == "start"
+				if !e.stopStuck || c.Argv[1] == "start" {
+					e.activeState = ""
+				}
 			}
 		case "is-enabled":
 			if !e.enabled {

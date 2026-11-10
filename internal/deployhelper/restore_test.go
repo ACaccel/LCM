@@ -253,6 +253,45 @@ func TestRestoreVerifiesBeforeChangingAnything(t *testing.T) {
 	})
 }
 
+// A unit waiting to restart after a crash is stopped for the pre-restore
+// copy, the restore and the undo like an active one, and started again.
+func TestRestoreStopsAUnitThatIsRestarting(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	e.deploy(commit1)
+	a := e.ok(backupReq(fileSources...)).Backup
+	e.write("/var/lib/web/media/a.txt", "changed", 0o644)
+	e.activeState = "activating"
+	calls := len(e.systemctlCalls())
+	e.workerWrap = func(mode string, run func() (string, int)) (string, int) {
+		if e.activeState != "" || e.active {
+			t.Errorf("the unit was not stopped for the %s worker", mode)
+		}
+		return run()
+	}
+	resp := e.ok(e.restoreReq(a.BackupID))
+	if !resp.Restore.Started || !e.active {
+		t.Errorf("restore %+v active %v", resp.Restore, e.active)
+	}
+	got := e.systemctlCalls()[calls:]
+	if stop, start := slices.Index(got, "stop web.service"), slices.Index(got, "start web.service"); stop < 0 || start < stop {
+		t.Errorf("systemctl calls %v", got)
+	}
+
+	// A unit that stays up refuses the restore before anything changed.
+	e.activeState, e.stopStuck = "activating", true
+	before := e.dataState()
+	e.workerWrap = nil
+	e.refused(e.restoreReq(a.BackupID), CodeRefused, "after being stopped")
+	if e.dataState() != before || len(e.stageDirs()) != 0 {
+		t.Errorf("data %s, staging %v", e.dataState(), e.stageDirs())
+	}
+	list := e.ok(Request{Op: OpBackups, Service: "web"}).Backups
+	if len(list) != 2 { // the backup and the pre-restore copy of the first restore
+		t.Errorf("listing %+v", list)
+	}
+}
+
 func TestFailedRestoreIsUndone(t *testing.T) {
 	setup := func() (*env, string, string) {
 		e := newEnv(t)

@@ -237,23 +237,44 @@ func (h *Helper) currentRelease(svc string) (string, string) {
 	return id, m.Commit
 }
 
-// unitState reports whether the service has a unit the helper wrote and
-// whether it is active.
-func (h *Helper) unitState(ctx context.Context, svc string) (exists, active bool, e *opErr) {
+// quiesce stops the service's unit for an operation that needs its data
+// still. It always stops a unit the helper wrote, whatever its state: a unit
+// that is activating or waiting to restart after a failure (Restart=) is not
+// "active", yet it would start a process again. running reports whether the
+// unit was active, activating or reloading, so that the caller starts it
+// again afterwards. The unit must be inactive or failed when it returns;
+// otherwise the unit is started again if it was running and the operation is
+// refused.
+func (h *Helper) quiesce(ctx context.Context, svc string) (running bool, e *opErr) {
 	conflict, err := hostsetup.UnitConflict(h.FS, svc, h.RootUID)
 	switch {
 	case err != nil:
-		return false, false, failf(CodeFailed, "%v", err)
+		return false, failf(CodeFailed, "%v", err)
 	case conflict != "":
-		return false, false, failf(CodeRefused, "%s", conflict)
+		return false, failf(CodeRefused, "%s", conflict)
 	}
 	if _, err := h.FS.Lstat(hostsetup.ServiceUnit(svc)); errors.Is(err, fs.ErrNotExist) {
-		return false, false, nil
+		return false, nil
 	} else if err != nil {
-		return false, false, failf(CodeFailed, "%v", err)
+		return false, failf(CodeFailed, "%v", err)
 	}
+	running = slices.Contains([]string{"active", "activating", "reloading"}, h.activeState(ctx, svc))
+	if e := h.unitCtl(ctx, "stop", svc); e != nil {
+		return running, e
+	}
+	if state := h.activeState(ctx, svc); state != "inactive" && state != "failed" {
+		if running {
+			_ = h.unitCtl(context.WithoutCancel(ctx), "start", svc)
+		}
+		return running, failf(CodeRefused, "%s is %q after being stopped, so its data cannot be used; nothing was changed", unitName(svc), hostsetup.Printable(state, 32))
+	}
+	return running, nil
+}
+
+// activeState is the unit's state as "systemctl is-active" prints it.
+func (h *Helper) activeState(ctx context.Context, svc string) string {
 	res, _ := h.run(ctx, systemctlTimeout, systemctl, "is-active", unitName(svc))
-	return true, strings.TrimSpace(res.Output) == "active", nil
+	return strings.TrimSpace(res.Output)
 }
 
 func (h *Helper) unitCtl(ctx context.Context, verb, svc string) *opErr {
@@ -305,16 +326,12 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 		}
 		p.rtBin = rt + "/bin"
 	}
-	_, active, e := h.unitState(ctx, req.Service)
-	if e != nil {
-		return respond(resp, e)
-	}
 	stopped := false
-	if p.mode == ModeStopped && active {
-		if e := h.unitCtl(ctx, "stop", req.Service); e != nil {
+	if p.mode == ModeStopped {
+		var e *opErr
+		if stopped, e = h.quiesce(ctx, req.Service); e != nil {
 			return respond(resp, e)
 		}
-		stopped = true
 	}
 	m, sum, out, e := h.makeSet(ctx, p)
 	var startErr *opErr
@@ -915,14 +932,9 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	}
 	defer func() { _ = h.FS.RemoveAll(stage) }()
 
-	_, active, e := h.unitState(ctx, env.svc)
+	active, e := h.quiesce(ctx, env.svc)
 	if e != nil {
 		return respond(resp, e)
-	}
-	if active {
-		if e := h.unitCtl(ctx, "stop", env.svc); e != nil {
-			return respond(resp, e)
-		}
 	}
 	startAgain := func() *opErr {
 		if !active {

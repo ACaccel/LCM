@@ -259,14 +259,78 @@ func TestBackupStoppedModeStopsAndStarts(t *testing.T) {
 	if !e.active || failed.Log != "boom\n" {
 		t.Errorf("active %v log %q", e.active, failed.Log)
 	}
-	// An inactive service is left stopped.
+	// An inactive service is stopped again to be sure, and left stopped.
 	e.active, e.workerWrap = false, nil
 	before := len(e.systemctlCalls())
 	e.ok(r)
 	for _, c := range e.systemctlCalls()[before:] {
-		if strings.HasPrefix(c, "stop web") || strings.HasPrefix(c, "start web") {
+		if strings.HasPrefix(c, "start web") {
 			t.Errorf("unexpected %s", c)
 		}
+	}
+	if e.active {
+		t.Error("an inactive service was started")
+	}
+}
+
+// A unit that waits to restart after a crash is not "active", but it would
+// start the service again in the middle of a stopped backup.
+func TestStoppedBackupStopsACrashLoopingUnit(t *testing.T) {
+	for _, state := range []string{"activating", "reloading"} {
+		t.Run(state, func(t *testing.T) {
+			e := newEnv(t)
+			e.seedData()
+			e.deploy(commit1)
+			e.activeState = state
+			r := backupReq(fileSources...)
+			r.Mode = ModeStopped
+			before := len(e.systemctlCalls())
+			e.workerWrap = func(_ string, run func() (string, int)) (string, int) {
+				if e.activeState != "" || e.active {
+					e.t.Error("the unit was not stopped while the worker ran")
+				}
+				return run()
+			}
+			e.ok(r)
+			calls := e.systemctlCalls()[before:]
+			stop, start := slices.Index(calls, "stop web.service"), slices.Index(calls, "start web.service")
+			if stop < 0 || start < stop || !e.active {
+				t.Errorf("systemctl calls %v, active %v", calls, e.active)
+			}
+		})
+	}
+	t.Run("failed units stay stopped", func(t *testing.T) {
+		e := newEnv(t)
+		e.seedData()
+		e.activeState = "failed"
+		r := backupReq(fileSources...)
+		r.Mode = ModeStopped
+		e.ok(r)
+		if slices.Contains(e.systemctlCalls(), "start web.service") {
+			t.Error("a failed unit was started")
+		}
+	})
+}
+
+func TestStoppedBackupRefusesAUnitThatStaysUp(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	e.deploy(commit1)
+	e.activeState, e.stopStuck = "activating", true
+	r := backupReq(fileSources...)
+	r.Mode = ModeStopped
+	workers := 0
+	e.workerWrap = func(_ string, run func() (string, int)) (string, int) { workers++; return run() }
+	e.refused(r, CodeRefused, "after being stopped")
+	if workers != 0 {
+		t.Error("the worker ran against a unit that was not stopped")
+	}
+	if names, _ := os.ReadDir(e.real("/var/backups/lcm/web")); len(names) != 0 {
+		t.Errorf("left %v", names)
+	}
+	// It was started again, as it had been running.
+	if calls := e.systemctlCalls(); calls[len(calls)-1] != "start web.service" {
+		t.Errorf("systemctl calls %v", calls)
 	}
 }
 
