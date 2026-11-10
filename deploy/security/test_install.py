@@ -24,7 +24,8 @@ I = load('security_installer', 'install.py')
 H = load('security_installer_helper', 'helper.py')
 SOURCES = {name: (HERE / name).read_bytes() for name in ('runtime.py', 'install.py', 'helper.py')}
 INPUT = {'version': 1, 'machineId': 'machine-a', 'endpoint': 'http://127.0.0.1:7800/api/v1/hooks/security',
-         'services': ['web'], 'watch': {'deploy': ['/etc/web', '/opt/extra', '/opt/missing', '/opt/web']}}
+         'services': ['web'], 'watch': {'deploy': ['/etc/web', '/opt/extra', '/opt/missing', '/opt/web']},
+         'aideIgnore': ['/opt/web/releases']}
 COLLECTOR_ID = 1234
 
 
@@ -203,6 +204,10 @@ class InstallerTests(unittest.TestCase):
         aide = self.read(H.AIDE_CONFIG).decode()
         self.assertIn('/usr/bin/python3\\.12(/|$) SEC', aide)
         self.assertIn('/opt/web(/|$) SEC', aide)
+        # Releases are recorded by LCM's deploys; audit still watches them.
+        self.assertIn('\n!/opt/web/releases(/|$)\n', aide)
+        self.assertIsNotNone(H.aide_targets(aide.encode()))
+        self.assertNotIn('releases', rules)
         self.assertEqual(self.system.rules - {'-a always,exit -F arch=b64 -S execve -k unrelated'},
                          {line for line in rules.splitlines() if line.startswith('-w')})
 
@@ -296,7 +301,7 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(manifest['state'], 'reverted')
 
     def test_inputs_are_validated(self):
-        for field, value in (('machineId', '../x'), ('endpoint', 'http://192.0.2.10:7800/api/v1/hooks/security'),
+        for field, value in (('aideIgnore', ['/opt/../etc']), ('aideIgnore', '/opt/web/releases'), ('machineId', '../x'), ('endpoint', 'http://192.0.2.10:7800/api/v1/hooks/security'),
                              ('services', ['web', 'Bad']), ('services', ['web', 'site']),
                              ('watch', {'probe': ['/opt/x']}), ('watch', {'deploy': ['/opt/../etc']}),
                              ('watch', {'deploy': ['relative']}), ('token', 'two words')):

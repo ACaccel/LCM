@@ -269,15 +269,17 @@ component's programs.
 | `sudoers` | `/etc/sudoers`, `/etc/sudoers.d` |
 | `cron` | `/etc/crontab`, `/etc/cron.*`, `/var/spool/cron/crontabs` |
 | `systemd` | `/etc/systemd/system`, `/etc/systemd/user`, `~/.config/systemd/user` |
-| `deploy` | `/usr/local/libexec/lcm*`, `/usr/local/bin/lcm`, `/etc/lcm`, and `/opt/<service>`, `/etc/<service>` of every grant in [`services`](operations.md#service-grants) |
+| `deploy` | `/usr/local/libexec/lcm*`, `/usr/local/bin/lcm`, `/etc/lcm`, and `/opt/<service>`, `/etc/<service>` of every grant in [`services`](operations.md#service-grants) except `external` ones |
 | `nginx` | `/etc/nginx` |
 | `probe` | `/var/lib/workstation-security/audit-probe` (acceptance probe only; not extendable) |
 
 The collector forwards one audit summary per category, login UID, effective UID and
 result each minute, with the record count, so a deployment that writes thousands of
-watched files does not fill its queue. A deployment below `/opt/<service>` changes the
-integrity scope's content: the next AIDE check reports it until the baseline is
-reviewed and accepted locally.
+watched files does not fill its queue. AIDE skips `/opt/<service>/releases`: every
+deployment changes it, and LCM records each one (the audit watch on `/opt/<service>`
+still covers it). A change to the integrity scope itself (a new grant, a new `watch`
+path) makes the next AIDE check report the difference until the baseline is reviewed
+and accepted locally.
 
 ### Installed files
 

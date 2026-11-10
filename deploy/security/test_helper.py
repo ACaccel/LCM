@@ -463,6 +463,10 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(H.aide_targets(config.encode()), sorted(paths))
         self.assertIsNone(H.aide_targets(b'/etc/.* SEC\n'))
         self.assertIsNone(H.aide_targets(b'@@include /etc/private.conf\n'))
+        excluded = (config + '!/opt/web/releases(/|$)\n').encode()
+        self.assertEqual(H.aide_targets(excluded), sorted(paths))
+        self.assertIsNone(H.aide_targets(b'!/opt/.*\n'))
+        self.assertIsNone(H.aide_targets(b'!/opt/../etc(/|$)\n'))
         self.assertIsNone(H.aide_targets((''.join('/path' + str(i) + '(/|$) SEC\n' for i in range(257))).encode()))
 
     def test_collector_status_drops_identity(self):

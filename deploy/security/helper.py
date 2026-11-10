@@ -418,7 +418,15 @@ def aide_targets(content):
     for line in content.decode('utf-8').splitlines():
         if len(line) > 1000:
             return None
-        if line.startswith(('/', '^', '!', '=', '@@')):
+        if line.startswith('!'):
+            # An excluded subtree: validated, not a target.
+            raw = line[1:-len('(/|$)')] if line.endswith('(/|$)') else ''
+            target = re.sub(r'\\([.\-])', r'\1', raw)
+            if (not re.fullmatch(r'/[A-Za-z0-9_./-]+', target) or re.escape(target) != raw
+                    or any(part in ('.', '..') for part in target.split('/'))):
+                return None
+            continue
+        if line.startswith(('/', '^', '=', '@@')):
             if not line.endswith('(/|$) SEC'):
                 return None
             raw = line[:-len('(/|$) SEC')]

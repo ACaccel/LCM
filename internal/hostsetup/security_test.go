@@ -88,13 +88,17 @@ func TestSecurityInstall(t *testing.T) {
 }
 
 func TestSecurityInputWatchesGrantedServices(t *testing.T) {
-	a := &applier{cfg: Config{Services: map[string]ServiceGrant{"web": {Port: 3000}, "site": {Port: 3001}}}}
+	a := &applier{cfg: Config{Services: map[string]ServiceGrant{"web": {Port: 3000}, "site": {Port: 3001}, "docs": {External: true}}}}
 	in := a.securityInput(&Security{MachineID: "m-1", Watch: map[string][]string{"deploy": {"/opt/web", "/opt/extra"}, "cron": {"/etc/cron.extra"}}})
-	if !slices.Equal(in.Services, []string{"site", "web"}) {
+	// An external grant gets hooks for its route but no deploy watches.
+	if !slices.Equal(in.Services, []string{"docs", "site", "web"}) {
 		t.Errorf("services = %v", in.Services)
 	}
 	if want := []string{"/etc/site", "/etc/web", "/opt/extra", "/opt/site", "/opt/web"}; !slices.Equal(in.Watch["deploy"], want) {
 		t.Errorf("deploy watches = %v, want %v", in.Watch["deploy"], want)
+	}
+	if want := []string{"/opt/site/releases", "/opt/web/releases"}; !slices.Equal(in.AIDEIgnore, want) {
+		t.Errorf("AIDE exclusions = %v, want %v", in.AIDEIgnore, want)
 	}
 	if !slices.Equal(in.Watch["cron"], []string{"/etc/cron.extra"}) {
 		t.Errorf("cron watches = %v", in.Watch["cron"])

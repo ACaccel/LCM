@@ -364,7 +364,7 @@ def audit_rules(paths: dict[str, list[str]]) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def aide_config(paths: list[str]) -> str:
+def aide_config(paths: list[str], ignore: list[str] = ()) -> str:
     header = """# Managed by the LCM security component: a curated baseline without the vendor's broad defaults.
 database_in=file:/var/lib/workstation-security/aide/aide.db
 database_out=file:/var/lib/workstation-security/aide/aide.db.new
@@ -375,6 +375,10 @@ SEC = p+ftype+i+l+n+u+g+s+m+c+sha256
     lines = [header.rstrip()]
     for path in sorted(set(paths)):
         lines.append(re.escape(path) + '(/|$) SEC')
+    # Excluded below a selected path, such as the releases LCM deploys and
+    # records itself.
+    for path in sorted(set(ignore)):
+        lines.append('!' + re.escape(path) + '(/|$)')
     return '\n'.join(lines) + '\n'
 
 
@@ -531,7 +535,7 @@ def validate_inputs(value: object, action: str) -> dict:
     """Every input is checked again here: the installer runs as root."""
     if not isinstance(value, dict) or value.get('version') != 1:
         raise Failure('unsupported installer input')
-    allowed = {'version', 'machineId', 'endpoint', 'services', 'watch', 'token'}
+    allowed = {'version', 'machineId', 'endpoint', 'services', 'watch', 'aideIgnore', 'token'}
     if set(value) - allowed:
         raise Failure('unexpected installer input fields')
     if action in ('plan', 'apply'):
@@ -558,6 +562,11 @@ def validate_inputs(value: object, action: str) -> dict:
             if (not isinstance(path, str) or not SAFE_PATH.fullmatch(path) or path == '/' or path.endswith('/')
                     or '//' in path or any(part in ('.', '..') for part in path.split('/'))):
                 raise Failure('watch.{} must hold absolute, clean paths (got {!r})'.format(category, path))
+    ignore = value.get('aideIgnore', [])
+    if not isinstance(ignore, list) or len(ignore) > MAX_WATCH or not all(
+            isinstance(path, str) and SAFE_PATH.fullmatch(path) and not path.endswith('/') and '//' not in path
+            and not any(part in ('.', '..') for part in path.split('/')) for path in ignore):
+        raise Failure('aideIgnore must hold absolute, clean paths')
     token = value.get('token')
     if token is not None and (not isinstance(token, str) or not re.fullmatch(r'[!-~]{1,4096}', token)):
         raise Failure('token must be printable ASCII without spaces')
@@ -928,7 +937,7 @@ class Component:
             LIB / 'install.py': (self.sources['install.py'], 0o644, 0, 0),
             HELPER: (self.sources['helper.py'], 0o644, 0, 0),
             COLLECTOR_CONFIG: (json.dumps(config, indent=2).encode() + b'\n', 0o640, 0, gid),
-            self.H.AIDE_CONFIG: (aide_config(self.critical(watches)).encode(), 0o600, 0, 0),
+            self.H.AIDE_CONFIG: (aide_config(self.critical(watches), self.inputs.get('aideIgnore', [])).encode(), 0o600, 0, 0),
             self.H.AUDIT_CORE: (audit_rules(watches).encode(), 0o600, 0, 0),
         }
         for name, content in unit_files(self.nginx).items():

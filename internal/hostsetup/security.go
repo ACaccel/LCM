@@ -28,7 +28,9 @@ type securityInput struct {
 	Endpoint  string              `json:"endpoint,omitempty"`
 	Services  []string            `json:"services,omitempty"`
 	Watch     map[string][]string `json:"watch,omitempty"`
-	Token     string              `json:"token,omitempty"`
+	// AIDEIgnore are subtrees of watched paths the integrity check skips.
+	AIDEIgnore []string `json:"aideIgnore,omitempty"`
+	Token      string   `json:"token,omitempty"`
 }
 
 // securityReply is the installer's stdout.
@@ -120,21 +122,28 @@ func (a *applier) securityInstalled() bool {
 
 // securityInput describes the wanted component: the Machine, the services
 // whose locations get observation hooks and every watched path. The
-// directories of granted services are deploy watches.
+// directories of the services LCM deploys are deploy watches, except their
+// releases for AIDE: they are root-owned and every deploy changes them, and
+// LCM records each one. An external grant has a route, and so hooks, but no
+// directories of LCM's.
 func (a *applier) securityInput(sec *Security) securityInput {
 	watch := map[string][]string{}
 	for category, paths := range sec.Watch {
 		watch[category] = slices.Clone(paths)
 	}
 	services := slices.Sorted(maps.Keys(a.cfg.Services))
+	var ignore []string
 	for _, name := range services {
-		watch["deploy"] = append(watch["deploy"], ServiceOptDir(name), ServiceEtcDir(name))
+		if !a.cfg.Services[name].External {
+			watch["deploy"] = append(watch["deploy"], ServiceOptDir(name), ServiceEtcDir(name))
+			ignore = append(ignore, ServiceReleases(name))
+		}
 	}
 	for category, paths := range watch {
 		slices.Sort(paths)
 		watch[category] = slices.Compact(paths)
 	}
-	return securityInput{Version: 1, MachineID: sec.MachineID, Endpoint: SecurityEndpoint, Services: services, Watch: watch}
+	return securityInput{Version: 1, MachineID: sec.MachineID, Endpoint: SecurityEndpoint, Services: services, Watch: watch, AIDEIgnore: ignore}
 }
 
 func (s *step) installerReport(r securityReply) {
