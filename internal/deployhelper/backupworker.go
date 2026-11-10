@@ -453,13 +453,18 @@ func (w *worker) checkSQLite(file string) error {
 }
 
 func (w *worker) backupMongo(ctx context.Context, i int, src BackupSource) error {
+	conf, cleanup, err := mongoConfig()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	names := artifactNames(i, src)
-	if err := w.dump(ctx, "mongodump", mongoArgs(w.outPath(names[0]), "--db="+src.Database)); err != nil {
+	if err := w.dump(ctx, "mongodump", mongoArgs(conf, w.outPath(names[0]), "--db="+src.Database)); err != nil {
 		return err
 	}
 	if src.Users {
 		for k, coll := range []string{"system.users", "system.roles"} {
-			if err := w.dump(ctx, "mongodump", mongoArgs(w.outPath(names[1+k]), "--db=admin", "--collection="+coll)); err != nil {
+			if err := w.dump(ctx, "mongodump", mongoArgs(conf, w.outPath(names[1+k]), "--db=admin", "--collection="+coll)); err != nil {
 				return err
 			}
 		}
@@ -467,14 +472,49 @@ func (w *worker) backupMongo(ctx context.Context, i int, src BackupSource) error
 	return nil
 }
 
-// mongoArgs adds the connection string that the service's environment
-// names, if any.
-func mongoArgs(archive string, args ...string) []string {
+// mongoArgs builds the arguments of a MongoDB tool writing to archive; conf,
+// when set, is the private config file that holds the connection string.
+func mongoArgs(conf, archive string, args ...string) []string {
 	out := append([]string{"--archive=" + archive, "--gzip"}, args...)
-	if uri := os.Getenv("MONGODB_URI"); uri != "" {
-		out = append(out, "--uri="+uri)
+	if conf != "" {
+		out = append(out, "--config="+conf)
 	}
 	return out
+}
+
+// mongoConfig writes the connection string that the service's environment
+// names, if any, to a 0600 YAML file in a private directory of the worker's
+// own temporary file system, and returns the file and a function that
+// removes it. The string holds a password, so it must not appear in the
+// arguments of the tools, which any process of the account can read in /proc.
+func mongoConfig() (string, func(), error) {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		return "", func() {}, nil
+	}
+	dir, err := os.MkdirTemp("", "lcm-mongo-")
+	if err != nil {
+		return "", nil, fmt.Errorf("prepare the MongoDB connection settings: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	quoted, err := json.Marshal(uri) // a JSON string is a valid YAML double-quoted scalar
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	file := dir + "/config.yaml"
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		_, err = fmt.Fprintf(f, "uri: %s\n", quoted)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("write the MongoDB connection settings: %w", err)
+	}
+	return file, cleanup, nil
 }
 
 // dump runs a database tool that writes its artifact itself, then accounts
@@ -618,6 +658,11 @@ func (w *worker) restoreMongo(ctx context.Context, src specSource) error {
 	if len(src.Artifacts) == 0 {
 		return errors.New("the set has no artifact for it")
 	}
+	conf, cleanup, err := mongoConfig()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	for k, a := range src.Artifacts {
 		ns := src.Database + ".*"
 		switch {
@@ -626,10 +671,7 @@ func (w *worker) restoreMongo(ctx context.Context, src specSource) error {
 		case k > 0 && strings.Contains(a.Name, "-roles."):
 			ns = "admin.system.roles"
 		}
-		args := []string{"--archive=" + w.in + "/" + a.Name, "--gzip", "--drop", "--nsInclude=" + ns}
-		if uri := os.Getenv("MONGODB_URI"); uri != "" {
-			args = append(args, "--uri="+uri)
-		}
+		args := mongoArgs(conf, w.in+"/"+a.Name, "--drop", "--nsInclude="+ns)
 		if err := w.run(ctx, "mongorestore", args, nil, ""); err != nil {
 			return err
 		}

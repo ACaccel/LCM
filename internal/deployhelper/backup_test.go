@@ -487,7 +487,9 @@ func TestBackupToolsAndCommand(t *testing.T) {
 	e.seedData()
 	e.deploy(commit1)
 	bin := t.TempDir()
-	argsFile := filepath.Join(bin, "args")
+	argsFile, confFile := filepath.Join(bin, "args"), filepath.Join(bin, "conf")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	script := func(name, body string) string {
 		p := filepath.Join(bin, name)
 		e.writeReal(p, "#!/bin/sh\n"+body, 0o755)
@@ -495,7 +497,7 @@ func TestBackupToolsAndCommand(t *testing.T) {
 	}
 	e.tools = map[string]string{
 		"pg_dump":   script("pg_dump", `echo "$@" >> `+argsFile+"\nfor a in \"$@\"; do case $a in --file=*) echo dump > ${a#--file=};; esac; done\n"),
-		"mongodump": script("mongodump", `echo "$@" >> `+argsFile+"\nfor a in \"$@\"; do case $a in --archive=*) echo archive > ${a#--archive=};; esac; done\n"),
+		"mongodump": script("mongodump", `echo "$@" >> `+argsFile+"\nfor a in \"$@\"; do case $a in --archive=*) echo archive > ${a#--archive=};; --config=*) cat ${a#--config=} >> "+confFile+"; stat -c %a ${a#--config=} >> "+confFile+";; esac; done\n"),
 	}
 	// A release program whose standard output is the dump.
 	e.write("/opt/web/current/bin/dump", "#!/bin/sh\necho command-output \"$1\"\n", 0o755)
@@ -524,12 +526,24 @@ func TestBackupToolsAndCommand(t *testing.T) {
 	args, _ := os.ReadFile(argsFile) //nolint:gosec // a file of the test's own tree
 	for _, want := range []string{
 		"--format=custom --no-password", "--dbname=app",
-		"--gzip --db=app --uri=mongodb://localhost/?x=1",
-		"--gzip --db=admin --collection=system.users --uri=", "--collection=system.roles",
+		"--gzip --db=app --config=", "--gzip --db=admin --collection=system.users --config=", "--collection=system.roles",
 	} {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("tool arguments lack %q:\n%s", want, args)
 		}
+	}
+
+	// The connection string, which holds a password, is not in the arguments
+	// of the tools: it is in a private file that is gone afterwards.
+	if strings.Contains(string(args), "localhost") || strings.Contains(string(args), "--uri") {
+		t.Errorf("the connection string is in the arguments:\n%s", args)
+	}
+	conf, _ := os.ReadFile(confFile) //nolint:gosec // a file of the test's own tree
+	if want := "uri: \"mongodb://localhost/?x=1\"\n600\n"; !strings.HasPrefix(string(conf), want) {
+		t.Errorf("config file seen by the tool: %q", conf)
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Errorf("temporary files remain: %v", left)
 	}
 
 	// A missing tool is a clear refusal of the backup, and the program of a

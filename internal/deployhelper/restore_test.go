@@ -384,6 +384,7 @@ func TestRestoreRunsTheDatabaseTools(t *testing.T) {
 		"mongodump":    script("mongodump", record+"for a in \"$@\"; do case $a in --archive=*) echo archive > ${a#--archive=};; esac; done\n"),
 		"mongorestore": script("mongorestore", record),
 	}
+	t.Setenv("MONGODB_URI", "mongodb://admin:secret@localhost/")
 	sources := []BackupSource{{Type: SourcePostgres, Database: "app"}, {Type: SourceMongoDB, Database: "app", Users: true}}
 	a := e.ok(backupReq(sources...)).Backup
 	if err := os.Remove(argsFile); err != nil {
@@ -402,6 +403,9 @@ func TestRestoreRunsTheDatabaseTools(t *testing.T) {
 	}
 	if want := []string{"pg_dump", "mongodump", "mongodump", "mongodump", "pg_restore", "mongorestore", "mongorestore", "mongorestore"}; !slices.Equal(tools, want) {
 		t.Fatalf("tools run: %v\n%s", tools, raw)
+	}
+	if strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "--uri") || !strings.Contains(string(raw), "mongorestore --archive=") {
+		t.Errorf("the connection string is in the arguments:\n%s", raw)
 	}
 	for _, want := range []string{"--clean --if-exists --no-owner --no-privileges --exit-on-error --no-password --dbname=app",
 		"--gzip --drop --nsInclude=app.*", "--nsInclude=admin.system.users", "--nsInclude=admin.system.roles"} {
