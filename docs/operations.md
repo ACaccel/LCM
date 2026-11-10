@@ -4,7 +4,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 ## Install
 
-`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security host helper and the deploy helper are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls), [deploy helper](#deploy-helper)).
+`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security component and the deploy helper are optional components, off by default ([machine power](#local-machine-power-helper), [security component](security.md#host-component), [deploy helper](#deploy-helper)).
 
 | Path | Owner, mode | Contents |
 |---|---|---|
@@ -30,7 +30,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
   "repository": "https://github.com/ACaccel/LCM.git",
   "toolchains": {"go": "/home/alice/.local/go", "node": "/home/alice/.local/node"},
   "tailscale": {"port": 9443},
-  "components": {"machinePower": false, "securityHost": null}
+  "components": {"machinePower": false, "security": null}
 }
 ```
 
@@ -41,7 +41,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 | `toolchains.go`, `toolchains.node` | `--go-root`, `--node-root` (`~OPERATOR/.local/{go,node}`) | Absolute toolchain directories; they and their ancestors must not be symbolic links, must be owned by root or the operator and writable by no one else; copied to `/opt/lcm/toolchain` |
 | `tailscale.port` | `--ts-port` (`9443`) | HTTPS port of `tailscale serve` |
 | `components.machinePower` | `--machine-power` (`false`) | Install the [machine power helper](#local-machine-power-helper) |
-| `components.securityHost` | `--security-host-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>"}` installs the [security host helper](#security-console-host-controls) |
+| `components.security` | `--security-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>", "watch": {"deploy": ["/opt/extra"]}}` installs the [security component](security.md#host-component); `watch` (optional) adds at most 32 absolute paths per category `accounts`, `ssh`, `sudoers`, `cron`, `systemd`, `deploy`, `nginx`. The key `securityHost` of earlier versions is accepted only as `null` |
 | `components.deploy` | (`false`) | Install the [deploy helper](#deploy-helper) and the build account |
 | `runtimes` | (none) | Named [runtimes](#runtimes) that managed services may use: `{"node24": "/home/alice/.local/node"}`; names `^[a-z][a-z0-9]{0,15}$`, directories checked like `toolchains` and copied to `/opt/lcm/runtimes/<name>` |
 | `backup.dir` | (none) | Where the [typed backups](#backups) of managed services are kept; a directory of its own: absolute, not a system directory (`/`, `/var`, `/var/lib`, `/opt`, `/home`, ...) nor inside `/etc`, `/usr`, `/tmp` and the like, not `/var/backups/lcm` (where `host upgrade` keeps its sets; use for example `/var/backups/lcm-services`), not `/var/lib/lcm*`, `/var/cache/lcm-build` or `/opt/lcm`, and not overlapping a service's `/opt/<name>`, `/var/lib/<name>` or `/etc/<name>`, a runtime or an input. `apply` creates it as root 0700; an existing directory must already be root-owned 0700, as `apply` never changes the mode of one that exists. Without it the backup and restore operations are refused |
@@ -86,11 +86,11 @@ A build with another storage schema is installed by [`lcm host upgrade`](#lcm-ho
 - Each step prints one line per result: `unchanged`, `would change: <what>` (`--check`), `changed: <what>`, or `needs manual action: <what>` for a difference it does not fix itself. Exit status: 0 converged; 3 with `--check` while changes or manual actions are pending; 1 on an error or a remaining manual action; 2 for usage errors. `--check` changes nothing; it stages the binary in a temporary directory to validate it.
 - Drift it fixes: changed, missing or replaced root files (a file owned by someone else is replaced, never taken over), their modes, directory owners and modes, toolchain copies that differ from their source, a missing checkout, token file or `tailscale serve` handler, a disabled, stopped or not reloaded unit.
 - Older builds: when the installed `/usr/local/bin/lcm` reports a later commit time (`lcm version`) than the build running `apply`, `apply` and `--check` print a warning first and mark each file they would replace; they do not stop.
-- What it keeps: an existing `lcm.env` (reported when it differs from the embedded one; one owned by someone other than root needs manual action), the installed `/usr/local/bin/lcm` (self-deploy keeps it current), and components switched off in `host.json`, which are reported as `installed but disabled` and never removed.
+- What it keeps: an existing `lcm.env` (reported when it differs from the embedded one; one owned by someone other than root needs manual action), the installed `/usr/local/bin/lcm` (self-deploy keeps it current), and components switched off in `host.json`, which are reported as `installed but disabled` and never removed. The security component is the exception: switched off, it needs manual action until `apply --remove` removes it ([removal](security.md#removal-and-cleanup)).
 - Root runs only a build of a reviewed checkout, because whoever can push to `main` controls the self-deployed binary. `bootstrap.sh` refuses a `--binary` that resolves to `/usr/local/bin/lcm` or its `.prev`/`.failed` copies, lies under `/var/lib/lcm` or is owned by `lcm`, before running it. `host init` and `host apply` refuse to run as root from those paths too; that check catches mistakes, but it runs inside the binary it judges, so it cannot stop an untrusted one.
-- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security-host`, `deploy`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine and deploy helpers have no embedded version: status checks only their owner and mode and shows their digest, and `host apply` replaces them with the reviewed build it runs from.
-- The console shows the same comparison on the machine's Overview tab (`GET /api/v1/host/components`, read as the `lcm` account and cached for 30 s). It warns only about `outdated` or `missing` files and names the update command; a component that is not installed is silent, and so are files the account cannot read (the sudoers rules and the security host helper are root-only by design; `sudo bin/lcm host status` compares them).
-- Helper updates: LCM never changes root files itself. When a self-deployed commit changes a host file, `lcm host status` shows `outdated`; review the change, then run `make build && sudo bin/lcm host apply` in the updated reviewed checkout. An installed security host helper is the exception: it needs its [reviewed upgrade](#security-console-host-controls).
+- `lcm host status` runs as any user and only reads. For each component (`core`, `machine-power`, `security`, `deploy`) and its root files it compares the installed SHA-256 with this build's: `up to date`, `outdated` (content, owner or mode), `missing` (partly installed), `not installed`, or `unknown` (not readable as this user, as the sudoers rules are). The pinned machine and deploy helpers have no embedded version: status checks only their owner and mode and shows their digest, and `host apply` replaces them with the reviewed build it runs from.
+- The console shows the same comparison on the machine's Overview tab (`GET /api/v1/host/components`, read as the `lcm` account and cached for 30 s). It warns only about `outdated` or `missing` files and names the update command; a component that is not installed is silent, and so are files the account cannot read (the sudoers rules and the security helper are root-only by design; `sudo bin/lcm host status` compares them).
+- Helper updates: LCM never changes root files itself. When a self-deployed commit changes a host file, `lcm host status` shows `outdated`; review the change, then run `make build && sudo bin/lcm host apply` in the updated reviewed checkout. The security component upgrades the same way ([security component](security.md#host-component)).
 
 ### Self-deploy
 
@@ -401,7 +401,7 @@ Storage schema 16 only adds indexes (timeline reads, audit filters and the reten
 - Failed-login audit entries beyond the newest 10,000.
 - Snapshot, point and event ceilings now apply per resource (200,000 rows each) instead of to all resources together.
 
-Set the [retention settings](../README.md#configuration) before the start to keep more. The security host helper purges its own finished operations only after it is reinstalled ([host controls](#security-console-host-controls)).
+Set the [retention settings](../README.md#configuration) before the start to keep more. The security helper purges its own finished operations once `host apply` installed the current one ([security component](security.md#host-component)).
 
 ### Upgrade checks for stricter host configuration
 
@@ -434,24 +434,11 @@ notification versions and host checks. Handling and settings changes require the
 displayed version and a reason. A notification test uses the configured relay route;
 wait for its firing and recovery revisions on the same message before accepting it.
 
-Install the restricted security helper only through a reviewed release; follow its
-[deployment and recovery contract](../deploy/security-host/README.md). With
-`components.securityHost` set to `{"machineId": "<immutable Machine ID>"}`, `lcm host apply`
-runs the embedded `install.py` with `python3 -I` from a root-only temporary directory,
-with that Machine ID and the SHA-256 of the embedded `helper.py`. `install.py` refuses an
-existing installation, so `apply` reports an installed helper that differs, a policy for
-another Machine or an incomplete installation as `needs manual action` and changes nothing;
-upgrade it as the contract describes. Verify actual
-LCM-context `GET /api/v1/security/host` availability after installation, rather than
-relying on a root-only status probe. Preserve existing timer jitter, required audit
-coverage, Nginx dry-run and locally reviewed AIDE baseline. The web baseline action
+The host side of these controls is the optional [security component](security.md#host-component):
+`lcm host apply` installs, adopts and upgrades it from the reviewed build like the other
+components. Verify actual LCM-context `GET /api/v1/security/host` availability after
+installation, rather than relying on a root-only status probe. The web baseline action
 records a review request only. No optional profiles are enabled by default.
-
-A helper installed before schema 16 refuses every preview once its operation journal
-holds 2,000 entries, permanently. The current helper first purges old finished entries
-([journal capacity](../deploy/security-host/README.md#recovery-and-local-approval));
-reinstall the reviewed `helper.py` with its matching `install.py` and SHA-256 to get the
-fix. LCM keeps its own record of finished host operations for `LCM_OPERATION_RETENTION`.
 
 Schema 11→13 needs an explicit upgrade with maintenance, paused automation and a
 matching DB/binary/health-artifact snapshot. Preserve notification environment and

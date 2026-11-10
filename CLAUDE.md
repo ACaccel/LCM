@@ -6,7 +6,7 @@ Self-hosted lifecycle control plane for `lcm/v2` resources (services, the local 
 
 - Go 1.26+, standard library first: `net/http` with `ServeMux` patterns, `log/slog`, `flag`. No web framework, no ORM, no CLI framework.
 - SQLite via `modernc.org/sqlite` (pure Go; keep `CGO_ENABLED=0` builds working).
-- Restricted security host helper in `deploy/security-host/`: Python 3 standard library, with fixed JSON operations and separately provisioned root permissions.
+- Optional security component in `deploy/security/` (root installer, collector, restricted helper): Python 3 standard library, run with `python3 -I`; the installer takes its input as JSON on stdin and records every change in a reversible transaction.
 - Web console in `web/`: React 19, TypeScript (strict), Vite, `@xyflow/react`, TanStack Query, React Router, CodeMirror 6, `yaml`; API types generated from OpenAPI (`openapi-typescript`/`openapi-fetch`); plain CSS with variables; Vitest. Built output is embedded through `internal/webui`.
 - Hand-written `database/sql` queries; schema changes are new numbered files in `internal/store/migrations/`, applied at startup.
 
@@ -20,7 +20,7 @@ make fmt     # golangci-lint fmt (gofmt + goimports)
 make check   # fmt-check, vet, lint, test, plus web-check when Node is available: run before finishing any change
 make web     # npm ci (if needed) + vite build into internal/webui/dist
 make web-check  # in web/: tsc, eslint, vitest, generated API types up to date (npm run check)
-make security-host-check  # Python unittest fixtures for the restricted helper; included in make check
+make security-check  # Python unittest fixtures for the security component (fake root, fake commands); included in make check
 ```
 
 Opt-in end-to-end scenarios (a real throwaway user-scope systemd unit, git repositories and the real clock; about 90 s): `LCM_IT_E2E=1 go test ./internal/app -run TestRealScenarios -v -count=1`. Diagnosis: `LCM_PPROF_LISTEN=127.0.0.1:6060` serves pprof (off by default).
@@ -31,7 +31,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 
 | Path | Contents |
 |---|---|
-| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper` and `deploy-helper`, root `host init`/`host apply`/`host allow`/`host upgrade` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
+| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper` and `deploy-helper`, root `host init`/`host apply`/`host allow`/`host upgrade`/`host security` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
 | `internal/app/` | Composition root: builds every component in dependency order, registers resource types, adapters (lock -> catalog, execx -> monitor), the `resource` expression variable, monitor sync, retention jobs, `Run`/`Close` |
 | `internal/config/` | Env and flag configuration, validation, slog setup |
 | `internal/store/` | SQLite handles (writer + reader pool), migrator (including the Go part of the v2 resource migration, `migrate_resources.go`), `storetest.Open(t)` test helper |
@@ -51,12 +51,12 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/runtime/` | Runtime adapters (systemd, docker, compose, command, external, managed over the deploy helper) and `CapabilitiesOf`, the actions a runtime configuration supports |
 | `internal/execx/` | Command execution with bounded lifetime, minimal environment and a `Fake` for tests |
 | `internal/security/` | Bounded security incidents and traffic, operator handling, notification settings and durable Konata outbox |
-| `internal/securityhost/` | Typed preview/apply/query client and durable intent for the independently installed restricted security helper |
+| `internal/securityhost/` | Typed preview/apply/query client and durable intent for the restricted helper of the security component |
 | `internal/deployhelper/` | Restricted root deploy helper (`lcm deploy-helper`: build, install, activate, unit control, ledger) and its sudo client and fake; the protocol reference is `protocol.go` |
 | `internal/monitor/` | Health checks, history, rollups, health aggregation combining checks with native machine/router health, alert ingestion; `alert/` parses Alertmanager, Uptime Kuma, Gatus and generic payloads |
 | `internal/machine/` | Machine resource type: identity, snapshots/minute points, health transitions, journal checkpoints, maintenance and durable operations; `observe/` contains bounded native probes, `power/` the restricted privileged protocol and independent receipts |
 | `internal/router/` | Router resource type: observation loops, native health, durable reboot operations; `xiaomi/` the allowlisted Xiaomi router web API client (`xiaomitest/` simulator) |
-| `internal/hostsetup/` | `lcm host`: host configuration (`/etc/lcm/host.json`), validation before any change, converging steps over an `FS`/`Runner` with in-memory fakes in tests, optional components, installed-vs-embedded status |
+| `internal/hostsetup/` | `lcm host`: host configuration (`/etc/lcm/host.json`), validation before any change, converging steps over an `FS`/`Runner` with in-memory fakes in tests, optional components (the security component through `deploy/security/install.py`), installed-vs-embedded status |
 | `internal/connection/` | Host connections file (`LCM_CONNECTIONS_FILE`): strict loading, validation, secret references; documents can name but not widen a connection |
 | `internal/maintenance/` | Common local write gate held across resource/service/config-sync writes and persisted across machine maintenance; shared by all components in the controller |
 | `internal/trigger/` | `trigger.*` nodes and the manager running signal, git, cron and webhook watchers |
@@ -74,7 +74,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `web/` | React 19 + TypeScript + Vite console; `src/api` (generated types, client, SSE), `src/policy` (YAML/graph logic), `src/pages`, `src/strings.ts` (all UI text) |
 | `internal/templates/` | Built-in policy templates: descriptors and the renderer over `examples/templates/*.yaml` (embedded through the data-only `examples` package) |
 | `internal/buildinfo/` | Version metadata |
-| `deploy/` | Host installation files, embedded through the data-only `deploy.go` and installed by `lcm host apply`: `bootstrap.sh` (root wrapper of `lcm host init`/`apply`), `seed.sh`, `uninstall.sh`, `self-install` (the only sudo command of the `lcm` account), unit, env, sudoers and the self-deploy documents; tested by `internal/app/deploy_test.go`, opt-in end-to-end `LCM_IT_SELFDEPLOY=1 go test ./internal/app -run TestRealSelfDeploy` |
+| `deploy/` | Host installation files, embedded through the data-only `deploy.go` and installed by `lcm host apply`: `bootstrap.sh` (root wrapper of `lcm host init`/`apply`), `seed.sh`, `uninstall.sh`, `self-install` (the only sudo command of the `lcm` account), unit, env, sudoers, the self-deploy documents and `security/` (the optional security component's installer, collector and helper); tested by `internal/app/deploy_test.go`, opt-in end-to-end `LCM_IT_SELFDEPLOY=1 go test ./internal/app -run TestRealSelfDeploy` |
 | `docs/` | `roadmap.md` (Traditional Chinese long-term priorities/status), `resources.md` (shared Resource model, connections, routers), `services.md` (service behavior), `machines.md` (local machine monitoring/control/recovery), `policies.md` (policies/templates/Git), `architecture.md` (components/security), `operations.md` (install, helper readiness, router connections, self-deploy, backup, upgrade) |
 
 See the README status for planned capabilities; export is currently the way back to git.
