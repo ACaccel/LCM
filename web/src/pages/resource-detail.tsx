@@ -16,6 +16,7 @@ import { s } from "../strings";
 import { ActionDialog } from "./resource/action-dialog";
 import { ChecksTab } from "./resource/checks";
 import { ConfigTab, resourceRef } from "./resource/config-tab";
+import { BackupsTab } from "./resource/backups";
 import { DeploymentsTab } from "./resource/deployments";
 import { MachineOperationsTab, MachinePowerHost } from "./resource/machine/controls";
 import { OverviewTab } from "./resource/overview";
@@ -28,7 +29,7 @@ import { RouterOperationsTab, RouterPowerHost } from "./resource/router";
 export type Tab = keyof typeof s.resource.tabs;
 
 const TYPE_TABS: Record<ResourceTypeName, Tab[]> = {
-  service: ["deployments"],
+  service: ["deployments", "backups"],
   machine: ["maintenance"],
   router: ["operations"],
 };
@@ -42,11 +43,12 @@ export function tabsFor(type: ResourceTypeName): Tab[] {
   return ["overview", ...TYPE_TABS[type], "checks", "timeline", "policies", "relations", "config"];
 }
 
-const SERVICE_ACTIONS: readonly ActionName[] = ["start", "stop", "restart", "backup", "run-job", "rollback", "deploy"];
+const SERVICE_ACTIONS: readonly ActionName[] = ["start", "stop", "restart", "backup", "restore", "run-job", "rollback", "deploy"];
 
 interface Pending {
   action: ActionName;
   version?: string;
+  backupId?: string;
 }
 
 /**
@@ -202,6 +204,9 @@ function Detail({ detail, tab, power }: { detail: ResourceDetail; tab: string | 
           onDeploy={(version) => setPending({ action: "deploy", version })}
         />
       )}
+      {active === "backups" && (
+        <BackupsTab resource={selector} canRestore={!archived && detail.actions.some((a) => a.name === "restore" && a.available)} onRestore={(backupId) => setPending({ action: "restore", backupId })} />
+      )}
       {active === "maintenance" && power && <MachineOperationsTab resource={detail} selector={selector} power={power} />}
       {active === "operations" && power && <RouterOperationsTab resource={detail} selector={selector} power={power} />}
       {active === "checks" && <ChecksTab resource={selector} />}
@@ -212,7 +217,7 @@ function Detail({ detail, tab, power }: { detail: ResourceDetail; tab: string | 
       {active === "relations" && <RelationsTab detail={detail} />}
       {active === "config" && <ConfigTab detail={detail} />}
 
-      {pending && <ActionDialog resource={detail.name} action={pending.action} version={pending.version} jobs={jobs} onClose={() => setPending(null)} />}
+      {pending && <ActionDialog resource={detail.name} action={pending.action} version={pending.version} backupId={pending.backupId} jobs={jobs} onClose={() => setPending(null)} />}
     </div>
   );
 }

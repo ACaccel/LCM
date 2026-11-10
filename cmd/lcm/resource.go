@@ -27,8 +27,9 @@ const resourceUsage = `Usage: lcm resource <command> <name> [args] [flags]
 
 Commands:
   action <name> <action>      Run a service action (deploy, rollback, start, stop,
-                              restart, backup, run-job); --version <commit> (deploy),
-                              --job <job> (run-job), --dry-run, --wait
+                              restart, backup, restore, run-job); --version <commit>
+                              (deploy), --job <job> (run-job), --backup-id <id>
+                              (restore; the newest set when omitted), --dry-run, --wait
   observe <name>              Collect a read-only observation (machine, router)
   history | events <name>     Read a page of observations or events (--limit, --cursor);
                               history also takes --from, --to (RFC 3339) and --step
@@ -48,7 +49,7 @@ Commands:
                               dependency order (dependents first for stop); stops
                               at the first failure; --dry-run, --wait
 
-A disruptive action (stop, restart, deploy, rollback, run-job, retiring a
+A disruptive action (stop, restart, deploy, rollback, restore, run-job, retiring a
 service, reboot, shutdown) on a resource other managed resources depend on or
 are controlled through prints that impact first. On a terminal, answering y
 accepts it. Without a terminal, and with --yes, the command is refused unless
@@ -86,6 +87,7 @@ type resourceFlags struct {
 	cursor    string
 	format    string
 	job       string
+	backupID  string
 	dryRun    bool
 	wait      bool
 	ackImpact bool
@@ -113,6 +115,7 @@ func (a *app) resource(ctx context.Context, args []string) error {
 	fs.StringVar(&f.step, "step", "", "history only: keep the newest snapshot of each interval of this length, a duration of at least 1s such as 5m or 1h")
 	fs.StringVar(&f.format, "o", "json", "output format: json or yaml")
 	fs.StringVar(&f.job, "job", "", "name of the job to run (action run-job only)")
+	fs.StringVar(&f.backupID, "backup-id", "", "backup set to restore (action restore only), the newest when omitted")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "show the plan of an action without performing it")
 	fs.BoolVar(&f.wait, "wait", false, "wait for an action to finish; exits with status 1 when it failed")
 	fs.BoolVar(&f.ackImpact, "acknowledge-impact", false, "accept the impact on dependents and control dependents of a disruptive action")
@@ -581,6 +584,9 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 	}
 	if f.job != "" {
 		body["job"] = f.job
+	}
+	if f.backupID != "" {
+		body["backupId"] = f.backupID
 	}
 	if f.ackImpact {
 		body["acknowledgeImpact"] = true

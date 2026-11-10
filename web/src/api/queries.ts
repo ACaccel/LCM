@@ -21,6 +21,7 @@ export const qk = {
   resourceSeries: (ref: string, check: string, windowKey: string) => ["resource", ref, "series", check, windowKey] as const,
   resourceSummary: (ref: string, window: string) => ["resource", ref, "summary", window] as const,
   resourceDeployments: (ref: string) => ["resource", ref, "deployments"] as const,
+  resourceBackups: (ref: string) => ["resource", ref, "backups"] as const,
   resourceVersions: (ref: string) => ["resource", ref, "versions"] as const,
   resourceVersion: (ref: string, v: number) => ["resource", ref, "version", v] as const,
   resourceYaml: (ref: string, version: number) => ["resource", ref, "yaml", version] as const,
@@ -174,6 +175,12 @@ export const deploymentsQuery = (ref: string) =>
   queryOptions({
     queryKey: qk.resourceDeployments(ref),
     queryFn: () => unwrap(client.GET("/resources/{resource}/deployments", { params: { path: { resource: ref }, query: { limit: 100 } } })),
+  });
+
+export const backupsQuery = (ref: string) =>
+  queryOptions({
+    queryKey: qk.resourceBackups(ref),
+    queryFn: () => unwrap(client.GET("/resources/{resource}/backups", { params: { path: { resource: ref }, query: { limit: 100 } } })),
   });
 
 export const resourceVersionsQuery = (ref: string) =>

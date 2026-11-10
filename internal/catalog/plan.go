@@ -56,7 +56,17 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 		if cfg.Backup == nil {
 			return Plan{}, ErrNoBackup
 		}
+		if cfg.Backup.Typed() {
+			p.add(typedBackupSteps(cfg.Backup)...)
+			break
+		}
 		p.add(message.New("step.backup", "run backup command: "+cfg.Backup.Command, "command", cfg.Backup.Command))
+	case ActionRestore:
+		steps, err := m.restoreSteps(ctx, rec, opts.BackupID)
+		if err != nil {
+			return Plan{}, err
+		}
+		p.add(steps...)
 	case ActionRunJob:
 		job, ok := cfg.Jobs[opts.Job]
 		if !ok {

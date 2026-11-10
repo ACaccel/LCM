@@ -34,8 +34,8 @@ func TestDecodeRequest(t *testing.T) {
 	for in, want := range map[string]string{
 		`{"version":2,"op":"query",` + opID + `}`:                                                                                             "unsupported protocol version",
 		`{"version":1,"op":"deploy",` + opID + `}`:                                                                                            `unknown op "deploy"`,
-		`{"version":1,"op":"backup",` + opID + `,"service":"web"}`:                                                                            "reserved for a later version",
-		`{"version":1,"op":"restore",` + opID + `}`:                                                                                           "reserved for a later version",
+		`{"version":1,"op":"backup",` + opID + `,"service":"web"}`:                                                                            "timeoutSec must be between",
+		`{"version":1,"op":"restore",` + opID + `}`:                                                                                           "service names must match",
 		`{"version":1,"op":"query","operationId":"0B7C4A1E-3F2D-4C5B-9A8E-123456789ABC"}`:                                                     "lower-case UUID",
 		`{"version":1,"op":"query"}`:                                                                                                          "lower-case UUID",
 		`{"version":1,"op":"query",` + opID + `,"service":"web"}`:                                                                             "query does not take service",

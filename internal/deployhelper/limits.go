@@ -35,12 +35,15 @@ type Limits struct {
 	// limit too.
 	MaxDepth       int
 	MeasureTimeout time.Duration
+	// BackupBytes bounds the artifacts of one backup set. MaxEntries also
+	// bounds the entries of a file archive.
+	BackupBytes int64
 }
 
 var defaultLimits = Limits{
 	MaxBytes: 16 << 30, MaxEntries: 2_000_000, CacheBytes: 4 << 30,
 	MinFreeBytes: 2 << 30, StopFreeBytes: 512 << 20, MinFreeInodes: 100_000, StopFreeInodes: 20_000,
-	Interval: 10 * time.Second, MaxDepth: 256, MeasureTimeout: 30 * time.Second,
+	Interval: 10 * time.Second, MaxDepth: 256, MeasureTimeout: 30 * time.Second, BackupBytes: 32 << 30,
 }
 
 func (l Limits) withDefaults() Limits {
@@ -74,6 +77,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MeasureTimeout > 0 {
 		d.MeasureTimeout = l.MeasureTimeout
+	}
+	if l.BackupBytes > 0 {
+		d.BackupBytes = l.BackupBytes
 	}
 	return d
 }

@@ -29,6 +29,7 @@ var actionRisks = map[string]string{
 	ActionDeploy:   resource.RiskDisruptive,
 	ActionRollback: resource.RiskDisruptive,
 	ActionBackup:   resource.RiskReversible,
+	ActionRestore:  resource.RiskDisruptive,
 	ActionRunJob:   resource.RiskDisruptive,
 }
 

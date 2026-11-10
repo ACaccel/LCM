@@ -10,6 +10,7 @@ import (
 	"github.com/ACaccel/lcm/internal/clock"
 	"github.com/ACaccel/lcm/internal/engine"
 	"github.com/ACaccel/lcm/internal/resource"
+	"github.com/ACaccel/lcm/internal/selfbackup"
 )
 
 // reconcileInterval is how often lifecycle states are compared with what
@@ -59,12 +60,32 @@ func every(ctx context.Context, clk clock.Clock, interval time.Duration, kick <-
 	}
 }
 
+// selfBackupDirName is the directory of LCM's own backups inside the data
+// directory, and selfBackupInterval the shortest time between two of them:
+// a backup about once a day, whenever the retention loop first finds the
+// last one older.
+const (
+	selfBackupDirName  = "backups"
+	selfBackupInterval = 23 * time.Hour
+)
+
 // retentionJobs deletes expired data. Each job reports how many rows it
 // removed; failures are logged and retried at the next interval.
 func (a *App) retentionJobs(ctx context.Context) {
 	actorCtx := auth.WithActor(ctx, auth.Actor{Kind: auth.KindSystem, ID: "security", Name: "security"})
 	if err := a.Security.Prune(actorCtx); err != nil && ctx.Err() == nil {
 		a.log.Warn("security retention failed", "error", err)
+	}
+	if a.SelfBackup != nil {
+		switch res, err := a.SelfBackup.Run(ctx); {
+		case errors.Is(err, selfbackup.ErrTooSoon):
+		case err != nil:
+			if ctx.Err() == nil {
+				a.log.Warn("self backup failed", "error", err)
+			}
+		default:
+			a.log.Info("self backup made", "backup", res.BackupID, "bytes", res.Size, "removed", len(res.Pruned))
+		}
 	}
 	jobs := []struct {
 		name string
@@ -86,6 +107,9 @@ func (a *App) retentionJobs(ctx context.Context) {
 		}},
 		{"deployments", func(ctx context.Context) (int64, error) {
 			return a.Catalog.PruneDeployments(ctx, a.Config.DeploymentKeep)
+		}},
+		{"backup records", func(ctx context.Context) (int64, error) {
+			return a.Catalog.PruneBackupRows(ctx, a.Config.TimelineRetention)
 		}},
 		{"action completions", func(ctx context.Context) (int64, error) {
 			return a.Catalog.PruneCompletions(ctx, a.Config.RunRetentionAge)

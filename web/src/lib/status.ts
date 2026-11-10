@@ -1,5 +1,5 @@
 import type { Severity } from "../api/security";
-import type { Action, CheckStatus, Deployment, Health, NodeStatus, PolicySummary, ResourcePhase, RouterSnapshot, RouterStatus, RunStatus, TimelineEntry } from "../api/types";
+import type { Action, Backup, CheckStatus, Deployment, Health, NodeStatus, PolicySummary, ResourcePhase, RouterSnapshot, RouterStatus, RunStatus, TimelineEntry } from "../api/types";
 import { s, sec } from "../strings";
 import { timelineField } from "./timeline";
 
@@ -125,6 +125,10 @@ const deploymentGlyph: Record<Deployment["outcome"], Glyph> = {
 };
 export function deploymentOutcomeView(outcome: Deployment["outcome"]): StatusView {
   return { ...deploymentGlyph[outcome], label: s.deployments.outcomes[outcome] };
+}
+
+export function backupOutcomeView(outcome: Backup["outcome"]): StatusView {
+  return { ...deploymentGlyph[outcome], label: s.backups.outcomes[outcome] };
 }
 
 const actionGlyph: Record<Action["status"], StatusView> = {

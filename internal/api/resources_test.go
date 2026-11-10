@@ -38,7 +38,7 @@ func TestResourceCRUDAndVersions(t *testing.T) {
 		m := a.(map[string]any)
 		actions[m["name"].(string)] = m
 	}
-	if len(actions) != 10 || actions["start"]["available"] != true || actions["deploy"]["reason"] != "notConfigured" ||
+	if len(actions) != 11 || actions["start"]["available"] != true || actions["deploy"]["reason"] != "notConfigured" ||
 		actions["retire"]["kind"] != "phase" || actions["resume"]["available"] != false || actions["stop"]["risk"] != "disruptive" ||
 		actions["restart"]["policy"] != true {
 		t.Fatalf("actions = %v", d["actions"])
@@ -162,7 +162,7 @@ func TestResourceTypes(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	if got := names(svc); got != "start,stop,restart,deploy,rollback,backup,run-job,retire,resume,unmanage" {
+	if got := names(svc); got != "start,stop,restart,deploy,rollback,backup,restore,run-job,retire,resume,unmanage" {
 		t.Fatalf("service actions = %s", got)
 	}
 	if got := names(mach); !strings.Contains(got, "reboot") || !strings.Contains(got, "observe") {

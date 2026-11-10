@@ -122,6 +122,7 @@ func TestInvalidValues(t *testing.T) {
 		{"zero timeline retention", nil, []string{"--timeline-retention", "0s"}, "timeline retention"},
 		{"zero run keep", nil, []string{"--run-retention-keep", "0"}, "run retention keep"},
 		{"zero deployment keep", map[string]string{EnvDeploymentKeep: "0"}, nil, "deployment retention keep"},
+		{"negative self backup keep", map[string]string{EnvSelfBackupKeep: "-1"}, nil, "self backup keep"},
 		{"zero version keep", map[string]string{EnvVersionKeep: "0"}, nil, "version retention keep"},
 		{"bad version keep", map[string]string{EnvVersionKeep: "many"}, nil, EnvVersionKeep},
 		{"zero operation retention", nil, []string{"--operation-retention", "0s"}, "operation retention"},
@@ -218,7 +219,7 @@ func TestComponentSettings(t *testing.T) {
 		EnvMonitorConcurrency: "2", EnvMonitorRawRetention: "24h", EnvMonitorRollupRetention: "48h",
 		EnvAlertResourceLabels: "svc, app ,", EnvTimelineRetention: "720h", EnvRunRetentionKeep: "5",
 		EnvRunRetentionAge: "48h", EnvDeploymentKeep: "7", EnvPruneInterval: "10m", EnvGitHubWebhookSecret: "gh-hook",
-		EnvVersionKeep: "9", EnvOperationRetention: "240h", EnvFailedLoginKeep: "30",
+		EnvVersionKeep: "9", EnvOperationRetention: "240h", EnvFailedLoginKeep: "30", EnvSelfBackupKeep: "3",
 	}, "--git", "/usr/bin/git", "--alert-resource-labels", "a,b")
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +242,7 @@ func TestComponentSettings(t *testing.T) {
 	if c.LockTTL != 30*time.Minute || c.MonitorConcurrency != 2 || c.RunRetentionKeep != 5 || c.DeploymentKeep != 7 || c.PruneInterval != 10*time.Minute {
 		t.Errorf("values: %+v", c)
 	}
-	if c.VersionKeep != 9 || c.OperationRetention != 240*time.Hour || c.FailedLoginKeep != 30 {
+	if c.VersionKeep != 9 || c.OperationRetention != 240*time.Hour || c.FailedLoginKeep != 30 || c.SelfBackupKeep != 3 {
 		t.Errorf("retention: %+v", c)
 	}
 

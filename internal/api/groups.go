@@ -174,6 +174,9 @@ func (s *Server) handleGroupAction(w http.ResponseWriter, r *http.Request) {
 	case !slices.Contains(catalog.Actions, action):
 		writeFieldError(w, "action", "must be a service lifecycle action: "+strings.Join(catalog.Actions, ", "))
 		return
+	case action == catalog.ActionRestore:
+		writeFieldError(w, "action", "a restore replaces the data of one service and names its backup, so it cannot run in a group")
+		return
 	case req.Params.Version != "" && action != catalog.ActionDeploy:
 		writeFieldError(w, "params.version", "only deploy accepts a version")
 		return

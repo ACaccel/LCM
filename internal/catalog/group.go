@@ -39,6 +39,8 @@ func (m *Manager) Do(ctx context.Context, name, action string, opts ActionOption
 		return m.Restart(ctx, name, opts)
 	case ActionBackup:
 		return m.Backup(ctx, name, opts)
+	case ActionRestore:
+		return m.Restore(ctx, name, opts)
 	case ActionRunJob:
 		return m.RunJob(ctx, name, opts)
 	}
@@ -90,6 +92,9 @@ var ErrEmptyGroup = precondition("catalog: no managed service matches the select
 func (m *Manager) PlanGroup(ctx context.Context, req GroupRequest) (Group, error) {
 	if !slices.Contains(Actions, req.Action) {
 		return Group{}, fmt.Errorf("%w: group actions run lifecycle actions only, not %q", ErrPrecondition, req.Action)
+	}
+	if req.Action == ActionRestore {
+		return Group{}, fmt.Errorf("%w: a restore replaces the data of one service and names its backup, so it never runs in a group", ErrPrecondition)
 	}
 	recs, err := m.cat.res.List(ctx, resource.Filter{Type: model.ResourceService, Labels: req.Labels})
 	if err != nil {

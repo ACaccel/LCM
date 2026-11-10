@@ -30,6 +30,7 @@ type fakeDeployHelper struct {
 	runtimes map[string][]string
 	releases []deployhelper.Release
 	current  string
+	sets     []deployhelper.BackupInfo
 }
 
 func newFakeDeployHelper() *fakeDeployHelper {
@@ -65,6 +66,26 @@ func (f *fakeDeployHelper) handle(req deployhelper.Request) (deployhelper.Respon
 		resp.Unit = &deployhelper.UnitStatus{LoadState: "loaded", ActiveState: "active", SubState: "running", Release: f.current}
 	case deployhelper.OpReleases:
 		resp.Releases = append([]deployhelper.Release{}, f.releases...)
+	case deployhelper.OpBackup:
+		info := deployhelper.BackupInfo{BackupID: id, Kind: deployhelper.KindBackup, CreatedAt: 1000 + int64(f.n), Size: 512, Mode: req.Mode,
+			ManifestSHA256: fmt.Sprintf("%064x", f.n), Sources: req.Sources}
+		f.sets = append(f.sets, info)
+		resp.Backup = &deployhelper.BackupResult{BackupID: id, ManifestSHA256: info.ManifestSHA256, Size: info.Size, Files: len(req.Sources), CreatedAt: info.CreatedAt}
+	case deployhelper.OpRestore:
+		i := slices.IndexFunc(f.sets, func(b deployhelper.BackupInfo) bool { return b.BackupID == req.BackupID })
+		if i < 0 {
+			resp.Code, resp.Message = deployhelper.CodeNotFound, "there is no backup "+req.BackupID
+			return resp, &deployhelper.Error{Code: resp.Code, Message: resp.Message}
+		}
+		pre := "pre-restore-" + id
+		f.sets = append(f.sets, deployhelper.BackupInfo{BackupID: pre, Kind: deployhelper.KindPreRestore, CreatedAt: 1000 + int64(f.n), Size: 256,
+			ManifestSHA256: fmt.Sprintf("%064x", f.n), Sources: f.sets[i].Sources, RestoredFrom: req.BackupID})
+		resp.Restore = &deployhelper.RestoreResult{BackupID: req.BackupID, PreRestoreID: pre, Restored: []string{"files media"}, Skipped: []string{}, Started: true}
+	case deployhelper.OpBackups:
+		resp.Backups = slices.Clone(f.sets)
+		slices.Reverse(resp.Backups)
+	case deployhelper.OpPrune:
+		resp.Prune = &deployhelper.PruneResult{Removed: []string{}, Kept: len(f.sets)}
 	}
 	return resp, nil
 }

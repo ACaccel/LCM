@@ -47,7 +47,9 @@ var (
 	ErrSourceInWorkDir  = precondition("catalog: source.url points into LCM's build directory; set it to the repository the checkout was cloned from")
 	ErrInvalidVersion   = precondition("catalog: version must be a commit sha of 7 to 64 hex digits")
 	ErrNoRollbackTarget = precondition("catalog: no earlier successful deployment to roll back to")
-	ErrNoBackup         = precondition("catalog: service has no backup command")
+	ErrNoBackup         = precondition("catalog: service has no backup configured")
+	ErrNoRestore        = precondition("catalog: service has no typed backup with a source that can be restored")
+	ErrUnknownBackup    = precondition("catalog: no such backup of this service, or retention removed it")
 	ErrUnknownJob       = precondition("catalog: service has no such job")
 	ErrUnsupported      = precondition("catalog: the service's runtime cannot perform this action")
 	// ErrHelperUnavailable refuses the actions of a managed service while
@@ -99,6 +101,9 @@ type ManagerConfig struct {
 	// Deploy is the deploy helper that builds, installs and runs managed
 	// services; nil when it is not installed, which refuses their actions.
 	Deploy rt.DeployHelper
+	// RestoreSettle is how long a restored service gets to become active
+	// before the restore is undone; default 15s, negative checks at once.
+	RestoreSettle time.Duration
 }
 
 // Forgetter drops the monitor state of a resource; *monitor.Monitor
@@ -119,6 +124,7 @@ type Manager struct {
 	workDir  string
 	monitor  Forgetter
 	deploy   rt.DeployHelper
+	settle   time.Duration
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
@@ -135,7 +141,10 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	m := &Manager{
 		cat: cfg.Catalog, runtimes: cfg.Runtimes, runner: cfg.Runner, locker: cfg.Locker,
 		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, monitor: cfg.Monitor, deploy: cfg.Deploy,
-		inflight: map[string]struct{}{},
+		settle: cfg.RestoreSettle, inflight: map[string]struct{}{},
+	}
+	if m.settle == 0 {
+		m.settle = 15 * time.Second
 	}
 	if m.log == nil {
 		m.log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -175,6 +184,9 @@ type ActionOptions struct {
 	Version string
 	// Job names the job to run. RunJob only.
 	Job string
+	// BackupID is the backup set to restore; empty means the newest.
+	// Restore only.
+	BackupID string
 }
 
 // ActionResult describes a finished action. Fields are camelCase JSON so
@@ -189,6 +201,10 @@ type ActionResult struct {
 	PreviousVersion string `json:"previousVersion,omitempty"`
 	DeploymentID    int64  `json:"deploymentId,omitempty"`
 	DurationMs      int64  `json:"durationMs"`
+	// BackupID is the set a backup made or a restore restored, and
+	// PreRestoreID the copy the restore took of the data it replaced.
+	BackupID     string `json:"backupId,omitempty"`
+	PreRestoreID string `json:"preRestoreId,omitempty"`
 	// Output is the tail of a backup or job command's output.
 	Output string `json:"output,omitempty"`
 	// Replayed is true when the result was returned for a repeated
@@ -462,6 +478,12 @@ func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOpti
 	if opts.Job != "" {
 		details["job"] = opts.Job
 	}
+	if res.BackupID != "" {
+		details["backupId"] = res.BackupID
+	}
+	if res.PreRestoreID != "" {
+		details["preRestoreId"] = res.PreRestoreID
+	}
 	if opts.RunID != "" {
 		details["runId"] = opts.RunID
 	}
@@ -552,6 +574,12 @@ func (m *Manager) timelineAction(ctx context.Context, s *session, res *ActionRes
 	}
 	if res.Output != "" {
 		data["output"] = res.Output
+	}
+	if res.BackupID != "" {
+		data["backupId"] = res.BackupID
+	}
+	if res.PreRestoreID != "" {
+		data["preRestoreId"] = res.PreRestoreID
 	}
 	summary := s.action + " " + outcome
 	if s.opts.Job != "" {

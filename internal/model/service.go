@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"slices"
@@ -70,7 +71,7 @@ type ServiceConfig struct {
 	KeepReleases int      `yaml:"keepReleases,omitempty" json:"keepReleases,omitempty"`
 
 	Source *Source            `yaml:"source,omitempty" json:"source,omitempty"`
-	Backup *Command           `yaml:"backup,omitempty" json:"backup,omitempty"`
+	Backup *Backup            `yaml:"backup,omitempty" json:"backup,omitempty"`
 	Jobs   map[string]Command `yaml:"jobs,omitempty" json:"jobs,omitempty"`
 }
 
@@ -161,6 +162,100 @@ func (c Command) EffectiveTimeout() time.Duration {
 	return c.Timeout.D()
 }
 
+// Backup says how a service is backed up: either by a shell command (every
+// adapter but managed) or by typed sources that the deploy helper backs up
+// and restores (managed only). The two forms exclude each other.
+type Backup struct {
+	// Command and Timeout are the command form.
+	Command string   `yaml:"command,omitempty" json:"command,omitempty"`
+	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// Sources, Mode and Keep are the typed form. Timeout also bounds the
+	// producing process of a typed backup.
+	Sources []BackupSource `yaml:"sources,omitempty" json:"sources,omitempty"`
+	Mode    string         `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Keep    *BackupKeep    `yaml:"keep,omitempty" json:"keep,omitempty"`
+}
+
+// Backup source types and modes of the typed form.
+const (
+	BackupFiles    = "files"
+	BackupSQLite   = "sqlite"
+	BackupPostgres = "postgres"
+	BackupMongoDB  = "mongodb"
+	BackupCommand  = "command"
+
+	BackupOnline  = "online"
+	BackupStopped = "stopped"
+)
+
+// BackupSource is one thing to back up. Paths are relative to the service's
+// data directory (/var/lib/<name>); argv names a program of the current
+// release. Each type takes only its own fields.
+type BackupSource struct {
+	Type     string   `yaml:"type" json:"type"`
+	Path     string   `yaml:"path,omitempty" json:"path,omitempty"`
+	Database string   `yaml:"database,omitempty" json:"database,omitempty"`
+	Users    bool     `yaml:"users,omitempty" json:"users,omitempty"`
+	Argv     []string `yaml:"argv,omitempty" json:"argv,omitempty"`
+}
+
+// BackupKeep is the retention of a typed backup: the newest set of each of
+// the last Daily days and Weekly weeks that have one.
+type BackupKeep struct {
+	Daily  int `yaml:"daily,omitempty" json:"daily,omitempty"`
+	Weekly int `yaml:"weekly,omitempty" json:"weekly,omitempty"`
+}
+
+// Defaults and bounds of the typed form.
+const (
+	DefaultKeepDaily  = 7
+	DefaultKeepWeekly = 4
+	MaxKeepDaily      = 366
+	MaxKeepWeekly     = 260
+	MaxBackupSources  = 16
+	// MaxBackupTimeout bounds timeout of a typed backup.
+	MaxBackupTimeout = Duration(2 * time.Hour)
+)
+
+// Typed reports whether the backup uses sources instead of a command.
+func (b Backup) Typed() bool { return len(b.Sources) > 0 }
+
+// EffectiveTimeout returns the timeout, defaulting to DefaultCommandTimeout.
+func (b Backup) EffectiveTimeout() time.Duration {
+	if b.Timeout == 0 {
+		return DefaultCommandTimeout.D()
+	}
+	return b.Timeout.D()
+}
+
+// EffectiveMode returns the mode of a typed backup, defaulting to online.
+func (b Backup) EffectiveMode() string {
+	if b.Mode == "" {
+		return BackupOnline
+	}
+	return b.Mode
+}
+
+// EffectiveKeep returns the retention of a typed backup; without keep it is
+// seven days and four weeks.
+func (b Backup) EffectiveKeep() BackupKeep {
+	if b.Keep == nil || (b.Keep.Daily == 0 && b.Keep.Weekly == 0) {
+		return BackupKeep{Daily: DefaultKeepDaily, Weekly: DefaultKeepWeekly}
+	}
+	return *b.Keep
+}
+
+// Restorable reports whether a typed backup has a source that a restore
+// puts back: command output has no restore.
+func (b Backup) Restorable() bool {
+	for _, s := range b.Sources {
+		if s.Type != BackupCommand {
+			return true
+		}
+	}
+	return false
+}
+
 // Limits on service configs.
 const (
 	MaxJobs    = 50
@@ -189,6 +284,14 @@ func (c *ServiceConfig) normalize(adapter string) {
 	if RuntimeType(adapter) == RuntimeManaged && len(c.Artifact) > 1 {
 		c.Artifact = strings.TrimSuffix(c.Artifact, "/")
 	}
+	// The same for the paths of file sources.
+	if c.Backup != nil {
+		for i, src := range c.Backup.Sources {
+			if (src.Type == BackupFiles || src.Type == BackupSQLite) && len(src.Path) > 1 {
+				c.Backup.Sources[i].Path = strings.TrimSuffix(src.Path, "/")
+			}
+		}
+	}
 }
 
 func (c *ServiceConfig) validate(adapter string, base string, is *Issues) {
@@ -198,7 +301,7 @@ func (c *ServiceConfig) validate(adapter string, base string, is *Issues) {
 		validateSource(c.Source, base+".source", is)
 	}
 	if c.Backup != nil {
-		validateCommand(*c.Backup, base+".backup", is)
+		validateBackup(c.Backup, RuntimeType(adapter), base+".backup", is)
 	}
 	if len(c.Jobs) > MaxJobs {
 		is.addf(base+".jobs", "at most %d jobs are allowed", MaxJobs)
@@ -384,6 +487,100 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 	}
 	if src.Timeout > MaxManagedBuildTimeout {
 		is.addf(base+".source.timeout", "must be at most %s for adapter managed", MaxManagedBuildTimeout.D())
+	}
+}
+
+var backupDBRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,62}$`)
+
+// validateBackup checks the form of a backup. Whether the host can run it
+// (a backup directory, the tools of a database) is the deploy helper's to
+// check when the backup runs.
+func validateBackup(b *Backup, adapter RuntimeType, base string, is *Issues) {
+	if !b.Typed() {
+		for name, set := range map[string]bool{"mode": b.Mode != "", "keep": b.Keep != nil} {
+			if set {
+				is.addf(base+"."+name, "needs sources: it belongs to the typed form of backup")
+			}
+		}
+		if adapter == RuntimeManaged {
+			is.addf(base+".sources", "is required for adapter managed: the deploy helper backs up the sources you name; the command form is not available")
+			return
+		}
+		validateCommand(Command{Command: b.Command, Timeout: b.Timeout}, base, is)
+		return
+	}
+	if b.Command != "" {
+		is.addf(base+".command", "cannot be combined with sources: use either the command form or the typed form")
+	}
+	if adapter != RuntimeManaged {
+		is.addf(base+".sources", "are only valid for adapter managed: the deploy helper backs up the data directory of a managed service")
+	}
+	switch {
+	case b.Timeout < 0:
+		is.addf(base+".timeout", "must not be negative")
+	case b.Timeout > MaxBackupTimeout:
+		is.addf(base+".timeout", "must be at most %s", MaxBackupTimeout.D())
+	}
+	switch b.Mode {
+	case "", BackupOnline, BackupStopped:
+	default:
+		is.addf(base+".mode", "must be %s or %s", BackupOnline, BackupStopped)
+	}
+	if k := b.Keep; k != nil {
+		switch {
+		case k.Daily < 0 || k.Daily > MaxKeepDaily:
+			is.addf(base+".keep.daily", "must be between 0 and %d", MaxKeepDaily)
+		case k.Weekly < 0 || k.Weekly > MaxKeepWeekly:
+			is.addf(base+".keep.weekly", "must be between 0 and %d", MaxKeepWeekly)
+		}
+	}
+	if len(b.Sources) > MaxBackupSources {
+		is.addf(base+".sources", "at most %d sources are allowed", MaxBackupSources)
+		return
+	}
+	var paths []string
+	for i, s := range b.Sources {
+		p := fmt.Sprintf("%s.sources[%d]", base, i)
+		allowed := map[string]bool{}
+		switch s.Type {
+		case BackupFiles, BackupSQLite:
+			allowed["path"] = true
+			if !releasePath(s.Path) || s.Path == "." || strings.HasSuffix(path.Base(s.Path), ".lcm-new") {
+				is.addf(p+".path", `must be a path below the data directory, not "." and not absolute: %s`, releasePathRule)
+			} else {
+				paths = append(paths, s.Path)
+			}
+		case BackupPostgres, BackupMongoDB:
+			allowed["database"] = true
+			if !backupDBRe.MatchString(s.Database) {
+				is.addf(p+".database", "must be a database name of letters, digits, _ and -")
+			}
+			if s.Type == BackupMongoDB {
+				allowed["users"] = true
+			}
+		case BackupCommand:
+			allowed["argv"] = true
+			if len(s.Argv) == 0 || !releasePath(s.Argv[0]) || s.Argv[0] == "." {
+				is.addf(p+".argv", "must begin with a release-relative executable: %s", releasePathRule)
+			} else {
+				validateArgs(s.Argv[1:], p+".argv", is)
+			}
+		default:
+			is.addf(p+".type", "must be one of %s, %s, %s, %s, %s", BackupFiles, BackupSQLite, BackupPostgres, BackupMongoDB, BackupCommand)
+			continue
+		}
+		for name, set := range map[string]bool{"path": s.Path != "", "database": s.Database != "", "users": s.Users, "argv": s.Argv != nil} {
+			if set && !allowed[name] {
+				is.addf(p+"."+name, "is not valid for source type %s", s.Type)
+			}
+		}
+	}
+	for i, a := range paths {
+		for _, o := range paths[i+1:] {
+			if a == o || strings.HasPrefix(a, o+"/") || strings.HasPrefix(o, a+"/") {
+				is.addf(base+".sources", "the paths %s and %s overlap", a, o)
+			}
+		}
 	}
 }
 

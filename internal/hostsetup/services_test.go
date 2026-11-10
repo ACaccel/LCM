@@ -68,6 +68,7 @@ func deployHost(t *testing.T) *testHost {
 	th.fs.dir("/srv/inputs/web", 0o755, aliceUID, aliceUID)
 	th.cfg.Components.Deploy = true
 	th.cfg.Runtimes = map[string]string{"node24": "/home/alice/.local/node"}
+	th.cfg.Backup = &Backup{Dir: "/var/backups/lcm"}
 	th.cfg.Services = map[string]ServiceGrant{"web": {Port: 3200, Runtimes: []string{"node24"}, Inputs: map[string]string{"assets": testInput}}}
 	th.writeConfig(th.cfg)
 	return th
@@ -123,7 +124,7 @@ func TestDeployComponentAndGrants(t *testing.T) {
 		perm     fs.FileMode
 		uid, gid int
 	}{
-		{BuildDir, 0o755, 0, 0}, {BuildCacheDir, 0o755, 0, 0}, {DeployLedger, 0o700, 0, 0},
+		{BuildDir, 0o755, 0, 0}, {BuildCacheDir, 0o755, 0, 0}, {DeployLedger, 0o700, 0, 0}, {"/var/backups/lcm", 0o700, 0, 0},
 		{"/var/lib/lcm-build/web", 0o750, 0, build.GID}, {"/var/cache/lcm-build/web", 0o750, build.UID, build.GID},
 		{RuntimesDir, 0o755, 0, 0}, {"/opt/web", 0o755, 0, 0}, {"/opt/web/releases", 0o755, 0, 0},
 		{"/var/lib/web", 0o750, web.UID, web.GID}, {"/etc/web", 0o750, 0, web.GID},
@@ -261,6 +262,7 @@ func TestUntrustedDeploySourcesAreRefused(t *testing.T) {
 		}, "runtimes.node24: link /home/alice/rt/lib -> ../../.. points outside"},
 		"build root of another owner": {func(th *testHost) { th.fs.dir(BuildDir, 0o755, 5, 5) }, "/var/lib/lcm-build is not owned by root"},
 		"ledger of another owner":     {func(th *testHost) { th.fs.dir(DeployLedger, 0o700, 5, 5) }, "/var/lib/lcm-deploy is not owned by root"},
+		"backups of another owner":    {func(th *testHost) { th.fs.dir("/var/backups/lcm", 0o700, 5, 5) }, "/var/backups/lcm is not owned by root"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			th := deployHost(t)

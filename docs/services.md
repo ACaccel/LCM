@@ -20,7 +20,7 @@ spec:
       branch: main
       build: make build
       install: ./install.sh
-    backup: { command: ./backup.sh }   # optional: enables the backup action
+    backup: { command: ./backup.sh }   # optional: enables the backup action (managed services: typed sources, see below)
     jobs:                          # optional: named commands for run-job
       reindex: { command: ./reindex.sh, timeout: 10m }
   checks:
@@ -74,7 +74,7 @@ spec:
 
 The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused, and the managed fields are refused for every other adapter. The helper checks every request again and refuses what the host does not grant; its message is shown as the error of the action.
 
-**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy` and `rollback` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; `backup` and jobs are unaffected. The reason message names the cause (wrapper missing, wrapper not a root-owned file only root can write, or another data directory) and the console shows it. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
+**Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy`, `rollback`, `backup` and `restore` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; jobs are unaffected. The wrapper is checked at every use, so enabling the component needs no restart of LCM. The reason message names the cause (wrapper missing, wrapper not a root-owned file only root can write, or another data directory) and the console shows it. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
 
 ## Source
 
@@ -95,6 +95,42 @@ The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused,
 
 Before storage schema 15 a source named the checkout (`source.repo`) and a remote name (`source.remote`); such documents are refused with an issue naming the field. The [upgrade](operations.md#upgrade-to-service-source-urls-schema-15) rewrites stored documents.
 
+### Backup and restore of managed services
+
+A managed service declares the data to keep instead of a command; the service's repository needs no backup code:
+
+```yaml
+config:
+  backup:
+    sources:
+      - { type: files,    path: media/ }        # a file or directory below /var/lib/<name>
+      - { type: sqlite,   path: app.sqlite }    # a consistent copy, also while the service runs
+      - { type: postgres, database: app }       # pg_dump -Fc as the service account (peer authentication, PG* variables)
+      - { type: mongodb,  database: app, users: true }   # mongodump; users also saves the admin users and roles
+      - { type: command,  argv: [bin/dump, --all] }      # a program of the current release; its standard output is the dump
+    mode: online                                # or stopped: the unit is stopped for the backup and started again
+    timeout: 30m                                # of the producing process, at most 2h
+    keep: { daily: 7, weekly: 4 }               # the default
+```
+
+The command form `backup: {command, timeout}` stays for every other adapter, and `sources` are refused for them; a managed service takes only `sources`. Paths are clean relative paths (no `..`, not absolute, not `.`) and may not overlap; at most 16 sources.
+
+**How a backup runs.** The [deploy helper](operations.md#backups) starts an unprivileged worker as the service's own account in a sandbox like its unit's (data directory read-only, the backup directory hidden, no port to bind, bounded time, memory and file size). Root only moves the finished files into `<backup.dir>/<name>/<id>/`, which only root can enter, writes a `manifest.json` with the size and SHA-256 of every file, and keeps the set read-only to the service. LCM stores the checksum of the manifest. Sources and what each produces:
+
+| Source | Artifact | Notes |
+|---|---|---|
+| `files` | one tar of regular files and directories | Links, devices, sockets and pipes are skipped and counted (`skipped`); group/other write and special mode bits are dropped; ownership is not stored |
+| `sqlite` | `VACUUM INTO` copy, checked with `quick_check` | Needs no `sqlite3` binary. `-wal`, `-shm` and `-journal` files are not part of the copy |
+| `postgres` | `pg_dump -Fc` | `pg_dump` must be installed (`/usr/bin` or `/usr/local/bin`); otherwise the backup fails with that message |
+| `mongodb` | `mongodump --gzip` archive, plus users and roles of `admin` with `users: true` | `MONGODB_URI` in the service's env file is passed as `--uri` |
+| `command` | the program's standard output | Kept, but never restored by LCM: it has no restore command |
+
+After every successful backup LCM asks the helper to apply `keep`: the newest set of each of the last `daily` days and `weekly` weeks (UTC) stays, the newest set always, and the rest is removed; unreadable sets are never removed. The records (`GET /api/v1/resources/{name}/backups`, console tab *備份*) stay for `LCM_TIMELINE_RETENTION` after their set is removed.
+
+**Restore.** `restore` (console: the button of a set on the *備份* tab, or *還原* for the newest) puts a set back: the helper verifies every artifact against the manifest (and LCM sends the checksum it recorded), stops the unit if it is active, copies what the restore will replace to a `pre-restore-…` set (retention keeps it for at least 7 days), replaces the sources and starts the unit again. Files and SQLite databases are extracted next to their target and swapped in; databases are restored with `pg_restore --clean` / `mongorestore --drop` (the database must exist). If the replacement fails the helper puts the pre-restore copy back itself. Otherwise LCM waits `15s` (a service that was running) and checks that the unit is active; if not, it restores the pre-restore set (`ErrRestoreUndone`). To undo a good restore later, restore the pre-restore set named in the result. The service's lifecycle state is not changed by a restore; a service that was stopped stays stopped. A restore is `disruptive` (needs `acknowledgeImpact` like a stop), never runs in a group, and has no policy node: it replaces data and is a decision for a person.
+
+An outcome LCM cannot determine (lost reply, helper still running, interrupted) is recorded as `interrupted` with the operation ID to query; it is never assumed to have succeeded.
+
 ## Lifecycle states and actions
 
 The lifecycle state is what LCM did to the service; health (below) is what the checks observe. The console shows both side by side.
@@ -113,10 +149,11 @@ The lifecycle state is what LCM did to the service; health (below) is what the c
 | `restart` | running, stopped, failed | runtime restart | restart, or start when inactive |
 | `deploy` | registered, running, stopped, failed | `source` | clone `url` into the [build checkout](#source) when it is missing; otherwise refuse if tracked files changed, set `origin` to `url` and `git fetch --prune`; resolve the version (default: head of the branch); `git checkout --detach`; `build`; `install`; restart (skipped when the runtime cannot restart, so `install` must apply the new version). Managed services: [helper steps](#managed-deployments) after the checkout |
 | `rollback` | running, stopped, failed | `source` and an earlier successful deployment | as deploy, to the previous successful commit, without fetching (a missing checkout is cloned). Managed services first try to [switch back to the installed release](#managed-deployments) |
-| `backup` | registered, running, stopped, failed | `backup` | run the command (in the build checkout when the service has a source) |
+| `backup` | registered, running, stopped, failed | `backup` | run the command (in the build checkout when the service has a source); managed services: the [typed backup](#backup-and-restore-of-managed-services) and its retention |
+| `restore` | registered, running, stopped, failed | typed `backup` with a restorable source | [restore](#backup-and-restore-of-managed-services) a set (`--backup-id`, the newest when omitted) |
 | `run-job` | registered, running, stopped, failed | `jobs` | run the named job |
 
-Run an action with `lcm resource action <service> <action> [--version <commit>] [--job <job>] [--dry-run] [--wait]` or `POST /api/v1/resources/{resource}/actions/{action}` (202 and an id for `GET /api/v1/actions/{id}`). Every action takes the lock `resource:<name>`, so actions on one service never overlap, and writes an audit entry and a timeline entry. The action renews its lock every third of `LCM_LOCK_TTL` while it runs, so the TTL only bounds a lock left by a crashed process, not the length of an action. Once the runtime has done the work, the new state is recorded even if the request is cancelled. `?dryRun=true` (console: *預覽*) returns the steps and the [impact](resources.md#relations) without locking or changing anything; `stop`, `restart`, `deploy`, `rollback` and `run-job` on a service that others depend on or are controlled through need `acknowledgeImpact`. Build, install, backup and job commands run with `sh -c`; step timeouts default to 15 minutes (`source.timeout`) and 30 minutes (`timeout` of backup and jobs).
+Run an action with `lcm resource action <service> <action> [--version <commit>] [--job <job>] [--backup-id <id>] [--dry-run] [--wait]` or `POST /api/v1/resources/{resource}/actions/{action}` (202 and an id for `GET /api/v1/actions/{id}`). Every action takes the lock `resource:<name>`, so actions on one service never overlap, and writes an audit entry and a timeline entry. The action renews its lock every third of `LCM_LOCK_TTL` while it runs, so the TTL only bounds a lock left by a crashed process, not the length of an action. Once the runtime has done the work, the new state is recorded even if the request is cancelled. `?dryRun=true` (console: *預覽*) returns the steps and the [impact](resources.md#relations) without locking or changing anything; `stop`, `restart`, `deploy`, `rollback`, `restore` and `run-job` on a service that others depend on or are controlled through need `acknowledgeImpact`. Build, install, backup and job commands run with `sh -c`; step timeouts default to 15 minutes (`source.timeout`) and 30 minutes (`timeout` of backup and jobs).
 
 The resource detail (`GET /api/v1/resources/{name}`) lists each action's availability with a reason: `notConfigured` (the console hides the button), `unsupported`, `helperUnavailable` ([managed services](#managed-services) without the deploy helper), `invalidState`, `notManaged` (retired) or `busy` (the button is disabled and says why). A rollback marked available may still find no target; the dry-run is definitive.
 

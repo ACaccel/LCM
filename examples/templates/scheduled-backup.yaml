@@ -6,6 +6,11 @@
 # to /api/v1/heartbeats/<resource>/<check> with an ingest token when it is
 # done.
 #
+# A managed service with a typed backup (backup.sources) needs no heartbeat:
+# the deploy helper's reply is the confirmation, and the node fails when the
+# backup does. Leave heartbeatCheck empty for it. Retention is the keep rule
+# of the backup, applied after every successful run.
+#
 # The trigger takes its values when the template is instantiated; every
 # other node reads params.*.
 apiVersion: lcm/v2

@@ -92,7 +92,7 @@ func Register(r *node.Registry, a Actions) {
 		"Restarts a service; a stopped service is started.", a.Restart)
 	simple("lifecycle.start", catalog.ActionStart, "Starts a stopped or failed service.", a.Start)
 	simple("lifecycle.stop", catalog.ActionStop, "Stops a service.", a.Stop)
-	simple("lifecycle.backup", catalog.ActionBackup, "Runs the service's backup command.", a.Backup)
+	simple("lifecycle.backup", catalog.ActionBackup, "Runs the service's backup: its command, or the typed backup of a managed service.", a.Backup)
 
 	node.Register(r, node.Spec[DeployProps]{
 		Type: "lifecycle.deploy", Category: Category, Effect: node.EffectWrite, ResourceProp: "resource",

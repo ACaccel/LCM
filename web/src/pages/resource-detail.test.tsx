@@ -61,7 +61,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("type-specific tabs", () => {
   it("puts the panels of each type between the common tabs", () => {
-    expect(tabsFor("service")).toEqual(["overview", "deployments", "checks", "timeline", "policies", "relations", "config"]);
+    expect(tabsFor("service")).toEqual(["overview", "deployments", "backups", "checks", "timeline", "policies", "relations", "config"]);
     expect(tabsFor("machine")).toEqual(["overview", "maintenance", "checks", "timeline", "policies", "relations", "config"]);
     expect(tabsFor("router")).toEqual(["overview", "operations", "checks", "timeline", "policies", "relations", "config"]);
   });

@@ -4,7 +4,7 @@
  * and commit stay in English.
  */
 import type { Category, DetectionState, Incident, Severity, Source } from "./api/security";
-import type { Deployment, NodeStatus, RunStatus } from "./api/types";
+import type { Backup, Deployment, NodeStatus, RunStatus } from "./api/types";
 
 export const s = {
   appName: "LCM",
@@ -225,6 +225,7 @@ export const s = {
     tabs: {
       overview: "總覽",
       deployments: "部署",
+      backups: "備份",
       operations: "操作",
       maintenance: "維護與操作",
       checks: "檢查",
@@ -362,6 +363,7 @@ export const s = {
     stop: "停止",
     restart: "重啟",
     backup: "備份",
+    restore: "還原",
     "run-job": "執行作業",
     observe: "立即觀測",
     "maintenance-enter": "進入維護",
@@ -376,6 +378,8 @@ export const s = {
   action: {
     versionLabel: "版本 (commit，留空表示設定分支的最新)",
     jobLabel: "作業名稱",
+    backupLabel: "要還原的備份",
+    backupNewest: "最新的備份",
     preview: "預覽 (dry-run)",
     previewing: "預覽中…",
     planTitle: "將執行的步驟",
@@ -469,6 +473,23 @@ export const s = {
     previous: "前一版",
     successRate: "成功率",
     log: "紀錄摘要",
+  },
+  backups: {
+    title: "備份",
+    help: "備份由 deploy helper 以服務自己的帳號在沙箱中產生，存放在只有 root 能進入的備份目錄；還原前會先把目前的資料複製成「還原前副本」，還原失敗或服務沒有恢復執行時會自動換回。",
+    empty: "尚無備份紀錄。",
+    emptyHint: "在文件的 backup.sources 設定要備份的資料後，按「備份」或套用「排程備份」範本。",
+    columns: { backup: "備份", sources: "來源", size: "大小", outcome: "結果" },
+    kinds: { backup: "備份", "pre-restore": "還原前副本", self: "LCM 自身備份", restore: "還原" } satisfies Record<Backup["kind"], string>,
+    outcomes: { running: "進行中", succeeded: "成功", failed: "失敗", interrupted: "已中斷" } satisfies Record<Backup["outcome"], string>,
+    restoreTo: "還原到此備份",
+    restoreOf: (id: string) => `還原備份 ${id}`,
+    restoreDisabled: "這個備份已被保留規則移除，或沒有完成，無法還原",
+    restoreUnavailable: "目前不能還原：請看上方動作按鈕的說明",
+    removed: "已被保留規則移除",
+    skipped: (n: number) => `${n} 個項目（連結、裝置、socket、pipe）沒有納入備份`,
+    manifest: "Manifest SHA-256",
+    notRestored: "指令輸出只保存，不會還原",
   },
   resourcePolicies: {
     title: "套用的 Policy",
@@ -1266,6 +1287,14 @@ export const msg: Record<string, (p: Params) => string> = {
   "step.helperInstall": (p) => `把建置結果的 ${p.artifact} 安裝為 ${p.service} 的新 release`,
   "step.helperActivate": (p) =>
     `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}將 ${p.service} 切換到新 release，以 ${p.start} 重啟`,
+  "step.helperBackup": (p) => `由 deploy helper 備份 ${p.sources}（${p.mode === "stopped" ? "停機" : "線上"}模式），存成備份目錄中的新備份`,
+  "step.helperPrune": (p) => `依保留規則移除舊備份：保留最近 ${p.daily} 天與 ${p.weekly} 週各自最新的一份，最新的備份一律保留`,
+  "step.restoreVerify": (p) => `用 manifest 的 SHA-256 驗證備份 ${p.backup}`,
+  "step.restoreStop": (p) => `${p.service} 執行中時先停止`,
+  "step.restorePreRestore": (p) => `把目前的資料（${p.sources}）複製成還原前副本`,
+  "step.restoreApply": (p) => `用 ${p.backup} 取代 ${p.sources}；失敗時自動換回還原前副本`,
+  "step.restoreStart": (p) => `${p.service} 原本在執行時重新啟動`,
+  "step.restoreCheck": () => "確認服務恢復執行；沒有恢復時還原「還原前副本」",
   "step.helperActivatePrevious": (p) => `將 ${p.service} 切回已安裝的 release ${p.release}（commit ${p.commit}）並重啟，不執行 migration`,
   "timeline.configSaved": (p) => `${p.actor} 儲存了設定版本 ${p.version}`,
   "timeline.configRestored": (p) => `${p.actor} 將版本 ${p.from} 還原為設定版本 ${p.version}`,

@@ -145,6 +145,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.machineHelper(ctx, rest)
 	case "deploy-helper":
 		return a.deployHelper(ctx, rest)
+	case "backup-worker":
+		return a.backupWorker(ctx, rest)
 	case "host":
 		return a.host(ctx, rest)
 	case "version", "--version":

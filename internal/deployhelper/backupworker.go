@@ -1,0 +1,900 @@
+package deployhelper
+
+import (
+	"archive/tar"
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path"
+	"slices"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	_ "modernc.org/sqlite" // the driver that copies SQLite databases consistently
+
+	"github.com/ACaccel/lcm/internal/hostsetup"
+)
+
+// The backup worker is "lcm backup-worker <in> <out>", started by the
+// helper with systemd-run as the service account in a sandbox. It is not
+// privileged: it reads or writes the service's own data directory, which
+// the service could do itself, and nothing else. It never runs as root.
+// The helper treats everything it leaves in <out> as untrusted input.
+
+// Names inside the staging directories.
+const (
+	specName   = "spec.json"
+	resultName = "result.json"
+	// restoreSuffix names the copy that a restore builds next to its target
+	// before swapping it in.
+	restoreSuffix = ".lcm-new"
+	maxSpec       = 1 << 20
+	maxResult     = 1 << 20
+	// sqliteHeader starts every SQLite database file.
+	sqliteHeader = "SQLite format 3\x00"
+)
+
+// artifactRef is a staged artifact a restore reads, with the SHA-256 it is
+// verified against again before use.
+type artifactRef struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// specSource is a source as the worker sees it. For a restore, Artifacts
+// are the files of <in>, or Absent says that the path did not exist.
+type specSource struct {
+	BackupSource
+	Artifacts []artifactRef `json:"artifacts,omitempty"`
+	Absent    bool          `json:"absent,omitempty"`
+}
+
+// workerSpec is <in>/spec.json, written by the helper.
+type workerSpec struct {
+	Version int          `json:"version"`
+	Mode    string       `json:"mode"` // "backup" or "restore"
+	Service string       `json:"service"`
+	Sources []specSource `json:"sources"`
+	// MaxBytes and MaxEntries bound what the worker writes or extracts.
+	MaxBytes   int64 `json:"maxBytes"`
+	MaxEntries int   `json:"maxEntries"`
+	// AllowMissing lets a source whose path does not exist count as absent
+	// instead of failing: the copy of what a restore replaces.
+	AllowMissing bool `json:"allowMissing,omitempty"`
+}
+
+// sourceResult is what the worker reports for a source.
+type sourceResult struct {
+	Absent  bool `json:"absent,omitempty"`
+	Skipped int  `json:"skipped,omitempty"`
+}
+
+// workerResult is <out>/result.json.
+type workerResult struct {
+	Version int            `json:"version"`
+	Sources []sourceResult `json:"sources"`
+}
+
+// WorkerHost maps the worker's fixed locations, so that tests can use a
+// directory tree.
+type WorkerHost struct {
+	// DataDir is the service's data directory, ReleaseDir the directory of
+	// its current release.
+	DataDir    func(service string) string
+	ReleaseDir func(service string) string
+	// Tool returns the absolute path of an external program.
+	Tool func(name string) (string, error)
+}
+
+// toolDirs are the directories searched for the database tools.
+var toolDirs = []string{"/usr/bin", "/usr/local/bin"}
+
+// DefaultWorkerHost is the host layout the helper's units use.
+func DefaultWorkerHost() WorkerHost {
+	return WorkerHost{
+		DataDir:    hostsetup.ServiceDataDir,
+		ReleaseDir: func(service string) string { return hostsetup.ServiceOptDir(service) + "/current" },
+		Tool: func(name string) (string, error) {
+			for _, d := range toolDirs {
+				p := d + "/" + name
+				if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+					return p, nil
+				}
+			}
+			return "", fmt.Errorf("%s is not installed (looked in %s)", name, strings.Join(toolDirs, ", "))
+		},
+	}
+}
+
+// worker is one run of the backup worker.
+type worker struct {
+	host WorkerHost
+	spec workerSpec
+	in   string
+	out  *os.Root
+	data *os.Root
+	log  io.Writer
+	// written counts the bytes written to artifacts or the data directory.
+	written int64
+	entries int
+}
+
+// RunWorker carries out the specification in inDir, writing its artifacts
+// to outDir (backup) or the data directory (restore). Progress goes to
+// log.
+func RunWorker(ctx context.Context, host WorkerHost, inDir, outDir string, log io.Writer) error {
+	if os.Geteuid() == 0 {
+		return errors.New("the backup worker must not run as root")
+	}
+	spec, err := readSpec(inDir)
+	if err != nil {
+		return err
+	}
+	out, err := os.OpenRoot(outDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	data, err := os.OpenRoot(host.DataDir(spec.Service))
+	if err != nil {
+		return fmt.Errorf("open the data directory: %w", err)
+	}
+	defer func() { _ = data.Close() }()
+	w := &worker{host: host, spec: spec, in: inDir, out: out, data: data, log: log}
+	if spec.Mode == "restore" {
+		return w.restore(ctx)
+	}
+	return w.backup(ctx)
+}
+
+func readSpec(inDir string) (workerSpec, error) {
+	in, err := os.OpenRoot(inDir)
+	if err != nil {
+		return workerSpec{}, err
+	}
+	defer func() { _ = in.Close() }()
+	f, err := in.Open(specName)
+	if err != nil {
+		return workerSpec{}, err
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, maxSpec+1))
+	if err != nil {
+		return workerSpec{}, err
+	}
+	var spec workerSpec
+	if err := decodeStrict(raw, maxSpec, &spec); err != nil {
+		return spec, fmt.Errorf("specification: %w", err)
+	}
+	switch {
+	case spec.Version != Version || (spec.Mode != "backup" && spec.Mode != "restore"):
+		return spec, errors.New("specification: unsupported version or mode")
+	case hostsetup.ValidServiceName(spec.Service) != nil:
+		return spec, errors.New("specification: invalid service")
+	case spec.MaxBytes < 1 || spec.MaxEntries < 1:
+		return spec, errors.New("specification: no limits")
+	}
+	plain := make([]BackupSource, len(spec.Sources))
+	for i, s := range spec.Sources {
+		plain[i] = s.BackupSource
+	}
+	if err := ValidateSources(plain); err != nil {
+		return spec, fmt.Errorf("specification: %w", err)
+	}
+	return spec, nil
+}
+
+func (w *worker) logf(format string, args ...any) {
+	_, _ = fmt.Fprintf(w.log, format+"\n", args...)
+}
+
+// charge accounts for n written bytes.
+func (w *worker) charge(n int64) error {
+	if w.written += n; w.written > w.spec.MaxBytes {
+		return fmt.Errorf("more than %d bytes", w.spec.MaxBytes)
+	}
+	return nil
+}
+
+func (w *worker) entry() error {
+	if w.entries++; w.entries > w.spec.MaxEntries {
+		return fmt.Errorf("more than %d entries", w.spec.MaxEntries)
+	}
+	return nil
+}
+
+// limitedWriter charges what passes through it.
+type limitedWriter struct {
+	w io.Writer
+	c *worker
+}
+
+func (l limitedWriter) Write(p []byte) (int, error) {
+	if err := l.c.charge(int64(len(p))); err != nil {
+		return 0, err
+	}
+	return l.w.Write(p)
+}
+
+// ---- backup ----
+
+func (w *worker) backup(ctx context.Context) error {
+	res := workerResult{Version: Version}
+	for i, src := range w.spec.Sources {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var r sourceResult
+		var err error
+		switch src.Type {
+		case SourceFiles:
+			r, err = w.backupFiles(i, src.BackupSource)
+		case SourceSQLite:
+			r, err = w.backupSQLite(i, src.BackupSource)
+		case SourcePostgres:
+			err = w.dump(ctx, "pg_dump", []string{"--format=custom", "--no-password", "--file=" + w.outPath(artifactNames(i, src.BackupSource)[0]), "--dbname=" + src.Database})
+		case SourceMongoDB:
+			err = w.backupMongo(ctx, i, src.BackupSource)
+		case SourceCommand:
+			err = w.backupCommand(ctx, i, src.BackupSource)
+		}
+		if err != nil {
+			return fmt.Errorf("source %d (%s): %w", i, describeSource(src.BackupSource), err)
+		}
+		res.Sources = append(res.Sources, r)
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		return err
+	}
+	return w.out.WriteFile(resultName, raw, 0o600)
+}
+
+// outPath is the real path of an artifact in the output directory, for
+// the external tools that write it themselves.
+func (w *worker) outPath(name string) string { return w.out.Name() + "/" + name }
+
+func (w *worker) create(name string) (*os.File, error) {
+	return w.out.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
+// checkName refuses names that a tar archive, a log or a terminal could
+// misrepresent.
+func checkName(name string) error {
+	if !utf8.ValidString(name) || strings.IndexFunc(name, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
+		return fmt.Errorf("the name %q is not printable", hostsetup.Printable(name, 80))
+	}
+	return nil
+}
+
+func (w *worker) backupFiles(i int, src BackupSource) (sourceResult, error) {
+	var res sourceResult
+	info, err := w.data.Lstat(src.Path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && w.spec.AllowMissing:
+		return sourceResult{Absent: true}, nil
+	case err != nil:
+		return res, err
+	case info.Mode()&fs.ModeSymlink != 0:
+		return res, errors.New("the path is a symbolic link")
+	}
+	f, err := w.create(artifactNames(i, src)[0])
+	if err != nil {
+		return res, err
+	}
+	bw := bufio.NewWriter(limitedWriter{w: f, c: w})
+	tw := tar.NewWriter(bw)
+	err = w.addTree(tw, src.Path, info, &res)
+	if err == nil {
+		err = tw.Close()
+	}
+	if err == nil {
+		err = bw.Flush()
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		w.logf("files %s: %d entries, %d skipped", src.Path, w.entries, res.Skipped)
+	}
+	return res, err
+}
+
+// archivedMode keeps the owner's bits and the group's and others' read and
+// execute bits.
+func archivedMode(m fs.FileMode) int64 { return int64(m.Perm() & 0o755) }
+
+func (w *worker) addTree(tw *tar.Writer, rel string, info fs.FileInfo, res *sourceResult) error {
+	if err := w.entry(); err != nil {
+		return err
+	}
+	if err := checkName(rel); err != nil {
+		return err
+	}
+	switch {
+	case info.IsDir():
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: rel + "/", Mode: archivedMode(info.Mode()) | 0o700, ModTime: info.ModTime()}); err != nil {
+			return err
+		}
+		d, err := w.data.Open(rel)
+		if err != nil {
+			return err
+		}
+		names, err := d.Readdirnames(-1)
+		_ = d.Close()
+		if err != nil {
+			return err
+		}
+		slices.Sort(names)
+		for _, n := range names {
+			child := path.Join(rel, n)
+			ci, err := w.data.Lstat(child)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // removed while the backup ran
+			}
+			if err != nil {
+				return err
+			}
+			if err := w.addTree(tw, child, ci, res); err != nil {
+				return err
+			}
+		}
+		return nil
+	case info.Mode().IsRegular():
+		f, err := w.data.Open(rel)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		fi, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			res.Skipped++
+			return nil
+		}
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: rel, Mode: archivedMode(fi.Mode()), Size: fi.Size(), ModTime: fi.ModTime()}); err != nil {
+			return err
+		}
+		if _, err := io.CopyN(tw, f, fi.Size()); err != nil {
+			return fmt.Errorf("%s changed while it was read: %w", rel, err)
+		}
+		return nil
+	}
+	// Links, devices, sockets and pipes are not stored.
+	res.Skipped++
+	return nil
+}
+
+// noLinks refuses a path with a symbolic link in any component.
+func (w *worker) noLinks(rel string) error {
+	parts := strings.Split(rel, "/")
+	for i := range parts {
+		info, err := w.data.Lstat(strings.Join(parts[:i+1], "/"))
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symbolic link", strings.Join(parts[:i+1], "/"))
+		}
+	}
+	return nil
+}
+
+func (w *worker) backupSQLite(i int, src BackupSource) (sourceResult, error) {
+	if err := w.noLinks(src.Path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) && w.spec.AllowMissing {
+			return sourceResult{Absent: true}, nil
+		}
+		return sourceResult{}, err
+	}
+	info, err := w.data.Lstat(src.Path)
+	if err != nil {
+		return sourceResult{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return sourceResult{}, errors.New("the path is not a regular file")
+	}
+	dst := w.outPath(artifactNames(i, src)[0])
+	db, err := sql.Open("sqlite", "file:"+w.data.Name()+"/"+src.Path+"?mode=ro&_pragma=busy_timeout(30000)")
+	if err != nil {
+		return sourceResult{}, err
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("VACUUM INTO ?", dst); err != nil {
+		return sourceResult{}, fmt.Errorf("copy the database: %w", err)
+	}
+	if err := w.checkSQLite(dst); err != nil {
+		return sourceResult{}, err
+	}
+	fi, err := w.out.Lstat(artifactNames(i, src)[0])
+	if err != nil {
+		return sourceResult{}, err
+	}
+	if err := w.charge(fi.Size()); err != nil {
+		return sourceResult{}, err
+	}
+	w.logf("sqlite %s: %d bytes", src.Path, fi.Size())
+	return sourceResult{}, nil
+}
+
+// checkSQLite opens a copy and runs the quick integrity check.
+func (w *worker) checkSQLite(file string) error {
+	db, err := sql.Open("sqlite", "file:"+file+"?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	var verdict string
+	if err := db.QueryRow("PRAGMA quick_check").Scan(&verdict); err != nil {
+		return fmt.Errorf("check the copy: %w", err)
+	}
+	if verdict != "ok" {
+		return fmt.Errorf("the copy failed its integrity check: %s", hostsetup.Printable(verdict, 200))
+	}
+	return nil
+}
+
+func (w *worker) backupMongo(ctx context.Context, i int, src BackupSource) error {
+	names := artifactNames(i, src)
+	if err := w.dump(ctx, "mongodump", mongoArgs(w.outPath(names[0]), "--db="+src.Database)); err != nil {
+		return err
+	}
+	if src.Users {
+		for k, coll := range []string{"system.users", "system.roles"} {
+			if err := w.dump(ctx, "mongodump", mongoArgs(w.outPath(names[1+k]), "--db=admin", "--collection="+coll)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// mongoArgs adds the connection string that the service's environment
+// names, if any.
+func mongoArgs(archive string, args ...string) []string {
+	out := append([]string{"--archive=" + archive, "--gzip"}, args...)
+	if uri := os.Getenv("MONGODB_URI"); uri != "" {
+		out = append(out, "--uri="+uri)
+	}
+	return out
+}
+
+// dump runs a database tool that writes its artifact itself, then accounts
+// for its size.
+func (w *worker) dump(ctx context.Context, tool string, args []string) error {
+	if err := w.run(ctx, tool, args, nil, ""); err != nil {
+		return err
+	}
+	for _, a := range args {
+		for _, p := range []string{"--file=", "--archive="} {
+			if name, ok := strings.CutPrefix(a, p); ok {
+				fi, err := os.Lstat(name)
+				if err != nil {
+					return err
+				}
+				return w.charge(fi.Size())
+			}
+		}
+	}
+	return nil
+}
+
+// run executes an external tool of the host. stdout, when set, receives its
+// standard output; its standard error goes to the log.
+func (w *worker) run(ctx context.Context, tool string, args []string, stdout io.Writer, dir string) error {
+	p := tool
+	if !strings.HasPrefix(tool, "/") {
+		var err error
+		if p, err = w.host.Tool(tool); err != nil {
+			return err
+		}
+	}
+	cmd := exec.CommandContext(ctx, p, args...) //nolint:gosec // a fixed tool or the release's own program, run as the service account
+	cmd.Env = os.Environ()
+	cmd.Dir = "/"
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	cmd.Stdout = stdout
+	cmd.Stderr = w.log
+	cmd.WaitDelay = 10 * time.Second
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s failed: %w", path.Base(p), err)
+	}
+	return nil
+}
+
+func (w *worker) backupCommand(ctx context.Context, i int, src BackupSource) error {
+	rel := w.host.ReleaseDir(w.spec.Service)
+	release, err := os.OpenRoot(rel)
+	if err != nil {
+		return fmt.Errorf("the service has no current release: %w", err)
+	}
+	defer func() { _ = release.Close() }()
+	info, err := release.Stat(src.Argv[0])
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("%s is not an executable file of the release", src.Argv[0])
+	}
+	f, err := w.create(artifactNames(i, src)[0])
+	if err != nil {
+		return err
+	}
+	err = w.run(ctx, rel+"/"+src.Argv[0], src.Argv[1:], limitedWriter{w: f, c: w}, rel)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// ---- restore ----
+
+func (w *worker) restore(ctx context.Context) error {
+	in, err := os.OpenRoot(w.in)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	for i, src := range w.spec.Sources {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if src.Type == SourceCommand {
+			continue
+		}
+		for _, a := range src.Artifacts {
+			if err := verifyArtifact(in, a); err != nil {
+				return fmt.Errorf("source %d (%s): %w", i, describeSource(src.BackupSource), err)
+			}
+		}
+		if err := w.restoreSource(ctx, in, i, src); err != nil {
+			return fmt.Errorf("source %d (%s): %w", i, describeSource(src.BackupSource), err)
+		}
+	}
+	return nil
+}
+
+// verifyArtifact checks a staged artifact against the hash it was given.
+func verifyArtifact(in *os.Root, a artifactRef) error {
+	f, err := in.Open(a.Name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return err
+	}
+	if n != a.Size || hex.EncodeToString(h.Sum(nil)) != a.SHA256 {
+		return fmt.Errorf("%s does not match its manifest", a.Name)
+	}
+	return nil
+}
+
+func (w *worker) restoreSource(ctx context.Context, in *os.Root, i int, src specSource) error {
+	switch src.Type {
+	case SourceFiles, SourceSQLite:
+		if src.Absent {
+			return w.removePath(src.Path)
+		}
+		if len(src.Artifacts) != 1 {
+			return errors.New("the set has no artifact for it")
+		}
+		if src.Type == SourceFiles {
+			return w.extract(in, src.Path, src.Artifacts[0].Name)
+		}
+		return w.restoreSQLite(in, src.Path, src.Artifacts[0].Name)
+	case SourcePostgres:
+		if len(src.Artifacts) != 1 {
+			return errors.New("the set has no artifact for it")
+		}
+		return w.run(ctx, "pg_restore", []string{"--clean", "--if-exists", "--no-owner", "--no-privileges", "--exit-on-error", "--no-password",
+			"--dbname=" + src.Database, w.in + "/" + src.Artifacts[0].Name}, nil, "")
+	case SourceMongoDB:
+		return w.restoreMongo(ctx, src)
+	}
+	return nil
+}
+
+func (w *worker) restoreMongo(ctx context.Context, src specSource) error {
+	if len(src.Artifacts) == 0 {
+		return errors.New("the set has no artifact for it")
+	}
+	for k, a := range src.Artifacts {
+		ns := src.Database + ".*"
+		switch {
+		case k > 0 && strings.Contains(a.Name, "-users."):
+			ns = "admin.system.users"
+		case k > 0 && strings.Contains(a.Name, "-roles."):
+			ns = "admin.system.roles"
+		}
+		args := []string{"--archive=" + w.in + "/" + a.Name, "--gzip", "--drop", "--nsInclude=" + ns}
+		if uri := os.Getenv("MONGODB_URI"); uri != "" {
+			args = append(args, "--uri="+uri)
+		}
+		if err := w.run(ctx, "mongorestore", args, nil, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removePath removes a path that did not exist when the set was made. The
+// removal does not follow links.
+func (w *worker) removePath(rel string) error {
+	if err := w.data.RemoveAll(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	w.logf("removed %s: it did not exist in the backup", rel)
+	return nil
+}
+
+// restoreSQLite copies a staged database next to its target and swaps it
+// in, removing the journal files of the replaced database first: they
+// belong to it and would corrupt the restored one.
+func (w *worker) restoreSQLite(in *os.Root, rel, artifact string) error {
+	src, err := in.Open(artifact)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+	head := make([]byte, len(sqliteHeader))
+	if _, err := io.ReadFull(src, head); err != nil || string(head) != sqliteHeader {
+		return errors.New("the artifact is not a SQLite database")
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if err := w.data.MkdirAll(path.Dir(rel), 0o750); err != nil {
+		return err
+	}
+	tmp := rel + restoreSuffix
+	if err := w.data.RemoveAll(tmp); err != nil {
+		return err
+	}
+	dst, err := w.data.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(limitedWriter{w: dst, c: w}, src)
+	if err == nil {
+		err = dst.Sync()
+	}
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = w.data.RemoveAll(tmp)
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if err := w.data.RemoveAll(rel + suffix); err != nil {
+			_ = w.data.RemoveAll(tmp)
+			return err
+		}
+	}
+	if err := w.data.RemoveAll(rel); err != nil {
+		_ = w.data.RemoveAll(tmp)
+		return err
+	}
+	if err := w.data.Rename(tmp, rel); err != nil {
+		return err
+	}
+	w.logf("sqlite %s restored", rel)
+	return nil
+}
+
+// within reports whether name is target or below it.
+func within(name, target string) bool {
+	return name == target || strings.HasPrefix(name, target+"/")
+}
+
+// extract builds the tree of an archive next to target and swaps it in.
+// Every name must be target or below it, clean, relative and without
+// "..", and every entry a regular file or a directory with no special mode
+// bits; anything else refuses the archive before the target is touched.
+func (w *worker) extract(in *os.Root, target, artifact string) error {
+	f, err := in.Open(artifact)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if err := w.data.MkdirAll(path.Dir(target), 0o750); err != nil {
+		return err
+	}
+	// The copy lives beside its target as <target>.lcm-new; names inside
+	// the archive are mapped into it.
+	stage := target + restoreSuffix
+	if err := w.data.RemoveAll(stage); err != nil {
+		return err
+	}
+	tr := tar.NewReader(f)
+	type dirMode struct {
+		name string
+		mode fs.FileMode
+		mod  time.Time
+	}
+	var dirs []dirMode
+	seen := map[string]bool{}
+	fail := func(err error) error {
+		_ = w.data.RemoveAll(stage)
+		return err
+	}
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fail(fmt.Errorf("read the archive: %w", err))
+		}
+		name := strings.TrimSuffix(hdr.Name, "/")
+		if hdr.Typeflag == tar.TypeDir && hdr.Name != name+"/" {
+			return fail(fmt.Errorf("directory entry %q is malformed", hostsetup.Printable(hdr.Name, 80)))
+		}
+		if err := checkEntryName(name, target); err != nil {
+			return fail(err)
+		}
+		if hdr.Mode&^0o777 != 0 {
+			return fail(fmt.Errorf("%s has special mode bits", name))
+		}
+		if seen[name] {
+			return fail(fmt.Errorf("%s appears twice", name))
+		}
+		seen[name] = true
+		if err := w.entry(); err != nil {
+			return fail(err)
+		}
+		dst := stage + strings.TrimPrefix(name, target)
+		mode := fs.FileMode(hdr.Mode & 0o755) //nolint:gosec // the mode was checked to have no bits above 0o777
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if dst != stage {
+				if err := w.requireDirParent(dst, stage); err != nil {
+					return fail(err)
+				}
+			}
+			if err := w.data.Mkdir(dst, 0o700); err != nil {
+				return fail(err)
+			}
+			dirs = append(dirs, dirMode{dst, mode | 0o700, hdr.ModTime})
+		case tar.TypeReg:
+			if dst == stage {
+				// A single-file source.
+				if err := w.writeEntry(tr, dst, hdr, mode); err != nil {
+					return fail(err)
+				}
+				continue
+			}
+			if err := w.requireDirParent(dst, stage); err != nil {
+				return fail(err)
+			}
+			if err := w.writeEntry(tr, dst, hdr, mode); err != nil {
+				return fail(err)
+			}
+		default:
+			return fail(fmt.Errorf("%s is a link, device or other special entry", name))
+		}
+	}
+	if len(seen) == 0 {
+		return fail(errors.New("the archive is empty"))
+	}
+	// Directory modes last, deepest first, so that a read-only directory
+	// can still be filled.
+	for _, d := range slices.Backward(dirs) {
+		if err := w.data.Chmod(d.name, d.mode); err != nil {
+			return fail(err)
+		}
+		_ = w.data.Chtimes(d.name, d.mod, d.mod)
+	}
+	if err := w.data.RemoveAll(target); err != nil {
+		return fail(err)
+	}
+	if err := w.data.Rename(stage, target); err != nil {
+		return err
+	}
+	w.logf("files %s restored: %d entries", target, len(seen))
+	return nil
+}
+
+// checkEntryName accepts a clean relative name equal to target or below it.
+func checkEntryName(name, target string) error {
+	switch {
+	case name == "" || path.IsAbs(name) || path.Clean(name) != name || slices.Contains(strings.Split(name, "/"), ".."):
+		return fmt.Errorf("the name %q is not a clean relative name", hostsetup.Printable(name, 80))
+	case !within(name, target):
+		return fmt.Errorf("the name %q is outside %s", hostsetup.Printable(name, 80), target)
+	}
+	return checkName(name)
+}
+
+// requireDirParent checks that the parent of dst, up to stage, is a
+// directory this extraction made: no earlier entry may have put anything
+// else there.
+func (w *worker) requireDirParent(dst, stage string) error {
+	parent := path.Dir(dst)
+	if parent == path.Dir(stage) && stage != dst {
+		return fmt.Errorf("%s has no parent", dst)
+	}
+	info, err := w.data.Lstat(parent)
+	if err != nil {
+		return fmt.Errorf("the parent of %s is missing", strings.TrimPrefix(dst, stage))
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("the parent of %s is not a directory", strings.TrimPrefix(dst, stage))
+	}
+	return nil
+}
+
+func (w *worker) writeEntry(tr *tar.Reader, dst string, hdr *tar.Header, mode fs.FileMode) error {
+	if hdr.Size < 0 {
+		return errors.New("negative size")
+	}
+	f, err := w.data.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(limitedWriter{w: f, c: w}, io.LimitReader(tr, hdr.Size))
+	if err == nil && n != hdr.Size {
+		err = io.ErrUnexpectedEOF
+	}
+	if err == nil {
+		err = f.Chmod(mode | 0o600)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		_ = w.data.Chtimes(dst, hdr.ModTime, hdr.ModTime)
+	}
+	return err
+}
+
+// describeSource names a source for logs and results.
+func describeSource(s BackupSource) string {
+	switch s.Type {
+	case SourceFiles, SourceSQLite:
+		return s.Type + " " + s.Path
+	case SourcePostgres, SourceMongoDB:
+		return s.Type + " " + s.Database
+	}
+	return s.Type + " " + strings.Join(s.Argv, " ")
+}
+
+// artifactNames are the artifacts source i produces, in order. The helper
+// computes them itself and reads exactly these.
+func artifactNames(i int, s BackupSource) []string {
+	base := fmt.Sprintf("%03d-%s", i, s.Type)
+	switch s.Type {
+	case SourceFiles:
+		return []string{base + ".tar"}
+	case SourceSQLite:
+		return []string{base + ".db"}
+	case SourcePostgres:
+		return []string{base + ".dump"}
+	case SourceMongoDB:
+		if s.Users {
+			return []string{base + ".archive", base + "-users.archive", base + "-roles.archive"}
+		}
+		return []string{base + ".archive"}
+	}
+	return []string{base + ".out"}
+}

@@ -54,6 +54,16 @@ func budget(req Request) time.Duration {
 		// reload check, reload and reload after a restore, is-enabled,
 		// enable and restart.
 		return migrateTimeout + migrateRunMargin + analyzeTimeout + 7*systemctlTimeout
+	case OpBackup:
+		// The producing process, then stopping its unit when it was
+		// stopped by the watcher or timed out, and stopping and starting
+		// the service.
+		return time.Duration(req.TimeoutSec)*time.Second + buildRunMargin + 4*systemctlTimeout
+	case OpRestore:
+		// The copy of the current data, the restore and the undo, each
+		// with its unit stopped on a timeout, and stopping and starting
+		// the service.
+		return 3*(restoreWorkerSec*time.Second+buildRunMargin+systemctlTimeout) + 4*systemctlTimeout
 	case OpStart, OpStop, OpRestart, OpStatus:
 		return systemctlTimeout
 	}
@@ -157,12 +167,15 @@ func (h *Helper) grant(req Request) (hostsetup.Config, hostsetup.ServiceGrant, *
 }
 
 func (h *Helper) read(ctx context.Context, req Request) Response {
-	_, _, refused := h.grant(req)
+	cfg, g, refused := h.grant(req)
 	if refused != nil {
 		return *refused
 	}
-	if req.Op == OpStatus {
+	switch req.Op {
+	case OpStatus:
 		return h.status(ctx, req)
+	case OpBackups:
+		return h.backups(req, cfg, g)
 	}
 	return h.releases(req)
 }
@@ -278,6 +291,12 @@ func (h *Helper) perform(ctx context.Context, req Request, cfg hostsetup.Config,
 		return h.install(ctx, req)
 	case OpActivate:
 		return h.activate(ctx, req, cfg, g)
+	case OpBackup:
+		return h.backup(ctx, req, cfg, g)
+	case OpRestore:
+		return h.restore(ctx, req, cfg, g)
+	case OpPrune:
+		return h.prune(ctx, req, cfg, g)
 	}
 	return h.unitAction(ctx, req)
 }

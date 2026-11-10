@@ -60,6 +60,9 @@ func (m *Manager) Reconcile(ctx context.Context) ([]Change, error) {
 	if err := m.interruptDeployments(ctx); err != nil {
 		return changes, err
 	}
+	if err := m.interruptBackups(ctx); err != nil {
+		return changes, err
+	}
 	return changes, nil
 }
 

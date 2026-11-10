@@ -152,10 +152,10 @@ var descriptors = []descriptor{
 		description: "Runs the service's backup on a cron schedule, retries it with backoff, runs once after downtime, " +
 			"optionally confirms that a heartbeat check reported in, and notifies on failure.",
 		params: []Param{
-			{Name: "resource", Type: TypeService, Required: true, Description: "Service whose backup command runs."},
+			{Name: "resource", Type: TypeService, Required: true, Description: "Service whose backup runs: its backup command, or the typed backup of a managed service."},
 			{Name: "schedule", Type: TypeString, Description: "Five-field cron expression."},
 			{Name: "timezone", Type: TypeString, Description: "IANA time zone of the schedule."},
-			{Name: "heartbeatCheck", Type: TypeString, Description: "Name of a heartbeat check of the service that the backup job reports to. Empty skips the confirmation."},
+			{Name: "heartbeatCheck", Type: TypeString, Description: "Name of a heartbeat check of the service that the backup command reports to. Empty skips the confirmation; a typed backup of a managed service needs none."},
 			{Name: "heartbeatTimeout", Type: TypeDuration, Description: "How long to wait for the heartbeat after the backup started."},
 			notify,
 		},
