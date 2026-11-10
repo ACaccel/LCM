@@ -292,6 +292,60 @@ func TestRestoreStopsAUnitThatIsRestarting(t *testing.T) {
 	}
 }
 
+// The pre-restore copy and the staging of an undo come on top of the set
+// being restored, and are checked before anything is replaced.
+func TestRestoreReservesRoomForTheCopyAndTheUndo(t *testing.T) {
+	setup := func() (*env, string, uint64) {
+		e := newEnv(t)
+		e.seedData()
+		e.deploy(commit1)
+		a := e.ok(backupReq(fileSources...)).Backup
+		e.active = true
+		return e, a.BackupID, uint64(a.Size)
+	}
+	lim := Limits{}.withDefaults()
+	t.Run("the current data is larger than the set", func(t *testing.T) {
+		e, id, size := setup()
+		e.write("/var/lib/web/media/big.bin", strings.Repeat("x", 1<<20), 0o644)
+		before := e.dataState()
+		// Room for the staged set twice, but not for the copy of the current
+		// data and its undo.
+		e.h.Free = func(p string) (uint64, uint64, error) {
+			if p == "/var/backups/lcm/web" {
+				return lim.MinFreeBytes + 2*size + 1<<10, 1 << 30, nil
+			}
+			return 1 << 40, 1 << 30, nil
+		}
+		e.refused(e.restoreReq(id), CodeRefused, "not enough room for the restore")
+		if e.dataState() != before || len(e.stageDirs()) != 0 {
+			t.Errorf("data %s, staging %v", e.dataState(), e.stageDirs())
+		}
+		e.h.Free = nil
+		e.ok(e.restoreReq(id))
+	})
+	t.Run("no room for an undo after the copy was made", func(t *testing.T) {
+		e, id, _ := setup()
+		before := e.dataState()
+		calls := 0
+		e.h.Free = func(p string) (uint64, uint64, error) {
+			if p != "/var/backups/lcm/web" {
+				return 1 << 40, 1 << 30, nil
+			}
+			if calls++; calls >= 3 { // the check after the pre-restore copy
+				return lim.StopFreeBytes, 1 << 30, nil
+			}
+			return 1 << 40, 1 << 30, nil
+		}
+		resp := e.refused(e.restoreReq(id), CodeRefused, "no room to undo")
+		if resp.Restore == nil || resp.Restore.PreRestoreID == "" || e.dataState() != before || !e.active {
+			t.Errorf("reply %+v data %s active %v", resp, e.dataState(), e.active)
+		}
+		if len(e.stageDirs()) != 0 {
+			t.Errorf("staging left: %v", e.stageDirs())
+		}
+	})
+}
+
 func TestFailedRestoreIsUndone(t *testing.T) {
 	setup := func() (*env, string, string) {
 		e := newEnv(t)

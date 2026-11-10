@@ -680,6 +680,23 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 	if e := expectOutput(t, p.sources, res); e != nil {
 		return zero, e
 	}
+	// The copy below is root's own write to the backup file system: make sure
+	// it fits with the room a running build or backup is allowed to leave.
+	var total, files uint64
+	for i, s := range p.sources {
+		if res.Sources[i].Absent {
+			continue
+		}
+		for _, name := range artifactNames(i, s) {
+			if info, err := t.Lstat(name); err == nil && info.Size > 0 {
+				total += uint64(info.Size)
+			}
+			files++
+		}
+	}
+	if err := h.checkFree(p.svcDir, lim.StopFreeBytes+total, lim.StopFreeInodes+files); err != nil {
+		return zero, failf(CodeRefused, "not enough room to store the backup: %v", err)
+	}
 	if err := h.FS.Mkdir(tmp, 0o700, h.RootUID, h.RootGID); err != nil {
 		return zero, failf(CodeFailed, "%v", err)
 	}
@@ -1061,6 +1078,60 @@ func describeAll(m setManifest, idx []int) []string {
 	return out
 }
 
+// currentSize estimates the bytes the pre-restore copy of the data a restore
+// replaces will take: the files and databases are measured, and the
+// database dumps are assumed to be about as large as the set's.
+func (h *Helper) currentSize(env backupEnv, m setManifest, idx []int, lim Limits) (uint64, error) {
+	var total uint64
+	files := map[string]int64{}
+	for _, f := range m.Files {
+		files[f.Name] = f.Size
+	}
+	for _, i := range idx {
+		s := m.Sources[i]
+		switch s.Type {
+		case SourceFiles, SourceSQLite:
+			names := []string{s.Path}
+			if s.Type == SourceSQLite {
+				names = append(names, s.Path+"-wal", s.Path+"-shm")
+			}
+			for _, n := range names {
+				size, err := h.pathSize(hostsetup.ServiceDataDir(env.svc)+"/"+n, lim)
+				if err != nil {
+					return 0, err
+				}
+				total += size
+			}
+		default:
+			for _, a := range s.Artifacts {
+				total += uint64(files[a]) //nolint:gosec // validated, non-negative sizes
+			}
+		}
+	}
+	return total, nil
+}
+
+// pathSize is the size of a file or of the files below a directory, with the
+// archive's overhead of a header for each; 0 when it does not exist.
+func (h *Helper) pathSize(p string, lim Limits) (uint64, error) {
+	info, err := h.FS.Lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return 0, nil
+	case err != nil:
+		return 0, err
+	case info.IsRegular():
+		return uint64(info.Size), nil //nolint:gosec // a file size is not negative
+	case !info.IsDir():
+		return 0, nil
+	}
+	u := h.usage(lim, p)
+	if u.stopped != "" || u.entries >= lim.MaxEntries {
+		return 0, fmt.Errorf("%s is too large or too deep to copy (%s)", p, cmp.Or(u.stopped, fmt.Sprintf("%d entries", u.entries)))
+	}
+	return uint64(u.bytes) + 1024*uint64(u.entries), nil //nolint:gosec // measured sizes are not negative
+}
+
 // restore puts a backup set back. The order protects the data: the set is
 // verified and staged first, the service stopped next, then the pre-restore
 // copy is taken, and only then is anything replaced. A failed replacement
@@ -1090,7 +1161,13 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	}
 	lim := h.backupLimits()
 	need := uint64(m.Size) //nolint:gosec // a validated, non-negative size
-	if err := h.checkFree(env.svcDir, lim.MinFreeBytes+2*need, lim.MinFreeInodes); err != nil {
+	current, err := h.currentSize(env, m, idx, lim)
+	if err != nil {
+		return refuse(resp, CodeRefused, "the current data cannot be sized for the restore: %v", err)
+	}
+	// The backup file system holds the staged set, the copy of the current
+	// data and, if the restore fails, the staged copy again for the undo.
+	if err := h.checkFree(env.svcDir, lim.MinFreeBytes+need+2*current, lim.MinFreeInodes); err != nil {
 		return refuse(resp, CodeRefused, "not enough room for the restore: %v", err)
 	}
 	if err := h.checkFree(hostsetup.ServiceDataDir(env.svc), lim.MinFreeBytes+need, lim.MinFreeInodes); err != nil {
@@ -1135,6 +1212,15 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	}
 	result.PreRestoreID = pm.BackupID
 	resp.Restore = result
+	// Staging the copy again for an undo needs room too; find out before
+	// anything is replaced.
+	if err := h.checkFree(env.svcDir, lim.StopFreeBytes+uint64(pm.Size), lim.StopFreeInodes+uint64(len(pm.Files))); err != nil { //nolint:gosec // validated, non-negative sizes
+		msg := "nothing was restored, as there would be no room to undo it: " + err.Error()
+		if serr := startAgain(); serr != nil {
+			msg += "; starting the service again failed: " + serr.msg
+		}
+		return refuse(resp, CodeRefused, "%s", msg)
+	}
 
 	if e := h.applyStage(ctx, env, opName+"r", stage); e != nil {
 		msg := "the restore failed: " + e.msg

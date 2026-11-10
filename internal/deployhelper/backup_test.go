@@ -551,6 +551,38 @@ func TestBackupLimits(t *testing.T) {
 	e.refused(backupReq(BackupSource{Type: SourceFiles, Path: "media"}), CodeRefused, "inodes free")
 }
 
+// Root's own copy of the artifacts needs room too, beyond what a running
+// backup is allowed to leave.
+func TestBackupChecksRoomBeforeCollecting(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	lim := Limits{}.withDefaults()
+	e.h.Free = func(p string) (uint64, uint64, error) {
+		if p == "/var/backups/lcm/web" {
+			return lim.StopFreeBytes, 1 << 30, nil // nothing beyond the reserve
+		}
+		return 1 << 40, 1 << 30, nil
+	}
+	e.refused(backupReq(fileSources...), CodeRefused, "not enough room to store the backup")
+	if names, _ := os.ReadDir(e.real("/var/backups/lcm/web")); len(names) != 0 {
+		t.Errorf("left %v", names)
+	}
+	e.h.Free = func(p string) (uint64, uint64, error) {
+		if p == "/var/backups/lcm/web" {
+			return lim.StopFreeBytes + 1<<20, lim.StopFreeInodes + 3, nil
+		}
+		return 1 << 40, 1 << 30, nil
+	}
+	e.ok(backupReq(fileSources...))
+	e.h.Free = func(p string) (uint64, uint64, error) {
+		if p == "/var/backups/lcm/web" {
+			return lim.StopFreeBytes + 1<<20, lim.StopFreeInodes, nil // no inodes for the files
+		}
+		return 1 << 40, 1 << 30, nil
+	}
+	e.refused(backupReq(fileSources...), CodeRefused, "inodes free")
+}
+
 func TestBackupToolsAndCommand(t *testing.T) {
 	e := newEnv(t)
 	e.seedData()
