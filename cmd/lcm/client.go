@@ -46,7 +46,7 @@ func (a *app) clientFlags(name string) (*flag.FlagSet, *connection) {
 	fs.StringVar(&c.server, "server", "", "server URL (default $"+envServer+" or "+defaultServer+")")
 	// The token itself is deliberately not a flag: it would show up in the
 	// process list and shell history.
-	fs.StringVar(&c.tokenFile, "token-file", "", "file holding the API token (default $"+envTokenFile+"; the token can also be in $"+envToken+")")
+	fs.StringVar(&c.tokenFile, "token-file", "", "file holding the API token (default $"+envTokenFile+", then ~/"+defaultTokenFile+"; the token can also be in $"+envToken+")")
 	return fs, c
 }
 
@@ -84,6 +84,11 @@ func (a *app) newClient(c *connection) (*client.Client, error) {
 	return cl, nil
 }
 
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
 func firstNonEmpty(vs ...string) string {
 	for _, v := range vs {
 		if v != "" {
@@ -93,8 +98,12 @@ func firstNonEmpty(vs ...string) string {
 	return ""
 }
 
+// defaultTokenFile is the token file that host setup writes for the
+// operator, relative to the home directory.
+const defaultTokenFile = ".config/lcm/token" //nolint:gosec // a path, not a credential
+
 // loadToken finds the API token: a token file given by flag, then
-// $LCM_TOKEN, then $LCM_TOKEN_FILE.
+// $LCM_TOKEN, then $LCM_TOKEN_FILE, then ~/.config/lcm/token when it exists.
 func (a *app) loadToken(flagFile string) (string, error) {
 	file := flagFile
 	if file == "" {
@@ -104,7 +113,14 @@ func (a *app) loadToken(flagFile string) (string, error) {
 		file = a.getenv(envTokenFile)
 	}
 	if file == "" {
-		return "", usagef("no API token: set %s or %s, or pass --token-file (create one with: lcm token create --name <name>)", envToken, envTokenFile)
+		if home := a.getenv("HOME"); filepath.IsAbs(home) {
+			if p := filepath.Join(home, defaultTokenFile); fileExists(p) {
+				file = p
+			}
+		}
+	}
+	if file == "" {
+		return "", usagef("no API token: set %s or %s, or pass --token-file (create one with: lcm token create --name <name>; ~/%s is read when it exists)", envToken, envTokenFile, defaultTokenFile)
 	}
 	info, err := os.Stat(file)
 	if err != nil {

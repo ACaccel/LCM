@@ -64,7 +64,7 @@ Admin and token commands open the database directly, so local filesystem access 
 The other commands talk to a running server over the API:
 
 - The server is `LCM_SERVER` (default `http://127.0.0.1:7800`) or `--server`.
-- The token is never a flag value. It comes from `LCM_TOKEN`, or from the file named by `--token-file` or `LCM_TOKEN_FILE` (first non-empty line). A token file that other users can read is refused (`chmod 600`). Create one in the console or with `lcm token create --name cli > token`.
+- The token is never a flag value. It comes from `LCM_TOKEN`, or from the file named by `--token-file` or `LCM_TOKEN_FILE` (first non-empty line); when none is set, `~/.config/lcm/token` is read if it exists, which is where `lcm host apply` writes the operator's token. A token file that other users can read is refused (`chmod 600`). Create one in the console or with `lcm token create --name cli > token`.
 - `-f` takes files or directories (searched recursively for `*.yaml` and `*.yml`, skipping `*.test.yaml`) and `-` for standard input; files may hold several documents separated by `---`.
 - Exit status: `0` success, `1` server or runtime error (including a failed run or action with `--wait`), `2` usage, `3` the command ran but documents were invalid or not applied.
 - Tables are plain aligned columns without colour.

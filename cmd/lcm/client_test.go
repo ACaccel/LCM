@@ -349,6 +349,15 @@ func TestClientCredentials(t *testing.T) {
 	bad := writeFile(t, dir, "bad-token", "lcm_wrong\n")
 	run(map[string]string{"LCM_TOKEN_FILE": file}, "get", "resources", "--token-file", bad).want(t, 1)
 
+	// Without a flag or variable, the file that host setup writes is used
+	// when it exists.
+	home := t.TempDir()
+	byHome := map[string]string{"LCM_TOKEN": "", "HOME": home}
+	run(byHome, "get", "resources").want(t, 2)
+	writeFile(t, filepath.Join(home, ".config", "lcm"), "token", s.token+"\n")
+	run(byHome, "get", "resources").want(t, 0)
+	run(map[string]string{"LCM_TOKEN": "", "HOME": home, "LCM_TOKEN_FILE": bad}, "get", "resources").want(t, 1)
+
 	// A token file that others can read is refused, and says how to fix it.
 	open := writeFile(t, dir, "open-token", s.token)
 	if err := os.Chmod(open, 0o644); err != nil { //nolint:gosec // the test needs a readable file to prove it is refused

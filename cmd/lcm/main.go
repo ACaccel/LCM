@@ -48,7 +48,8 @@ Commands that talk to a running server (see the README):
 Run "lcm <command> -h" for the flags of a command.
 Configuration is read from LCM_* environment variables; flags override them.
 The server commands use LCM_SERVER (default http://127.0.0.1:7800) and an API
-token from LCM_TOKEN, or from the file named by --token-file or LCM_TOKEN_FILE.
+token from LCM_TOKEN, or from the file named by --token-file or LCM_TOKEN_FILE,
+or else from ~/.config/lcm/token when that file exists.
 Exit status: 0 success, 1 error, 2 usage, 3 documents with problems or,
 for host apply|upgrade --check, pending changes.
 `
