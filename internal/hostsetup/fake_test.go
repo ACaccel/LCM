@@ -192,6 +192,9 @@ func (m *memFS) Readlink(p string) (string, error) {
 	if !ok {
 		return "", notExist("readlink", p)
 	}
+	if m.denied[p] {
+		return "", &fs.PathError{Op: "readlink", Path: p, Err: fs.ErrPermission}
+	}
 	if n.mode&fs.ModeSymlink == 0 {
 		return "", fmt.Errorf("readlink %s: not a link", p)
 	}

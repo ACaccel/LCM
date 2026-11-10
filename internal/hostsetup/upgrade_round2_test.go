@@ -89,6 +89,7 @@ func TestUpgradeListenerMustBelongToTheUnit(t *testing.T) {
 		want string
 	}{
 		{"port held by another process", func(r *upRunner) { r.foreignListener = true }, "does not belong to process"},
+		{"descriptors that cannot be read", func(r *upRunner) { r.unreadableFDs = true }, "cannot inspect the sockets of process"},
 		{"another listener on the port", func(r *upRunner) { r.extraListener = true }, "does not belong to process"},
 		{"process replaced while it settles", func(r *upRunner) { r.pidChangeAt = 3 }, "NRestarts"},
 	}
@@ -96,7 +97,7 @@ func TestUpgradeListenerMustBelongToTheUnit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			u := newUpTest(t)
 			u.r.onStart = func(n int) error {
-				u.r.foreignListener, u.r.extraListener, u.r.pidChangeAt = false, false, 0
+				u.r.foreignListener, u.r.extraListener, u.r.unreadableFDs, u.r.pidChangeAt = false, false, false, 0
 				if n == 1 {
 					tc.at(u.r)
 				}

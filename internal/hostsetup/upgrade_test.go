@@ -64,6 +64,7 @@ type upRunner struct {
 	// is replaced at pidChangeAt (when non-zero).
 	shows, pidChangeAt int
 	foreignListener    bool
+	unreadableFDs      bool
 	extraListener      bool
 	badCgroup          bool
 	churnPID           bool
@@ -240,6 +241,12 @@ func (r *upRunner) publish() {
 	r.fs.link(fmt.Sprintf("/proc/%d/fd/0", r.pid), "/dev/null", 0, 0)
 	if !r.foreignListener {
 		r.fs.link(fmt.Sprintf("/proc/%d/fd/7", r.pid), fmt.Sprintf("socket:[%d]", inode), 0, 0)
+	}
+	if r.unreadableFDs {
+		r.fs.mu.Lock()
+		r.fs.denied[fmt.Sprintf("/proc/%d/fd/0", r.pid)] = true
+		r.fs.denied[fmt.Sprintf("/proc/%d/fd/7", r.pid)] = true
+		r.fs.mu.Unlock()
 	}
 }
 

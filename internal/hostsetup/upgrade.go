@@ -1069,15 +1069,27 @@ func (u *upgrader) listenersOwnedBy(pid int) error {
 		return fmt.Errorf("read %s: %w", dir, err)
 	}
 	held := map[string]bool{}
+	var unreadable error
 	for _, n := range names {
-		if target, err := u.h.FS.Readlink(dir + "/" + n); err == nil {
-			if inode, ok := strings.CutPrefix(target, "socket:["); ok {
-				held[strings.TrimSuffix(inode, "]")] = true
+		target, err := u.h.FS.Readlink(dir + "/" + n)
+		if err != nil {
+			// A descriptor that closed meanwhile is not a failure; one
+			// that cannot be read (no CAP_SYS_PTRACE for another
+			// account's process) means the sockets cannot be told apart.
+			if !errors.Is(err, fs.ErrNotExist) && unreadable == nil {
+				unreadable = err
 			}
+			continue
+		}
+		if inode, ok := strings.CutPrefix(target, "socket:["); ok {
+			held[strings.TrimSuffix(inode, "]")] = true
 		}
 	}
 	for _, inode := range inodes {
 		if !held[inode] {
+			if unreadable != nil {
+				return fmt.Errorf("cannot inspect the sockets of process %d of %s, so the listener on port %d (inode %s) cannot be attributed to it: %w", pid, UnitName, healthPort, printable(inode, 20), unreadable)
+			}
 			return fmt.Errorf("a socket listening on port %d (inode %s) does not belong to process %d of %s", healthPort, printable(inode, 20), pid, UnitName)
 		}
 	}
