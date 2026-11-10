@@ -36,6 +36,10 @@ TRAFFIC = {"auth", "api", "upload", "socket", "static", "other"}
 SERVICE = re.compile(r"[a-z][a-z0-9-]{0,62}")
 CREDENTIAL = re.compile(r"[a-z][a-z0-9-]{0,62}")
 MAX_AUDIT_GROUPS = 500
+# Queue slots items from the Nginx log may hold at most, and the distinct
+# services counted in unfinished traffic windows.
+MAX_LOW_QUEUE = 600
+MAX_SERVICES = 64
 # Answers that a retry cannot change: invalid, conflicting or oversized items.
 PERMANENT_REJECTIONS = {400, 409, 413, 422}
 
@@ -154,6 +158,31 @@ def sanitized_status(value: dict) -> dict:
     return result
 
 
+def is_low(row: dict) -> bool:
+    """Whether a queued item comes from the Nginx log."""
+    return row.get("kind") == "traffic" or row.get("event", {}).get("source") == "nginx"
+
+
+def syscall_fields(line: str) -> tuple[dict, str | None]:
+    """The fields of a SYSCALL record and its rule key.
+
+    comm, exe and other strings the audited process chooses come after the
+    numeric fields, so those are read only before " comm="; the key is the
+    record's last field, quoted, hex-encoded or (null)."""
+    head = line.split(" comm=", 1)[0]
+    fields = dict(re.findall(r" ([a-z]+)=([^ \"]+)", head))
+    match = re.search(r' key=(?:"([^"]*)"|\(null\)|([0-9A-F]+))$', line)
+    key = None
+    if match and match.group(1) is not None:
+        key = match.group(1)
+    elif match and match.group(2):
+        try:
+            key = bytes.fromhex(match.group(2)).decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            key = None
+    return fields, key
+
+
 def token_path(config: dict) -> Path:
     """The ingest token: a systemd credential of the collector unit, so that
     the file it comes from stays readable by root alone."""
@@ -194,24 +223,43 @@ class Collector:
             raise ValueError("Unsupported collector state version")
         self.now = time.time()
 
+    def make_room(self, low: bool) -> bool:
+        """Free a queue slot for a new item. Items derived from the Nginx
+        log, which the web server's account can write, are low priority:
+        they are bounded to MAX_LOW_QUEUE and are evicted first, so that
+        they never push out audit, AIDE or collector health events."""
+        queue = self.state["queue"]
+        lows = [row for row in queue if is_low(row)]
+        if low and len(lows) >= MAX_LOW_QUEUE:
+            queue.remove(lows[0])
+            self.state["dropped"] += 1
+        if len(queue) < MAX_QUEUE:
+            return True
+        if lows and lows[0] in queue:
+            queue.remove(lows[0])
+        elif low:
+            # Only high priority items left: the low one is the loss.
+            self.state["dropped"] += 1
+            return False
+        else:
+            queue.pop(0)
+        self.state["dropped"] += 1
+        return True
+
     def enqueue(self, item: dict) -> None:
         queue = self.state["queue"]
         if any(row.get("event", {}).get("eventId") == item["eventId"] for row in queue):
             return
-        if len(queue) >= MAX_QUEUE:
-            queue.pop(0)
-            self.state["dropped"] += 1
-        queue.append({"event": item, "created": self.now, "attempts": 0, "retryAt": 0})
+        if self.make_room(item["source"] == "nginx"):
+            queue.append({"event": item, "created": self.now, "attempts": 0, "retryAt": 0})
 
     def enqueue_traffic(self, item: dict) -> None:
         identity = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()
         if any(row.get("trafficId") == identity for row in self.state["queue"]):
             return
-        if len(self.state["queue"]) >= MAX_QUEUE:
-            self.state["queue"].pop(0)
-            self.state["dropped"] += 1
-        self.state["queue"].append({"kind": "traffic", "traffic": item, "trafficId": identity,
-                                    "created": self.now, "attempts": 0, "retryAt": 0})
+        if self.make_room(True):
+            self.state["queue"].append({"kind": "traffic", "traffic": item, "trafficId": identity,
+                                        "created": self.now, "attempts": 0, "retryAt": 0})
 
     def health(self, key: str, problem: bool, summary: str) -> None:
         current = self.state["health"].get(key)
@@ -316,9 +364,18 @@ class Collector:
         totals = self.state["nginx"]
         traffic = self.state.setdefault("traffic", {})
         finalized = self.state.setdefault("trafficFinalizedUntil", {})
+        services = {measurement.get("service", "") for measurement in traffic.values()}
+        bad = 0
         for line in lines:
             try:
+                # The web server's account can write this log: every line is
+                # untrusted. Anything unexpected, including nesting deep enough
+                # to exhaust recursion, discards the line, never the collector.
+                if len(line) > MAX_LINE:
+                    raise ValueError("Oversized Nginx record")
                 row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("Nginx record is not an object")
                 when = epoch(str(row.get("time", row.get("timestamp", ""))))
                 if when > self.now + 300 or when < self.now - 30 * 86400:
                     raise ValueError("Out-of-retention Nginx timestamp")
@@ -328,6 +385,13 @@ class Collector:
                 route = category if category in TRAFFIC else "other"
                 service = row.get("service")
                 service = service if isinstance(service, str) and SERVICE.fullmatch(service) else ""
+                if service and service not in services:
+                    if len(services) > MAX_SERVICES:
+                        # Bounded distinct services: the rest counts unassigned.
+                        self.health("traffic:capacity", True, "Too many distinct Nginx services; extra traffic counted unassigned.")
+                        service = ""
+                    else:
+                        services.add(service)
                 code = int(row.get("status", 0))
                 duration = float(row.get("request_time", 0)) * 1000
                 response_bytes = int(row.get("bytes_sent", 0))
@@ -366,8 +430,11 @@ class Collector:
                 value = totals.setdefault(key, {"count": 0, "when": bucket, "service": service,
                                                 "route": route, "reason": reason})
                 value["count"] += 1
-            except (TypeError, ValueError, OverflowError):
-                self.health("parse:nginx", True, "Malformed Nginx security records discarded.")
+            except Exception:  # noqa: BLE001 - any malformed line is discarded and counted
+                bad += 1
+        if bad:
+            self.state["nginxDiscarded"] = self.state.get("nginxDiscarded", 0) + bad
+            self.health("parse:nginx", True, "Malformed Nginx security records discarded.")
         for key, value in list(totals.items()):
             if value["when"] >= int(self.now // 60) * 60:
                 continue
@@ -407,8 +474,10 @@ class Collector:
     def audit(self, lines: list[bytes]) -> None:
         pending = self.state["auditPending"]
         for raw in lines:
-            line = raw.decode("utf-8", errors="replace")
-            record = re.search(r"\btype=(\w+).*?msg=audit\((\d+(?:\.\d+)?):(\d+)\)", line)
+            # Enriched records append interpreted fields after \x1d; only the
+            # raw part counts.
+            line = raw.decode("utf-8", errors="replace").rstrip("\n").split("\x1d", 1)[0]
+            record = re.match(r"type=(\w+) msg=audit\((\d+(?:\.\d+)?):(\d+)\):", line)
             if not record:
                 continue
             kind, when, serial = record.groups()
@@ -419,13 +488,12 @@ class Collector:
             identity = f"{when}:{serial}"
             row = pending.setdefault(identity, {"when": observed, "first": self.now})
             if kind == "SYSCALL":
-                for key in ("auid", "uid", "euid", "syscall"):
-                    match = re.search(rf"\b{key}=(-?\d+)\b", line)
-                    if match:
-                        row[key] = int(match.group(1))
-                success = re.search(r"\bsuccess=(yes|no)\b", line)
-                row["success"] = success.group(1) if success else "unknown"
-                category = re.search(r'\bkey="?wssec_(\w+)', line)
+                fields, key = syscall_fields(line)
+                for name in ("auid", "uid", "euid", "syscall"):
+                    if re.fullmatch(r"-?\d+", fields.get(name, "")):
+                        row[name] = int(fields[name])
+                row["success"] = fields.get("success") if fields.get("success") in ("yes", "no") else "unknown"
+                category = re.fullmatch(r"wssec_([a-z]+)", key or "")
                 if category and category.group(1) in CATEGORIES:
                     row["category"] = category.group(1)
             if kind == "EOE":
@@ -538,7 +606,8 @@ class Collector:
                 return None
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         sent = 0
-        for row in list(self.state["queue"]):
+        # Audit, AIDE and health events go before anything from the Nginx log.
+        for row in sorted(self.state["queue"], key=is_low):
             if sent >= 30:
                 break
             if row["retryAt"] > self.now:
@@ -579,8 +648,12 @@ class Collector:
             sent += 1
 
     def poll(self) -> None:
+        # Each batch is checkpointed with its cursor, so that a line can be
+        # read at most once more after a crash, never in a loop.
         self.nginx(self.lines("nginx", Path(self.config["nginxLog"])))
+        atomic_json(self.path, self.state)
         self.audit(self.lines("audit", Path(self.config["auditLog"])))
+        atomic_json(self.path, self.state)
         self.reports(Path(self.config["reportsDir"]))
         # Checkpoint queue and cursors before network I/O. Stable event IDs make retries safe.
         atomic_json(self.path, self.state)

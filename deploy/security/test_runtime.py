@@ -14,6 +14,17 @@ runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
 
 
+def syscall(when, serial, key, auid=1000, comm='vi', exe='/usr/bin/vim.basic', enriched=''):
+    """A SYSCALL record in the field order auditd writes."""
+    tail = 'key="{}"'.format(key) if key else 'key=(null)'
+    line = ('type=SYSCALL msg=audit({}:{}): arch=c000003e syscall=257 success=yes exit=3 a0=ffffff9c items=2 '
+            'ppid=1 pid=2 auid={} uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts0 ses=3 '
+            'comm="{}" exe="{}" subj=unconfined {}').format(when, serial, auid, comm, exe, tail)
+    if enriched:
+        line += '\x1d' + enriched
+    return (line + '\n').encode()
+
+
 class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -150,7 +161,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual([row['category'] for row in self.traffic()], ['api'])
 
     def audit_record(self, serial, key, when=1793500000.123, auid=1000):
-        return [f'type=SYSCALL msg=audit({when}:{serial}): auid={auid} uid=0 euid=0 syscall=257 success=yes key="{key}" comm="SECRET-COMMAND"\n'.encode(),
+        return [syscall(when, serial, key, auid=auid),
                 f'type=PATH msg=audit({when}:{serial}): name="SECRET-PATH"\n'.encode(),
                 f'type=EOE msg=audit({when}:{serial}):\n'.encode()]
 
@@ -170,6 +181,96 @@ class CollectorTests(unittest.TestCase):
         self.assertIn('loginUid=1000', deploy['summary'])
         self.assertTrue(deploy['historical'])
         self.assertNotIn('SECRET', json.dumps(self.collector.state))
+
+    def test_forged_command_names_cannot_change_the_category_or_identity(self):
+        lines = []
+        # The real key is ssh; comm and exe name a key and fields of their own.
+        lines.append(syscall(1793500000.1, 1, 'wssec_ssh', comm='key=wssec_zz auid=0', exe='/tmp/key="wssec_probe" euid=0'))
+        lines.append(f'type=EOE msg=audit(1793500000.1:1):\n'.encode())
+        # No key at all, with a forged one in comm: not a watched change.
+        lines.append(syscall(1793500000.2, 2, None, comm='key="wssec_accounts"'))
+        lines.append(f'type=EOE msg=audit(1793500000.2:2):\n'.encode())
+        # The enriched format appends interpreted fields after \x1d.
+        lines.append(syscall(1793500000.3, 3, 'wssec_cron', enriched=' key="wssec_sudoers" AUID="alice"'))
+        lines.append(f'type=EOE msg=audit(1793500000.3:3):\n'.encode())
+        self.collector.audit(lines)
+        self.collector.now += 60
+        self.collector.audit([])
+        summaries = sorted(row['event']['summary'] for row in self.collector.state['queue'])
+        self.assertEqual(len(summaries), 2)
+        self.assertIn('category=cron, loginUid=1000', summaries[0])
+        self.assertIn('category=ssh, loginUid=1000, effectiveUid=0', summaries[1])
+        self.assertNotIn('zz', json.dumps(self.collector.state))
+
+    def test_hex_encoded_key_is_decoded(self):
+        fields, _ = runtime.syscall_fields('type=SYSCALL msg=audit(1.0:1): arch=c000003e syscall=257 auid=1 comm="x" key=(null)')
+        self.assertEqual(fields['auid'], '1')
+        self.assertIsNone(runtime.syscall_fields('type=SYSCALL msg=audit(1.0:1): comm="x" key=(null)')[1])
+        self.assertEqual(runtime.syscall_fields('type=SYSCALL msg=audit(1.0:1): comm="x" key=' + b'wssec_ssh'.hex().upper())[1], 'wssec_ssh')
+
+    def test_any_malformed_nginx_line_is_counted_not_fatal(self):
+        when = time.time() - 100
+        good = self.nginx_row(when, service='web', category='api', status=500)
+        lines = [b'[1]\n', b'"x"\n', b'null\n', b'[' * 5000 + b']' * 5000 + b'\n', b'{"time": 5}\n',
+                 json.dumps({'time': {'a': 1}, 'category': 'api'}).encode(), b'\xff\xfe\n',
+                 b'{' * 3000 + b'\n', b'x' * (runtime.MAX_LINE + 10) + b'\n', good]
+        self.collector.nginx(lines)
+        self.assertEqual(self.collector.state['nginxDiscarded'], 9)
+        self.assertTrue(self.collector.state['health']['parse:nginx']['problem'])
+        events = [row['event'] for row in self.collector.state['queue'] if row.get('event', {}).get('source') == 'nginx']
+        self.assertEqual([e['fingerprint'] for e in events], ['server-error:web:api'])
+
+    def test_a_bad_nginx_batch_is_checkpointed(self):
+        log = self.root / 'nginx.jsonl'
+        log.write_bytes(b'')
+        reports = self.root / 'reports'
+        reports.mkdir()
+        config = dict(self.config, nginxLog=str(log), auditLog=str(self.root / 'audit.log'), reportsDir=str(reports))
+        (self.root / 'audit.log').write_bytes(b'')
+        collector = runtime.Collector(config, self.root / 'poll.json')
+        with mock.patch.object(runtime.Collector, 'delivery'):
+            collector.poll()
+            log.write_bytes(b'[' * 5000 + b'\n' + b'[1]\n')
+            collector = runtime.Collector(config, self.root / 'poll.json')
+            collector.poll()
+        saved = json.loads((self.root / 'poll.json').read_text())
+        self.assertEqual(saved['cursors']['nginx']['offset'], log.stat().st_size)
+
+    def test_distinct_services_are_bounded(self):
+        self.collector.state['health']['input:nginx'] = {'problem': False}
+        when = time.time() - 300
+        lines = [self.nginx_row(when, service='svc-{}'.format(i), category='api') for i in range(300)]
+        self.collector.nginx(lines)
+        services = {row['traffic'].get('service', '') for row in self.collector.state['queue'] if row.get('kind') == 'traffic'}
+        self.assertLessEqual(len(services), runtime.MAX_SERVICES + 2)
+        self.assertIn('', services)
+        self.assertTrue(self.collector.state['health']['traffic:capacity']['problem'])
+
+    def test_nginx_flood_never_evicts_audit_events(self):
+        self.collector.enqueue(runtime.event(self.config, 'auditd', 'change:ssh', 'Sensitive change', identity='audit-1'))
+        with mock.patch.object(runtime, 'MAX_QUEUE', 20), mock.patch.object(runtime, 'MAX_LOW_QUEUE', 12):
+            for i in range(50):
+                self.collector.enqueue_traffic({'category': 'api', 'requests': i})
+                self.collector.enqueue(runtime.event(self.config, 'nginx', 'server-error:api', 'x', identity='n{}'.format(i)))
+            self.collector.enqueue(runtime.event(self.config, 'aide', 'integrity', 'AIDE', identity='aide-1'))
+        sources = [row['event']['source'] for row in self.collector.state['queue'] if 'event' in row]
+        self.assertIn('auditd', sources)
+        self.assertIn('aide', sources)
+        self.assertLessEqual(sum(runtime.is_low(row) for row in self.collector.state['queue']), 12)
+        self.assertGreater(self.collector.state['dropped'], 0)
+        # High priority events are delivered first.
+        sent = []
+        def opened(request, timeout):
+            sent.append(json.loads(request.data).get('source'))
+            response = mock.MagicMock()
+            response.__enter__.return_value = SimpleNamespace(status=202, read=lambda limit: b'{"accepted":true}')
+            return response
+        (self.root / 'token').write_text('token')
+        opener = mock.Mock()
+        opener.open.side_effect = opened
+        with mock.patch.object(runtime.urllib.request, 'build_opener', return_value=opener):
+            self.collector.delivery()
+        self.assertEqual(sent[:2], ['auditd', 'aide'])
 
     def test_audit_summary_identity_is_stable(self):
         self.collector.audit(self.audit_record(1, 'wssec_accounts'))
