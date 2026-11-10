@@ -4,7 +4,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 
 ## Install
 
-`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security host helper and the deploy helper are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls), [deploy helper](#deploy-helper)).
+`lcm host apply` installs LCM on a systemd host whose console is published with `tailscale serve`, and lets LCM deploy itself from `main` afterwards. It installs the host files embedded in the binary (the reviewed files in [`deploy/`](../deploy/)) as described by the root-owned [host configuration](#host-configuration), and can be rerun at any time. It runs LCM as the unprivileged system account `lcm`; the standard installation grants only [`self-install`](#self-deploy) as a root command. Machine power, the security host helper, the deploy helper and the nginx ingress are optional components, off by default ([machine power](#local-machine-power-helper), [security host](#security-console-host-controls), [deploy helper](#deploy-helper), [ingress](#ingress)).
 
 | Path | Owner, mode | Contents |
 |---|---|---|
@@ -45,7 +45,8 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 | `components.deploy` | (`false`) | Install the [deploy helper](#deploy-helper) and the build account |
 | `runtimes` | (none) | Named [runtimes](#runtimes) that managed services may use: `{"node24": "/home/alice/.local/node"}`; names `^[a-z][a-z0-9]{0,15}$`, directories checked like `toolchains` and copied to `/opt/lcm/runtimes/<name>` |
 | `backup.dir` | (none) | Where the [typed backups](#backups) of managed services are kept; a directory of its own: absolute, not a system directory (`/`, `/var`, `/var/lib`, `/opt`, `/home`, ...) nor inside `/etc`, `/usr`, `/tmp` and the like, not `/var/backups/lcm` (where `host upgrade` keeps its sets; use for example `/var/backups/lcm-services`), not `/var/lib/lcm*`, `/var/cache/lcm-build` or `/opt/lcm`, and not overlapping a service's `/opt/<name>`, `/var/lib/<name>` or `/etc/<name>`, a runtime or an input. `apply` creates it as root 0700; an existing directory must already be root-owned 0700, as `apply` never changes the mode of one that exists. Without it the backup and restore operations are refused |
-| `services` | `lcm host allow` | The [deploy allowlist](#service-grants): `{"web": {"port": 3200, "runtimes": ["node24"], "inputs": {"assets": "/srv/inputs/web/assets"}}}`; `route` and `extraPaths` are reserved for the ingress component and refused |
+| `components.ingress` | (`null`) | The [ingress](#ingress) site: domain, listen addresses, ACME webroot, certbot settings, HSTS, domain-level files, the hand-made site to adopt |
+| `services` | `lcm host allow` | The [deploy allowlist](#service-grants): `{"web": {"port": 3200, "runtimes": ["node24"], "inputs": {"assets": "/srv/inputs/web/assets"}, "route": {"prefix": "/web/"}}}`; `route` and `external` are described under [routes](#routes); `extraPaths` is reserved for a later version and refused |
 
 ### Procedure
 
@@ -236,6 +237,103 @@ With `backup.dir` set in `host.json`, the deploy helper backs up and restores th
 **On a new machine.** Install LCM and the deploy component, set `backup.dir`, `host allow` the service and run `apply`, create the (empty) databases of `postgres` and `mongodb` sources, copy the set directory `<backup.dir>/<service>/<id>/` from the old machine to the same place (root 0700, files root 0600, manifest unchanged), and deploy the service once so that its unit and account exist. Then restore: `lcm resource action <service> restore --backup-id <id>`, or without the id for the newest set. LCM has no record of a copied set, so it asks the helper to list the sets (`backups`) and records the one it restores; a set whose manifest cannot be read is not offered. The restore verifies every artifact against the manifest, so a damaged copy is refused before anything is changed.
 
 **Prerequisites.** `sqlite` and `files` need nothing installed. `pg_dump`/`pg_restore` and `mongodump`/`mongorestore` must be installed for their sources. Do not put `backup.dir` under `/home`, `/root` or `/run/user`: the sandbox hides them.
+
+### Ingress
+
+With `components.ingress` set, LCM owns one nginx site for the domain and renders it as a whole from `host.json` and the services' route options; it keeps certbot and its timer. Nothing is installed for it when it is `null`, and turning it off removes nothing.
+
+| Path | Owner, mode | Contents |
+|---|---|---|
+| `/etc/nginx/sites-available/lcm-ingress.conf` | root 0644 | The rendered site; its first line is LCM's marker, and a file without it is never replaced |
+| `/etc/nginx/sites-enabled/lcm-ingress.conf` | root link | Link to the site |
+| `/var/lib/lcm-ingress/` | root 0700 | `routes/<service>.json` (accepted route options), `last-apply.json`, `previous.conf` (the site before the last change), `adopted.json` (the link cutover disabled), `reverted.json` |
+| `/var/www/lcm-ingress/well-known/` | root 0755 | Copies of the domain-level files nginx serves |
+| `<acmeWebroot>` (`/var/www/lcm-acme`) | root 0755 | certbot's webroot challenges, served on port 80 |
+| `/etc/letsencrypt/renewal-hooks/deploy/lcm-ingress-reload` | root 0755 | [`deploy/lcm-ingress-reload`](../deploy/lcm-ingress-reload): `nginx -t`, then reload, after certbot saved a renewed certificate |
+| `/run/lcm-ingress.lock` | root 0600 | Serializes every change of the site |
+
+```json
+"components": {
+  "ingress": {
+    "domain": "example.org",
+    "listen": ["192.0.2.10"],
+    "acmeWebroot": "/var/www/lcm-acme",
+    "tls": {"email": "ops@example.org", "keyType": "ecdsa"},
+    "hsts": false,
+    "wellKnown": {"assetlinks.json": "/etc/lcm/ingress/assetlinks.json"},
+    "adopt": "example.org",
+    "legacyLock": "/run/lock/example-nginx-deploy.lock"
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `domain` | Lower-case domain name, the site's `server_name` |
+| `listen` | IP addresses (canonical form, at most 8) both servers bind to; empty binds all addresses (IPv4 and IPv6) |
+| `acmeWebroot` | Default `/var/www/lcm-acme`; not in a system tree, home directories or `/var/lib`, and not overlapping a static directory |
+| `tls.email`, `tls.keyType` | certbot's account email and key type (`ecdsa`, the default, or `rsa`) |
+| `hsts` | Send `Strict-Transport-Security: max-age=31536000` from every location (default off) |
+| `wellKnown` | Domain-level files: `assetlinks.json`, `security.txt` or `apple-app-site-association`, each naming a root-owned file of at most 64 KiB; the content is copied and served at `/.well-known/<name>` with a fixed media type. The rest of `/.well-known/` answers 404 |
+| `adopt` | The hand-made site in `sites-enabled` whose link the first application disables ([cutover](#cutover-and-revert)) |
+| `legacyLock` | A lock file below `/run` that hand-made scripts still take while they edit nginx; while it exists, every change of the site takes it too |
+
+`apply` needs nginx (`/usr/sbin/nginx`) and reports certbot when it is missing. With the component on it also installs the [deploy helper](#deploy-helper) files (wrapper, pinned helper, sudoers rule, ledger), through which LCM applies route changes; with `components.deploy` false the helper refuses every deploy and backup operation.
+
+#### Routes
+
+```sh
+sudo bin/lcm host allow web --port 3200 --route /web/
+sudo bin/lcm host allow site --external --route / --static /var/www/site/current
+```
+
+A route's prefix, port and static directory come only from `services.<name>` in `host.json`:
+
+- `route.prefix`: `/` or an absolute path ending with `/`, of letters, digits and `._-` components, none starting with `.` (so `/.well-known/` is never a prefix); unique across services. Prefixes may nest: the longest one wins, and a location of one service may not lie in another service's longer prefix.
+- `route.static`: a directory served at the prefix (as nginx `root` for `/`, `alias` otherwise). It and every directory above it must be root-owned, not writable by group or others and not links; it may not be in a system tree, a home directory, `/var/lib`, `/var/log`, `/var/cache`, `/opt/lcm` or `backup.dir`.
+- `external: true`: LCM does not own the service's process or accounts. `apply` and `allow` create nothing for it, the deploy helper refuses its deploy and backup operations, and `port` is optional when the route has a static directory. An external service has no runtimes or inputs.
+
+Without route options a route proxies everything below the prefix to `http://127.0.0.1:<port>/` (stripping the prefix), or serves the static directory (`try_files $uri $uri/ =404`). `/prefix` (without the final `/`) redirects to `/prefix/`. The presentation options (proxy locations, SPA fallback, 404 page, immutable directories, downloads, redirects, CSP) belong to the service's document; their grammar is the reference in [`internal/ingress`](../internal/ingress/options.go).
+
+**What reaches nginx.** Documents carry no nginx syntax: locations come from fixed templates, every value is checked against a strict grammar (paths of letters, digits and `._-` components, fixed vocabularies for categories, media types and redirect codes, sizes up to 64m and timeouts up to 1h, a CSP subset without quotes, backslashes, `$`, braces, commas or line breaks) and checked again by the renderer, which writes it inside double quotes. Every location repeats the full header set (`X-Content-Type-Options`, `Referrer-Policy`, HSTS when on, the service's CSP or CSP-Report-Only), because `add_header` in a location replaces the inherited ones, and sets `$lcm_service` and `$lcm_category`. Proxy locations include `/etc/nginx/lcm/hooks/<service>/<category>-*.conf` (a glob without matches is valid), where the security component adds its observation rules.
+
+**Applying.** `apply`, `host cert issue`, `host ingress revert` and the deploy helper's `ingress.apply` change the site the same way, holding `/run/lcm-ingress.lock` (and `legacyLock` while it exists):
+
+1. Render the whole site; refuse it when a value, a static directory or a well-known file fails its checks.
+2. Copy the well-known files, write the site file atomically (the previous content goes to `previous.conf`), enable it and disable the adopted link.
+3. Test the complete configuration with `nginx -t`, exactly what a reload loads.
+4. Reload nginx and probe every route on the first listen address (or `127.0.0.1`) with the domain as `Host` and TLS server name; a probe passes with any answer except a server error of nginx itself (`502`-`504` mean the service is not answering yet and pass).
+5. On any failure put the previous file and links back, and reload again if nginx had loaded the change. The result is recorded in `last-apply.json`.
+
+`host apply --check` prints the rendered file when it would change it, together with the adoption. LCM sends a service's route options to the deploy helper (`ingress.apply`, see the [protocol](../internal/deployhelper/protocol.go)); the helper keeps them in `/var/lib/lcm-ingress/routes/` and puts the previous ones back when the site fails. It refuses while the site has never been installed or was reverted, and while the adopted site is enabled again, so that cutover stays an administrator's step. `ingress.status` reports the digest of the site the configuration renders, the installed one and the last result; `lcm host status` run as root compares them too (as another user it only checks that the installed site is LCM's).
+
+#### Certificates
+
+certbot keeps the certificate and renews it with its own timer. `apply` makes the renewal configuration `/etc/letsencrypt/renewal/<domain>.conf` use the webroot: it sets `authenticator = webroot`, `webroot_path = <acmeWebroot>,` and the domain's `[[webroot_map]]` entry, keeps every other line, and reports an `installer` other than `None` (certbot would edit nginx's files on renewal) as a manual action. It installs the deploy hook above and reports other deploy hooks, such as a hand-made reload, without removing them.
+
+On a new machine, after `apply` (which serves port 80 with the ACME location until a certificate exists):
+
+```sh
+sudo bin/lcm host cert issue
+```
+
+It applies the site without TLS, runs `certbot certonly --webroot -w <acmeWebroot> -d <domain> --email <email> --key-type <keyType> --agree-tos -n`, then applies the full site with the port 443 server. It refuses when the domain already has a certificate.
+
+#### Cutover and revert
+
+To take over a host whose site was written by hand, name that site in `adopt`, then:
+
+1. `sudo bin/lcm host apply --check`: review the rendered site and the line that disables the adopted site (its file in `sites-available` stays).
+2. Stop the scripts that still edit nginx, or set `legacyLock` to the lock they take. Avoid the days around a certificate renewal.
+3. `sudo bin/lcm host apply`: the first application disables the adopted link and records it in `adopted.json`.
+
+To go back:
+
+```sh
+sudo bin/lcm host ingress revert
+```
+
+It disables LCM's site, enables the adopted site again with the link it recorded (or `sites-available/<adopt>`), tests and reloads nginx (putting LCM's site back when that fails), then removes `lcm-ingress.conf` (kept as `previous.conf`) and marks the site reverted: the deploy helper refuses `ingress.apply` from then on. The next `apply` installs the site again; set `components.ingress` to `null` first to stay reverted.
 
 ## Uninstall
 

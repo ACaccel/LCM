@@ -95,6 +95,8 @@ LCM restarts services and runs commands, so it is a high-privilege system. The d
 
 **Managed services.** The build, install, run, backup and restore of a `managed` service never run as the `lcm` user: LCM sends fixed requests to the restricted [deploy helper](operations.md#deploy-helper), which acts as root only on what `host.json` grants. Data is produced and restored by an unprivileged worker as the service's own account in a sandbox; root only moves finished files into a root-only backup directory, with checksums, through confined, descriptor-checked operations ([backups](operations.md#backups)). LCM's own database is backed up by the server itself without privileges ([backup](operations.md#backup)).
 
+**Ingress.** The nginx site is written only by root: `lcm host apply` or the deploy helper's `ingress.apply` renders it as a whole from `host.json` (domain, prefixes, ports, static directories) and the services' route options, which select fixed templates and never carry nginx syntax. The site is tested with `nginx -t`, reloaded, probed and put back on any failure; the first application disables one named hand-made site, and only an administrator's `host apply` does that ([ingress](operations.md#ingress)).
+
 System-scope systemd units are controlled with a configured prefix, `sudo -n` by default (`LCM_SYSTEMCTL_PRIVILEGE`). A sudoers rule limits it to start, stop and restart of the units LCM may touch; status queries need no privilege. User-scope units (`scope: user`) use `systemctl --user` and need nothing. Example `/etc/sudoers.d/lcm`:
 
 ```
