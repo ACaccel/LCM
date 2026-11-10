@@ -172,6 +172,10 @@ func (a *applier) securityComponent(ctx context.Context, s *step) error {
 		}
 		return a.removeSecurity(ctx, s)
 	}
+	if a.ingressHeld != "" {
+		s.manual("waits until the ingress site applies (" + a.ingressHeld + "): adopting removes nginx hook files the hand-made site may include")
+		return nil
+	}
 	in := a.securityInput(sec)
 	if len(in.Services) > maxSecurityServices {
 		return fmt.Errorf("the security component observes at most %d services; services has %d", maxSecurityServices, len(in.Services))

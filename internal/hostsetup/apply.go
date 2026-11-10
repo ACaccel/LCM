@@ -88,6 +88,10 @@ type applier struct {
 	// downgrade, when set, warns that this build is older than the
 	// installed binary.
 	downgrade string
+	// ingressHeld is set when the ingress site could not be applied for a
+	// reason the administrator must fix; the security component then waits,
+	// since its adoption removes hook files a hand-made site may include.
+	ingressHeld string
 }
 
 // checkDowngrade compares the commit times that "lcm version" reports for

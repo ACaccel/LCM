@@ -105,6 +105,25 @@ func TestSecurityAfterIngress(t *testing.T) {
 	}
 }
 
+// TestSecurityWaitsForTheIngressSite: while the adopted site needs manual
+// action it stays enabled, so the security component must not remove the
+// hook files it may include.
+func TestSecurityWaitsForTheIngressSite(t *testing.T) {
+	th := ingressHost(t, true)
+	th.fs.file(SitesAvailable+"/example.org", handMadeSite, 0o666, 0, 0)
+	th.cfg.Components.Security = &Security{MachineID: "m-1"}
+	th.writeConfig(th.cfg)
+	for _, check := range []bool{true, false} {
+		res, out, err := th.apply(Options{Check: check})
+		if err != nil || res.Manual == 0 || !strings.Contains(out, "security:") || !strings.Contains(out, "waits until the ingress site applies") {
+			t.Fatalf("check=%v: %+v %v\n%s", check, res, err, out)
+		}
+		if len(th.r.sec.actions) != 0 || th.r.reloads != 0 {
+			t.Fatalf("check=%v: installer %v, reloads %d", check, th.r.sec.actions, th.r.reloads)
+		}
+	}
+}
+
 func TestSecurityInputWatchesGrantedServices(t *testing.T) {
 	a := &applier{cfg: Config{Services: map[string]ServiceGrant{"web": {Port: 3000}, "site": {Port: 3001}, "docs": {External: true}}}}
 	in := a.securityInput(&Security{MachineID: "m-1", Watch: map[string][]string{"deploy": {"/opt/web", "/opt/extra"}, "cron": {"/etc/cron.extra"}}})

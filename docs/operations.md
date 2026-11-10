@@ -330,7 +330,7 @@ To take over a host whose site was written by hand, name that site in `adopt`, t
 3. `sudo bin/lcm host apply`: the first application disables the adopted link and records it in `adopted.json` (a later `adopt` is added to the record).
 4. Once the projects no longer edit nginx, remove `legacyLock` from `host.json`.
 
-`apply` converges the security component after the deploy helper and the ingress site, so one run installs both and the security component's adoption removes its old nginx hook files only once the hand-made site that included them is disabled. When the same `apply` adopts an existing [security component](security.md#install-adopt-and-upgrade), first add to `components.security.watch.deploy` the root deploy tooling directories that projects on the host still use, until their services are deployed by LCM; the security component no longer watches them by itself.
+`apply` converges the security component after the deploy helper and the ingress site, so one run installs both and the security component's adoption removes its old nginx hook files only once the hand-made site that included them is disabled; while the site needs manual action, the security component waits. When the same `apply` adopts an existing [security component](security.md#install-adopt-and-upgrade), first add to `components.security.watch.deploy` the root deploy tooling directories that projects on the host still use, until their services are deployed by LCM; the security component no longer watches them by itself.
 
 To go back:
 
@@ -339,6 +339,8 @@ sudo bin/lcm host ingress revert
 ```
 
 It disables LCM's site, enables every adopted site again with the link it recorded (or `sites-available/<adopt>` without a record), tests and reloads nginx (putting LCM's site back when that fails), then removes `lcm-ingress.conf` (a copy goes to `previous.conf` when it can be read; the removal only checks the marker line), puts back the renewal configuration as it was before `apply` changed it, and marks the site reverted: the deploy helper refuses `ingress.apply` from then on. It does not wait for `legacyLock`, so going back stays possible while the lock is held. The next `apply` installs the site again; set `components.ingress` to `null` first to stay reverted.
+
+After a cutover that also adopted the security component, the hand-made site may include hook files the adoption removed, so `nginx -t` fails and `revert` keeps LCM's site. Undo the security adoption first (`sudo bin/lcm host security revert --apply`, which puts those files back), then revert the site.
 
 ## Uninstall
 

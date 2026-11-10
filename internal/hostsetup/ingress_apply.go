@@ -60,6 +60,7 @@ func (a *applier) ingressStep(ctx context.Context, s *step) error {
 	}
 	if info, err := fsys.Lstat(Nginx); err != nil || !info.IsRegular() {
 		s.manual("nginx is not installed (" + Nginx + "); install it (apt install nginx) and apply again")
+		a.ingressHeld = "nginx is not installed"
 		return nil
 	}
 	if _, err := a.h.Runner.LookPath("certbot"); err != nil {
@@ -84,6 +85,7 @@ func (a *applier) ingressStep(ctx context.Context, s *step) error {
 	if err != nil {
 		s.manual(err.Error())
 		s.note("the renewal configuration is changed only after the site applies")
+		a.ingressHeld = "the ingress site needs manual action"
 		return nil
 	}
 	for _, d := range plan.Dropped {
