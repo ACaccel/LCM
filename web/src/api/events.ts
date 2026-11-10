@@ -118,6 +118,10 @@ export function createEventApplier(qc: QueryClient): EventApplier {
       invalidate(qk.resourceDeployments(entry.resource));
       invalidate(qk.resource(entry.resource));
     }
+    // A backup, or a restore, which also adds the pre-restore copy.
+    if (entry.kind === "backup" || (entry.kind === "action" && entry.data?.["action"] === "restore")) {
+      invalidate(qk.resourceBackups(entry.resource));
+    }
   }
 
   /** A document or phase change: lists, the detail by name and by id, and ownership. */

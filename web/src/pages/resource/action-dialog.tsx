@@ -19,12 +19,14 @@ interface Props {
   action: ActionName;
   /** Preset commit, for "deploy this version" from the history. */
   version?: string;
+  /** Preset backup set, for "restore this backup" from the backups tab; the newest when absent. */
+  backupId?: string;
   /** Job names of the service, offered by run-job. */
   jobs?: string[];
   onClose: () => void;
 }
 
-const DANGEROUS: ReadonlySet<ActionName> = new Set(["stop", "rollback"]);
+const DANGEROUS: ReadonlySet<ActionName> = new Set(["stop", "rollback", "restore"]);
 
 // One endpoint answers a dry run with the plan (200) and a real run with the
 // started action (202); the generated type is their union.
@@ -106,7 +108,7 @@ function ActionProgress({ id, onClose }: { id: string; onClose: () => void }) {
  * service action. The buttons of the resource page are not shortcuts around policy:
  * the server checks the same preconditions for the preview and the run.
  */
-export function ActionDialog({ resource, action, version: presetVersion, jobs, onClose }: Props) {
+export function ActionDialog({ resource, action, version: presetVersion, backupId, jobs, onClose }: Props) {
   const qc = useQueryClient();
   const [version, setVersion] = useState(presetVersion ?? "");
   const [job, setJob] = useState(jobs?.[0] ?? "");
@@ -116,6 +118,7 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
   const body = {
     ...(action === "deploy" && version.trim() ? { version: version.trim() } : {}),
     ...(action === "run-job" ? { job } : {}),
+    ...(action === "restore" && backupId ? { backupId } : {}),
   };
   const key = JSON.stringify(body);
   const current = plan?.key === key;
@@ -194,6 +197,11 @@ export function ActionDialog({ resource, action, version: presetVersion, jobs, o
             <Field label={s.action.versionLabel} htmlFor="act-version">
               <input id="act-version" type="text" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="a41c9e2" spellCheck={false} />
             </Field>
+          )}
+          {action === "restore" && (
+            <p className="meta">
+              {s.action.backupLabel}: {backupId ? <code>{backupId}</code> : s.action.backupNewest}
+            </p>
           )}
           {action === "run-job" && (
             <Field label={s.action.jobLabel} htmlFor="act-job">
