@@ -31,7 +31,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 
 | Path | Contents |
 |---|---|
-| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper` and `deploy-helper`, root `host init`/`host apply`/`host allow`/`host upgrade`/`host security` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
+| `cmd/lcm/` | Entry point and subcommands: `serve` (a thin wrapper over `internal/app`), `admin`, `token`, `version`, `storage-schema`, restricted `machine-helper` and `deploy-helper`, root `host init`/`host apply`/`host allow`/`host upgrade`/`host cert`/`host ingress`/`host security` and `host status`, offline `convert` (`lcm/v1` -> `lcm/v2`), and the API client commands `apply`, `export`, `validate`, `get`, `run`, `resource` (`client.go` holds shared token/document handling) |
 | `internal/app/` | Composition root: builds every component in dependency order, registers resource types, adapters (lock -> catalog, execx -> monitor), the `resource` expression variable, monitor sync, retention jobs, `Run`/`Close` |
 | `internal/config/` | Env and flag configuration, validation, slog setup |
 | `internal/store/` | SQLite handles (writer + reader pool), migrator (including the Go part of the v2 resource migration, `migrate_resources.go`), `storetest.Open(t)` test helper |
@@ -58,6 +58,7 @@ Web development: Node 24 (`export PATH=$HOME/.local/node/bin:$PATH` here), `cd w
 | `internal/router/` | Router resource type: observation loops, native health, durable reboot operations; `xiaomi/` the allowlisted Xiaomi router web API client (`xiaomitest/` simulator) |
 | `internal/hostsetup/` | `lcm host`: host configuration (`/etc/lcm/host.json`), validation before any change, converging steps over an `FS`/`Runner` with in-memory fakes in tests, optional components (the security component through `deploy/security/install.py`), installed-vs-embedded status |
 | `internal/upgrademarker/` | Format of `<data dir>/host-upgrade.json`, the dependency-free file `lcm host upgrade` leaves and the server consumes at start (`internal/app/hostupgrade.go`, `catalog.RecordHostUpgrade`) to record the upgrade as a deployment |
+| `internal/ingress/` | Route presentation options and the deterministic renderer of LCM's nginx site (standard library only; shared by the model, host setup and the deploy helper); locations set `$lcm_service`/`$lcm_category` and include the security component's hooks |
 | `internal/connection/` | Host connections file (`LCM_CONNECTIONS_FILE`): strict loading, validation, secret references; documents can name but not widen a connection |
 | `internal/maintenance/` | Common local write gate held across resource/service/config-sync writes and persisted across machine maintenance; shared by all components in the controller |
 | `internal/trigger/` | `trigger.*` nodes and the manager running signal, git, cron and webhook watchers |
