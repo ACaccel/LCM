@@ -44,7 +44,7 @@ How to run LCM on a host. Build and general configuration reference: [README](..
 | `components.securityHost` | `--security-host-machine-id` (`null`) | `{"machineId": "<immutable Machine ID>"}` installs the [security host helper](#security-console-host-controls) |
 | `components.deploy` | (`false`) | Install the [deploy helper](#deploy-helper) and the build account |
 | `runtimes` | (none) | Named [runtimes](#runtimes) that managed services may use: `{"node24": "/home/alice/.local/node"}`; names `^[a-z][a-z0-9]{0,15}$`, directories checked like `toolchains` and copied to `/opt/lcm/runtimes/<name>` |
-| `backup.dir` | (none) | Where service backups will be kept (typed backups, a later version); absolute, not under `/var/lib/lcm` |
+| `backup.dir` | (none) | Where the [typed backups](#backups) of managed services are kept; absolute, not under `/var/lib/lcm`, created by `apply` as root 0700. Without it the backup and restore operations are refused |
 | `services` | `lcm host allow` | The [deploy allowlist](#service-grants): `{"web": {"port": 3200, "runtimes": ["node24"], "inputs": {"assets": "/srv/inputs/web/assets"}}}`; `route` and `extraPaths` are reserved for the ingress component and refused |
 
 ### Procedure
@@ -158,6 +158,7 @@ With `components.deploy: true`, `lcm host apply` installs what managed services 
 | `/var/lib/lcm-deploy/` | root 0700 | The helper's operation ledger and locks; `apply` creates the directory, the helper refuses to run without it |
 | `/var/lib/lcm-build/`, `/var/cache/lcm-build/` | root 0755 | Build and cache roots, with one directory per [service grant](#service-grants) |
 | `/opt/lcm/runtimes/<name>/` | root | [Runtime](#runtimes) copies |
+| `<backup.dir>/` | root 0700 | [Backup sets](#backups) of managed services, one directory per service; `apply` creates it when `backup.dir` is set |
 
 The protocol (operations, fields, replies, error codes, ledger) is documented in [`internal/deployhelper/protocol.go`](../internal/deployhelper/protocol.go). LCM calls `sudo -n -- /usr/local/libexec/lcm-deploy` with one JSON request on stdin; the helper reads `/etc/lcm/host.json` itself, with the same trust checks as `host apply`, and refuses every service, runtime or input it does not grant.
 
@@ -201,6 +202,29 @@ sudo bin/lcm host allow web --port 3200 --runtime node24 --input assets=/srv/inp
 - An existing account must be one host setup created (its comment above, a system account with that home and no login shell), and existing directories must already have the owners above; otherwise, and when another unit or a drop-in of that name exists, `apply` reports a manual action and `allow` refuses. Nothing is taken over.
 - A service removed from `services` is reported by `apply`; its account, directories, releases and unit are kept.
 
+#### Backups
+
+With `backup.dir` set in `host.json`, the deploy helper backs up and restores the data of a managed service ([what to declare](services.md#backup-and-restore-of-managed-services)). The helper's operations `backup`, `restore`, `backups` and `prune` are described in the protocol reference; this section is the host side.
+
+**Layout.** `<backup.dir>/<service>/<id>/` (root 0700, ids like releases: UTC time and eight hex digits, `pre-restore-` before them for the copy a restore takes) holds `manifest.json` and one artifact per source (`000-files.tar`, `001-sqlite.db`, `002-postgres.dump`, `003-mongodb.archive` with `-users` and `-roles`, `004-command.out`), all root 0600. The manifest (strictly decoded, root-written) records service, id, kind, mode, creation time, the release that was current, each source with its artifacts or `absent`, and each artifact's name, size and SHA-256. Nothing in the backup directory is writable by the service; the unit and the build sandbox hide it. `.stage-*`, `.tmp-*` and `.del-*` entries are leftovers of an operation that did not finish and are removed by the next `prune`.
+
+**Trust.** The producing process is a restricted subcommand of the pinned helper (`lcm backup-worker`), started with `systemd-run` as the service account:
+
+- Sandbox as the service unit's: `ProtectSystem=strict` with the data directory read-only (writable only for a restore), `ProtectHome`, `PrivateTmp`, `PrivateDevices`, no capabilities, `NoNewPrivileges`, `SocketBindDeny=any`, `RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX`, `UMask=0077`, LCM's data and `/etc/lcm`, the ledgers and the build trees inaccessible, `EnvironmentFile=/etc/<service>/env`, and `RuntimeMaxSec`, `MemoryMax=2G`, `TasksMax=512`, `LimitFSIZE` and `LimitCORE=0`.
+- The backup directory is replaced by an empty read-only file system with only this operation's staging directories bound back: `in` (the specification root wrote, read-only) and `out` (the worker's output).
+- Root treats `out` as hostile. It opens it through a tree confined to the directory, reads exactly the artifact names it computed itself, accepts only regular files owned by the service account, copies them into a new root-owned directory while hashing the bytes copied, writes the manifest and renames the directory into place. Sizes are bounded (a set up to 32 GiB, a file archive up to 2,000,000 entries), the staging output is measured every 10 s like a build, and an operation does not start with less than 2 GiB or 100,000 inodes free.
+- A restore verifies the manifest and the SHA-256 of every artifact while copying it to a staging directory readable by the service account, and the worker checks them again. It runs as the service account with only the data directory writable, so a restore can write nothing a compromised service could not. The worker extracts through a root confined to the data directory, refuses absolute names, `..`, links, devices, pipes, special mode bits and duplicate names, and swaps each source in next to its target; a link planted in the data directory is replaced, never followed. A SQLite file's `-wal`, `-shm` and `-journal` are removed first.
+- Postgres and MongoDB are handled by their official tools (`pg_dump`, `pg_restore`, `mongodump`, `mongorestore` from `/usr/bin` or `/usr/local/bin`) run by the worker as the service account; a missing tool fails the backup naming it. Authentication is whatever the service account has: peer authentication or the `PG*` variables of its env file, `MONGODB_URI` for MongoDB.
+- `mode: stopped` stops the unit around the backup and starts it again if it was active, also when the backup failed.
+
+**Retention.** `keep.daily`/`keep.weekly` (default 7 and 4) keep the newest set of each of the last N UTC days and ISO weeks that have one; the newest set is never removed, nor a set whose manifest cannot be read, nor a `pre-restore` set younger than 7 days. A set is renamed before it is deleted, so a half-removed set is never listed. LCM runs `prune` after every successful backup.
+
+**Restoring.** Use the console or `lcm resource action <service> restore [--backup-id <id>]`. A restore stops the service, so schedule it like a deployment. If the restore or the check afterwards fails the pre-restore copy is put back; if even that fails the service stays stopped and the message names the set to restore by hand (`restore` with that `backupId`). The pre-restore copy is kept for 7 days at least.
+
+**On a new machine.** Install LCM and the deploy component, set `backup.dir`, `host allow` the service and run `apply`, create the (empty) databases of `postgres` and `mongodb` sources, copy the set directory `<backup.dir>/<service>/<id>/` from the old machine to the same place (root 0700, files root 0600, manifest unchanged), and deploy the service once so that its unit and account exist. Then restore: `lcm resource action <service> restore --backup-id <id>`, or without the id for the newest set. LCM has no record of a copied set, so it asks the helper to list the sets (`backups`) and records the one it restores; a set whose manifest cannot be read is not offered. The restore verifies every artifact against the manifest, so a damaged copy is refused before anything is changed.
+
+**Prerequisites.** `sqlite` and `files` need nothing installed. `pg_dump`/`pg_restore` and `mongodump`/`mongorestore` must be installed for their sources. Do not put `backup.dir` under `/home`, `/root` or `/run/user`: the sandbox hides them.
+
 ## Uninstall
 
 ```sh
@@ -232,10 +256,13 @@ The unit sets neither `NoNewPrivileges=` (it would disable sudo) nor `ProtectSys
 | `calendars/` | Calendar files for `trigger.cron` |
 | `sources/` | LCM's own clones of config-source repositories; safe to delete, they are fetched again |
 | `work/<name>` | Build checkout of each service with a [source](services.md#source); cloned again by the next deploy when deleted. Backups and jobs run in it, so delete one only when its build output is disposable |
+| `backups/` | LCM's own [backups](#backup) (mode 0700): one directory per backup with `lcm.db`, `secrets/` and `manifest.json` |
 
 ## Backup
 
-The database runs in WAL mode, so copy it with SQLite rather than `cp`:
+**LCM's own state.** The server backs itself up once a day (the retention loop makes one when the last is 23 hours old): `VACUUM INTO` writes a consistent copy of `lcm.db` while LCM runs, the readable secret files of the secrets directory are copied next to it, and `manifest.json` records the schema and every file's SHA-256. It runs as the `lcm` account without privileges, so it also works without the deploy component. Backups are in `<data dir>/backups/<id>/` (0700), the newest one of each of the last `LCM_SELF_BACKUP_KEEP` days (default 7; 0 turns it off) is kept, and each is a record of the resource `lcm` (`GET /api/v1/resources/lcm/backups`, kind `self`), so the console shows when the last one was made. They sit on the same disk as the database: they protect against a damaged or wrongly changed database, not against losing the disk. Copy the directory elsewhere for that. To restore: stop LCM, replace `lcm.db` with the set's copy (removing `lcm.db-wal` and `lcm.db-shm`), restore `secrets/` if needed and start the matching binary. LCM never restores itself.
+
+**By hand.** The database runs in WAL mode, so copy it with SQLite rather than `cp`:
 
 ```sh
 sudo -u lcm sqlite3 /var/lib/lcm/lcm.db ".backup '/var/backups/lcm/lcm-$(date +%F).db'"
@@ -344,6 +371,12 @@ Storage schema 15 replaces `source.repo` and `source.remote` of services with `s
 4. Config sources: `GET /api/v1/config/sources` lists them; note which own services with a source (`GET /api/v1/config/ownership`).
 
 **After the upgrade.** `lcm export resource/<name>` shows `source.url`. Git documents that still use `source.repo` or `source.remote` fail to sync with an issue naming the field and the resource keeps its migrated configuration; replace the fields with the exported `source.url` and commit. The migration rewrote the recorded repository documents too, so a repository updated to the same content shows no drift. `lcm convert` does not convert a v1 `source` ([rules](policies.md#policy-as-code)).
+
+### Upgrade to typed backups (schema 17)
+
+Storage schema 17 adds the `backups` table (one row per backup set, pre-restore copy and restore, and per backup of LCM's own database); no existing row changes. The schema changes, so self-install refuses it (`storage schema unknown or changed`): pause self-deploy before the commit reaches `main`, then `make build && sudo bin/lcm host upgrade` ([Upgrade](#upgrade)); the upgrade backs up the database first and restores it when the new binary does not come up healthy. Older binaries refuse the migrated database.
+
+**After the upgrade.** The self backup makes its first copy within an hour (`<data dir>/backups`); set `LCM_SELF_BACKUP_KEEP=0` before the start to turn it off. A managed service gets typed backups by adding `backup.sources` ([services](services.md#backup-and-restore-of-managed-services)); set `backup.dir` in `host.json` and run `sudo bin/lcm host apply`, which creates the directory (root 0700, an existing directory of another mode is changed to it), and apply it once after the new binary is installed so the pinned helper contains the backup operations (`lcm host status` shows a helper that differs from this build). Services using the command form of `backup` are unchanged.
 
 ### Upgrade to bounded retention (schema 16)
 
