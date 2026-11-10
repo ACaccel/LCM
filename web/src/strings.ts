@@ -548,6 +548,10 @@ export const s = {
         title: "部署後驗證",
         description: "任何方式部署後等待服務恢復健康，逾時就回復。已使用自動部署範本的服務不需要。",
       },
+      "cert-expiry": {
+        title: "憑證到期通知",
+        description: "資源的 tls 檢查轉為異常（憑證即將到期、驗證失敗或無法連線）時發出通知。預設不發送通知，需指定 secret 才會啟用。",
+      },
       "restart-on-down": {
         title: "異常自動重啟",
         description: "服務健康狀態轉為異常時重啟，並回報是否恢復。這個範本不限制重啟次數：持續失敗的服務每次轉為異常都會再重啟。",
@@ -574,7 +578,7 @@ export const s = {
       heartbeatTimeout: "等待 heartbeat 的時間上限",
     } as Record<string, string>,
     paramHelp: {
-      resource: "policy 要處理的服務。會等待恢復健康的範本，需要該服務至少有一個 critical 健康檢查。",
+      resource: "policy 要處理的服務。會等待恢復健康的範本，需要該服務至少有一個 critical 健康檢查；憑證到期通知範本則需要該服務有 tls 檢查。",
       repo: "LCM 輪詢新 commit 的 Git repo；選擇服務後會帶入該服務的來源 (source.url)。",
       branch: "要監看的分支；選擇服務後會帶入該服務設定的分支。",
       requireCI: "只部署 GitHub Actions 檢查已通過的 commit。",

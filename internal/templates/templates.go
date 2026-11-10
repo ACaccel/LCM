@@ -167,6 +167,16 @@ var descriptors = []descriptor{
 		params: []Param{service, healthTimeout(), notify},
 	},
 	{
+		id: "cert-expiry", title: "Certificate expiry", resourceParam: "resource",
+		description: "Reports when a tls check of the resource goes down: the served certificate expires soon, " +
+			"no longer verifies or the endpoint is unreachable. Notifications are off until a secret is named.",
+		params: []Param{
+			{Name: "resource", Type: TypeService, Required: true,
+				Description: "Resource that has a tls check. The check's minValidity decides how early it goes down."},
+			notify,
+		},
+	},
+	{
 		id: "restart-on-down", title: "Restart when down", resourceParam: "resource",
 		description: "Restarts the service when its health turns down and reports whether it recovered. " +
 			"This simple version has no rate limit: a service that keeps failing is restarted every time.",

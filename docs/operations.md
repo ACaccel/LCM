@@ -426,6 +426,8 @@ The target is under 50 MB resident. `LCM_MEMORY_LIMIT` (default `40MiB`, `off` d
 
 LCM serves plain HTTP. For access beyond localhost run a TLS-terminating reverse proxy (nginx, Caddy) in front, keep LCM on `127.0.0.1`, and set `LCM_COOKIE_SECURE=true`. Login rate limiting counts failures per client address; behind a proxy every client has the proxy's address, so one client can lock out all of them. When the proxy sets `X-Forwarded-For` (replacing or appending to a client-supplied value), set `LCM_TRUSTED_PROXIES` to its address, for example `127.0.0.1/32,::1/128` for a local proxy. The event stream (`/api/v1/events`) needs response buffering turned off in the proxy.
 
+To watch the proxy's certificate, give a resource a [`tls` check](services.md#health-checks) (days left and `notAfter` show in its message) and, to be told, instantiate the `cert-expiry` [template](policies.md#templates). It connects without privileges and does not renew anything.
+
 
 ## Security console host controls
 

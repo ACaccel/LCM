@@ -5,7 +5,7 @@
 // # Checks
 //
 // Resources of every type declare model.Check values; they are handed to
-// Sync as Def values. Check types (http, tcp, systemd, docker, command, heartbeat,
+// Sync as Def values. Check types (http, tcp, tls, systemd, docker, command, heartbeat,
 // prometheus) live in a Registry like node types: props are decoded and
 // validated once at Sync, and external programs run behind the Runner
 // interface so tests use a fake.
