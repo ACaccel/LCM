@@ -391,13 +391,16 @@ type BackupResult struct {
 // RestoreResult is the result of restore. Restored and Skipped name the
 // sources (type with path or database) that were restored and that cannot
 // be (command artifacts). Started reports that the unit was active before
-// and was started again.
+// and was started again. LeftStopped reports that the restore failed and
+// putting the previous data back failed too, so the unit was deliberately
+// not started on half-restored data.
 type RestoreResult struct {
 	BackupID     string   `json:"backupId"`
 	PreRestoreID string   `json:"preRestoreId,omitempty"`
 	Restored     []string `json:"restored"`
 	Skipped      []string `json:"skipped"`
 	Started      bool     `json:"started"`
+	LeftStopped  bool     `json:"leftStopped,omitempty"`
 }
 
 // BackupInfo is one entry of backups. Problem is set instead of the other

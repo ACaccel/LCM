@@ -1225,12 +1225,16 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	if e := h.applyStage(ctx, env, opName+"r", stage); e != nil {
 		msg := "the restore failed: " + e.msg
 		if uerr := h.undoRestore(context.WithoutCancel(ctx), env, opName, pm, lim); uerr != nil {
-			msg += "; putting the previous data back from " + pm.BackupID + " failed too: " + uerr.msg
+			// The data is neither the old nor the new: starting the service on
+			// it could corrupt it further or serve garbage.
+			result.LeftStopped = true
+			msg += "; putting the previous data back from " + pm.BackupID + " failed too: " + uerr.msg +
+				"; the service was left stopped because its data may be incomplete, so repair it from " + pm.BackupID + " before starting it"
 		} else {
 			msg += "; the previous data was put back"
-		}
-		if serr := startAgain(); serr != nil {
-			msg += "; starting the service again failed: " + serr.msg
+			if serr := startAgain(); serr != nil {
+				msg += "; starting the service again failed: " + serr.msg
+			}
 		}
 		resp.Log = e.log
 		return refuse(resp, CodeFailed, "%s", msg)

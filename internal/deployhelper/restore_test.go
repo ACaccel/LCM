@@ -395,8 +395,13 @@ func TestFailedRestoreIsUndone(t *testing.T) {
 			return run()
 		}
 		resp := e.refused(e.restoreReq(id), CodeFailed, "putting the previous data back from pre-restore-")
-		if !strings.Contains(resp.Message, "failed too") || resp.Restore == nil || !e.active {
+		// The data is half restored, so the service stays stopped.
+		if !strings.Contains(resp.Message, "failed too") || !strings.Contains(resp.Message, "left stopped") ||
+			resp.Restore == nil || !resp.Restore.LeftStopped || e.active {
 			t.Errorf("reply %+v active %v", resp, e.active)
+		}
+		if calls := e.systemctlCalls(); calls[len(calls)-1] == "start web.service" {
+			t.Errorf("systemctl calls %v", calls)
 		}
 		// The pre-restore set stays for the administrator.
 		if !e.exists("/var/backups/lcm/web/" + resp.Restore.PreRestoreID + "/manifest.json") {
