@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ACaccel/lcm/internal/execx"
+	"github.com/ACaccel/lcm/internal/hostsetup"
 )
 
 // installTool writes a test program as a trusted tool of the host and
@@ -439,6 +441,13 @@ func TestBackupDoesNotTrustTheWorkersOutput(t *testing.T) {
 		"an absent source of a real backup": {func(e *env, out string) {
 			e.writeReal(out+"/result.json", `{"version":1,"sources":[{"absent":true},{}]}`, 0o600)
 		}, "reports files media as absent"},
+		"an extra file": {func(e *env, out string) {
+			e.writeReal(out+"/leftover", "x", 0o600)
+		}, "unexpected entry \"leftover\""},
+		"a subdirectory": {func(e *env, out string) {
+			e.mkdirReal(out + "/sub")
+			e.writeReal(out+"/sub/x", "x", 0o600)
+		}, "unexpected entry \"sub\""},
 		"a directory in place of an artifact": {func(e *env, out string) {
 			_ = os.Remove(out + "/001-sqlite.db")
 			e.mkdirReal(out + "/001-sqlite.db")
@@ -463,6 +472,53 @@ func TestBackupDoesNotTrustTheWorkersOutput(t *testing.T) {
 				t.Errorf("left %v", names)
 			}
 		})
+	}
+}
+
+// recordingFS notes the order in which the helper secures the staging
+// output and opens it for reading.
+type recordingFS struct {
+	hostsetup.OS
+	events *[]string
+}
+
+func (r recordingFS) Chown(name string, want hostsetup.Info, uid, gid int) error {
+	if strings.HasSuffix(name, "/out") {
+		*r.events = append(*r.events, fmt.Sprintf("chown %d:%d", uid, gid))
+	}
+	return r.OS.Chown(name, want, uid, gid)
+}
+
+func (r recordingFS) Chmod(name string, want hostsetup.Info, perm fs.FileMode) error {
+	if strings.HasSuffix(name, "/out") {
+		*r.events = append(*r.events, fmt.Sprintf("chmod %04o", perm))
+	}
+	return r.OS.Chmod(name, want, perm)
+}
+
+func (r recordingFS) OpenTree(root string) (hostsetup.Tree, error) {
+	if strings.HasSuffix(root, "/out") {
+		*r.events = append(*r.events, "read")
+	}
+	return r.OS.OpenTree(root)
+}
+
+// The service account can keep a descriptor of the staging output after the
+// worker ends, so root takes the directory over before it reads anything.
+func TestBackupSecuresTheOutputBeforeReadingIt(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	var events []string
+	e.h.FS = recordingFS{OS: hostsetup.OS{Root: e.root}, events: &events}
+	e.ok(backupReq(fileSources...))
+	// The measurement and the copy both read the directory.
+	if len(events) < 3 || events[0] != fmt.Sprintf("chown %d:%d", e.h.RootUID, e.h.RootGID) || events[1] != "chmod 0700" || slices.Contains(events[2:], "chown") {
+		t.Errorf("events %v", events)
+	}
+	for _, ev := range events[2:] {
+		if ev != "read" {
+			t.Errorf("events %v", events)
+		}
 	}
 }
 

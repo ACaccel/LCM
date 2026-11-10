@@ -2,6 +2,7 @@ package deployhelper
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -628,7 +629,30 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 		CreatedAt: h.Clock.Now().UnixMilli(), RestoredFrom: p.restoredFrom}
 	m.ReleaseID, m.Commit = h.currentRelease(p.svc)
 	before, err := h.FS.Lstat(out)
-	if err != nil {
+	switch {
+	case err != nil:
+		return zero, failf(CodeFailed, "%v", err)
+	case !before.IsDir() || before.IsLink() || before.UID != p.acc.UID:
+		return zero, failf(CodeFailed, "the output directory is not the service account's directory")
+	}
+	// The worker is gone, but the service account may still hold a
+	// descriptor of out (its own, or one a child passed over a socket, or
+	// reached through /proc) and write to it later. Take the directory away
+	// from the account, so that nothing can be added after the next
+	// measurement, and measure again.
+	if err := h.FS.Chown(out, before, h.RootUID, h.RootGID); err != nil {
+		return zero, failf(CodeFailed, "secure the output directory: %v", err)
+	}
+	if err := h.FS.Chmod(out, before, 0o700); err != nil {
+		return zero, failf(CodeFailed, "secure the output directory: %v", err)
+	}
+	lim := h.backupLimits()
+	watch := lim
+	watch.MaxEntries = stageEntries
+	if u := h.usage(watch, out); u.stopped != "" || u.bytes > lim.MaxBytes || u.entries > stageEntries {
+		return zero, failf(CodeFailed, "the backup output exceeds its limits (%s)", cmp.Or(u.stopped, fmt.Sprintf("%d bytes in %d entries", u.bytes, u.entries)))
+	}
+	if before, err = h.FS.Lstat(out); err != nil {
 		return zero, failf(CodeFailed, "%v", err)
 	}
 	t, err := h.FS.OpenTree(out)
@@ -645,18 +669,22 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 	} else if err := decodeStrict(raw, maxResult, &res); err != nil || len(res.Sources) != len(p.sources) {
 		return zero, failf(CodeFailed, "the worker's result is not valid")
 	}
-	if err := h.FS.Mkdir(tmp, 0o700, h.RootUID, h.RootGID); err != nil {
-		return zero, failf(CodeFailed, "%v", err)
-	}
-	lim := h.backupLimits()
 	for i, s := range p.sources {
-		ms := manifestSource{BackupSource: s, Artifacts: []string{}, Absent: res.Sources[i].Absent}
-		if ms.Absent && (!p.allowMissing || (s.Type != SourceFiles && s.Type != SourceSQLite)) {
+		if res.Sources[i].Absent && (!p.allowMissing || (s.Type != SourceFiles && s.Type != SourceSQLite)) {
 			return zero, failf(CodeFailed, "the worker reports %s as absent", describeSource(s))
 		}
 		if res.Sources[i].Skipped < 0 || (s.Type != SourceFiles && res.Sources[i].Skipped != 0) {
 			return zero, failf(CodeFailed, "the worker's result is not valid")
 		}
+	}
+	if e := expectOutput(t, p.sources, res); e != nil {
+		return zero, e
+	}
+	if err := h.FS.Mkdir(tmp, 0o700, h.RootUID, h.RootGID); err != nil {
+		return zero, failf(CodeFailed, "%v", err)
+	}
+	for i, s := range p.sources {
+		ms := manifestSource{BackupSource: s, Artifacts: []string{}, Absent: res.Sources[i].Absent}
 		m.Skipped += res.Sources[i].Skipped
 		if !ms.Absent {
 			for _, name := range artifactNames(i, s) {
@@ -675,6 +703,34 @@ func (h *Helper) collect(p setParams, id, out, tmp string) (setManifest, *opErr)
 		m.Files = []manifestFile{}
 	}
 	return m, nil
+}
+
+// expectOutput refuses an output directory that holds anything but the
+// result and the artifacts the sources call for, or anything but regular
+// files: the account that wrote it cannot add a subdirectory or a leftover
+// that root would later walk.
+func expectOutput(t hostsetup.Tree, sources []BackupSource, res workerResult) *opErr {
+	want := map[string]bool{resultName: true}
+	for i, s := range sources {
+		if !res.Sources[i].Absent {
+			for _, name := range artifactNames(i, s) {
+				want[name] = true
+			}
+		}
+	}
+	names, _, err := t.ReadDir(".")
+	if err != nil {
+		return failf(CodeFailed, "%v", err)
+	}
+	for _, n := range names {
+		if !want[n] {
+			return failf(CodeFailed, "the worker left an unexpected entry %q", hostsetup.Printable(n, 64))
+		}
+		if info, err := t.Lstat(n); err != nil || !info.IsRegular() {
+			return failf(CodeFailed, "%s is not a regular file", hostsetup.Printable(n, 64))
+		}
+	}
+	return nil
 }
 
 func readTreeFile(t hostsetup.Tree, name string, max int64) ([]byte, error) {
