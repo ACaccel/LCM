@@ -84,7 +84,7 @@ The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused,
 |---|---|
 | `url` | Required. A remote (`https://`, `ssh://`, `git@host:path`) or the absolute path of a local development repository. It must not carry credentials (only the ssh user `git`) and must not point into LCM's build directory |
 | `branch` | Required. Branch a deploy without `--version` takes the head of |
-| `build`, `install` | Optional `sh -c` commands run in the build checkout |
+| `build`, `install` | Optional `sh -c` commands run in the build checkout. A command that exits with status 75 asks for the operator and promises it changed nothing: the deployment is recorded as failed with the code `deploy.needsUpgrade` and the last line of the output, a service that still runs stays `running`, and policies can test the code (`auto-deploy` then does not roll back). LCM's own [self-deploy](operations.md#self-deploy) uses it for a storage schema change |
 | `timeout` | Limit of each step, default 15m |
 
 - **Build checkout.** LCM owns one checkout per service at `<data dir>/work/<name>` (`/var/lib/lcm/work/<name>` with `deploy/`); a document cannot name it. The first deploy clones `url` there (an existing empty directory counts as missing; a non-empty directory without `.git` is refused). Every later deploy first sets the checkout's `origin` to `url`, so editing `url` switches the source at the next deploy, then fetches.

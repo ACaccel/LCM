@@ -258,6 +258,58 @@ func TestDeployBuildFailureLeavesFailed(t *testing.T) {
 	}
 }
 
+// An install script that exits with ExitNeedsUpgrade asks for the operator and
+// has changed nothing: the deployment fails with the stable code, and a
+// service that still runs stays running.
+func TestDeployNeedsUpgradeLeavesServiceRunning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		state  rt.State
+		script string
+		want   catalog.State
+	}{
+		{"running service", rt.StateActive, "echo 'storage schema 16 -> 17 needs the operator' >&2; exit 75", catalog.StateRunning},
+		{"stopped service", rt.StateInactive, "exit 75", catalog.StateFailed},
+		{"another status", rt.StateActive, "exit 74", catalog.StateFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGitFixture(t)
+			e := newEnv(t, realGit(g))
+			e.put(g.doc("app", okBuild, tc.script), 0)
+			e.setState("app", catalog.StateRunning)
+			e.runtime.adapter("app").set(func(a *fakeAdapter) { a.state = tc.state })
+
+			res, err := e.mgr.Deploy(e.ctx, "app", catalog.ActionOptions{})
+			var se *catalog.StepError
+			if !errors.As(err, &se) || se.Step != "install" || !errors.Is(err, catalog.ErrDeployFailed) {
+				t.Fatalf("err = %v", err)
+			}
+			if got := errors.Is(err, catalog.ErrNeedsUpgrade); got != (tc.script != "exit 74") {
+				t.Fatalf("errors.Is(err, ErrNeedsUpgrade) = %v for %q", got, err)
+			}
+			if res.To != tc.want || e.state("app") != tc.want {
+				t.Fatalf("result %+v, state %s, want %s", res, e.state("app"), tc.want)
+			}
+			if len(e.runtime.adapter("app").Calls()) != 0 {
+				t.Fatalf("a refused install must not restart the service: %v", e.runtime.adapter("app").Calls())
+			}
+			d := deployments(t, e, "app")[0]
+			if d.Outcome != catalog.OutcomeFailed || !strings.Contains(d.Error, "install") {
+				t.Fatalf("deployment = %+v", d)
+			}
+			if tc.script == "exit 74" {
+				return
+			}
+			if !strings.HasPrefix(d.Error, "deployment failed at install: deploy.needsUpgrade") {
+				t.Fatalf("deployment error = %q", d.Error)
+			}
+			if tc.script != "exit 75" && !strings.HasSuffix(d.Error, "deploy.needsUpgrade: storage schema 16 -> 17 needs the operator") {
+				t.Fatalf("deployment error does not carry the script's last line: %q", d.Error)
+			}
+		})
+	}
+}
+
 func TestDeployOtherFailures(t *testing.T) {
 	t.Run("restart fails", func(t *testing.T) {
 		g := newGitFixture(t)

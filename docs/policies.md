@@ -19,7 +19,7 @@ Four built-in templates ([`examples/templates/`](../examples/templates), embedde
 
 | Template | What it does |
 |---|---|
-| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback`; optional: one message per deployment, on Discord or a konata relay, shows the stages as they finish |
+| `auto-deploy` | New commit on a branch -> optional GitHub CI check (`ci.status`, optionally by workflow file) -> deploy window -> `lifecycle.deploy` -> wait for the service to turn healthy -> otherwise `lifecycle.rollback` (not after a deploy that fails with `deploy.needsUpgrade`, see [services](services.md#source); that is announced instead); optional: one message per deployment, on Discord or a konata relay, shows the stages as they finish |
 | `scheduled-backup` | Cron (default `Asia/Taipei`, runs once after downtime) -> `lifecycle.backup` with retry and backoff -> optional wait for a heartbeat check -> notify on failure |
 | `post-deploy-verify` | After any deployment of the service, wait for health and roll back on timeout |
 | `restart-on-down` | Health turns `down` -> restart -> wait for recovery -> notify. It has no rate limit: a service that keeps failing is restarted every time |

@@ -22,6 +22,21 @@ import (
 // holds the log; whether to roll back is up to the caller or a policy.
 var ErrDeployFailed = errors.New("catalog: deployment failed")
 
+// ExitNeedsUpgrade is the exit status with which a build or install script
+// reports that the candidate cannot be installed by a deployment but needs
+// an action by the operator, and that it changed nothing. The last line of
+// its output says what to do. The self-deploy service uses it when the
+// candidate's storage schema differs from the running server's, which only
+// "lcm host upgrade" can migrate (docs/operations.md#self-deploy).
+const ExitNeedsUpgrade = 75
+
+// ErrNeedsUpgrade is matched by the error of a deployment whose build or
+// install script exited with ExitNeedsUpgrade. Its text is the stable code
+// "deploy.needsUpgrade", which policies can test for. The deployment is
+// recorded as failed, but the service is left as it was, so the caller must
+// not roll back.
+var ErrNeedsUpgrade = errors.New("deploy.needsUpgrade")
+
 // StepError reports the pipeline step that failed.
 type StepError struct {
 	Step string
@@ -227,8 +242,9 @@ func (s *session) record(ctx context.Context, res *ActionResult, version, previo
 			s.m.log.Error("finish deployment failed", "service", s.name, "error", err)
 		}
 		// A managed service the failed deployment certainly did not touch
-		// keeps running; the helper's other failures leave it failed.
-		s.settle(ctx, s.rt.Type != model.RuntimeManaged || !s.leavesServiceAlone(perr))
+		// keeps running; the helper's other failures leave it failed. A
+		// deployment that asks for an upgrade changed nothing.
+		s.settle(ctx, !errors.Is(perr, ErrNeedsUpgrade) && (s.rt.Type != model.RuntimeManaged || !s.leavesServiceAlone(perr)))
 		return perr
 	}
 	if err := s.m.cat.SetDeploymentVersions(fctx, id, sha, previous); err != nil {
@@ -258,6 +274,9 @@ func (s *session) pipeline(ctx context.Context, src *model.Source, co checkout, 
 		log.add(c, r.Output)
 		if err != nil {
 			log.note("error: %v", err)
+			if (step == "build" || step == "install") && execx.ExitCode(err) == ExitNeedsUpgrade {
+				return r, &StepError{Step: step, Err: withReason(ErrNeedsUpgrade, r.Output)}
+			}
 			return r, &StepError{Step: step, Err: withReason(err, r.Output)}
 		}
 		return r, nil
