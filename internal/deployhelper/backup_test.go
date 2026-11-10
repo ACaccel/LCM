@@ -292,6 +292,57 @@ func TestBackupOfACleanWALDatabase(t *testing.T) {
 	e.refused(backupReq(BackupSource{Type: SourceSQLite, Path: "wal.sqlite"}), CodeFailed, "the backup worker exited with status 1")
 }
 
+// The leftovers of an interrupted operation are swept by the next changing
+// one, whether or not it finishes, not only by prune.
+func TestChangingOperationsSweepLeftovers(t *testing.T) {
+	e := newEnv(t)
+	e.seedData()
+	leftovers := func() {
+		e.mkdir("/var/backups/lcm/web/.stage-deadbeefb/out", 0o700)
+		e.write("/var/backups/lcm/web/.stage-deadbeefb/out/big", "x", 0o600)
+		e.mkdir("/var/backups/lcm/web/.tmp-deadbeefb", 0o700)
+		e.mkdir("/var/backups/lcm/web/.del-20200101T000000Z-00000000", 0o700)
+		// mkdir loosens the chain above; the backup directory is root's alone.
+		for _, d := range []string{"/var/backups/lcm", "/var/backups/lcm/web"} {
+			if err := os.Chmod(e.real(d), 0o700); err != nil { //nolint:gosec // a directory of the test host
+				t.Fatal(err)
+			}
+		}
+	}
+	left := func() []string {
+		var out []string
+		names, _ := os.ReadDir(e.real("/var/backups/lcm/web"))
+		for _, n := range names {
+			if strings.HasPrefix(n.Name(), ".") {
+				out = append(out, n.Name())
+			}
+		}
+		return out
+	}
+	leftovers()
+	a := e.ok(backupReq(fileSources...)).Backup
+	if l := left(); len(l) != 0 {
+		t.Errorf("a backup left %v", l)
+	}
+	leftovers()
+	// Even a refused restore clears them (an unknown set, after the sweep).
+	e.refused(e.restoreReq("20200101T000000Z-00000000"), CodeNotFound, "there is no backup")
+	if l := left(); len(l) != 0 {
+		t.Errorf("a restore left %v", l)
+	}
+	leftovers()
+	e.ok(e.restoreReq(a.BackupID))
+	if l := left(); len(l) != 0 {
+		t.Errorf("a restore left %v", l)
+	}
+	// Listing changes nothing.
+	leftovers()
+	e.ok(Request{Op: OpBackups, Service: "web"})
+	if l := left(); len(l) != 3 {
+		t.Errorf("a listing removed %v", l)
+	}
+}
+
 func TestBackupStoppedModeStopsAndStarts(t *testing.T) {
 	e := newEnv(t)
 	e.seedData()

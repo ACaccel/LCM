@@ -415,6 +415,9 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 	if e != nil {
 		return respond(resp, e)
 	}
+	if e := h.sweep(env); e != nil {
+		return respond(resp, e)
+	}
 	p := setParams{backupEnv: env, opID: req.OperationID, tag: "b", kind: KindBackup, mode: req.Mode, sources: req.Sources, timeoutSec: req.TimeoutSec}
 	if p.mode == "" {
 		p.mode = ModeOnline
@@ -905,6 +908,24 @@ func (h *Helper) backups(req Request, cfg hostsetup.Config, g hostsetup.ServiceG
 	return resp
 }
 
+// sweep removes the staging leftovers of an operation that was interrupted.
+// Every changing operation calls it first: it holds the service's lock, so no
+// backup or restore of the service is running and the leftovers are dead.
+func (h *Helper) sweep(env backupEnv) *opErr {
+	names, err := h.FS.ReadDir(env.svcDir)
+	if err != nil {
+		return failf(CodeFailed, "%v", err)
+	}
+	for _, n := range names {
+		if strings.HasPrefix(n, stagePrefix) || strings.HasPrefix(n, tmpPrefix) || strings.HasPrefix(n, delPrefix) {
+			if err := h.FS.RemoveAll(env.svcDir + "/" + n); err != nil {
+				return failf(CodeFailed, "remove %s: %v", n, err)
+			}
+		}
+	}
+	return nil
+}
+
 // prune removes what the retention rules allow.
 func (h *Helper) prune(_ context.Context, req Request, cfg hostsetup.Config, g hostsetup.ServiceGrant) Response {
 	resp := reply(req)
@@ -912,18 +933,8 @@ func (h *Helper) prune(_ context.Context, req Request, cfg hostsetup.Config, g h
 	if e != nil {
 		return respond(resp, e)
 	}
-	names, err := h.FS.ReadDir(env.svcDir)
-	if err != nil {
-		return refuse(resp, CodeFailed, "%v", err)
-	}
-	// This operation holds the service's lock, so no backup or restore of it
-	// is running: staging leftovers are dead.
-	for _, n := range names {
-		if strings.HasPrefix(n, stagePrefix) || strings.HasPrefix(n, tmpPrefix) || strings.HasPrefix(n, delPrefix) {
-			if err := h.FS.RemoveAll(env.svcDir + "/" + n); err != nil {
-				return refuse(resp, CodeFailed, "remove %s: %v", n, err)
-			}
-		}
+	if e := h.sweep(env); e != nil {
+		return respond(resp, e)
 	}
 	list, e := h.listSets(env)
 	if e != nil {
@@ -1140,6 +1151,9 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	resp := reply(req)
 	env, e := h.backupContext(ctx, req.Service, cfg, g, true)
 	if e != nil {
+		return respond(resp, e)
+	}
+	if e := h.sweep(env); e != nil {
 		return respond(resp, e)
 	}
 	m, sum, e := h.readSet(env.svcDir, env.svc, req.BackupID)
