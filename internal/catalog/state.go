@@ -97,6 +97,8 @@ var actionStates = map[string][]State{
 	ActionBackup:   {StateRegistered, StateRunning, StateStopped, StateFailed},
 	ActionRestore:  {StateRegistered, StateRunning, StateStopped, StateFailed},
 	ActionRunJob:   {StateRegistered, StateRunning, StateStopped, StateFailed},
+	// Presenting a service changes nothing about its process.
+	ActionApplyRoute: {StateRegistered, StateRunning, StateStopped, StateFailed},
 }
 
 // Actions of the manager.
@@ -109,6 +111,9 @@ const (
 	ActionBackup   = "backup"
 	ActionRestore  = "restore"
 	ActionRunJob   = "run-job"
+	// ActionApplyRoute sends the document's route options to the deploy
+	// helper again.
+	ActionApplyRoute = "apply-route"
 )
 
 // CanAct reports whether action may start in state.

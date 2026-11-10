@@ -4607,7 +4607,7 @@ components:
       enum: [unknown, healthy, degraded, down]
     ActionName:
       type: string
-      enum: [deploy, rollback, start, stop, restart, backup, restore, run-job]
+      enum: [deploy, rollback, start, stop, restart, backup, restore, run-job, apply-route]
     ActionRequest:
       type: object
       additionalProperties: false
@@ -5729,6 +5729,8 @@ components:
             config:
               type: object
               additionalProperties: true
+              properties:
+                route: { $ref: "#/components/schemas/ServiceRoute" }
               description: |
                 Typed by `type` and `adapter` and validated strictly by the server (unknown
                 fields are refused). service: the runtime fields valid for the adapter
@@ -5736,7 +5738,8 @@ components:
                 `restart`, `status`; managed: `artifact`, `start`, `startArgs`, `runtime`,
                 `migrate`, `keepReleases`, and a required `source` with `build` and no
                 `install`) plus `source`, `backup` (`command` and `timeout`; managed:
-                `sources`, `mode`, `timeout`, `keep`) and `jobs`. machine:
+                `sources`, `mode`, `timeout`, `keep`), `jobs` and `route` (any adapter:
+                how the host's nginx site presents the service). machine:
                 `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,
                 `thresholds`. router: `interval`, `staleAfter`, `thresholds`
                 (`cpuPercent`, `memoryPercent`, `consecutive`, `hysteresis`).
@@ -5907,12 +5910,17 @@ components:
         service:
           type: object
           description: Services only.
-          required: [deployedVersion, lastDeployment]
+          required: [deployedVersion, lastDeployment, route]
           properties:
             deployedVersion: { type: string }
             lastDeployment:
               oneOf:
                 - $ref: "#/components/schemas/Deployment"
+                - type: "null"
+            route:
+              description: The outcome of sending the document's `route` section to the host; null for a service that has no route section and never had an outcome.
+              oneOf:
+                - $ref: "#/components/schemas/ServiceRouteStatus"
                 - type: "null"
         machine:
           type: object
@@ -5932,6 +5940,101 @@ components:
               oneOf:
                 - $ref: "#/components/schemas/RouterStatus"
                 - type: "null"
+    ServiceRoute:
+      type: object
+      additionalProperties: false
+      description: |
+        The `route` section of a service document: how the host's nginx site presents the
+        service. It carries no privileges; the prefix, port and static directory of the
+        route come from the host configuration (`services.<name>.route`). All paths are
+        relative to the route's prefix. Without a section the route proxies everything
+        below the prefix (or serves its static directory).
+      properties:
+        proxy:
+          type: array
+          maxItems: 32
+          description: Locations below the prefix that go to the service's approved port.
+          items: { $ref: "#/components/schemas/ServiceRouteProxy" }
+        static:
+          $ref: "#/components/schemas/ServiceRouteStatic"
+        redirects:
+          type: array
+          maxItems: 32
+          items: { $ref: "#/components/schemas/ServiceRouteRedirect" }
+        headers:
+          $ref: "#/components/schemas/ServiceRouteHeaders"
+    ServiceRouteProxy:
+      type: object
+      additionalProperties: false
+      required: [path, upstream]
+      properties:
+        path: { type: string, description: "Relative path below the prefix; a prefix location ends with `/`." }
+        exact: { type: boolean, description: Match the path alone instead of everything below it. }
+        upstream: { type: string, description: Absolute path on the service that the path maps to. }
+        bodyLimit: { type: string, description: "Largest request body, at most `64m` (`3m`, `512k`)." }
+        cookiePath: { type: boolean, description: Rewrite the cookie path `/` of the service's responses to the prefix. }
+        websocket: { type: boolean, description: Pass connection upgrades through and do not buffer. }
+        timeout: { type: string, description: "Read and write timeout, at most `1h` (`75s`, `5m`)." }
+        category:
+          type: string
+          enum: [api, auth, upload, socket, health, static]
+          description: Names the location for the security component's hooks; empty is `api`.
+    ServiceRouteStatic:
+      type: object
+      additionalProperties: false
+      properties:
+        spa: { type: boolean, description: Answer unknown paths with `index.html` instead of 404. }
+        notFound: { type: string, description: "Page served with a 404, relative to the static directory." }
+        immutable:
+          type: array
+          maxItems: 16
+          items: { type: string }
+          description: Directories whose files never change in place; cached for a year.
+        downloads:
+          type: array
+          maxItems: 16
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, type]
+            properties:
+              path: { type: string }
+              type: { type: string, description: A media type from a fixed list. }
+    ServiceRouteRedirect:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      properties:
+        from: { type: string, description: Path below the prefix. }
+        to: { type: string, description: "Path from the prefix's root; `/` is the prefix itself." }
+        code: { type: integer, enum: [301, 302, 307, 308], description: Default 301. }
+    ServiceRouteHeaders:
+      type: object
+      additionalProperties: false
+      properties:
+        csp: { type: string, description: "The Content-Security-Policy, in a restricted grammar the server validates." }
+        cspReportOnly: { type: boolean, description: Send it as Content-Security-Policy-Report-Only. }
+    ServiceRouteStatus:
+      type: object
+      required: [configured, state, current, message, at, operationId, siteSha256, changes]
+      properties:
+        configured: { type: boolean, description: The document has a `route` section. }
+        state:
+          type: string
+          enum: ["", pending, applied, refused, failed, unknown, skipped]
+          description: |
+            Newest recorded outcome; empty when nothing was ever sent. `refused`: the host does not
+            grant what the route needs or refused the change; `failed`: the helper tried and put the site back;
+            `unknown`: the outcome could not be confirmed; `skipped`: the deploy helper or the ingress
+            component is not available. A refusal never rejects the document.
+        current: { type: boolean, description: The outcome concerns the route as the document says now. }
+        message: { type: string, description: The helper's message. }
+        at: { type: [string, "null"], format: date-time }
+        operationId: { type: string }
+        siteSha256: { type: string, description: Digest of the nginx site the helper rendered. }
+        changes:
+          type: array
+          items: { type: string }
     ResourcePhaseRequest:
       type: object
       required: [phase]

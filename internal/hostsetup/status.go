@@ -134,6 +134,10 @@ func unknown(st FileStatus, err error) FileStatus {
 	return st
 }
 
+// ComponentState summarizes the files of a component: not installed when
+// none exists, otherwise the most significant file state.
+func ComponentState(files []FileStatus) string { return componentState(files) }
+
 // componentState summarizes the files: not installed when none exists,
 // otherwise the most significant file state.
 func componentState(files []FileStatus) string {

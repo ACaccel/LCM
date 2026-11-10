@@ -128,6 +128,9 @@ type Manager struct {
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
+	// routeMu serializes the sends of route options: they all change one
+	// nginx site.
+	routeMu sync.Mutex
 }
 
 // NewManager returns a Manager.

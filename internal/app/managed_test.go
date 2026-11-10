@@ -31,6 +31,10 @@ type fakeDeployHelper struct {
 	releases []deployhelper.Release
 	current  string
 	sets     []deployhelper.BackupInfo
+	// routeRefusal, when set, refuses ingress.apply with this message.
+	routeRefusal string
+	// ingress is the answer to ingress.status.
+	ingress *hostsetup.IngressStatus
 }
 
 func newFakeDeployHelper() *fakeDeployHelper {
@@ -81,6 +85,15 @@ func (f *fakeDeployHelper) handle(req deployhelper.Request) (deployhelper.Respon
 		f.sets = append(f.sets, deployhelper.BackupInfo{BackupID: pre, Kind: deployhelper.KindPreRestore, CreatedAt: 1000 + int64(f.n), Size: 256,
 			ManifestSHA256: fmt.Sprintf("%064x", f.n), Sources: f.sets[i].Sources, RestoredFrom: req.BackupID})
 		resp.Restore = &deployhelper.RestoreResult{BackupID: req.BackupID, PreRestoreID: pre, Restored: []string{"files media"}, Skipped: []string{}, Started: true}
+	case deployhelper.OpIngressApply:
+		if f.routeRefusal != "" {
+			resp.State = deployhelper.StateFailed
+			resp.Code, resp.Message = deployhelper.CodeRefused, f.routeRefusal
+			return resp, &deployhelper.Error{Code: resp.Code, Message: resp.Message}
+		}
+		resp.IngressApply = &deployhelper.IngressApplyResult{SHA256: strings.Repeat("c", 64), Changes: []string{"update /etc/nginx/sites-available/lcm-ingress.conf"}}
+	case deployhelper.OpIngressStatus:
+		resp.Ingress = f.ingress
 	case deployhelper.OpBackups:
 		resp.Backups = slices.Clone(f.sets)
 		slices.Reverse(resp.Backups)

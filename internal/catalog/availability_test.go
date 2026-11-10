@@ -88,11 +88,13 @@ func TestAvailableActions(t *testing.T) {
 			catalog.ActionStart: catalog.ReasonUnsupported, catalog.ActionStop: catalog.ReasonUnsupported,
 			catalog.ActionRestart: catalog.ReasonUnsupported, catalog.ActionDeploy: "", catalog.ActionRollback: "",
 			catalog.ActionBackup: catalog.ReasonNotConfigured, catalog.ActionRestore: catalog.ReasonNotConfigured, catalog.ActionRunJob: catalog.ReasonNotConfigured,
+			catalog.ActionApplyRoute: catalog.ReasonNotConfigured,
 		},
 		"app": {
 			catalog.ActionStart: catalog.ReasonInvalidState, catalog.ActionStop: "", catalog.ActionRestart: "",
 			catalog.ActionDeploy: catalog.ReasonNotConfigured, catalog.ActionRollback: catalog.ReasonNotConfigured,
 			catalog.ActionBackup: "", catalog.ActionRestore: catalog.ReasonNotConfigured, catalog.ActionRunJob: catalog.ReasonNotConfigured,
+			catalog.ActionApplyRoute: catalog.ReasonNotConfigured,
 		},
 	}
 	for name, want := range cases {

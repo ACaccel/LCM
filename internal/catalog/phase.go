@@ -31,6 +31,8 @@ var actionRisks = map[string]string{
 	ActionBackup:   resource.RiskReversible,
 	ActionRestore:  resource.RiskDisruptive,
 	ActionRunJob:   resource.RiskDisruptive,
+	// The site is rolled back by the helper when the apply fails.
+	ActionApplyRoute: resource.RiskReversible,
 }
 
 // phaseRisks are the risks of the phase changes of a service.

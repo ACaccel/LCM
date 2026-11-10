@@ -214,6 +214,9 @@ type healthDTO struct {
 type serviceExtrasDTO struct {
 	DeployedVersion string         `json:"deployedVersion"`
 	LastDeployment  *deploymentDTO `json:"lastDeployment"`
+	// Route is the outcome of sending the document's route section to the
+	// host; nil for a service without one.
+	Route *catalog.RouteStatus `json:"route"`
 }
 
 type statusExtrasDTO struct {
@@ -367,6 +370,15 @@ func (s *Server) detail(ctx context.Context, r *http.Request, rec resource.Recor
 		if len(deps) > 0 {
 			d := toDeploymentDTO(deps[0])
 			out.Service.LastDeployment = &d
+		}
+		if s.manager != nil {
+			svc, err := s.catalog.Get(ctx, rec.Name)
+			if err != nil {
+				return resourceDetailDTO{}, err
+			}
+			if out.Service.Route, err = s.manager.RouteStatus(ctx, svc); err != nil {
+				return resourceDetailDTO{}, err
+			}
 		}
 	}
 	return out, nil
