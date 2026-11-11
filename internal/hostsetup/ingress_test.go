@@ -321,7 +321,7 @@ func TestIngressRevert(t *testing.T) {
 	th.converge()
 	installed := th.fs.content(SiteFile)
 	var out bytes.Buffer
-	if err := RevertIngress(context.Background(), th.host, RevertOptions{Out: &out}); err != nil {
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{Out: &out}); err != nil {
 		t.Fatalf("revert: %v\n%s", err, out.String())
 	}
 	if th.fs.get(SiteFile) != nil || th.fs.get(SiteLink) != nil {
@@ -354,7 +354,7 @@ func TestIngressRevert(t *testing.T) {
 
 	// A failing revert keeps the site.
 	th.r.nginxTest = func() error { return exit(1) }
-	if err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil {
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil {
 		t.Fatal("revert succeeded")
 	}
 	if th.fs.get(SiteLink) == nil || th.fs.get(SitesEnabled+"/example.org") != nil || th.fs.content(SiteFile) != installed {
@@ -363,7 +363,7 @@ func TestIngressRevert(t *testing.T) {
 
 	// Revert as a user is refused.
 	th.host.Privileged = false
-	if err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil || !strings.Contains(err.Error(), "must run as root") {
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil || !strings.Contains(err.Error(), "must run as root") {
 		t.Fatalf("revert as a user: %v", err)
 	}
 }
@@ -774,7 +774,7 @@ func TestIngressRevertRestoresRenewalAndAllAdoptedSites(t *testing.T) {
 		t.Fatal("the renewal configuration was not changed")
 	}
 	var out bytes.Buffer
-	if err := RevertIngress(context.Background(), th.host, RevertOptions{Out: &out}); err != nil {
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{Out: &out}); err != nil {
 		t.Fatalf("revert: %v\n%s", err, out.String())
 	}
 	if th.lockedLegacy != "" {
@@ -794,11 +794,58 @@ func TestIngressRevertRestoresRenewalAndAllAdoptedSites(t *testing.T) {
 	}
 }
 
+func TestIngressRevertCheckChangesNothing(t *testing.T) {
+	th := ingressHost(t, true)
+	th.converge()
+	th.fs.resetOps()
+	reloads, calls := th.r.reloads, len(th.r.calls)
+	var out bytes.Buffer
+	res, err := RevertIngress(context.Background(), th.host, RevertOptions{Check: true, Out: &out})
+	if err != nil || res.Changes != 4 {
+		t.Fatalf("check: %+v %v\n%s", res, err, out.String())
+	}
+	for _, s := range []string{
+		"would change: disable lcm-ingress.conf",
+		"would change: enable the adopted site example.org again",
+		"would change: remove " + SiteFile,
+		"would change: restore " + RenewalConf("example.org") + " as it was before ingress changed it",
+	} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("check output lacks %q:\n%s", s, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "is still set") {
+		t.Errorf("check output:\n%s", out.String())
+	}
+	if w := th.fs.writes(); len(w) > 0 || Reverted(th.fs) || th.r.reloads != reloads || len(th.r.calls) != calls {
+		t.Errorf("check changed the host or ran commands: %v", w)
+	}
+
+	// The real revert does what the check listed, and a second check has
+	// nothing left to report.
+	var real bytes.Buffer
+	done, err := RevertIngress(context.Background(), th.host, RevertOptions{Out: &real})
+	if err != nil || done.Changes != res.Changes {
+		t.Fatalf("revert: %+v %v\n%s", done, err, real.String())
+	}
+	out.Reset()
+	res, err = RevertIngress(context.Background(), th.host, RevertOptions{Check: true, Out: &out})
+	if err != nil || res.Changes != 0 || !strings.Contains(out.String(), "unchanged: the ingress site is not installed") {
+		t.Fatalf("second check: %+v %v\n%s", res, err, out.String())
+	}
+
+	// A check as a user is refused like the revert.
+	th.host.Privileged = false
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{Check: true}); err == nil || !strings.Contains(err.Error(), "must run as root") {
+		t.Fatalf("check as a user: %v", err)
+	}
+}
+
 func TestIngressRevertDoesNotReadTheSiteBack(t *testing.T) {
 	th := ingressHost(t, true)
 	th.converge()
 	th.fs.file(SiteFile, ingress.Marker+"\n"+strings.Repeat("#\n", maxSite), 0o644, 0, 0)
-	if err := RevertIngress(context.Background(), th.host, RevertOptions{}); err != nil {
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{}); err != nil {
 		t.Fatalf("revert of an oversized site: %v", err)
 	}
 	if th.fs.get(SiteFile) != nil || th.fs.get(SiteLink) != nil {
@@ -806,7 +853,7 @@ func TestIngressRevertDoesNotReadTheSiteBack(t *testing.T) {
 	}
 	// A file without the marker is never removed.
 	th.fs.file(SiteFile, "server {}\n", 0o644, 0, 0)
-	if err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil || th.fs.get(SiteFile) == nil {
+	if _, err := RevertIngress(context.Background(), th.host, RevertOptions{}); err == nil || th.fs.get(SiteFile) == nil {
 		t.Fatalf("removed a site LCM did not write: %v", err)
 	}
 }

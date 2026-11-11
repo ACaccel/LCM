@@ -38,7 +38,7 @@ Commands:
                               --publish serves its /opt/<service>/www
   host status                 Compare installed host files with this build
   host cert issue             Obtain the ingress domain's first certificate (root)
-  host ingress revert         Remove the ingress site, enable the adopted one (root)
+  host ingress revert         Remove the ingress site, enable the adopted one (root; --check)
 
 Commands that talk to a running server (see the README):
   apply -f <file|dir> [--dry-run] [--force]   Apply Resource, Policy and Module documents

@@ -29,4 +29,7 @@ func TestHostAllowUsage(t *testing.T) {
 	if r := cli("host", "ingress", "revert"); r.code != 1 || !strings.Contains(r.stderr, "must run as root") {
 		t.Errorf("unprivileged revert: %+v", r)
 	}
+	if r := cli("host", "ingress", "revert", "--check"); r.code != 1 || !strings.Contains(r.stderr, "must run as root") {
+		t.Errorf("unprivileged revert --check: %+v", r)
+	}
 }

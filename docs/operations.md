@@ -338,8 +338,11 @@ To take over a host whose site was written by hand, name that site in `adopt`, t
 To go back:
 
 ```sh
+sudo bin/lcm host ingress revert --check   # what would change
 sudo bin/lcm host ingress revert
 ```
+
+`--check` prints `would change: <what>` for each step (the links, the site file, the renewal configuration) or `unchanged: the ingress site is not installed`, and exits 3 while a change is pending, as in `host apply --check`. It validates the recorded links and the kept renewal configuration like the real run, but takes no lock and neither tests nor reloads nginx, so only the real run finds an `nginx -t` failure.
 
 It disables LCM's site, enables every adopted site again with the link it recorded (or `sites-available/<adopt>` without a record), tests and reloads nginx (putting LCM's site back when that fails), then removes `lcm-ingress.conf` (a copy goes to `previous.conf` when it can be read; the removal only checks the marker line), puts back the renewal configuration as it was before `apply` changed it, and marks the site reverted: the deploy helper refuses `ingress.apply` from then on. It does not wait for `legacyLock`, so going back stays possible while the lock is held. The next `apply` installs the site again; set `components.ingress` to `null` first to stay reverted.
 

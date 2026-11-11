@@ -1042,8 +1042,10 @@ func SiteStatus(env IngressEnv, cfg Config) (IngressStatus, error) {
 // links the applications recorded or, without a record, the
 // configuration's adopt) and puts back the renewal configuration apply
 // changed. The caller holds the ingress lock. It does not read the site
-// back beyond its marker. It returns what it changed.
-func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, error) {
+// back beyond its marker. It returns what it changed; with check it
+// validates the same things and returns what it would change, without
+// writing, testing or reloading nginx.
+func RevertSite(ctx context.Context, env IngressEnv, cfg Config, check bool) ([]string, error) {
 	fsys := env.FS
 	for _, d := range nginxDirs {
 		if _, err := trustedAs(fsys, d, env.RootUID, false); err != nil {
@@ -1088,6 +1090,9 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 	}
 	for _, rec := range restore {
 		did = append(did, "enable the adopted site "+rec.Name+" again")
+	}
+	if check {
+		return revertCheck(env, did, installed)
 	}
 	if len(did) > 0 {
 		change := func() error {
@@ -1148,6 +1153,22 @@ func RevertSite(ctx context.Context, env IngressEnv, cfg Config) ([]string, erro
 	return did, recordLast(env, "", nil)
 }
 
+// revertCheck completes the list of what RevertSite would change with the
+// steps after the links: the site file and the renewal configuration.
+func revertCheck(env IngressEnv, did []string, installed bool) ([]string, error) {
+	if installed {
+		did = append(did, "remove "+SiteFile)
+	}
+	orig, found, err := readRenewal(env)
+	if err != nil {
+		return did, err
+	}
+	if found {
+		did = append(did, "restore "+orig.Path+" as it was before ingress changed it")
+	}
+	return did, nil
+}
+
 // renewalOriginal is certbot's renewal configuration as it was before apply
 // first changed it.
 type renewalOriginal struct {
@@ -1165,22 +1186,31 @@ func saveRenewal(env IngressEnv, p string, mode fs.FileMode, content []byte) err
 	return writeState(env, renewalFile, append(data, '\n'))
 }
 
+// readRenewal reads the kept renewal configuration and checks that it can
+// be put back; found is false when none was kept.
+func readRenewal(env IngressEnv) (orig renewalOriginal, found bool, err error) {
+	data, err := readLimited(env.FS, renewalFile, 2*maxConfigSize)
+	if errors.Is(err, fs.ErrNotExist) {
+		return orig, false, nil
+	}
+	if err != nil {
+		return orig, false, err
+	}
+	if err := json.Unmarshal(data, &orig); err != nil || !within(orig.Path, RenewalDir) || path.Clean(orig.Path) != orig.Path || !strings.HasSuffix(orig.Path, ".conf") {
+		return orig, false, fmt.Errorf("%s cannot be used; restore the renewal configuration by hand", renewalFile)
+	}
+	if _, err := trustedAs(env.FS, orig.Path, env.RootUID, true); err != nil {
+		return orig, false, fmt.Errorf("the renewal configuration cannot be restored: %w", err)
+	}
+	return orig, true, nil
+}
+
 // restoreRenewal puts back the kept renewal configuration and returns its
 // path, or "" when none was kept.
 func restoreRenewal(env IngressEnv) (string, error) {
-	data, err := readLimited(env.FS, renewalFile, 2*maxConfigSize)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
+	orig, found, err := readRenewal(env)
+	if err != nil || !found {
 		return "", err
-	}
-	var orig renewalOriginal
-	if err := json.Unmarshal(data, &orig); err != nil || !within(orig.Path, RenewalDir) || path.Clean(orig.Path) != orig.Path || !strings.HasSuffix(orig.Path, ".conf") {
-		return "", fmt.Errorf("%s cannot be used; restore the renewal configuration by hand", renewalFile)
-	}
-	if _, err := trustedAs(env.FS, orig.Path, env.RootUID, true); err != nil {
-		return "", fmt.Errorf("the renewal configuration cannot be restored: %w", err)
 	}
 	if err := env.FS.WriteFile(orig.Path, strings.NewReader(orig.Content), orig.Mode&0o644, env.RootUID, env.RootGID); err != nil {
 		return "", err

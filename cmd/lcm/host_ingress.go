@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 
 	"github.com/ACaccel/lcm/internal/hostsetup"
 )
@@ -34,6 +35,7 @@ func (a *app) hostIngress(ctx context.Context, fs *flag.FlagSet, args []string) 
 		return usagef("host ingress: expected subcommand revert")
 	}
 	path := fs.String("config", hostsetup.ConfigPath, "host configuration file")
+	check := fs.Bool("check", false, "report what would change without changing anything (exit status 3 when something would)")
 	pos, err := parseArgs(fs, args[1:])
 	if err != nil {
 		return err
@@ -45,5 +47,12 @@ func (a *app) hostIngress(ctx context.Context, fs *flag.FlagSet, args []string) 
 	if err != nil {
 		return err
 	}
-	return hostsetup.RevertIngress(ctx, h, hostsetup.RevertOptions{ConfigPath: *path, Out: a.stdout})
+	res, err := hostsetup.RevertIngress(ctx, h, hostsetup.RevertOptions{ConfigPath: *path, Check: *check, Out: a.stdout})
+	if err != nil {
+		return err
+	}
+	if *check && res.Changes > 0 {
+		return problemError{fmt.Sprintf("%d changes pending", res.Changes)}
+	}
+	return nil
 }

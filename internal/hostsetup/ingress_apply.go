@@ -401,12 +401,17 @@ func IssueCertificate(ctx context.Context, h Host, o CertOptions) error {
 type RevertOptions struct {
 	ConfigPath string
 	Out        io.Writer
+	// Check reports what revert would change without changing anything.
+	Check bool
 }
+
+// RevertResult counts what RevertIngress changed, or with Check would.
+type RevertResult struct{ Changes int }
 
 // RevertIngress removes LCM's site and enables the adopted hand-made site
 // again. The deploy helper refuses ingress.apply until "host apply" applies
 // the site again; to stay reverted, set components.ingress to null first.
-func RevertIngress(ctx context.Context, h Host, o RevertOptions) error {
+func RevertIngress(ctx context.Context, h Host, o RevertOptions) (RevertResult, error) {
 	if o.ConfigPath == "" {
 		o.ConfigPath = ConfigPath
 	}
@@ -415,36 +420,44 @@ func RevertIngress(ctx context.Context, h Host, o RevertOptions) error {
 		out = safeWriter{w: o.Out}
 	}
 	if !h.Privileged {
-		return errors.New("must run as root, from a reviewed build: sudo bin/lcm host ingress revert")
+		return RevertResult{}, errors.New("must run as root, from a reviewed build: sudo bin/lcm host ingress revert")
 	}
 	if err := CheckExecutable(h.Executable); err != nil {
-		return err
+		return RevertResult{}, err
 	}
 	cfg, err := LoadConfig(h.FS, o.ConfigPath)
 	if err != nil {
-		return safeError{err}
+		return RevertResult{}, safeError{err}
 	}
 	// Revert never waits for the legacy lock, which anyone who can read
 	// the lock file can hold: going back must stay possible.
-	unlock, err := h.lockIngress("")
-	if err != nil {
-		return err
+	// A check reads only, so it neither needs nor creates the lock.
+	if !o.Check {
+		unlock, err := h.lockIngress("")
+		if err != nil {
+			return RevertResult{}, err
+		}
+		defer unlock()
 	}
-	defer unlock()
-	did, err := RevertSite(ctx, h.ingressEnv(), cfg)
+	did, err := RevertSite(ctx, h.ingressEnv(), cfg, o.Check)
+	verb := "changed: "
+	if o.Check {
+		verb = "would change: "
+	}
 	for _, d := range did {
-		_, _ = fmt.Fprintln(out, "changed: "+d)
+		_, _ = fmt.Fprintln(out, verb+d)
 	}
+	res := RevertResult{Changes: len(did)}
 	if err != nil {
-		return safeError{err}
+		return res, safeError{err}
 	}
 	if len(did) == 0 {
 		_, _ = fmt.Fprintln(out, "unchanged: the ingress site is not installed")
 	}
-	if cfg.Components.Ingress != nil {
+	if cfg.Components.Ingress != nil && !o.Check {
 		_, _ = fmt.Fprintf(out, "components.ingress is still set in %s: the next sudo bin/lcm host apply installs the site again; set it to null to stay reverted.\n", o.ConfigPath)
 	}
-	return nil
+	return res, nil
 }
 
 // privilegedConfig checks that the command runs as root from a reviewed
