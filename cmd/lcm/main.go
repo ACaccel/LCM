@@ -35,7 +35,10 @@ Commands:
                               Add a service to the deploy allowlist and create
                               its account and directories (root); --route P
                               [--static DIR] [--external] publish it through ingress,
-                              --publish serves its /opt/<service>/www
+                              --publish serves its /opt/<service>/www;
+                              --instance NAME[:PORT] (instead of --port),
+                              --instance-group NAME=GROUP, --group G,
+                              --after UNIT, --wants UNIT (repeatable)
   host status                 Compare installed host files with this build
   host cert issue             Obtain the ingress domain's first certificate (root)
   host ingress revert         Remove the ingress site, enable the adopted one (root; --check)

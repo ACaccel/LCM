@@ -105,7 +105,7 @@ func TestMonitorDefsSkipRetiredAndCarryLabels(t *testing.T) {
 		rec("host", model.ResourceMachine, resource.PhaseManaged, "ping"),
 		{Name: "d", Type: model.ResourceService, Phase: resource.PhaseManaged},
 	}
-	defs := monitorDefs(recs)
+	defs := monitorDefs(recs, nil)
 	if len(defs) != 3 || defs[0].ID() != "a/one" || defs[1].ID() != "a/two" || defs[0].Labels["tier"] != "web" ||
 		defs[0].ResourceType != model.ResourceService || defs[2].ID() != "host/ping" || defs[2].ResourceType != model.ResourceMachine {
 		t.Fatalf("defs = %+v", defs)

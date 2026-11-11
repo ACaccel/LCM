@@ -731,8 +731,8 @@ func TestBackupToolsAndCommand(t *testing.T) {
 	for name, want := range map[string]string{
 		"000-postgres.dump":         "dump\n",
 		"001-mongodb.archive":       "archive\n",
-		"001-mongodb-users.archive": "archive\n",
-		"001-mongodb-roles.archive": "archive\n",
+		"001-mongodb-admin.archive": "archive\n",
+		"001-mongodb-users.bson":    "",
 		"002-command.out":           "command-output --all\n",
 	} {
 		if got := e.read(set + "/" + name); got != want {
@@ -742,7 +742,7 @@ func TestBackupToolsAndCommand(t *testing.T) {
 	args, _ := os.ReadFile(argsFile) //nolint:gosec // a file of the test's own tree
 	for _, want := range []string{
 		"--format=custom --no-password", "--dbname=app",
-		"--gzip --db=app --config=", "--gzip --db=admin --collection=system.users --config=", "--collection=system.roles",
+		"--gzip --db=app --config=", "--gzip --db=admin --config=", "--db=admin --collection=system.users --out=- --config=",
 	} {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("tool arguments lack %q:\n%s", want, args)

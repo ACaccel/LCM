@@ -396,6 +396,7 @@ type fakeRunner struct {
 
 	missingTools map[string]bool
 	accounts     map[string]Account
+	groups       map[string]Group
 
 	enabled, active, needReload bool
 	serve                       string
@@ -591,6 +592,12 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		return ""
 	}
 	switch {
+	case c.Path == "getent" && arg(0) == "group":
+		g, ok := r.groups[arg(1)]
+		if !ok {
+			return nil, exit(2)
+		}
+		return fmt.Appendf(nil, "%s:x:%d:\n", g.Name, g.GID), nil
 	case c.Path == "getent":
 		acc, ok := r.accounts[arg(1)]
 		if !ok {

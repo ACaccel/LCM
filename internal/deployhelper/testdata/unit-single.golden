@@ -1,0 +1,47 @@
+# Written by the LCM deploy helper from its built-in template; do not edit.
+[Unit]
+Description=web-app (managed by LCM)
+After=network.target
+
+[Service]
+Type=simple
+User=web-app
+Group=web-app
+WorkingDirectory=/opt/web-app/current
+ExecStart=/opt/lcm/runtimes/node24/bin/node server/index.js --prod
+EnvironmentFile=/etc/web-app/env
+Environment=PORT=3001 HOST=127.0.0.1
+Environment=PATH=/opt/lcm/runtimes/node24/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+MemoryHigh=384M
+MemoryMax=512M
+TimeoutStopSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm-services
+SocketBindAllow=tcp:3001
+SocketBindDeny=any
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+PrivateIPC=yes
+ReadWritePaths=/var/lib/web-app
+InaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build
+
+[Install]
+WantedBy=multi-user.target

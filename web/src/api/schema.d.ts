@@ -2567,6 +2567,8 @@ export interface components {
             props?: {
                 [key: string]: unknown;
             };
+            /** @description Binds the check to an instance of a managed service (a key of `config.instances`); paused while that instance is stopped. */
+            instance?: string;
         };
         PolicyNode: {
             id: string;
@@ -2641,6 +2643,12 @@ export interface components {
             backupId?: string;
             /** @description Accept the impact of a disruptive action; see the dry run's `impact`. */
             acknowledgeImpact?: boolean;
+            /** @description One instance of a managed service with `config.instances`; start, stop and restart only. Stop disables the instance, so that deployments and service-wide actions keep it stopped until it is started by name; the last enabled instance cannot be stopped this way. */
+            instance?: string;
+            /** @description Restore only. Also restore the MongoDB users and roles the set holds (a `mongodb` source with `users`), which replaces every account of the mongod instance. Needs `confirm`. */
+            restoreUsers?: boolean;
+            /** @description With `restoreUsers`, the resource's name, typed by the operator. */
+            confirm?: string;
         };
         ActionSteps: {
             resource: string;
@@ -2776,6 +2784,10 @@ export interface components {
             /** @description Tail of a backup or job command's output. */
             output?: string;
             replayed?: boolean;
+            /** @description The instance the action acted on. */
+            instance?: string;
+            /** @description A restore that also restored MongoDB users and roles. */
+            restoreUsers?: boolean;
         };
         Action: {
             id: string;
@@ -2787,6 +2799,8 @@ export interface components {
             version?: string;
             job?: string;
             backupId?: string;
+            instance?: string;
+            restoreUsers?: boolean;
             /** Format: date-time */
             startedAt: string;
             /** Format: date-time */
@@ -2824,6 +2838,8 @@ export interface components {
             path?: string;
             /** @description postgres, mongodb. */
             database?: string;
+            /** @description mongodb: every database instead of `database`; then the only mongodb source. */
+            all?: boolean;
             /** @description mongodb: also back up the admin database's users and roles. */
             users?: boolean;
             /** @description command: a program of the current release and its arguments. */
@@ -2908,6 +2924,10 @@ export interface components {
             /** Format: int64 */
             lastLatencyMs: number;
             consecutiveFailures: number;
+            /** @description The instance of a managed service the check belongs to. */
+            instance?: string;
+            /** @description The check's instance was stopped by an operator; the check does not run, does not count towards health and reads unknown, and `message` says why. */
+            paused?: boolean;
         };
         Checks: {
             resource: string;
@@ -3511,7 +3531,9 @@ export interface components {
                  *     `restart`, `status`; managed: `artifact`, `start` (optional with `publish`:
                  *     the service then only publishes static content), `startArgs`, `runtime`,
                  *     `migrate`, `keepReleases`, `publish` (`dir`, `retain`, `retainDays`),
-                 *     `limits` (`memoryHigh`, `memoryMax`, `stopTimeout`), and a required
+                 *     `limits` (`memoryHigh`, `memoryMax`, `stopTimeout`), `instances` (up to 16
+                 *     processes of one release by name, each overriding `start`, `startArgs` and
+                 *     `limits`), and a required
                  *     `source` with `build` and no `install`) plus `source`, `backup`
                  *     (`command` and `timeout`; managed:
                  *     `sources`, `mode`, `timeout`, `keep`), `jobs` and `route` (any adapter:
@@ -3659,6 +3681,8 @@ export interface components {
                 lastDeployment: components["schemas"]["Deployment"] | null;
                 /** @description The outcome of sending the document's `route` section to the host; null for a service that has no route section and never had an outcome. */
                 route: components["schemas"]["ServiceRouteStatus"] | null;
+                /** @description The instances of a managed service with `config.instances`, sorted by name, with their last observed state; null for any other service. */
+                instances?: components["schemas"]["ServiceInstance"][] | null;
             };
             /** @description Machines only. */
             machine?: {
@@ -3668,6 +3692,35 @@ export interface components {
             router?: {
                 status: components["schemas"]["RouterStatus"] | null;
             };
+        };
+        ServiceInstance: {
+            name: string;
+            /** @description The port the host grants the instance; null when it binds none. */
+            port: number | null;
+            /** @enum {string} */
+            state: "active" | "inactive" | "failed" | "unknown";
+            /** @description The instance's unit is enabled on the host. False after a stop by name, and for an instance without a unit yet. */
+            enabled: boolean;
+            /** @description An operator stopped the instance by name (its unit exists and is disabled); deployments and service-wide actions keep it stopped and its checks are paused. False for an instance without a unit yet. */
+            stopped: boolean;
+            subState: string;
+            pid: number;
+            /**
+             * Format: date-time
+             * @description When LCM last read the instances; null before the first reading.
+             */
+            observedAt: string | null;
+            health: components["schemas"]["Health"];
+            /** @description The names of the checks bound to the instance. */
+            checks: string[];
+            actions: components["schemas"]["ServiceInstanceAction"][];
+        };
+        ServiceInstanceAction: {
+            /** @enum {string} */
+            name: "start" | "stop" | "restart";
+            available: boolean;
+            /** @description Why the action is unavailable now: notManaged, helperUnavailable, invalidState (the service is not running or failed; act on the service), instanceRunning (start: the instance is enabled and active) or lastInstance (stop the service instead); empty when available. */
+            reason: string;
         };
         /**
          * @description The `route` section of a service document: how the host's nginx site presents the

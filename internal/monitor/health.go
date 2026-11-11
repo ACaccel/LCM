@@ -2,6 +2,8 @@ package monitor
 
 import (
 	"slices"
+
+	"github.com/ACaccel/lcm/internal/model"
 )
 
 // healthOf aggregates check statuses into the checks' health: down if any
@@ -19,6 +21,9 @@ import (
 func healthOf(checks map[string]*entry, effective bool) Health {
 	var up, critDown, critUnknown, otherDown bool
 	for _, e := range checks {
+		if e.paused {
+			continue
+		}
 		st := e.status
 		if effective && e.stale {
 			st = StatusUnknown
@@ -50,6 +55,18 @@ func healthOf(checks map[string]*entry, effective bool) Health {
 	default:
 		return HealthUnknown
 	}
+}
+
+// ChecksHealth is the health of a subset of a resource's checks, such as
+// the ones bound to one instance, by the rule of healthOf over their
+// current statuses; paused checks do not count.
+func ChecksHealth(checks []CheckStatus) Health {
+	entries := make(map[string]*entry, len(checks))
+	for _, c := range checks {
+		critical := c.Critical
+		entries[c.Name] = &entry{status: c.Status, paused: c.Paused, check: model.Check{Name: c.Name, Critical: &critical}}
+	}
+	return healthOf(entries, false)
 }
 
 // severity orders health values from best to worst for combining.
@@ -95,7 +112,7 @@ func (r *resource) combined(effective bool) Health {
 func failingChecks(checks map[string]*entry) []string {
 	var out []string
 	for name, e := range checks {
-		if e.status == StatusDown {
+		if e.status == StatusDown && !e.paused {
 			out = append(out, name)
 		}
 	}

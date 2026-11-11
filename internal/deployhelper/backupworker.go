@@ -3,6 +3,7 @@ package deployhelper
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -155,8 +157,11 @@ func RunWorker(ctx context.Context, host WorkerHost, inDir, outDir string, log i
 	}
 	defer func() { _ = data.Close() }()
 	w := &worker{host: host, spec: spec, in: inDir, out: out, data: data, log: log}
-	if spec.Mode == "restore" {
+	switch spec.Mode {
+	case "restore":
 		return w.restore(ctx)
+	case "check":
+		return w.checkUsers(ctx)
 	}
 	return w.backup(ctx)
 }
@@ -181,7 +186,7 @@ func readSpec(inDir string) (workerSpec, error) {
 		return spec, fmt.Errorf("specification: %w", err)
 	}
 	switch {
-	case spec.Version != Version || (spec.Mode != "backup" && spec.Mode != "restore"):
+	case spec.Version != Version || (spec.Mode != "backup" && spec.Mode != "restore" && spec.Mode != "check"):
 		return spec, errors.New("specification: unsupported version or mode")
 	case hostsetup.ValidServiceName(spec.Service) != nil:
 		return spec, errors.New("specification: invalid service")
@@ -455,21 +460,105 @@ func (w *worker) checkSQLite(file string) error {
 }
 
 func (w *worker) backupMongo(ctx context.Context, i int, src BackupSource) error {
+	if err := checkURIPath(src); err != nil {
+		return err
+	}
 	conf, cleanup, err := mongoConfig()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 	names := artifactNames(i, src)
-	if err := w.dump(ctx, "mongodump", mongoArgs(conf, w.outPath(names[0]), "--db="+src.Database)); err != nil {
+	// Without --db, mongodump dumps every database but local, admin
+	// included.
+	var only []string
+	if !src.All {
+		only = []string{"--db=" + src.Database}
+	}
+	if err := w.dump(ctx, "mongodump", mongoArgs(conf, w.outPath(names[0]), only...)); err != nil {
 		return err
 	}
-	if src.Users {
-		for k, coll := range []string{"system.users", "system.roles"} {
-			if err := w.dump(ctx, "mongodump", mongoArgs(conf, w.outPath(names[1+k]), "--db=admin", "--collection="+coll)); err != nil {
-				return err
-			}
+	if !src.Users {
+		return nil
+	}
+	// The whole admin database: users and roles restore only together with
+	// admin.system.version, which tells mongorestore their auth schema.
+	if err := w.dump(ctx, "mongodump", mongoArgs(conf, w.outPath(names[1]), "--db=admin")); err != nil {
+		return err
+	}
+	// The users once more as plain BSON, which a restore checks with
+	// bsondump before it replaces any account.
+	f, err := w.create(names[2])
+	if err != nil {
+		return err
+	}
+	args := []string{"--db=admin", "--collection=system.users", "--out=-"}
+	if conf != "" {
+		args = append(args, "--config="+conf)
+	}
+	err = w.run(ctx, "mongodump", args, limitedWriter{w: f, c: w}, "")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// mongoURI returns the connection string of the service's environment.
+func mongoURI() string { return os.Getenv("MONGODB_URI") }
+
+// uriParts returns the database path of a MongoDB connection string, its
+// user name and the database that user authenticates against
+// (authSource, else the path, else admin). A string without credentials
+// has no user.
+func uriParts(uri string) (database, user, authDB string, err error) {
+	rest, ok := strings.CutPrefix(uri, "mongodb://")
+	if !ok {
+		if rest, ok = strings.CutPrefix(uri, "mongodb+srv://"); !ok {
+			return "", "", "", errors.New("MONGODB_URI is not a mongodb:// or mongodb+srv:// connection string")
 		}
+	}
+	rest, query, _ := strings.Cut(rest, "?")
+	authority, path, _ := strings.Cut(rest, "/")
+	if database, err = url.PathUnescape(path); err != nil {
+		return "", "", "", errors.New("MONGODB_URI has an invalid database path")
+	}
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		name, _, _ := strings.Cut(authority[:at], ":")
+		if user, err = url.PathUnescape(name); err != nil {
+			return "", "", "", errors.New("MONGODB_URI has an invalid user name")
+		}
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return "", "", "", errors.New("MONGODB_URI has invalid options")
+	}
+	authDB = values.Get("authSource")
+	switch {
+	case authDB != "":
+	case database != "":
+		authDB = database
+	default:
+		authDB = "admin"
+	}
+	return database, user, authDB, nil
+}
+
+// checkURIPath refuses a connection string with a database path for a
+// source of all databases or one with users: the MongoDB tools take the
+// path as --db, so they would back up or restore that database alone
+// without an error, or refuse the admin database the users live in.
+func checkURIPath(src BackupSource) error {
+	uri := mongoURI()
+	if (!src.All && !src.Users) || uri == "" {
+		return nil
+	}
+	database, _, authDB, err := uriParts(uri)
+	if err != nil {
+		return err
+	}
+	if database != "" {
+		return fmt.Errorf("MONGODB_URI names the database %q, so the tools would only see that database; for a source of all databases or with users "+
+			"leave the path empty and name the user's database with authSource, such as mongodb://user:password@host:27017/?authSource=%s", database, authDB)
 	}
 	return nil
 }
@@ -562,7 +651,7 @@ func (w *worker) run(ctx context.Context, tool string, args []string, stdout io.
 		}
 	}
 	cmd := exec.CommandContext(ctx, p, args...) //nolint:gosec // a fixed tool or the release's own program, run as the service account
-	cmd.Env = os.Environ()
+	cmd.Env = toolEnv(path.Base(p), os.Environ())
 	cmd.Dir = "/"
 	if dir != "" {
 		cmd.Dir = dir
@@ -574,6 +663,21 @@ func (w *worker) run(ctx context.Context, tool string, args []string, stdout io.
 		return fmt.Errorf("%s failed: %w", path.Base(p), err)
 	}
 	return nil
+}
+
+// toolEnv is the environment of a program the worker starts. The MongoDB
+// tools get their connection string from the private --config file, so
+// MONGODB_URI is left out of theirs: unlike the worker, which is not
+// dumpable, a tool's environment is readable by every process of the
+// account through /proc.
+func toolEnv(tool string, env []string) []string {
+	if tool != "mongodump" && tool != "mongorestore" {
+		return env
+	}
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		name, _, _ := strings.Cut(kv, "=")
+		return name == "MONGODB_URI"
+	})
 }
 
 func (w *worker) backupCommand(ctx context.Context, i int, src BackupSource) error {
@@ -625,6 +729,75 @@ func (w *worker) restore(ctx context.Context) error {
 	return nil
 }
 
+// checkUsers runs before a restore of MongoDB users replaces anything: the
+// users of the set must include the one the connection string logs in as,
+// because mongorestore removes every user the set does not hold, and the
+// backups and the undo of this very restore need that user.
+func (w *worker) checkUsers(ctx context.Context) error {
+	in, err := os.OpenRoot(w.in)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	uri := mongoURI()
+	if uri == "" {
+		return nil
+	}
+	_, user, authDB, err := uriParts(uri)
+	if err != nil || user == "" {
+		return err
+	}
+	for _, src := range w.spec.Sources {
+		if src.Type != SourceMongoDB || !src.Users {
+			continue
+		}
+		i := slices.IndexFunc(src.Artifacts, func(a artifactRef) bool { return strings.HasSuffix(a.Name, "-users.bson") })
+		if i < 0 {
+			return errors.New("the set has no copy of the users to check")
+		}
+		a := src.Artifacts[i]
+		if err := verifyArtifact(in, a); err != nil {
+			return err
+		}
+		var out bytes.Buffer
+		if err := w.run(ctx, "bsondump", []string{"--quiet", w.in + "/" + a.Name}, &limitedBuffer{b: &out, max: maxUsersDump}, ""); err != nil {
+			return err
+		}
+		found := false
+		for line := range strings.SplitSeq(out.String(), "\n") {
+			var u struct {
+				User string `json:"user"`
+				DB   string `json:"db"`
+			}
+			if json.Unmarshal([]byte(line), &u) == nil && u.User == user && u.DB == authDB {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("the set holds no user %s of the database %s, which MONGODB_URI logs in as: restoring its users would remove that user, "+
+				"and the backups and the undo of this restore would fail to log in; restore without restoreUsers, or from a set that has the user", user, authDB)
+		}
+	}
+	return nil
+}
+
+// maxUsersDump bounds what bsondump may print for the users of a set.
+const maxUsersDump = 64 << 20
+
+// limitedBuffer collects output up to max bytes and refuses the rest.
+type limitedBuffer struct {
+	b   *bytes.Buffer
+	max int
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if l.b.Len()+len(p) > l.max {
+		return 0, errors.New("the users of the set exceed the size a check reads")
+	}
+	return l.b.Write(p)
+}
+
 // verifyArtifact checks a staged artifact against the hash it was given.
 func verifyArtifact(in *os.Root, a artifactRef) error {
 	f, err := in.Open(a.Name)
@@ -672,20 +845,28 @@ func (w *worker) restoreMongo(ctx context.Context, src specSource) error {
 	if len(src.Artifacts) == 0 {
 		return errors.New("the set has no artifact for it")
 	}
+	if err := checkURIPath(src.BackupSource); err != nil {
+		return err
+	}
 	conf, cleanup, err := mongoConfig()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 	for k, a := range src.Artifacts {
-		ns := src.Database + ".*"
+		ns := []string{"--nsInclude=" + src.Database + ".*"}
 		switch {
-		case k > 0 && strings.Contains(a.Name, "-users."):
-			ns = "admin.system.users"
-		case k > 0 && strings.Contains(a.Name, "-roles."):
-			ns = "admin.system.roles"
+		case k > 0 && strings.HasSuffix(a.Name, "-users.bson"):
+			// Only read by the check before the restore.
+			continue
+		case k > 0 && strings.HasSuffix(a.Name, "-admin.archive"):
+			ns = []string{"--nsInclude=admin.system.users", "--nsInclude=admin.system.roles", "--nsInclude=admin.system.version"}
+		case src.All:
+			// Every database of the set but the instance's own: users and
+			// roles come back only from their artifacts, when asked.
+			ns = []string{"--nsExclude=admin.*", "--nsExclude=config.*", "--nsExclude=local.*"}
 		}
-		args := mongoArgs(conf, w.in+"/"+a.Name, "--drop", "--nsInclude="+ns)
+		args := mongoArgs(conf, w.in+"/"+a.Name, append([]string{"--drop"}, ns...)...)
 		if err := w.run(ctx, "mongorestore", args, nil, ""); err != nil {
 			return err
 		}
@@ -944,6 +1125,9 @@ func describeSource(s BackupSource) string {
 	case SourceFiles, SourceSQLite:
 		return s.Type + " " + s.Path
 	case SourcePostgres, SourceMongoDB:
+		if s.All {
+			return s.Type + " (all databases)"
+		}
 		return s.Type + " " + s.Database
 	}
 	return s.Type + " " + strings.Join(s.Argv, " ")
@@ -962,7 +1146,7 @@ func artifactNames(i int, s BackupSource) []string {
 		return []string{base + ".dump"}
 	case SourceMongoDB:
 		if s.Users {
-			return []string{base + ".archive", base + "-users.archive", base + "-roles.archive"}
+			return []string{base + ".archive", base + "-admin.archive", base + "-users.bson"}
 		}
 		return []string{base + ".archive"}
 	}

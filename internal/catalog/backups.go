@@ -345,6 +345,9 @@ func describeSources(sources []model.BackupSource) string {
 			parts[i] = s.Type + " " + s.Path
 		case model.BackupPostgres, model.BackupMongoDB:
 			parts[i] = s.Type + " " + s.Database
+			if s.All {
+				parts[i] = s.Type + " (all databases)"
+			}
 		default:
 			parts[i] = s.Type + " " + strings.Join(s.Argv, " ")
 		}

@@ -62,7 +62,8 @@ func EntryMessage(e Entry) message.Message {
 		}
 	case KindDeployment, KindAction, KindBackup, KindJob:
 		if has("action") && has("outcome") {
-			return m("timeline.action", "action", str(d, "action"), "outcome", str(d, "outcome"), "job", str(d, "job"), "version", shortSHA(str(d, "version")))
+			return m("timeline.action", "action", str(d, "action"), "outcome", str(d, "outcome"), "job", str(d, "job"), "version", shortSHA(str(d, "version")),
+				"instance", str(d, "instance"))
 		}
 	case KindRoute:
 		if has("state") {

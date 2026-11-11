@@ -75,6 +75,11 @@ type ServiceConfig struct {
 	// to the service's fixed publish directory, and the limits of its unit.
 	Publish *Publish    `yaml:"publish,omitempty" json:"publish,omitempty"`
 	Limits  *UnitLimits `yaml:"limits,omitempty" json:"limits,omitempty"`
+	// managed: the processes the service runs from one release, by name.
+	// Each instance runs as its own unit <name>@<instance>.service; start,
+	// startArgs and limits above are the defaults of every instance. Ports
+	// and other privileges of an instance come from the host configuration.
+	Instances map[string]InstanceConfig `yaml:"instances,omitempty" json:"instances,omitempty"`
 
 	Source *Source            `yaml:"source,omitempty" json:"source,omitempty"`
 	Backup *Backup            `yaml:"backup,omitempty" json:"backup,omitempty"`
@@ -97,7 +102,81 @@ func (c *ServiceConfig) Runtime(adapter string) Runtime {
 		Container: c.Container,
 		Project:   c.Project, File: c.File,
 		Start: c.Start, Stop: c.Stop, Restart: c.Restart, Status: c.Status,
+		Instances: c.InstanceNames(),
 	}
+}
+
+// InstanceConfig overrides the process settings of one instance of a
+// managed service. start replaces the service's start; startArgs, when
+// present (even empty), replaces the service's startArgs as a whole; limits
+// are merged field by field over the service's limits.
+type InstanceConfig struct {
+	Start     string      `yaml:"start,omitempty" json:"start,omitempty"`
+	StartArgs *[]string   `yaml:"startArgs,omitempty" json:"startArgs,omitempty"`
+	Limits    *UnitLimits `yaml:"limits,omitempty" json:"limits,omitempty"`
+}
+
+// ResolvedInstance is one instance with the service defaults applied.
+type ResolvedInstance struct {
+	Name      string
+	Start     string
+	StartArgs []string
+	// Limits is nil when neither the service nor the instance sets one.
+	Limits *UnitLimits
+}
+
+// ResolvedInstances returns the instances sorted by name with the service
+// defaults applied, or nil when the service has none.
+func (c *ServiceConfig) ResolvedInstances() []ResolvedInstance {
+	if len(c.Instances) == 0 {
+		return nil
+	}
+	out := make([]ResolvedInstance, 0, len(c.Instances))
+	for _, name := range sortedKeys(c.Instances) {
+		in := c.Instances[name]
+		r := ResolvedInstance{Name: name, Start: c.Start, StartArgs: c.StartArgs, Limits: MergeLimits(c.Limits, in.Limits)}
+		if in.Start != "" {
+			r.Start = in.Start
+		}
+		if in.StartArgs != nil {
+			r.StartArgs = *in.StartArgs
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// InstanceNames returns the sorted instance names, or nil without
+// instances.
+func (c *ServiceConfig) InstanceNames() []string {
+	if len(c.Instances) == 0 {
+		return nil
+	}
+	return sortedKeys(c.Instances)
+}
+
+// MergeLimits returns the fields of over set on top of base, or nil when
+// both are nil.
+func MergeLimits(base, over *UnitLimits) *UnitLimits {
+	if base == nil && over == nil {
+		return nil
+	}
+	var out UnitLimits
+	if base != nil {
+		out = *base
+	}
+	if over != nil {
+		if over.MemoryHigh != "" {
+			out.MemoryHigh = over.MemoryHigh
+		}
+		if over.MemoryMax != "" {
+			out.MemoryMax = over.MemoryMax
+		}
+		if over.StopTimeout != 0 {
+			out.StopTimeout = over.StopTimeout
+		}
+	}
+	return &out
 }
 
 // Runtime configures a runtime adapter. Only the fields of the chosen type
@@ -120,7 +199,15 @@ type Runtime struct {
 	// managed: the service name the deploy helper knows, which is the
 	// resource name
 	Service string `yaml:"service,omitempty" json:"service,omitempty"`
+	// managed: the sorted instance names; empty for a service that runs a
+	// single unit.
+	Instances []string `yaml:"instances,omitempty" json:"instances,omitempty"`
 }
+
+// RunsProcess reports whether a managed runtime runs a process: it has a
+// start or instances. A managed service without either only publishes
+// static content.
+func (r Runtime) RunsProcess() bool { return r.Start != "" || len(r.Instances) > 0 }
 
 // EffectiveScope returns the systemd scope, defaulting to system.
 func (r Runtime) EffectiveScope() string {
@@ -235,11 +322,13 @@ const (
 // data directory (/var/lib/<name>); argv names a program of the current
 // release. Each type takes only its own fields.
 type BackupSource struct {
-	Type     string   `yaml:"type" json:"type"`
-	Path     string   `yaml:"path,omitempty" json:"path,omitempty"`
-	Database string   `yaml:"database,omitempty" json:"database,omitempty"`
-	Users    bool     `yaml:"users,omitempty" json:"users,omitempty"`
-	Argv     []string `yaml:"argv,omitempty" json:"argv,omitempty"`
+	Type     string `yaml:"type" json:"type"`
+	Path     string `yaml:"path,omitempty" json:"path,omitempty"`
+	Database string `yaml:"database,omitempty" json:"database,omitempty"`
+	// All backs up every database of a mongodb source instead of Database.
+	All   bool     `yaml:"all,omitempty" json:"all,omitempty"`
+	Users bool     `yaml:"users,omitempty" json:"users,omitempty"`
+	Argv  []string `yaml:"argv,omitempty" json:"argv,omitempty"`
 }
 
 // BackupKeep is the retention of a typed backup: the newest set of each of
@@ -522,7 +611,7 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 		}{
 			{"artifact", c.Artifact != ""}, {"keepReleases", c.KeepReleases != 0}, {"migrate", c.Migrate != nil},
 			{"runtime", c.RuntimeName != ""}, {"startArgs", c.StartArgs != nil},
-			{"publish", c.Publish != nil}, {"limits", c.Limits != nil},
+			{"publish", c.Publish != nil}, {"limits", c.Limits != nil}, {"instances", c.Instances != nil},
 		} {
 			if f.set {
 				is.addf(base+"."+f.name, "is not valid for adapter %s", adapter)
@@ -553,7 +642,10 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 	if c.KeepReleases != 0 && (c.KeepReleases < MinKeepReleases || c.KeepReleases > MaxKeepReleases) {
 		is.addf(base+".keepReleases", "must be between %d and %d", MinKeepReleases, MaxKeepReleases)
 	}
-	if c.Start == "" {
+	if c.Instances != nil {
+		validateInstances(c, base+".instances", is)
+	}
+	if c.Start == "" && len(c.Instances) == 0 {
 		// A service without a process: the release only brings static
 		// content, and nothing that configures a process applies.
 		if c.Publish == nil {
@@ -590,6 +682,72 @@ func validateManaged(c *ServiceConfig, adapter RuntimeType, base string, is *Iss
 	}
 	if src.Timeout > MaxManagedBuildTimeout {
 		is.addf(base+".source.timeout", "must be at most %s for adapter managed", MaxManagedBuildTimeout.D())
+	}
+}
+
+// Instance limits.
+const (
+	// MaxInstances bounds the instances of one managed service.
+	MaxInstances = 16
+	// MaxInstanceName bounds an instance name, which becomes part of the
+	// unit name <service>@<instance>.service.
+	MaxInstanceName = 24
+)
+
+// instanceNameRe allows no leading, trailing or double "-", which keeps the
+// prefixes systemd uses for drop-in directories unambiguous.
+var instanceNameRe = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+
+// ValidInstanceName reports whether name is a valid instance name. "backup"
+// is reserved: the host keeps the backup worker's env file where an
+// instance named so would have its own.
+func ValidInstanceName(name string) bool {
+	return len(name) <= MaxInstanceName && instanceNameRe.MatchString(name) && name != "backup"
+}
+
+// validateInstances checks the instances of a managed service and the
+// settings each resolves to.
+func validateInstances(c *ServiceConfig, base string, is *Issues) {
+	switch {
+	case len(c.Instances) == 0:
+		is.addf(base, "must name at least one instance; omit it for a service with a single unit")
+		return
+	case len(c.Instances) > MaxInstances:
+		is.addf(base, "at most %d instances are allowed", MaxInstances)
+		return
+	}
+	for _, name := range sortedKeys(c.Instances) {
+		p := base + "." + name
+		in := c.Instances[name]
+		if !ValidInstanceName(name) {
+			is.addf(p, "instance names are lowercase letters and digits in groups joined by single '-', starting with a letter (max %d), and not backup", MaxInstanceName)
+		}
+		switch {
+		case in.Start == "" && c.Start == "":
+			is.addf(p+".start", "is required: the service sets no start for its instances to share")
+		case in.Start != "" && (!releasePath(in.Start) || in.Start == "."):
+			is.addf(p+".start", "must be a release-relative file: %s", releasePathRule)
+		}
+		if in.StartArgs != nil {
+			validateArgs(*in.StartArgs, p+".startArgs", is)
+		}
+		if in.Limits == nil {
+			continue
+		}
+		var own Issues
+		validateLimits(in.Limits, p+".limits", &own)
+		if len(own) > 0 {
+			*is = append(*is, own...)
+			continue
+		}
+		// The merged limits must hold together too, such as an instance
+		// memoryHigh above the service's memoryMax.
+		m := MergeLimits(c.Limits, in.Limits)
+		high, okHigh := UnitSize(m.MemoryHigh)
+		ceiling, okMax := UnitSize(m.MemoryMax)
+		if okHigh && okMax && high > ceiling {
+			is.addf(p+".limits", "memoryHigh %s must not be larger than memoryMax %s once merged with the service's limits", m.MemoryHigh, m.MemoryMax)
+		}
 	}
 }
 
@@ -714,6 +872,7 @@ func validateBackup(b *Backup, adapter RuntimeType, base string, is *Issues) {
 		return
 	}
 	var paths []string
+	mongo, allDBs := 0, false
 	for i, s := range b.Sources {
 		p := fmt.Sprintf("%s.sources[%d]", base, i)
 		allowed := map[string]bool{}
@@ -727,11 +886,20 @@ func validateBackup(b *Backup, adapter RuntimeType, base string, is *Issues) {
 			}
 		case BackupPostgres, BackupMongoDB:
 			allowed["database"] = true
-			if !backupDBRe.MatchString(s.Database) {
-				is.addf(p+".database", "must be a database name of letters, digits, _ and -")
-			}
 			if s.Type == BackupMongoDB {
 				allowed["users"] = true
+				allowed["all"] = true
+				mongo++
+				allDBs = allDBs || s.All
+			}
+			switch {
+			case s.All && s.Type == BackupMongoDB && s.Database != "":
+				is.addf(p+".database", "cannot be combined with all: a mongodb source backs up one database or all of them")
+			case s.All && s.Type == BackupMongoDB:
+			case !backupDBRe.MatchString(s.Database) && s.Type == BackupMongoDB:
+				is.addf(p+".database", "must be a database name of letters, digits, _ and -, or set all: true to back up every database")
+			case !backupDBRe.MatchString(s.Database):
+				is.addf(p+".database", "must be a database name of letters, digits, _ and -")
 			}
 		case BackupCommand:
 			allowed["argv"] = true
@@ -744,11 +912,14 @@ func validateBackup(b *Backup, adapter RuntimeType, base string, is *Issues) {
 			is.addf(p+".type", "must be one of %s, %s, %s, %s, %s", BackupFiles, BackupSQLite, BackupPostgres, BackupMongoDB, BackupCommand)
 			continue
 		}
-		for name, set := range map[string]bool{"path": s.Path != "", "database": s.Database != "", "users": s.Users, "argv": s.Argv != nil} {
+		for name, set := range map[string]bool{"path": s.Path != "", "database": s.Database != "", "all": s.All, "users": s.Users, "argv": s.Argv != nil} {
 			if set && !allowed[name] {
 				is.addf(p+"."+name, "is not valid for source type %s", s.Type)
 			}
 		}
+	}
+	if allDBs && mongo > 1 {
+		is.addf(base+".sources", "an all-databases mongodb source must be the only mongodb source")
 	}
 	for i, a := range paths {
 		for _, o := range paths[i+1:] {

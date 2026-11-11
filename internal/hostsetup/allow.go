@@ -3,10 +3,13 @@ package hostsetup
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"reflect"
 	"slices"
@@ -85,6 +88,18 @@ func (a *applier) allow(ctx context.Context, name string, g ServiceGrant) error 
 	if err := next.Validate(); err != nil {
 		return err
 	}
+	if g.usesInstanceKeys() || next.Backup != nil && next.Backup.Tools != nil {
+		// An older pinned helper parses host.json strictly and would refuse
+		// every operation of every service once these keys exist.
+		outdated, err := a.pinnedHelperOutdated()
+		if err != nil {
+			return err
+		}
+		if outdated {
+			return fmt.Errorf("the pinned deploy helper %s is not this build, and an older helper cannot read instances, groups, after, wants or backup.tools; "+
+				"run sudo bin/lcm host apply first, then this command again", DeployHelper)
+		}
+	}
 	for _, t := range []string{"getent", "useradd"} {
 		if _, err := h.Runner.LookPath(t); err != nil {
 			return fmt.Errorf("missing required tool: %s", t)
@@ -158,6 +173,33 @@ func (a *applier) allow(ctx context.Context, name string, g ServiceGrant) error 
 		_, _ = fmt.Fprintf(a.o.Out, "\n%s; complete it with: sudo bin/lcm host apply\n", strings.Join(later, "; "))
 	}
 	return nil
+}
+
+// pinnedHelperOutdated reports whether a pinned deploy helper is installed
+// that is not the running build.
+func (a *applier) pinnedHelperOutdated() (bool, error) {
+	if _, err := a.h.FS.Lstat(DeployHelper); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	pinned, err := hashFile(a.h.FS, DeployHelper)
+	if err != nil {
+		return false, err
+	}
+	if a.h.OpenExecutable == nil {
+		return false, errors.New("the running executable cannot be read")
+	}
+	exe, err := a.h.OpenExecutable()
+	if err != nil {
+		return false, fmt.Errorf("read the running executable: %w", err)
+	}
+	defer func() { _ = exe.Close() }()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, exe); err != nil {
+		return false, fmt.Errorf("read the running executable: %w", err)
+	}
+	return hex.EncodeToString(sum.Sum(nil)) != pinned, nil
 }
 
 // readConfigFile reads the configuration file and the description of the

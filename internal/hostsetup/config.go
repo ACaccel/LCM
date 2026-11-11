@@ -46,6 +46,9 @@ type Config struct {
 // Backup configures where service backups are kept.
 type Backup struct {
 	Dir string `json:"dir"`
+	// Tools names the database tools the deploy helper uses, by tool name,
+	// instead of searching /usr/bin and /usr/local/bin for them.
+	Tools map[string]string `json:"tools,omitempty"`
 }
 
 // ServiceGrant is what one managed service may use. Documents name a
@@ -64,6 +67,36 @@ type ServiceGrant struct {
 	External bool `json:"external,omitempty"`
 	// Route publishes the service through the ingress component.
 	Route *RouteGrant `json:"route,omitempty"`
+	// Groups are supplementary groups of every unit of the service.
+	Groups []string `json:"groups,omitempty"`
+	// After and Wants are system units the service's units are ordered
+	// after and pull in; Wants= can start a unit as root, so only the host
+	// configuration names them.
+	After []string `json:"after,omitempty"`
+	Wants []string `json:"wants,omitempty"`
+	// Instances are the processes the service may run from one release, by
+	// instance name, each with its own unit <name>@<instance>.service. A
+	// grant with instances has no port of its own.
+	Instances map[string]InstanceGrant `json:"instances,omitempty"`
+}
+
+// InstanceGrant is what one instance of a service may use besides the
+// service's grant.
+type InstanceGrant struct {
+	// Port is where the instance listens on 127.0.0.1; zero binds none.
+	Port int `json:"port,omitempty"`
+	// Groups are supplementary groups of this instance's unit only.
+	Groups []string `json:"groups,omitempty"`
+}
+
+// MultiInstance reports whether the grant runs instances instead of a
+// single unit.
+func (g ServiceGrant) MultiInstance() bool { return len(g.Instances) > 0 }
+
+// usesInstanceKeys reports whether the grant uses a key that a deploy
+// helper older than multi-instance support cannot parse.
+func (g ServiceGrant) usesInstanceKeys() bool {
+	return g.Instances != nil || g.Groups != nil || g.After != nil || g.Wants != nil
 }
 
 // RouteGrant is the part of a route only the host configuration decides.
@@ -206,10 +239,15 @@ var configKeys = keys{
 		},
 	},
 	"runtimes": {anyKey: nil},
-	"backup":   {"dir": nil},
+	"backup":   {"dir": nil, "tools": {anyKey: nil}},
 	"services": {anyKey: {
 		"port": nil, "runtimes": nil, "inputs": {anyKey: nil}, "external": nil,
 		"route": {"prefix": nil, "static": nil}, "extraPaths": reservedKey,
+		"groups": nil, "after": nil, "wants": nil,
+		"instances": {anyKey: {
+			"port": nil, "groups": nil,
+			"account": reservedKey, "credentials": reservedKey, "runtimeDir": reservedKey, "module": reservedKey,
+		}},
 	}},
 }
 

@@ -51,9 +51,14 @@ func budget(req Request) time.Duration {
 		return time.Duration(req.TimeoutSec)*time.Second + buildRunMargin + 2*systemctlTimeout
 	case OpActivate:
 		// The migration and stopping its unit, the unit verification, the
-		// reload check, reload and reload after a restore, is-enabled,
-		// enable and restart.
-		return migrateTimeout + migrateRunMargin + analyzeTimeout + 7*systemctlTimeout
+		// reload check, reload and reload after a restore, disabling the
+		// orphaned units, is-enabled, enable, restart, the state of the
+		// instances and the reload after removing orphans. Each call covers
+		// every instance, so the budget does not grow with them.
+		return migrateTimeout + migrateRunMargin + analyzeTimeout + 10*systemctlTimeout
+	case OpStart, OpStop, OpRestart:
+		// is-enabled or enable, then the action.
+		return 2 * systemctlTimeout
 	case OpBackup:
 		// The producing process, then stopping its unit when it was
 		// stopped by the watcher or timed out, and stopping and starting
@@ -64,7 +69,7 @@ func budget(req Request) time.Duration {
 		// with its unit stopped on a timeout, and stopping and starting
 		// the service.
 		return 3*(restoreWorkerSec*time.Second+buildRunMargin+systemctlTimeout) + 4*systemctlTimeout
-	case OpStart, OpStop, OpRestart, OpStatus:
+	case OpStatus:
 		return systemctlTimeout
 	case OpIngressApply:
 		// The ingress and legacy locks, nginx -t and a reload, the probes,
@@ -91,7 +96,9 @@ type Host struct {
 	Config func() (hostsetup.Config, error)
 	// Lookup reads an account.
 	Lookup func(ctx context.Context, name string) (hostsetup.Account, bool, error)
-	Ledger *Ledger
+	// LookupGroup reads a group.
+	LookupGroup func(ctx context.Context, name string) (hostsetup.Group, bool, error)
+	Ledger      *Ledger
 	// RootUID owns every directory and file the helper trusts, and RootUID
 	// and RootGID own what it writes: 0 on a host.
 	RootUID, RootGID int
@@ -204,7 +211,7 @@ func (h *Helper) read(ctx context.Context, req Request) Response {
 	}
 	switch req.Op {
 	case OpStatus:
-		return h.status(ctx, req)
+		return h.status(ctx, req, g)
 	case OpBackups:
 		return h.backups(req, cfg, g)
 	}
@@ -338,7 +345,7 @@ func (h *Helper) perform(ctx context.Context, req Request, cfg hostsetup.Config,
 	case OpIngressApply:
 		return h.ingressApply(ctx, req, cfg)
 	}
-	return h.unitAction(ctx, req)
+	return h.unitAction(ctx, req, g)
 }
 
 // account reads an account; with home set it must be the dedicated system

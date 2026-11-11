@@ -27,14 +27,19 @@ func (e *entry) view(effective bool) CheckStatus {
 	if effective && e.stale {
 		st = StatusUnknown
 	}
+	msg := e.lastMessage
+	if e.paused {
+		st, msg = StatusUnknown, e.pauseReason
+	}
 	var failures int
 	if st == StatusDown {
 		failures = e.failRun
 	}
 	return CheckStatus{
 		Resource: e.resource, Name: e.check.Name, Type: e.check.Type, Critical: e.check.IsCritical(),
-		Interval: e.check.Interval.D(), Status: st, Stale: e.stale, Since: e.since, Message: e.lastMessage,
+		Interval: e.check.Interval.D(), Status: st, Stale: e.stale, Since: e.since, Message: msg,
 		LastResult: e.lastAt, LastLatency: e.lastLatency, ConsecutiveFailures: failures,
+		Instance: e.check.Instance, Paused: e.paused,
 	}
 }
 

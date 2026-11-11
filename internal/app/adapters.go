@@ -114,6 +114,12 @@ func resourceVar(res *resource.Store, types []resource.Type, mon *monitor.Monito
 				if st, ok := mon.Resource(r.Name); ok {
 					checks := make(map[string]any, len(st.Checks))
 					for _, c := range st.Checks {
+						if c.Paused {
+							// An instance an operator stopped: a policy
+							// waiting for fresh healthy checks must not wait
+							// for it.
+							continue
+						}
 						checks[c.Name] = map[string]any{
 							"status": string(c.Status), "message": c.Message, "critical": c.Critical,
 							"sinceMs": millis(c.Since), "lastResultMs": millis(c.LastResult),

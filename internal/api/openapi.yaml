@@ -4529,6 +4529,9 @@ components:
         critical: { type: boolean, description: "Default true." }
         threshold: { type: integer, minimum: 1 }
         props: { type: object, additionalProperties: true }
+        instance:
+          type: string
+          description: Binds the check to an instance of a managed service (a key of `config.instances`); paused while that instance is stopped.
     PolicyNode:
       type: object
       required: [id, type]
@@ -4624,6 +4627,15 @@ components:
         acknowledgeImpact:
           type: boolean
           description: Accept the impact of a disruptive action; see the dry run's `impact`.
+        instance:
+          type: string
+          description: One instance of a managed service with `config.instances`; start, stop and restart only. Stop disables the instance, so that deployments and service-wide actions keep it stopped until it is started by name; the last enabled instance cannot be stopped this way.
+        restoreUsers:
+          type: boolean
+          description: Restore only. Also restore the MongoDB users and roles the set holds (a `mongodb` source with `users`), which replaces every account of the mongod instance. Needs `confirm`.
+        confirm:
+          type: string
+          description: With `restoreUsers`, the resource's name, typed by the operator.
     ActionSteps:
       type: object
       required: [resource, action, from, to, steps, stepMessages]
@@ -4791,6 +4803,8 @@ components:
         preRestoreId: { type: string, description: The copy a restore took of the data it replaced; restoring it undoes the restore. }
         output: { type: string, description: Tail of a backup or job command's output. }
         replayed: { type: boolean }
+        instance: { type: string, description: The instance the action acted on. }
+        restoreUsers: { type: boolean, description: A restore that also restored MongoDB users and roles. }
     Action:
       type: object
       required: [id, resource, action, status, actor, startedAt, finishedAt, result, error]
@@ -4803,6 +4817,8 @@ components:
         version: { type: string }
         job: { type: string }
         backupId: { type: string }
+        instance: { type: string }
+        restoreUsers: { type: boolean }
         startedAt: { type: string, format: date-time }
         finishedAt: { type: [string, "null"], format: date-time }
         result:
@@ -4841,6 +4857,7 @@ components:
         type: { type: string, enum: [files, sqlite, postgres, mongodb, command] }
         path: { type: string, description: "files, sqlite: a path below the service's data directory." }
         database: { type: string, description: "postgres, mongodb." }
+        all: { type: boolean, description: "mongodb: every database instead of `database`; then the only mongodb source." }
         users: { type: boolean, description: "mongodb: also back up the admin database's users and roles." }
         argv: { type: array, items: { type: string }, description: "command: a program of the current release and its arguments." }
     Backup:
@@ -4923,6 +4940,10 @@ components:
         lastResult: { type: [string, "null"], format: date-time }
         lastLatencyMs: { type: integer, format: int64 }
         consecutiveFailures: { type: integer }
+        instance: { type: string, description: The instance of a managed service the check belongs to. }
+        paused:
+          type: boolean
+          description: The check's instance was stopped by an operator; the check does not run, does not count towards health and reads unknown, and `message` says why.
     Checks:
       type: object
       required: [resource, health, since, checks]
@@ -5738,7 +5759,9 @@ components:
                 `restart`, `status`; managed: `artifact`, `start` (optional with `publish`:
                 the service then only publishes static content), `startArgs`, `runtime`,
                 `migrate`, `keepReleases`, `publish` (`dir`, `retain`, `retainDays`),
-                `limits` (`memoryHigh`, `memoryMax`, `stopTimeout`), and a required
+                `limits` (`memoryHigh`, `memoryMax`, `stopTimeout`), `instances` (up to 16
+                processes of one release by name, each overriding `start`, `startArgs` and
+                `limits`), and a required
                 `source` with `build` and no `install`) plus `source`, `backup`
                 (`command` and `timeout`; managed:
                 `sources`, `mode`, `timeout`, `keep`), `jobs` and `route` (any adapter:
@@ -5925,6 +5948,12 @@ components:
               oneOf:
                 - $ref: "#/components/schemas/ServiceRouteStatus"
                 - type: "null"
+            instances:
+              description: The instances of a managed service with `config.instances`, sorted by name, with their last observed state; null for any other service.
+              oneOf:
+                - type: array
+                  items: { $ref: "#/components/schemas/ServiceInstance" }
+                - type: "null"
         machine:
           type: object
           description: Machines only.
@@ -5943,6 +5972,39 @@ components:
               oneOf:
                 - $ref: "#/components/schemas/RouterStatus"
                 - type: "null"
+    ServiceInstance:
+      type: object
+      required: [name, port, state, enabled, stopped, subState, pid, observedAt, health, checks, actions]
+      properties:
+        name: { type: string }
+        port: { type: [integer, "null"], description: The port the host grants the instance; null when it binds none. }
+        state: { type: string, enum: [active, inactive, failed, unknown] }
+        enabled:
+          type: boolean
+          description: The instance's unit is enabled on the host. False after a stop by name, and for an instance without a unit yet.
+        stopped:
+          type: boolean
+          description: An operator stopped the instance by name (its unit exists and is disabled); deployments and service-wide actions keep it stopped and its checks are paused. False for an instance without a unit yet.
+        subState: { type: string }
+        pid: { type: integer }
+        observedAt: { type: [string, "null"], format: date-time, description: When LCM last read the instances; null before the first reading. }
+        health: { $ref: "#/components/schemas/Health" }
+        checks:
+          type: array
+          description: The names of the checks bound to the instance.
+          items: { type: string }
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceInstanceAction" }
+    ServiceInstanceAction:
+      type: object
+      required: [name, available, reason]
+      properties:
+        name: { type: string, enum: [start, stop, restart] }
+        available: { type: boolean }
+        reason:
+          type: string
+          description: "Why the action is unavailable now: notManaged, helperUnavailable, invalidState (the service is not running or failed; act on the service), instanceRunning (start: the instance is enabled and active) or lastInstance (stop the service instead); empty when available."
     ServiceRoute:
       type: object
       additionalProperties: false

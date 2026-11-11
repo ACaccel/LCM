@@ -32,11 +32,11 @@
 //	install   service, buildId, artifact
 //	activate  service, releaseId, start (optional, see below), runtime (optional),
 //	          migrate (optional), keepReleases (optional, 2-20, default 3),
-//	          publish (optional), limits (optional)
-//	start     service
-//	stop      service
-//	restart   service
-//	status    service
+//	          publish (optional), limits (optional), instances (optional)
+//	start     service, instance (optional)
+//	stop      service, instance (optional)
+//	restart   service, instance (optional)
+//	status    service, instance (optional)
 //	releases  service
 //	query     (operationId names the operation to look up)
 //	backup    service, sources, mode (optional), timeoutSec, runtime (optional)
@@ -62,8 +62,14 @@
 // retain). limits is {memoryHigh, memoryMax, stopTimeoutSec}: sizes of
 // digits with K, M or G between 1M and 16G, memoryHigh not above
 // memoryMax, stopTimeoutSec 1-600. An activate without start publishes
-// only: it needs publish and takes neither migrate nor limits. The fields
-// of backup, restore and prune are described under "Backups".
+// only: it needs publish and takes neither migrate nor limits. instances
+// (1-16, sorted by name, each once) is [{name, start, limits}] for a
+// service that host.json grants instances: it replaces start and limits,
+// which must then be absent, with one start (as start) and optional limits
+// (as limits) per instance, resolved by LCM. instance is an instance name:
+// lower-case letters and digits in groups joined by single "-", starting
+// with a letter, at most 24 characters. The fields of backup, restore and
+// prune are described under "Backups".
 //
 // A reply carries "version", "op" and "operationId" of the request, and:
 //
@@ -88,7 +94,9 @@
 //     manifest}, "activate" {releaseId, previous, switched, unitChanged,
 //     published {written, replaced, unchanged, deleted, retained, skipped}},
 //     "unit" (status) {loadState, activeState, subState, unitFileState,
-//     mainPid, release}, "releases" [{releaseId, current, previous,
+//     mainPid, release} with, for a service granted instances, "instances"
+//     [{name, port, loadState, activeState, subState, unitFileState, mainPid,
+//     granted}], "releases" [{releaseId, current, previous,
 //     manifest}], "backup" {backupId, manifestSha256, size, files, skipped,
 //     createdAt, releaseId}, "restore" {backupId, preRestoreId, restored,
 //     skipped, started, leftStopped}, "backups" [{backupId, kind, createdAt,
@@ -159,7 +167,44 @@
 // has no port runs no process: its activate has no start, publishes and
 // switches the links, and writes no unit; a grant with a port needs start.
 // start, stop, restart and status act on <service>.service only, and only
-// on a unit the helper wrote.
+// on a unit the helper wrote. The grant's groups (SupplementaryGroups=, each
+// an existing dynamic system group that hostsetup.GroupProblem accepts),
+// after and wants go into the unit; without them the unit is exactly the
+// one earlier versions wrote.
+//
+// # Instances
+//
+// A service whose grant has "instances" runs one unit per instance,
+// /etc/systemd/system/<service>@<instance>.service, each rendered in full
+// from the template (no systemd template, no drop-ins) with the shared
+// /etc/<service>/env and then /etc/<service>/<instance>.env (which must not
+// set PORT, HOST, LCM_SERVICE or LCM_INSTANCE), LCM_SERVICE and
+// LCM_INSTANCE, PORT and HOST and SocketBindAllow= only when the instance is
+// granted a port (SocketBindDeny=any always), and the groups of the service
+// and the instance. Its activate needs instances and the grant must list
+// every one; a grant without instances refuses them, and an old helper
+// refuses the new fields as unknown keys. A template <service>@.service, a
+// drop-in of it or of an instance (also the ones systemd applies by a prefix
+// ending in "-"), or a file named like an instance unit without the marker
+// refuses every operation of the service. activate migrates (as the
+// service account with the shared env file and no port) and publishes once,
+// writes the changed units, switches the links once and verifies and
+// reloads as above, restoring every unit and the links on failure. Then it
+// disables and stops ("disable --now") the units of instances no longer
+// requested and the service's single unit when it was converted, enables
+// the units new in this activation, restarts every enabled instance in one
+// "systemctl restart", and removes the orphaned files. The reply's activate
+// adds "instances" [{name, unitChanged, enabled, restarted, activeState}]
+// and "removed" (instance names; "" is the single unit). Enablement is the
+// instances' desired state: start or restart with instance enables the
+// unit first ("enable --now"), stop with instance disables it ("disable
+// --now", refused for the last enabled instance), and without instance
+// start and restart act on the enabled instances and stop on every unit the
+// helper wrote for the service. status without instance reports the
+// enabled instances as one unit (active when all are, failed when one is,
+// inactive when all are or none is enabled, activating otherwise; mainPid
+// 0) and lists each in "instances". backup and restore that stop the
+// service stop all its units and start again exactly those that ran.
 //
 // # Publishing
 //
@@ -193,17 +238,24 @@
 // timeoutSec (1-7200) and runtime (optional; a runtime granted to the
 // service, whose bin directory is put on the worker's PATH). A source is
 // {type, ...} with files {path}, sqlite {path}, postgres {database},
-// mongodb {database, users} or command {argv}. A path is a clean relative
+// mongodb {database or all, users} or command {argv}; a mongodb source with
+// all: true backs up every database and must be the only mongodb source. A path is a clean relative
 // path below the data directory (not ".") and the paths of files and sqlite
 // sources may not overlap; a database is a name of letters, digits, "_" and
 // "-"; argv is a release-relative executable and arguments, as for start.
 // restore: backupId, manifestSha256 (refused when the set's manifest has
 // another checksum, so that LCM restores the set it recorded) and
 // restoreUsers. restoreUsers (default false) also restores the "admin" users
-// and roles of a mongodb source saved with users: true. Those are the whole
-// mongod instance's accounts: a plain restore replaces only the database and
-// does not copy the accounts either, and users: true is meant for a service
-// with a mongod of its own. prune: keep {daily, weekly}, the newest set of
+// and roles of a mongodb source saved with users: true, together with
+// admin.system.version (their auth schema). Those are the whole mongod
+// instance's accounts: a plain restore replaces only the database and does
+// not copy the accounts either, and users: true is meant for a service with
+// a mongod of its own. Before anything is stopped, a check worker reads the
+// set's users with bsondump and refuses the restore unless they include the
+// user the connection string logs in as (in its authSource database):
+// mongorestore removes every user the set lacks. A source with all refuses a
+// connection string with a database path, which the tools would take as
+// --db. prune: keep {daily, weekly}, the newest set of
 // each of that many UTC days and ISO weeks stays (never the newest set, a
 // set whose manifest cannot be read, or a pre-restore set younger than 7
 // days).
@@ -211,8 +263,10 @@
 // Layout. <backup.dir>/<service>/<id>/ (root 0700; id as for releases, with
 // "pre-restore-" before it for the copy a restore takes) holds manifest.json
 // and one artifact per source: NNN-files.tar, NNN-sqlite.db, NNN-postgres.dump,
-// NNN-mongodb.archive (with NNN-mongodb-users.archive and
-// NNN-mongodb-roles.archive), NNN-command.out, all root 0600. The manifest
+// NNN-mongodb.archive (with users: NNN-mongodb-admin.archive, the admin
+// database, and NNN-mongodb-users.bson, its users as BSON for the check),
+// NNN-command.out, all root 0600. Sets with the earlier users and roles
+// artifacts are listed with a problem. The manifest
 // records the service, id, kind, mode, creation time, release, the sources
 // with their artifacts (or "absent", for a pre-restore copy of a path that
 // did not exist) and each artifact's size and SHA-256. A set is built in
@@ -228,8 +282,9 @@
 // directories bound back, no ports, 2 GiB of memory, 512 tasks, the
 // timeoutSec, and files of at most BackupBytes (32 GiB). The specification is
 // written by root; the database tools (pg_dump, pg_restore, mongodump,
-// mongorestore) are named in it by absolute path, found by the helper in
-// /usr/bin or /usr/local/bin and checked to be root's, with every link and
+// mongorestore, bsondump) are named in it by absolute path, taken from
+// backup.tools or found by the helper in /usr/bin or /usr/local/bin and
+// checked to be root's, with every link and
 // directory only root can change, and the worker runs nothing else it finds.
 // A MongoDB connection string from the service's environment reaches the
 // tools in a 0600 --config file in the worker's private /tmp, not in their
@@ -431,6 +486,12 @@ type Request struct {
 	KeepReleases int         `json:"keepReleases,omitempty"`
 	Publish      *Publish    `json:"publish,omitempty"`
 	Limits       *UnitLimits `json:"limits,omitempty"`
+	// Instances replace start and limits for a service granted instances:
+	// one unit per instance, sorted by name.
+	Instances []InstanceSpec `json:"instances,omitempty"`
+	// start, stop, restart and status: one instance of a service granted
+	// instances; empty acts on the service.
+	Instance string `json:"instance,omitempty"`
 	// backup (with timeoutSec and runtime)
 	Sources []BackupSource `json:"sources,omitempty"`
 	Mode    string         `json:"mode,omitempty"`
@@ -465,6 +526,9 @@ type Response struct {
 	Backup   *BackupResult   `json:"backup,omitempty"`
 	Restore  *RestoreResult  `json:"restore,omitempty"`
 	Backups  []BackupInfo    `json:"backups,omitempty"`
+	// Instances is the status of each instance unit of a service granted
+	// instances, when status names no instance.
+	Instances []InstanceStatus `json:"instances,omitempty"`
 	// BackupsTruncated reports that backups is incomplete: entries beyond the
 	// newest MaxListed were left out, or entries were cut (their sources
 	// omitted, then the oldest dropped) to keep the reply within MaxResponse.
@@ -521,6 +585,43 @@ type ActivateResult struct {
 	// Published counts what publishing changed, when the request had
 	// publish.
 	Published *PublishResult `json:"published,omitempty"`
+	// Instances reports each instance of a request with instances, and
+	// Removed the instances whose units were removed (the name "" is the
+	// service's single unit, removed when the service was converted).
+	Instances []InstanceResult `json:"instances,omitempty"`
+	Removed   []string         `json:"removed,omitempty"`
+}
+
+// InstanceSpec is one instance of an activate: its start command and
+// limits, resolved by LCM from the document.
+type InstanceSpec struct {
+	Name   string      `json:"name"`
+	Start  []string    `json:"start"`
+	Limits *UnitLimits `json:"limits,omitempty"`
+}
+
+// InstanceResult is what activate did with one instance. An instance that
+// an operator stopped (its unit disabled) gets its new unit but is not
+// started: Enabled and Restarted are false.
+type InstanceResult struct {
+	Name        string `json:"name"`
+	UnitChanged bool   `json:"unitChanged"`
+	Enabled     bool   `json:"enabled"`
+	Restarted   bool   `json:"restarted"`
+	ActiveState string `json:"activeState,omitempty"`
+}
+
+// InstanceStatus is the status of one instance unit. Granted is false for
+// a unit the helper wrote for an instance that host.json no longer grants.
+type InstanceStatus struct {
+	Name          string `json:"name"`
+	Port          int    `json:"port,omitempty"`
+	LoadState     string `json:"loadState"`
+	ActiveState   string `json:"activeState"`
+	SubState      string `json:"subState"`
+	UnitFileState string `json:"unitFileState"`
+	MainPID       int    `json:"mainPid"`
+	Granted       bool   `json:"granted"`
 }
 
 // Publish is the static content of a release to publish.
@@ -597,11 +698,13 @@ const MaxSources = 16
 // BackupSource is one thing to back up. Each type takes only its own
 // fields.
 type BackupSource struct {
-	Type     string   `json:"type"`
-	Path     string   `json:"path,omitempty"`
-	Database string   `json:"database,omitempty"`
-	Users    bool     `json:"users,omitempty"`
-	Argv     []string `json:"argv,omitempty"`
+	Type     string `json:"type"`
+	Path     string `json:"path,omitempty"`
+	Database string `json:"database,omitempty"`
+	// All backs up every database of a mongodb source.
+	All   bool     `json:"all,omitempty"`
+	Users bool     `json:"users,omitempty"`
+	Argv  []string `json:"argv,omitempty"`
 }
 
 // Keep is the retention of backup sets: the number of days and ISO weeks
@@ -716,6 +819,8 @@ func (r Request) fields() []string {
 	add(r.KeepReleases != 0, "keepReleases")
 	add(r.Publish != nil, "publish")
 	add(r.Limits != nil, "limits")
+	add(r.Instances != nil, "instances")
+	add(r.Instance != "", "instance")
 	add(r.Sources != nil, "sources")
 	add(r.Mode != "", "mode")
 	add(r.BackupID != "", "backupId")
@@ -730,11 +835,11 @@ func (r Request) fields() []string {
 var opFields = map[Op][]string{
 	OpBuild:    {"service", "commit", "command", "timeoutSec", "runtimes"},
 	OpInstall:  {"service", "buildId", "artifact"},
-	OpActivate: {"service", "releaseId", "start", "runtime", "migrate", "keepReleases", "publish", "limits"},
-	OpStart:    {"service"},
-	OpStop:     {"service"},
-	OpRestart:  {"service"},
-	OpStatus:   {"service"},
+	OpActivate: {"service", "releaseId", "start", "runtime", "migrate", "keepReleases", "publish", "limits", "instances"},
+	OpStart:    {"service", "instance"},
+	OpStop:     {"service", "instance"},
+	OpRestart:  {"service", "instance"},
+	OpStatus:   {"service", "instance"},
 	OpReleases: {"service"},
 	OpQuery:    {},
 	OpBackup:   {"service", "sources", "mode", "timeoutSec", "runtime"},
@@ -768,6 +873,9 @@ func (r Request) Validate() error {
 	}
 	if err := hostsetup.ValidServiceName(r.Service); err != nil {
 		return err
+	}
+	if r.Instance != "" && !hostsetup.ValidInstanceName(r.Instance) {
+		return errors.New("instance is not an instance name")
 	}
 	switch r.Op {
 	case OpBuild:
@@ -840,6 +948,7 @@ func ValidateSources(sources []BackupSource) error {
 		return fmt.Errorf("sources must list between 1 and %d sources", MaxSources)
 	}
 	var paths []string
+	mongo, allDBs := 0, false
 	for i, src := range sources {
 		at := fmt.Sprintf("sources[%d]", i)
 		allowed := map[string]bool{}
@@ -852,11 +961,17 @@ func ValidateSources(sources []BackupSource) error {
 			paths = append(paths, src.Path)
 		case SourcePostgres, SourceMongoDB:
 			allowed["database"] = true
-			if !dbPattern.MatchString(src.Database) {
-				return fmt.Errorf("%s.database must be a database name of letters, digits, _ and -", at)
-			}
 			if src.Type == SourceMongoDB {
-				allowed["users"] = true
+				allowed["users"], allowed["all"] = true, true
+				mongo++
+				allDBs = allDBs || src.All
+			}
+			switch {
+			case src.All && src.Type == SourceMongoDB && src.Database != "":
+				return fmt.Errorf("%s: mongodb takes database or all, not both", at)
+			case src.All && src.Type == SourceMongoDB:
+			case !dbPattern.MatchString(src.Database):
+				return fmt.Errorf("%s.database must be a database name of letters, digits, _ and -", at)
 			}
 		case SourceCommand:
 			allowed["argv"] = true
@@ -869,11 +984,14 @@ func ValidateSources(sources []BackupSource) error {
 		default:
 			return fmt.Errorf("%s.type %q is not a source type", at, hostsetup.Printable(src.Type, 32))
 		}
-		for name, set := range map[string]bool{"path": src.Path != "", "database": src.Database != "", "users": src.Users, "argv": src.Argv != nil} {
+		for name, set := range map[string]bool{"path": src.Path != "", "database": src.Database != "", "all": src.All, "users": src.Users, "argv": src.Argv != nil} {
 			if set && !allowed[name] {
 				return fmt.Errorf("%s: %s does not take %s", at, src.Type, name)
 			}
 		}
+	}
+	if allDBs && mongo > 1 {
+		return errors.New("an all-databases mongodb source must be the only mongodb source")
 	}
 	for i, a := range paths {
 		for _, b := range paths[i+1:] {
@@ -914,7 +1032,13 @@ func (r Request) validateActivate() error {
 	if !idPattern.MatchString(r.ReleaseID) {
 		return errors.New("releaseId is not a release ID")
 	}
+	if r.Instances != nil {
+		if err := r.validateInstances(); err != nil {
+			return err
+		}
+	}
 	switch {
+	case r.Instances != nil:
 	case r.Start == nil:
 		// Static content only: no process to start, migrate or limit.
 		if r.Publish == nil || r.Migrate != nil || r.Limits != nil {
@@ -951,6 +1075,37 @@ func (r Request) validateActivate() error {
 	}
 	if r.KeepReleases != 0 && (r.KeepReleases < 2 || r.KeepReleases > MaxKeepReleases) {
 		return fmt.Errorf("keepReleases must be between 2 and %d", MaxKeepReleases)
+	}
+	return nil
+}
+
+// validateInstances checks the instances of an activate: 1-16, sorted by
+// name and each once, every one with a start like start's and optional
+// limits; the service-wide start and limits must be absent.
+func (r Request) validateInstances() error {
+	switch {
+	case r.Start != nil || r.Limits != nil:
+		return errors.New("an activate with instances takes start and limits per instance only")
+	case len(r.Instances) < 1 || len(r.Instances) > hostsetup.MaxInstances:
+		return fmt.Errorf("instances must list between 1 and %d instances", hostsetup.MaxInstances)
+	}
+	for i, in := range r.Instances {
+		switch {
+		case !hostsetup.ValidInstanceName(in.Name):
+			return fmt.Errorf("instances[%d].name is not an instance name", i)
+		case i > 0 && in.Name <= r.Instances[i-1].Name:
+			return errors.New("instances must be sorted by name, each once")
+		case len(in.Start) == 0 || !relPath(in.Start[0]) || in.Start[0] == ".":
+			return fmt.Errorf("instances[%d].start must begin with a release-relative file", i)
+		}
+		if err := validArgs(in.Start[1:]); err != nil {
+			return fmt.Errorf("instances[%d].start: %w", i, err)
+		}
+		if in.Limits != nil {
+			if err := in.Limits.validate(); err != nil {
+				return fmt.Errorf("instances[%d].limits: %w", i, err)
+			}
+		}
 	}
 	return nil
 }
@@ -1068,7 +1223,7 @@ var requestKeys = map[string]bool{
 	"timeoutSec": true, "runtimes": true, "buildId": true, "artifact": true, "releaseId": true,
 	"start": true, "runtime": true, "migrate": true, "keepReleases": true, "publish": true, "limits": true,
 	"sources": true, "mode": true, "backupId": true, "manifestSha256": true, "restoreUsers": true, "keep": true,
-	"route": true,
+	"route": true, "instances": true, "instance": true,
 }
 
 // DecodeRequest decodes and validates one request.

@@ -49,6 +49,7 @@ export type Deployment = S["Deployment"];
 export type Backup = S["Backup"];
 export type ServiceRoute = S["ServiceRoute"];
 export type ServiceRouteStatus = S["ServiceRouteStatus"];
+export type ServiceInstance = S["ServiceInstance"];
 export type BackupSource = S["BackupSource"];
 export type TimelineEntry = S["TimelineEntry"];
 export type TimelineList = S["TimelineList"];

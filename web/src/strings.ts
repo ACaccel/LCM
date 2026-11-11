@@ -405,6 +405,27 @@ export const s = {
       notOffered: "這個資源不提供此動作",
     },
   },
+  instances: {
+    title: "實例",
+    name: "名稱",
+    port: "連接埠",
+    state: "狀態",
+    health: "健康",
+    actions: "動作",
+    states: { active: "執行中", inactive: "未執行", failed: "失敗", unknown: "未知" } as Record<string, string>,
+    disabled: "已停用（由操作者停止）",
+    disabledHint: "操作者以實例名稱停止了它：部署與整個服務的重啟都不會啟動它，直到再以名稱啟動；它的檢查暫停中。",
+    checkInstance: "這項檢查屬於這個實例",
+    confirmTitle: (verb: string, svc: string, instance: string) => `${verb} ${svc} 的實例 ${instance}`,
+    unavailable: {
+      invalidState: "服務沒有在執行或失敗；請對整個服務執行動作",
+      lastInstance: "這是最後一個執行中的實例；請停止整個服務",
+      instanceRunning: "實例已在執行；要重新啟動請用重啟",
+      helperUnavailable: "這台主機的 deploy helper 無法使用",
+      notManaged: "資源不在納管中",
+      busy: "正在執行其他動作",
+    } as Record<string, string>,
+  },
   timeline: {
     title: "時間軸",
     kinds: "事件類型",
@@ -444,6 +465,7 @@ export const s = {
     critical: "關鍵",
     nonCritical: "非關鍵",
     stale: "資料過期",
+    paused: "已暫停",
     up: "正常",
     down: "失敗",
     unknown: "未知",
@@ -1322,7 +1344,14 @@ export const msg: Record<string, (p: Params) => string> = {
   "step.helperBuild": (p) => `由 deploy helper 在沙箱中以 lcmb-${p.service} 建置${p.runtime ? `（runtime ${p.runtime}）` : ""}：${p.command}`,
   "step.helperInstall": (p) => `把建置結果的 ${p.artifact} 安裝為 ${p.service} 的新 release`,
   "step.helperActivate": (p) =>
-    `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}${p.publish ? `把新 release 的 ${p.publish} 發布到 ${p.target}，再` : ""}將 ${p.service} 切換到新 release，以 ${p.start} 重啟`,
+    `${p.migrate ? `執行 migration ${p.migrate}，再` : ""}${p.publish ? `把新 release 的 ${p.publish} 發布到 ${p.target}，再` : ""}將 ${p.service} 切換到新 release，${
+      p.instances ? `同時重啟已啟用的實例（${p.instances}）；已停止的實例維持停止` : `以 ${p.start} 重啟`
+    }`,
+  "step.instanceStart": (p) => `啟用並啟動 ${p.unit}；之後的部署也會啟動它`,
+  "step.instanceStop": (p) => `停止並停用 ${p.unit}；再以名稱啟動前都維持停止，部署也不會啟動它`,
+  "step.instanceRestart": (p) => `啟用並重啟 ${p.unit}`,
+  "step.restoreUsers": (p) =>
+    `以 ${p.backup} 的內容取代 MongoDB 執行個體的所有帳號與角色（admin.system.users、admin.system.roles）；這份備份由服務自己的帳號寫出，服務若遭入侵，其中可能含有被植入的帳號；還原前副本保留目前的帳號`,
   "step.helperPublish": (p) => `把新 release 的 ${p.publish} 發布到 ${p.target}，並將 ${p.service} 切換到新 release；這個服務不執行程序`,
   "step.applyRoute": (p) => `把 ${p.service} 的 route 設定送交 deploy helper，由它產生並套用 nginx site`,
   "step.helperBackup": (p) => `由 deploy helper 備份 ${p.sources}（${p.mode === "stopped" ? "停機" : "線上"}模式），存成備份目錄中的新備份`,
@@ -1344,7 +1373,7 @@ export const msg: Record<string, (p: Params) => string> = {
   "timeline.lifecycle": (p) =>
     `${arrow(label(s.state, p.previous), label(s.state, p.state))}${p.action ? `（${label(s.actionName, p.action)}）` : ""}`,
   "timeline.action": (p) =>
-    `${label(s.actionName, p.action)}${p.job ? ` ${p.job}` : ""}${label(s.deployments.outcomes, p.outcome)}${p.version ? `，版本 ${p.version}` : ""}`,
+    `${label(s.actionName, p.action)}${p.job ? ` ${p.job}` : ""}${p.instance ? `實例 ${p.instance} ` : ""}${label(s.deployments.outcomes, p.outcome)}${p.version ? `，版本 ${p.version}` : ""}`,
   "timeline.check": (p) =>
     `檢查 ${p.check}：${arrow(label(checkStatus, p.previous), label(checkStatus, p.status))}${p.message ? `（${p.message}）` : ""}`,
   "timeline.health": (p) => `健康狀態：${arrow(label(s.health, p.previous), label(s.health, p.health))}`,

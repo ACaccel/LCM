@@ -1,0 +1,50 @@
+# Written by the LCM deploy helper from its built-in template; do not edit.
+[Unit]
+Description=bots alpha (managed by LCM)
+After=network.target mongodb-bots.service
+Wants=mongodb-bots.service
+
+[Service]
+Type=simple
+User=bots
+Group=bots
+WorkingDirectory=/opt/bots/current
+ExecStart=/opt/lcm/runtimes/node24/bin/node dist/bot/alpha/index.js
+EnvironmentFile=/etc/bots/env
+EnvironmentFile=/etc/bots/alpha.env
+Environment=LCM_SERVICE=bots LCM_INSTANCE=alpha
+Environment=PORT=4100 HOST=127.0.0.1
+Environment=PATH=/opt/lcm/runtimes/node24/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=5
+MemoryHigh=384M
+MemoryMax=512M
+TimeoutStopSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power -/var/backups/lcm-services
+SocketBindAllow=tcp:4100
+SocketBindDeny=any
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+PrivateIPC=yes
+ReadWritePaths=/var/lib/bots
+InaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build
+
+[Install]
+WantedBy=multi-user.target

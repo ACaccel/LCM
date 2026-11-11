@@ -102,6 +102,22 @@ func TestActionErrors(t *testing.T) {
 	x.call("POST", v1+"/resources/web/actions/start", map[string]string{"job": "x"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	x.call("POST", v1+"/resources/web/actions/run-job", nil).wantError(http.StatusUnprocessableEntity, "validation_failed")
 	x.call("POST", v1+"/resources/web/actions/run-job", map[string]string{"job": "ghost"}).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	// An instance is for start, stop and restart of a service that has it;
+	// restoring users needs the resource's name typed.
+	for _, tc := range []struct {
+		action string
+		body   any
+	}{
+		{"backup", map[string]string{"instance": "a"}},
+		{"restart", map[string]string{"instance": "Bad--name"}},
+		{"restart", map[string]string{"instance": "a"}},
+		{"start", map[string]any{"restoreUsers": true, "confirm": "web"}},
+		{"restore", map[string]any{"restoreUsers": true}},
+		{"restore", map[string]any{"restoreUsers": true, "confirm": "other"}},
+		{"restore", map[string]any{"confirm": "web"}},
+	} {
+		x.call("POST", v1+"/resources/web/actions/"+tc.action, tc.body).wantError(http.StatusUnprocessableEntity, "validation_failed")
+	}
 	// Missing configuration is a precondition, not a bad request.
 	x.call("POST", v1+"/resources/web/actions/backup", nil).wantError(http.StatusConflict, "precondition_failed")
 	x.call("POST", v1+"/resources/web/actions/deploy", nil).wantError(http.StatusConflict, "precondition_failed")

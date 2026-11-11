@@ -104,6 +104,10 @@ type ManagerConfig struct {
 	// RestoreSettle is how long a restored service gets to become active
 	// before the restore is undone; default 15s, negative checks at once.
 	RestoreSettle time.Duration
+	// OnInstances, when set, is called with a service's name when the
+	// instances an operator stopped changed, so that their checks are
+	// paused or resumed.
+	OnInstances func(service string)
 }
 
 // Forgetter drops the monitor state of a resource; *monitor.Monitor
@@ -128,6 +132,11 @@ type Manager struct {
 
 	mu       sync.Mutex
 	inflight map[string]struct{}
+	// instMu guards instances, the last observation of each service's
+	// instances.
+	instMu      sync.Mutex
+	instances   map[string]InstanceSnapshot
+	onInstances func(string)
 	// routeMu serializes the sends of route options: they all change one
 	// nginx site.
 	routeMu sync.Mutex
@@ -145,6 +154,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		cat: cfg.Catalog, runtimes: cfg.Runtimes, runner: cfg.Runner, locker: cfg.Locker,
 		log: cfg.Log, lockTTL: cfg.LockTTL, git: cfg.Git, workDir: cfg.WorkDir, monitor: cfg.Monitor, deploy: cfg.Deploy,
 		settle: cfg.RestoreSettle, inflight: map[string]struct{}{},
+		instances: map[string]InstanceSnapshot{}, onInstances: cfg.OnInstances,
 	}
 	if m.settle == 0 {
 		m.settle = 15 * time.Second
@@ -190,6 +200,12 @@ type ActionOptions struct {
 	// BackupID is the backup set to restore; empty means the newest.
 	// Restore only.
 	BackupID string
+	// Instance names one instance of a managed service with instances.
+	// Start, stop and restart only; empty acts on the service.
+	Instance string
+	// RestoreUsers also restores the MongoDB users and roles a set holds,
+	// which replaces every account of the mongod instance. Restore only.
+	RestoreUsers bool
 }
 
 // ActionResult describes a finished action. Fields are camelCase JSON so
@@ -213,6 +229,11 @@ type ActionResult struct {
 	// Replayed is true when the result was returned for a repeated
 	// idempotency key and nothing was executed.
 	Replayed bool `json:"replayed,omitempty"`
+	// Instance is the instance the action acted on, if one.
+	Instance string `json:"instance,omitempty"`
+	// RestoreUsers reports a restore that also restored MongoDB users and
+	// roles.
+	RestoreUsers bool `json:"restoreUsers,omitempty"`
 }
 
 // session is one action in progress: it owns the service lock and the
@@ -335,9 +356,13 @@ func (s *session) prepare(ctx context.Context) error {
 		s.close()
 		return err
 	}
-	if err := s.m.checkAction(s.action, s.rec); err != nil {
+	check := s.m.checkAction(s.action, s.rec)
+	if s.opts.Instance != "" {
+		check = s.m.checkInstanceAction(s.action, s.opts.Instance, s.rec)
+	}
+	if check != nil {
 		s.close()
-		return err
+		return check
 	}
 	return nil
 }
@@ -481,6 +506,12 @@ func (m *Manager) exec(ctx context.Context, name, action string, opts ActionOpti
 	if opts.Job != "" {
 		details["job"] = opts.Job
 	}
+	if opts.Instance != "" {
+		details["instance"] = opts.Instance
+	}
+	if res.RestoreUsers {
+		details["restoreUsers"] = true
+	}
 	if res.BackupID != "" {
 		details["backupId"] = res.BackupID
 	}
@@ -532,11 +563,17 @@ func (m *Manager) replay(ctx context.Context, name, action string, opts ActionOp
 	return res, true, nil
 }
 
-// idemAction distinguishes jobs: two run-job nodes for different jobs of
-// one service keep separate keys.
+// idemAction distinguishes jobs, instances and restores with users: two
+// run-job nodes for different jobs of one service, or restarts of different
+// instances, keep separate keys.
 func idemAction(action string, opts ActionOptions) string {
-	if action == ActionRunJob {
+	switch {
+	case action == ActionRunJob:
 		return action + ":" + opts.Job
+	case opts.Instance != "":
+		return action + ":" + opts.Instance
+	case action == ActionRestore && opts.RestoreUsers:
+		return action + ":users"
 	}
 	return action
 }
@@ -575,6 +612,12 @@ func (m *Manager) timelineAction(ctx context.Context, s *session, res *ActionRes
 	if s.opts.Job != "" {
 		data["job"] = s.opts.Job
 	}
+	if s.opts.Instance != "" {
+		data["instance"] = s.opts.Instance
+	}
+	if res.RestoreUsers {
+		data["restoreUsers"] = true
+	}
 	if res.Output != "" {
 		data["output"] = res.Output
 	}
@@ -585,8 +628,11 @@ func (m *Manager) timelineAction(ctx context.Context, s *session, res *ActionRes
 		data["preRestoreId"] = res.PreRestoreID
 	}
 	summary := s.action + " " + outcome
-	if s.opts.Job != "" {
+	switch {
+	case s.opts.Job != "":
 		summary = fmt.Sprintf("%s %s %s", s.action, s.opts.Job, outcome)
+	case s.opts.Instance != "":
+		summary = fmt.Sprintf("%s %s %s", s.action, s.opts.Instance, outcome)
 	}
 	if res.Version != "" {
 		summary += " at " + shortSHA(res.Version)

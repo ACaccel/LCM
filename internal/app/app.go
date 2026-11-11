@@ -406,11 +406,12 @@ func New(ctx context.Context, cfg config.Config, opts ...Option) (_ *App, err er
 	a.Manager, err = catalog.NewManager(catalog.ManagerConfig{
 		Catalog: a.Catalog, Runtimes: a.Runtimes, Runner: o.runner, Locker: lockAdapter{m: a.Locks},
 		Log: log.With("component", "lifecycle"), LockTTL: cfg.LockTTL, Git: cfg.Git, WorkDir: workDir, Monitor: a.Monitor,
-		Deploy: helper, RestoreSettle: o.restoreSettle,
+		Deploy: helper, RestoreSettle: o.restoreSettle, OnInstances: func(string) { a.syncer.request() },
 	})
 	if err != nil {
 		return nil, err
 	}
+	a.syncer.stopped = a.Manager.StoppedInstances
 	// Hooks before anything writes: every save and phase change of a
 	// service or machine passes through its type.
 	a.Resources.RegisterHooks(model.ResourceService, a.Manager.Hooks())

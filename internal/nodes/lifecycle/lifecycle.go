@@ -49,6 +49,14 @@ type ResourceProps struct {
 	AcknowledgeImpact bool   `json:"acknowledgeImpact" desc:"allow a disruptive action on a service other managed resources depend on or are controlled through; without it such a node fails"`
 }
 
+// InstanceProps configures lifecycle.start, lifecycle.stop and
+// lifecycle.restart.
+type InstanceProps struct {
+	Resource          string `json:"resource" lcm:"required" desc:"name of a service resource, usually an expression such as {{ trigger.resource }}"`
+	Instance          string `json:"instance" desc:"instance of a managed service with instances to act on; empty acts on the whole service"`
+	AcknowledgeImpact bool   `json:"acknowledgeImpact" desc:"allow a disruptive action on a service other managed resources depend on or are controlled through; without it such a node fails"`
+}
+
 // DeployProps configures lifecycle.deploy.
 type DeployProps struct {
 	Resource          string `json:"resource" lcm:"required" desc:"name of a service resource"`
@@ -86,12 +94,29 @@ func Register(r *node.Registry, a Actions) {
 			},
 		})
 	}
+	instance := func(typ, action, desc string, run func(context.Context, string, catalog.ActionOptions) (catalog.ActionResult, error)) {
+		node.Register(r, node.Spec[InstanceProps]{
+			Type: typ, Category: Category, Effect: node.EffectWrite, Description: desc, ResourceProp: "resource",
+			Validate: func(p InstanceProps) error {
+				if p.Instance != "" && !model.ValidInstanceName(p.Instance) {
+					return fmt.Errorf("instance: %q is not a valid instance name", p.Instance)
+				}
+				return checkResource(p.Resource)
+			},
+			Run: func(ctx context.Context, rc *node.RunContext, p InstanceProps) (node.Result, error) {
+				return execute(ctx, rc, a, p.Resource, action, p.AcknowledgeImpact, catalog.ActionOptions{Instance: p.Instance}, run)
+			},
+			DryRun: func(ctx context.Context, rc *node.RunContext, p InstanceProps) (node.Result, error) {
+				return plan(ctx, a, p.Resource, action, p.AcknowledgeImpact, catalog.ActionOptions{Instance: p.Instance})
+			},
+		})
+	}
 	simple("lifecycle.rollback", catalog.ActionRollback,
 		"Redeploys the previous successful version of a service.", a.Rollback)
-	simple("lifecycle.restart", catalog.ActionRestart,
-		"Restarts a service; a stopped service is started.", a.Restart)
-	simple("lifecycle.start", catalog.ActionStart, "Starts a stopped or failed service.", a.Start)
-	simple("lifecycle.stop", catalog.ActionStop, "Stops a service.", a.Stop)
+	instance("lifecycle.restart", catalog.ActionRestart,
+		"Restarts a service, or one instance of it; a stopped service is started.", a.Restart)
+	instance("lifecycle.start", catalog.ActionStart, "Starts a stopped or failed service, or one instance of a running one.", a.Start)
+	instance("lifecycle.stop", catalog.ActionStop, "Stops a service, or one instance of it, which then stays stopped until started by name.", a.Stop)
 	simple("lifecycle.backup", catalog.ActionBackup, "Runs the service's backup: its command, or the typed backup of a managed service.", a.Backup)
 
 	node.Register(r, node.Spec[DeployProps]{

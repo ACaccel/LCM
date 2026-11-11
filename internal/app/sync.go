@@ -29,6 +29,9 @@ type monitorSyncer struct {
 	// one.
 	mu   sync.Mutex
 	kick chan struct{}
+	// stopped returns the instances of a service that an operator stopped,
+	// whose checks are paused; nil pauses nothing.
+	stopped func(service string) map[string]bool
 }
 
 func newMonitorSyncer(res *resource.Store, mon *monitor.Monitor, log *slog.Logger) *monitorSyncer {
@@ -37,15 +40,24 @@ func newMonitorSyncer(res *resource.Store, mon *monitor.Monitor, log *slog.Logge
 
 // monitorDefs lists the checks of every managed resource of any type.
 // Retired resources are not observed, and List never returns unmanaged
-// ones.
-func monitorDefs(recs []resource.Record) []monitor.Def {
+// ones. The checks of an instance that stopped reports stopped by an
+// operator are paused.
+func monitorDefs(recs []resource.Record, stopped func(service string) map[string]bool) []monitor.Def {
 	var defs []monitor.Def
 	for _, rec := range recs {
 		if rec.Phase != resource.PhaseManaged || rec.Document == nil {
 			continue
 		}
+		var off map[string]bool
+		if stopped != nil && rec.Type == model.ResourceService {
+			off = stopped(rec.Name)
+		}
 		for _, c := range rec.Document.Spec.Checks {
-			defs = append(defs, monitor.Def{Resource: rec.Name, ResourceType: rec.Type, Labels: rec.Document.Metadata.Labels, Check: c})
+			d := monitor.Def{Resource: rec.Name, ResourceType: rec.Type, Labels: rec.Document.Metadata.Labels, Check: c}
+			if c.Instance != "" && off[c.Instance] {
+				d.Paused, d.PauseReason = true, "instance "+c.Instance+" is stopped"
+			}
+			defs = append(defs, d)
 		}
 	}
 	return defs
@@ -64,7 +76,7 @@ func (s *monitorSyncer) Sync(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = s.mon.SyncAt(ctx, gen, monitorDefs(recs))
+	err = s.mon.SyncAt(ctx, gen, monitorDefs(recs, s.stopped))
 	var issues model.Issues
 	if errors.As(err, &issues) {
 		for _, is := range issues {
@@ -85,6 +97,12 @@ func (s *monitorSyncer) Changed(c resource.Change) {
 	if s.leftObservation(c) {
 		s.mon.Forget(c.Name)
 	}
+	s.request()
+}
+
+// request asks the sync loop for a sync soon, such as when the instances
+// an operator stopped changed.
+func (s *monitorSyncer) request() {
 	select {
 	case s.kick <- struct{}{}:
 	default:

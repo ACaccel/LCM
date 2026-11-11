@@ -158,6 +158,10 @@ func invalidField(err error) string {
 		return "version"
 	case errors.Is(err, catalog.ErrUnknownJob):
 		return "job"
+	case errors.Is(err, catalog.ErrUnknownInstance):
+		return "instance"
+	case errors.Is(err, catalog.ErrNoUsers):
+		return "restoreUsers"
 	case errors.Is(err, engine.ErrInvalidMode):
 		return "mode"
 	case errors.Is(err, engine.ErrUnknownTrigger):

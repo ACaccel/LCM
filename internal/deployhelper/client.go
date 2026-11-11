@@ -110,6 +110,12 @@ func (c Client) Call(ctx context.Context, req Request) (Response, error) {
 		}
 		return Response{}, unknown("malformed reply", err)
 	}
+	if resp.Code == CodeRefused && resp.OperationID == "" && resp.Op == "" {
+		// The helper refused the request before it could read its op and
+		// ID, for example a field a helper older than this LCM does not
+		// know: nothing ran.
+		return resp, &Error{Code: resp.Code, Message: resp.Message}
+	}
 	if resp.OperationID != req.OperationID || (req.Op != OpQuery && resp.Op != req.Op) {
 		return Response{}, unknown("the reply is for another request", nil)
 	}

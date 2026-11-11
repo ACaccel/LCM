@@ -209,6 +209,12 @@ func TestManagedServiceThroughTheApp(t *testing.T) {
 			t.Fatalf("LCM ran %q itself", c.Display())
 		}
 	}
+	// A service without instances sends what earlier versions sent.
+	for _, r := range helper.Requests() {
+		if r.Instances != nil || r.Instance != "" || r.RestoreUsers {
+			t.Fatalf("single-instance request carries new fields: %+v", r)
+		}
+	}
 
 	rec, err := h.app.Catalog.Get(h.ctx, "web")
 	if err != nil || rec.State != catalog.StateRunning {

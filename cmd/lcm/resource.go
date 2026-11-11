@@ -30,7 +30,10 @@ Commands:
                               restart, backup, restore, run-job, apply-route);
                               --version <commit> (deploy), --job <job> (run-job),
                               --backup-id <id> (restore; the newest set when
-                              omitted), --dry-run, --wait
+                              omitted), --instance <name> (start, stop, restart
+                              of one instance), --restore-users --confirm <name>
+                              (restore MongoDB users and roles too; prints the
+                              plan and asks unless --yes), --dry-run, --wait
   observe <name>              Collect a read-only observation (machine, router)
   history | events <name>     Read a page of observations or events (--limit, --cursor);
                               history also takes --from, --to (RFC 3339) and --step
@@ -89,6 +92,8 @@ type resourceFlags struct {
 	format    string
 	job       string
 	backupID  string
+	instance  string
+	users     bool
 	dryRun    bool
 	wait      bool
 	ackImpact bool
@@ -117,6 +122,8 @@ func (a *app) resource(ctx context.Context, args []string) error {
 	fs.StringVar(&f.format, "o", "json", "output format: json or yaml")
 	fs.StringVar(&f.job, "job", "", "name of the job to run (action run-job only)")
 	fs.StringVar(&f.backupID, "backup-id", "", "backup set to restore (action restore only), the newest when omitted")
+	fs.StringVar(&f.instance, "instance", "", "instance of a managed service to start, stop or restart (actions start, stop, restart only)")
+	fs.BoolVar(&f.users, "restore-users", false, "also restore the MongoDB users and roles of the set, replacing every account of the mongod instance (action restore only; needs --confirm <name>)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "show the plan of an action without performing it")
 	fs.BoolVar(&f.wait, "wait", false, "wait for an action to finish; exits with status 1 when it failed")
 	fs.BoolVar(&f.ackImpact, "acknowledge-impact", false, "accept the impact on dependents and control dependents of a disruptive action")
@@ -589,6 +596,16 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 	if f.backupID != "" {
 		body["backupId"] = f.backupID
 	}
+	if f.instance != "" {
+		body["instance"] = f.instance
+	}
+	name, act := pos[1], pos[2]
+	if f.users {
+		if f.confirm != name {
+			return usagef("resource: --restore-users needs --confirm %s: it replaces every user and role of the MongoDB instance", name)
+		}
+		body["restoreUsers"], body["confirm"] = true, f.confirm
+	}
 	if f.ackImpact {
 		body["acknowledgeImpact"] = true
 	}
@@ -596,8 +613,12 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 	if err != nil {
 		return err
 	}
-	name, act := pos[1], pos[2]
 	path := client.Path("resources", name, "actions", act)
+	// target names what the action acts on in the output.
+	target := name
+	if f.instance != "" {
+		target = name + " instance " + f.instance
+	}
 	if !f.dryRun && !f.ackImpact {
 		accepted, err := a.askActionImpact(ctx, cl, name, act, f)
 		if err != nil {
@@ -607,7 +628,7 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 			body["acknowledgeImpact"] = true
 		}
 	}
-	if f.dryRun {
+	if f.dryRun || f.users {
 		var plan struct {
 			From   string     `json:"from"`
 			To     string     `json:"to"`
@@ -617,12 +638,19 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 		if err := cl.JSON(ctx, "POST", path, url.Values{"dryRun": {"true"}}, body, &plan); err != nil {
 			return apiError(err)
 		}
-		_, _ = fmt.Fprintf(a.stdout, "plan: %s %s (%s -> %s)\n", act, name, plan.From, plan.To)
+		_, _ = fmt.Fprintf(a.stdout, "plan: %s %s (%s -> %s)\n", act, target, plan.From, plan.To)
 		for i, s := range plan.Steps {
 			_, _ = fmt.Fprintf(a.stdout, "  %d. %s\n", i+1, s)
 		}
 		a.printImpact(a.stdout, "  ", plan.Impact)
-		return nil
+		if f.dryRun {
+			return nil
+		}
+		// Restoring users replaces accounts the services may log in with:
+		// a person reviews the plan first.
+		if err := a.confirmWrite(f.yes, false); err != nil {
+			return err
+		}
 	}
 	var started struct {
 		ActionID string `json:"actionId"`
@@ -630,7 +658,7 @@ func (a *app) resourceAction(ctx context.Context, conn *connection, pos []string
 	if err := cl.JSON(ctx, "POST", path, nil, body, &started); err != nil {
 		return apiError(err)
 	}
-	_, _ = fmt.Fprintf(a.stdout, "action %s started (%s %s)\n", started.ActionID, act, name)
+	_, _ = fmt.Fprintf(a.stdout, "action %s started (%s %s)\n", started.ActionID, act, target)
 	if !f.wait {
 		return nil
 	}

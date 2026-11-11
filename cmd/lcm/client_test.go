@@ -319,6 +319,12 @@ func TestResourceActionCommand(t *testing.T) {
 	s.cli("", "resource", "action", "web", "start").want(t, 1) // already running
 	s.cli("", "resource", "action", "web").want(t, 2)
 	s.cli("", "resource", "action", "web", "run-job").want(t, 1)
+	// The server refuses an instance of a service without instances, and
+	// restoring users needs the name typed before anything is asked.
+	s.cli("", "resource", "action", "web", "restart", "--instance", "a").want(t, 1)
+	s.cli("", "resource", "action", "web", "restore", "--restore-users").want(t, 2)
+	s.cli("", "resource", "action", "web", "restore", "--restore-users", "--confirm", "other").want(t, 2)
+	s.cli("", "resource", "action", "web", "restore", "--restore-users", "--confirm", "web").want(t, 1)
 
 	// A failing command is reported by --wait.
 	s.runner.Reply("web-stop", "boom", 1)

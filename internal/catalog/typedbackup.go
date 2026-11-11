@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/ACaccel/lcm/internal/deployhelper"
@@ -29,7 +30,7 @@ var ErrRestoreUndone = errors.New("catalog: the restored service did not become 
 func helperSources(src []model.BackupSource) []deployhelper.BackupSource {
 	out := make([]deployhelper.BackupSource, len(src))
 	for i, s := range src {
-		out[i] = deployhelper.BackupSource{Type: s.Type, Path: s.Path, Database: s.Database, Users: s.Users, Argv: s.Argv}
+		out[i] = deployhelper.BackupSource{Type: s.Type, Path: s.Path, Database: s.Database, All: s.All, Users: s.Users, Argv: s.Argv}
 	}
 	return out
 }
@@ -37,9 +38,17 @@ func helperSources(src []model.BackupSource) []deployhelper.BackupSource {
 func modelSources(src []deployhelper.BackupSource) []model.BackupSource {
 	out := make([]model.BackupSource, len(src))
 	for i, s := range src {
-		out[i] = model.BackupSource{Type: s.Type, Path: s.Path, Database: s.Database, Users: s.Users, Argv: s.Argv}
+		out[i] = model.BackupSource{Type: s.Type, Path: s.Path, Database: s.Database, All: s.All, Users: s.Users, Argv: s.Argv}
 	}
 	return out
+}
+
+// ErrNoUsers refuses restoreUsers for a set that holds no MongoDB users.
+var ErrNoUsers = precondition("catalog: the backup set holds no MongoDB users and roles (a mongodb source with users: true) to restore")
+
+// holdsUsers reports whether sources include MongoDB users and roles.
+func holdsUsers(sources []model.BackupSource) bool {
+	return slices.ContainsFunc(sources, func(s model.BackupSource) bool { return s.Type == model.BackupMongoDB && s.Users })
 }
 
 // timeoutSeconds is d in whole seconds within the helper's bounds.
@@ -194,6 +203,10 @@ func (s *session) restore(ctx context.Context, res *ActionResult) error {
 	if err != nil {
 		return err
 	}
+	if s.opts.RestoreUsers && !holdsUsers(target.Sources) {
+		return fmt.Errorf("%w: %s", ErrNoUsers, target.BackupID)
+	}
+	res.RestoreUsers = s.opts.RestoreUsers
 	if adopted {
 		target.Actor, target.RunID = s.actor, s.opts.RunID
 		if _, err := s.m.cat.AddBackup(ctx, target); err != nil {
@@ -210,6 +223,7 @@ func (s *session) restore(ctx context.Context, res *ActionResult) error {
 	}
 	resp, callErr := rt.CallHelper(ctx, s.m.deploy, deployhelper.Request{
 		Op: deployhelper.OpRestore, Service: s.name, OperationID: rec.OperationID, BackupID: target.BackupID, ManifestSHA256: target.ManifestSHA256,
+		RestoreUsers: s.opts.RestoreUsers,
 	})
 	fctx, cancel := detached(ctx)
 	defer cancel()
@@ -239,7 +253,9 @@ func (s *session) restore(ctx context.Context, res *ActionResult) error {
 }
 
 // checkRestored waits for the restored service to become active and undoes
-// the restore from the pre-restore set when it does not.
+// the restore from the pre-restore set when it does not. The undo restores
+// users and roles when the restore did: the pre-restore set holds the
+// accounts it replaced only then, and only then must they come back.
 func (s *session) checkRestored(ctx context.Context, pre, restored string) error {
 	if s.m.settle > 0 {
 		if err := s.m.pause(ctx, s.m.settle); err != nil {
@@ -265,7 +281,7 @@ func (s *session) checkRestored(ctx context.Context, pre, restored string) error
 		return err
 	}
 	resp, undoErr := rt.CallHelper(ctx, s.m.deploy, deployhelper.Request{
-		Op: deployhelper.OpRestore, Service: s.name, OperationID: rec.OperationID, BackupID: pre,
+		Op: deployhelper.OpRestore, Service: s.name, OperationID: rec.OperationID, BackupID: pre, RestoreUsers: s.opts.RestoreUsers,
 	})
 	fctx, cancel := detached(ctx)
 	defer cancel()
@@ -342,7 +358,7 @@ func typedBackupSteps(b *model.Backup) []message.Message {
 }
 
 // restoreSteps are the steps of a restore, or why it cannot run.
-func (m *Manager) restoreSteps(ctx context.Context, rec *Record, backupID string) ([]message.Message, error) {
+func (m *Manager) restoreSteps(ctx context.Context, rec *Record, backupID string, users bool) ([]message.Message, error) {
 	b := rec.Config.Backup
 	if b == nil || !b.Typed() || !b.Restorable() {
 		return nil, ErrNoRestore
@@ -358,13 +374,25 @@ func (m *Manager) restoreSteps(ctx context.Context, rec *Record, backupID string
 		}
 	}
 	sources := describeSources(restorable)
-	return []message.Message{
+	var usersStep []message.Message
+	if users {
+		if !holdsUsers(target.Sources) {
+			return nil, fmt.Errorf("%w: %s", ErrNoUsers, target.BackupID)
+		}
+		usersStep = append(usersStep, message.New("step.restoreUsers",
+			fmt.Sprintf("replace every user and role of the MongoDB instance (admin.system.users, admin.system.roles) with those of %s; "+
+				"the service's own account wrote that set, so it holds whatever users a compromised service put there; the pre-restore copy keeps the current ones",
+				target.BackupID),
+			"backup", target.BackupID))
+	}
+	return append([]message.Message{
 		message.New("step.restoreVerify", fmt.Sprintf("verify backup %s against the checksums in its manifest", target.BackupID), "backup", target.BackupID),
 		message.New("step.restoreStop", "stop "+rec.Name+" if it is running", "service", rec.Name),
 		message.New("step.restorePreRestore", fmt.Sprintf("copy the current data (%s) to a pre-restore set", sources), "sources", sources),
 		message.New("step.restoreApply", fmt.Sprintf("replace %s with the content of %s; a failure puts the pre-restore copy back", sources, target.BackupID),
 			"sources", sources, "backup", target.BackupID),
+	}, append(usersStep,
 		message.New("step.restoreStart", "start "+rec.Name+" again if it was running", "service", rec.Name),
 		message.New("step.restoreCheck", "check that the service becomes active; if not, restore the pre-restore set", "service", rec.Name),
-	}, nil
+	)...), nil
 }

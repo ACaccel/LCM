@@ -28,10 +28,13 @@ func unitName(svc string) string { return svc + ".service" }
 // still connect anywhere, and the kernel does not stop it from binding its
 // port on another address than HOST: systemd has no per-address bind
 // rule, and IPAddressAllow= would also block its outbound connections.
+// A service or instance without a port (port 0) may bind none.
 func serviceSandbox(svc string, port int, backup string) []string {
 	props := sandbox("0027", backup)
+	if port != 0 {
+		props = append(props, "SocketBindAllow=tcp:"+strconv.Itoa(port))
+	}
 	props = append(props,
-		"SocketBindAllow=tcp:"+strconv.Itoa(port),
 		"SocketBindDeny=any",
 		"RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK",
 		"PrivateIPC=yes",
@@ -39,25 +42,66 @@ func serviceSandbox(svc string, port int, backup string) []string {
 	return append(props, "InaccessiblePaths=-"+hostsetup.BuildDir+" -"+hostsetup.BuildCacheDir)
 }
 
-// renderUnit is the built-in unit template. Every value in it is checked
-// to need no quoting or escaping: the limits were validated with the
-// request.
+// unitSpec is everything a rendered unit holds. Instance is empty for a
+// service's single unit; After, Wants and Groups come from the grant.
+type unitSpec struct {
+	svc, instance        string
+	port                 int
+	execStart            []string
+	rtBin, backup        string
+	limits               *UnitLimits
+	after, wants, groups []string
+}
+
+// renderUnit is the built-in template of a service's single unit.
 func renderUnit(svc string, port int, execStart []string, rtBin, backup string, limits *UnitLimits) string {
+	return renderSpec(unitSpec{svc: svc, port: port, execStart: execStart, rtBin: rtBin, backup: backup, limits: limits})
+}
+
+// renderSpec is the built-in unit template. Every value in it is checked
+// to need no quoting or escaping: the limits were validated with the
+// request, and the names, units and groups with host.json. Without an
+// instance, After, Wants and Groups, the unit is the one earlier versions
+// wrote, byte for byte, so that a helper upgrade changes no unit.
+func renderSpec(u unitSpec) string {
+	svc := u.svc
+	desc := svc
+	if u.instance != "" {
+		desc = svc + " " + u.instance
+	}
 	lines := []string{
 		hostsetup.ServiceUnitMarker,
 		"[Unit]",
-		"Description=" + svc + " (managed by LCM)",
-		"After=network.target",
+		"Description=" + desc + " (managed by LCM)",
+		strings.Join(append([]string{"After=network.target"}, u.after...), " "),
+	}
+	if len(u.wants) > 0 {
+		lines = append(lines, "Wants="+strings.Join(u.wants, " "))
+	}
+	lines = append(lines,
 		"",
 		"[Service]",
 		"Type=simple",
-		"User=" + svc,
-		"Group=" + svc,
-		"WorkingDirectory=" + hostsetup.ServiceOptDir(svc) + "/current",
-		"ExecStart=" + strings.Join(execStart, " "),
-		"EnvironmentFile=" + hostsetup.ServiceEnvFile(svc),
-		"Environment=PORT=" + strconv.Itoa(port) + " HOST=127.0.0.1",
+		"User="+svc,
+		"Group="+svc,
+	)
+	if len(u.groups) > 0 {
+		lines = append(lines, "SupplementaryGroups="+strings.Join(u.groups, " "))
 	}
+	lines = append(lines,
+		"WorkingDirectory="+hostsetup.ServiceOptDir(svc)+"/current",
+		"ExecStart="+strings.Join(u.execStart, " "),
+		"EnvironmentFile="+hostsetup.ServiceEnvFile(svc),
+	)
+	if u.instance != "" {
+		lines = append(lines,
+			"EnvironmentFile="+hostsetup.ServiceInstanceEnvFile(svc, u.instance),
+			"Environment=LCM_SERVICE="+svc+" LCM_INSTANCE="+u.instance)
+	}
+	if u.port != 0 {
+		lines = append(lines, "Environment=PORT="+strconv.Itoa(u.port)+" HOST=127.0.0.1")
+	}
+	port, rtBin, backup, limits := u.port, u.rtBin, u.backup, u.limits
 	if rtBin != "" {
 		lines = append(lines, "Environment=PATH="+rtBin+":"+systemPath)
 	}
@@ -99,6 +143,16 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 	if _, err := h.trustedPath(relDir, false); err != nil || m.Service != svc || m.ReleaseID != req.ReleaseID {
 		return refuse(resp, CodeFailed, "release %s is incomplete or not this service's", req.ReleaseID)
 	}
+	switch {
+	case g.MultiInstance() && req.Instances == nil:
+		return refuse(resp, CodeRefused, "services.%s has instances in %s, but the request has none: give the document config.instances, or grant the service a port instead with sudo bin/lcm host allow",
+			svc, hostsetup.ConfigPath)
+	case !g.MultiInstance() && req.Instances != nil:
+		return refuse(resp, CodeRefused, "the request has instances, but services.%s has none in %s: an administrator grants them with sudo bin/lcm host allow %s --instance NAME[:PORT]",
+			svc, hostsetup.ConfigPath, svc)
+	case g.MultiInstance():
+		return h.activateInstances(ctx, req, resp, cfg, g, relDir)
+	}
 	static := req.Start == nil
 	switch {
 	case static && g.Port != 0:
@@ -118,7 +172,7 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 			return refuse(resp, CodeFailed, "%v; nothing was switched", err)
 		}
 		resp.Log = sanitizeLog(strings.Join(notes, "\n"))
-		return h.switchAndRestart(ctx, req, resp, "", published)
+		return h.switchAndRestart(ctx, req, resp, "", published, nil)
 	}
 	acc, err := h.account(ctx, svc, hostsetup.ServiceDataDir(svc), hostsetup.ServiceComment(svc))
 	if err != nil {
@@ -129,8 +183,25 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 	} else if conflict != "" {
 		return refuse(resp, CodeRefused, "%s", conflict)
 	}
+	// Instance units left from a grant with instances would hold the
+	// service's port and data: they are found before anything changes and
+	// stop before the single unit starts.
+	units, conflict, err := h.scanUnits(svc)
+	switch {
+	case err != nil:
+		return refuse(resp, CodeFailed, "read %s: %v", hostsetup.UnitDir, err)
+	case conflict != "":
+		return refuse(resp, CodeRefused, "%s", conflict)
+	}
+	var orphans []string
+	for _, in := range units.instances {
+		orphans = append(orphans, hostsetup.InstanceUnitName(svc, in))
+	}
 	if err := h.checkServiceFiles(svc, acc); err != nil {
 		return refuse(resp, CodeRefused, "%v; run sudo bin/lcm host allow", err)
+	}
+	if err := h.checkGroups(ctx, cfg, svc, g.GrantedGroups("")); err != nil {
+		return refuse(resp, CodeRefused, "services.%s: %v", svc, err)
 	}
 	rtBin := ""
 	if req.Runtime != "" {
@@ -167,15 +238,18 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 			resp.Log = sanitizeLog(strings.TrimRight(resp.Log, "\n") + "\n" + strings.Join(notes, "\n"))
 		}
 	}
-	return h.switchAndRestart(ctx, req, resp, renderUnit(svc, g.Port, execStart, rtBin, backupDir(cfg), req.Limits), published)
+	unit := renderSpec(unitSpec{svc: svc, port: g.Port, execStart: execStart, rtBin: rtBin, backup: backupDir(cfg), limits: req.Limits,
+		after: g.After, wants: g.Wants, groups: g.GrantedGroups("")})
+	return h.switchAndRestart(ctx, req, resp, unit, published, orphans)
 }
 
 // switchAndRestart installs the unit, switches the current and previous
 // links, reloads systemd when the unit changed or systemd reports an
-// outdated copy, and restarts the service. A unit that does not verify or
-// load is put back together with the links. Without a unit (static content
-// only) it switches the links and prunes the releases.
-func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Response, unit string, published *PublishResult) Response {
+// outdated copy, stops and removes the orphaned instance units, and
+// restarts the service. A unit that does not verify or load is put back
+// together with the links. Without a unit (static content only) it
+// switches the links and prunes the releases.
+func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Response, unit string, published *PublishResult, orphans []string) Response {
 	svc, id := req.Service, req.ReleaseID
 	opt := hostsetup.ServiceOptDir(svc)
 	cur, prev, unitPath := opt+"/current", opt+"/previous", hostsetup.ServiceUnit(svc)
@@ -271,6 +345,17 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 			return refuse(resp, CodeFailed, "%s; the previous unit and release were restored", commandFailure("systemctl daemon-reload", res.Output, err))
 		}
 	}
+	for _, u := range orphans {
+		inst, _ := strings.CutPrefix(strings.TrimSuffix(u, ".service"), svc+"@")
+		result.Removed = append(result.Removed, inst)
+	}
+	if len(orphans) > 0 {
+		if res, err := h.run(ctx, systemctlTimeout, append([]string{systemctl, "disable", "--now", "--quiet"}, orphans...)...); err != nil {
+			resp.Log = sanitizeLog(res.Output)
+			result.Removed = nil
+			return refuse(resp, CodeFailed, "%s; the release is current", commandFailure("systemctl disable --now", res.Output, err))
+		}
+	}
 	if res, _ := h.run(ctx, systemctlTimeout, systemctl, "is-enabled", unitName(svc)); strings.TrimSpace(res.Output) != "enabled" {
 		if res, err := h.run(ctx, systemctlTimeout, systemctl, "enable", "--quiet", unitName(svc)); err != nil {
 			resp.Log = sanitizeLog(res.Output)
@@ -279,10 +364,33 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 	}
 	if res, err := h.run(ctx, systemctlTimeout, systemctl, "restart", unitName(svc)); err != nil {
 		resp.Log = sanitizeLog(res.Output)
+		h.removeUnits(ctx, &resp, orphans)
 		return refuse(resp, CodeFailed, "%s; the release is current", commandFailure("systemctl restart", res.Output, err))
 	}
+	h.removeUnits(ctx, &resp, orphans)
 	h.pruneReleases(svc, keep, id, result.Previous)
 	return resp
+}
+
+// removeUnits removes the files of stopped and disabled units the helper
+// wrote and reloads systemd; a failure is noted in the log only.
+func (h *Helper) removeUnits(ctx context.Context, resp *Response, units []string) {
+	if len(units) == 0 {
+		return
+	}
+	var notes []string
+	for _, u := range units {
+		p := hostsetup.UnitDir + "/" + u
+		if err := h.FS.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			notes = append(notes, fmt.Sprintf("could not remove %s: %v", p, err))
+		}
+	}
+	if res, err := h.run(ctx, systemctlTimeout, systemctl, "daemon-reload"); err != nil {
+		notes = append(notes, commandFailure("systemctl daemon-reload", res.Output, err))
+	}
+	if len(notes) > 0 {
+		resp.Log = sanitizeLog(strings.TrimRight(resp.Log, "\n") + "\n" + strings.Join(notes, "\n"))
+	}
 }
 
 // checkServiceFiles checks what host setup made for the service: its env
@@ -380,14 +488,17 @@ func (h *Helper) migrateCommand(relDir string, migrate []string, rtBin string) (
 }
 
 // migrateArgs runs a migration like the service would run: as its account,
-// in the new release, with its env file and sandbox.
+// in the new release, with its env file and sandbox. Port 0 (a service with
+// instances, whose migration no instance owns) sets no PORT or HOST.
 func migrateArgs(unit, svc string, acc hostsetup.Account, relDir string, port int, rtBin, backup string, argv []string) []string {
 	args := []string{
 		systemdRun, "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec",
 		"--unit=" + unit,
 		"--uid=" + strconv.Itoa(acc.UID), "--gid=" + strconv.Itoa(acc.GID),
 		"--working-directory=" + relDir,
-		"--setenv=PORT=" + strconv.Itoa(port), "--setenv=HOST=127.0.0.1",
+	}
+	if port != 0 {
+		args = append(args, "--setenv=PORT="+strconv.Itoa(port), "--setenv=HOST=127.0.0.1")
 	}
 	if rtBin != "" {
 		args = append(args, "--setenv=PATH="+rtBin+":"+systemPath)

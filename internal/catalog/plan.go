@@ -34,8 +34,17 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 	if err != nil {
 		return Plan{}, err
 	}
+	if opts.Instance != "" {
+		if err := m.checkInstanceAction(action, opts.Instance, rec); err != nil {
+			return Plan{}, err
+		}
+		return instancePlan(rec, action, opts.Instance), nil
+	}
 	if err := m.checkAction(action, rec); err != nil {
 		return Plan{}, err
+	}
+	if opts.RestoreUsers && action != ActionRestore {
+		return Plan{}, precondition(fmt.Sprintf("catalog: %s does not restore users", action))
 	}
 	cfg := rec.Config
 	p := Plan{Resource: name, Action: action, From: rec.State, To: rec.State}
@@ -62,7 +71,7 @@ func (m *Manager) Plan(ctx context.Context, name, action string, opts ActionOpti
 		}
 		p.add(message.New("step.backup", "run backup command: "+cfg.Backup.Command, "command", cfg.Backup.Command))
 	case ActionRestore:
-		steps, err := m.restoreSteps(ctx, rec, opts.BackupID)
+		steps, err := m.restoreSteps(ctx, rec, opts.BackupID, opts.RestoreUsers)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -173,6 +182,26 @@ func (m *Manager) deploySteps(ctx context.Context, rec *Record, action, version 
 		return append(steps, message.New("step.skipRestart", "skip restart: the runtime cannot restart this service, so the install step must apply the new version")), nil
 	}
 	return append(steps, runtimeStep(rec.Runtime())("step.restart", "restart ")), nil
+}
+
+// instancePlan is the plan of an action on one instance. The service's
+// state follows the instances afterwards, so the plan names none.
+func instancePlan(rec *Record, action, instance string) Plan {
+	p := Plan{Resource: rec.Name, Action: action, From: rec.State, To: rec.State}
+	p.add(message.New("step.lock", "lock "+LockName(rec.Name), "lock", LockName(rec.Name)))
+	unit := rec.Name + "@" + instance + ".service"
+	switch action {
+	case ActionStart:
+		p.add(message.New("step.instanceStart", fmt.Sprintf("enable and start %s; deployments start it again from now on", unit),
+			"service", rec.Name, "instance", instance, "unit", unit))
+	case ActionStop:
+		p.add(message.New("step.instanceStop", fmt.Sprintf("stop and disable %s; it stays stopped until started again, and deployments keep it stopped", unit),
+			"service", rec.Name, "instance", instance, "unit", unit))
+	case ActionRestart:
+		p.add(message.New("step.instanceRestart", fmt.Sprintf("enable and restart %s", unit),
+			"service", rec.Name, "instance", instance, "unit", unit))
+	}
+	return p
 }
 
 // runtimeStep returns a constructor of steps that act on the runtime r. The

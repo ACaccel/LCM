@@ -266,6 +266,10 @@ func toolNames(s BackupSource, restore bool) []string {
 		return []string{"pg_restore"}
 	case s.Type == SourcePostgres:
 		return []string{"pg_dump"}
+	case s.Type == SourceMongoDB && restore && s.Users:
+		// bsondump reads the set's users before they replace the
+		// instance's accounts.
+		return []string{"mongorestore", "bsondump"}
 	case s.Type == SourceMongoDB && restore:
 		return []string{"mongorestore"}
 	case s.Type == SourceMongoDB:
@@ -278,48 +282,37 @@ func toolNames(s BackupSource, restore bool) []string {
 // it ends at must be root's and in directories only root can change, and the
 // file must be executable. The path itself, not its target, is what the
 // worker runs, as some distributions dispatch on the program's name.
+// It is the check "lcm host apply" runs on backup.tools.
 func (h *Helper) trustedTool(p string) error {
-	for range 8 {
-		info, err := h.FS.Lstat(p)
-		if err != nil {
-			return err
-		}
-		if !info.IsLink() {
-			info, err := h.trustedPath(p, true)
-			if err != nil {
-				return err
-			}
-			if info.Mode.Perm()&0o111 == 0 {
-				return fmt.Errorf("%s is not executable", p)
-			}
-			return nil
-		}
-		if _, err := h.trustedPath(path.Dir(p), false); err != nil {
-			return err
-		}
-		if info.UID != h.RootUID {
-			return fmt.Errorf("%s is a link that root does not own", p)
-		}
-		target, err := h.FS.Readlink(p)
-		if err != nil {
-			return err
-		}
-		if !path.IsAbs(target) {
-			target = path.Join(path.Dir(p), target)
-		}
-		p = path.Clean(target)
-	}
-	return errors.New("too many links")
+	_, err := hostsetup.TrustedTool(h.FS, p, h.RootUID)
+	return err
 }
 
-// resolveTools finds the database tools the sources need in the system's
-// binary directories and checks that root alone can change each. It refuses
-// before anything is changed when a tool is missing or not trustworthy.
-func (h *Helper) resolveTools(sources []BackupSource, restore bool) (map[string]string, *opErr) {
+// backupTools returns backup.tools of the configuration, if any.
+func backupTools(cfg hostsetup.Config) map[string]string {
+	if cfg.Backup == nil {
+		return nil
+	}
+	return cfg.Backup.Tools
+}
+
+// resolveTools finds the database tools the sources need and checks that
+// root alone can change each: the path backup.tools names for a tool, with
+// no other copy tried, or else the first one in the system's binary
+// directories. It refuses before anything is changed when a tool is
+// missing or not trustworthy.
+func (h *Helper) resolveTools(configured map[string]string, sources []BackupSource, restore bool) (map[string]string, *opErr) {
 	tools := map[string]string{}
 	for _, s := range sources {
 		for _, name := range toolNames(s, restore) {
 			if tools[name] != "" {
+				continue
+			}
+			if p, ok := configured[name]; ok {
+				if err := h.trustedTool(p); err != nil {
+					return nil, failf(CodeRefused, "backup.tools.%s in %s cannot be trusted (%v); install it so that only root can change it", name, hostsetup.ConfigPath, err)
+				}
+				tools[name] = p
 				continue
 			}
 			var problems []string
@@ -355,40 +348,51 @@ func (h *Helper) resolveTools(sources []BackupSource, restore bool) (map[string]
 // again afterwards. The unit must be inactive or failed when it returns;
 // otherwise the unit is started again if it was running and the operation is
 // refused.
-func (h *Helper) quiesce(ctx context.Context, svc string) (running bool, e *opErr) {
-	conflict, err := hostsetup.UnitConflict(h.FS, svc, h.RootUID)
-	switch {
-	case err != nil:
-		return false, failf(CodeFailed, "%v", err)
-	case conflict != "":
-		return false, failf(CodeRefused, "%s", conflict)
+//
+// A service granted instances has a unit per instance: all of them are
+// stopped, and running names exactly those that were running.
+func (h *Helper) quiesce(ctx context.Context, svc string, g hostsetup.ServiceGrant) (running []string, e *opErr) {
+	units, e := h.serviceUnits(svc, g)
+	if e != nil || len(units) == 0 {
+		return nil, e
 	}
-	if _, err := h.FS.Lstat(hostsetup.ServiceUnit(svc)); errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	} else if err != nil {
-		return false, failf(CodeFailed, "%v", err)
+	before := h.activeStates(ctx, units)
+	for i, u := range units {
+		if slices.Contains([]string{"active", "activating", "reloading"}, before[i]) {
+			running = append(running, u)
+		}
 	}
-	running = slices.Contains([]string{"active", "activating", "reloading"}, h.activeState(ctx, svc))
-	if e := h.unitCtl(ctx, "stop", svc); e != nil {
+	if e := h.unitCtl(ctx, "stop", units...); e != nil {
 		return running, e
 	}
-	if state := h.activeState(ctx, svc); state != "inactive" && state != "failed" {
-		if running {
-			_ = h.unitCtl(context.WithoutCancel(ctx), "start", svc)
+	for i, state := range h.activeStates(ctx, units) {
+		if state != "inactive" && state != "failed" {
+			if len(running) > 0 {
+				_ = h.unitCtl(context.WithoutCancel(ctx), "start", running...)
+			}
+			return running, failf(CodeRefused, "%s is %q after being stopped, so its data cannot be used; nothing was changed", units[i], hostsetup.Printable(state, 32))
 		}
-		return running, failf(CodeRefused, "%s is %q after being stopped, so its data cannot be used; nothing was changed", unitName(svc), hostsetup.Printable(state, 32))
 	}
 	return running, nil
 }
 
-// activeState is the unit's state as "systemctl is-active" prints it.
-func (h *Helper) activeState(ctx context.Context, svc string) string {
-	res, _ := h.run(ctx, systemctlTimeout, systemctl, "is-active", unitName(svc))
-	return strings.TrimSpace(res.Output)
+// activeStates are the units' states as "systemctl is-active" prints them,
+// one per unit; a missing answer is "".
+func (h *Helper) activeStates(ctx context.Context, units []string) []string {
+	res, _ := h.run(ctx, systemctlTimeout, append([]string{systemctl, "is-active"}, units...)...)
+	lines := strings.Split(strings.TrimSpace(res.Output), "\n")
+	out := make([]string, len(units))
+	for i := range out {
+		if i < len(lines) && len(lines) == len(units) {
+			out[i] = strings.TrimSpace(lines[i])
+		}
+	}
+	return out
 }
 
-func (h *Helper) unitCtl(ctx context.Context, verb, svc string) *opErr {
-	if res, err := h.run(ctx, systemctlTimeout, systemctl, verb, unitName(svc)); err != nil {
+// unitCtl runs one systemctl verb on units.
+func (h *Helper) unitCtl(ctx context.Context, verb string, units ...string) *opErr {
+	if res, err := h.run(ctx, systemctlTimeout, append([]string{systemctl, verb}, units...)...); err != nil {
 		return failf(CodeFailed, "%s", commandFailure("systemctl "+verb, res.Output, err)).withLog(res.Output)
 	}
 	return nil
@@ -441,20 +445,24 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 		}
 		p.rtBin = rt + "/bin"
 	}
-	if _, e := h.resolveTools(p.sources, false); e != nil {
+	if _, e := h.resolveTools(backupTools(p.cfg), p.sources, false); e != nil {
 		return respond(resp, e)
 	}
-	stopped := false
+	// Refused before the service is stopped.
+	if _, e := h.backupEnvFile(req.Service, p.sources); e != nil {
+		return respond(resp, e)
+	}
+	var stopped []string
 	if p.mode == ModeStopped {
 		var e *opErr
-		if stopped, e = h.quiesce(ctx, req.Service); e != nil {
+		if stopped, e = h.quiesce(ctx, req.Service, g); e != nil {
 			return respond(resp, e)
 		}
 	}
 	m, sum, out, e := h.makeSet(ctx, p)
 	var startErr *opErr
-	if stopped {
-		startErr = h.unitCtl(context.WithoutCancel(ctx), "start", req.Service)
+	if len(stopped) > 0 {
+		startErr = h.unitCtl(context.WithoutCancel(ctx), "start", stopped...)
 	}
 	if e != nil {
 		if startErr != nil {
@@ -550,10 +558,50 @@ func (h *Helper) newStage(p backupEnv, name string, spec workerSpec) (string, *o
 	return stage, nil
 }
 
+// backupEnvFile returns the service's optional backup env file, which only
+// the backup worker gets (for credentials such as a MongoDB URI with the
+// backup and restore roles that the service itself should not hold), or ""
+// when there is none. It must be root's alone, readable by root only.
+//
+// A command source runs a program of the release, which the service's
+// document chooses: a worker that runs one must never see these
+// credentials, so a backup with a command source is refused while the file
+// exists. Restore workers never run command sources.
+func (h *Helper) backupEnvFile(svc string, sources []BackupSource) (string, *opErr) {
+	p := hostsetup.ServiceBackupEnvFile(svc)
+	if _, err := h.FS.Lstat(p); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", failf(CodeFailed, "%v", err)
+	}
+	if slices.ContainsFunc(sources, func(s BackupSource) bool { return s.Type == SourceCommand }) {
+		return "", failf(CodeRefused, "%s exists, and a command source would run the release's own program with the credentials it holds; "+
+			"back up the command source without it, or remove the command source", p)
+	}
+	info, err := h.trustedPath(p, true)
+	switch {
+	case err != nil:
+		return "", failf(CodeRefused, "%s cannot be used: %v", p, err)
+	case info.Mode.Perm()&0o077 != 0 || info.GID != h.RootGID:
+		return "", failf(CodeRefused, "%s must be readable by root only; run sudo chown root:root %s && sudo chmod 600 %s", p, p, p)
+	}
+	return p, nil
+}
+
 // runWorker runs a worker and watches the size of its output.
 func (h *Helper) runWorker(ctx context.Context, unit, stage string, p setParams, restore bool, timeoutSec int) (string, *opErr) {
 	lim := h.backupLimits()
+	backupEnv, e := h.backupEnvFile(p.svc, p.sources)
+	if e != nil {
+		return "", e
+	}
 	argv := h.workerArgs(unit, p, stage, timeoutSec, lim)
+	if backupEnv != "" {
+		// After the service's env file, so that its values win; systemd
+		// reads it as root, and no unit of the service names it.
+		i := slices.Index(argv, "--property=EnvironmentFile="+hostsetup.ServiceEnvFile(p.svc))
+		argv = slices.Insert(argv, i+1, "--property=EnvironmentFile="+backupEnv)
+	}
 	watch := lim
 	watch.MaxEntries = stageEntries
 	var stop func() string
@@ -593,7 +641,7 @@ func (h *Helper) makeSet(ctx context.Context, p setParams) (setManifest, string,
 		spec.Sources = append(spec.Sources, specSource{BackupSource: s})
 	}
 	var e *opErr
-	if spec.Tools, e = h.resolveTools(p.sources, false); e != nil {
+	if spec.Tools, e = h.resolveTools(backupTools(p.cfg), p.sources, false); e != nil {
 		return zero, "", "", e
 	}
 	stage, e := h.newStage(p.backupEnv, name, spec)
@@ -1068,8 +1116,11 @@ func restorable(m setManifest) []int {
 // users and roles of a MongoDB source are left out unless restoreUsers. The
 // hashes are computed on the bytes copied, so what is staged is what was
 // verified.
-func (h *Helper) stageSet(env backupEnv, name string, m setManifest, restoreUsers bool, maxEntries int, maxBytes int64) (string, *opErr) {
-	spec := workerSpec{Version: Version, Mode: "restore", Service: env.svc, MaxBytes: maxBytes, MaxEntries: maxEntries}
+//
+// In mode "check" it stages only the users of the MongoDB sources that hold
+// them, for the check that runs before their restore.
+func (h *Helper) stageSet(env backupEnv, name, mode string, m setManifest, restoreUsers bool, maxEntries int, maxBytes int64) (string, *opErr) {
+	spec := workerSpec{Version: Version, Mode: mode, Service: env.svc, MaxBytes: maxBytes, MaxEntries: maxEntries}
 	files := map[string]manifestFile{}
 	for _, f := range m.Files {
 		files[f.Name] = f
@@ -1078,7 +1129,12 @@ func (h *Helper) stageSet(env backupEnv, name string, m setManifest, restoreUser
 		s := m.Sources[i]
 		ss := specSource{BackupSource: s.BackupSource, Absent: s.Absent, Mode: s.Mode}
 		arts := s.Artifacts
-		if s.Type == SourceMongoDB && s.Users && !restoreUsers {
+		switch {
+		case mode == "check" && (s.Type != SourceMongoDB || !s.Users):
+			continue
+		case mode == "check":
+			arts = slices.DeleteFunc(slices.Clone(arts), func(a string) bool { return !strings.HasSuffix(a, "-users.bson") })
+		case s.Type == SourceMongoDB && s.Users && !restoreUsers:
 			// The users and roles are the whole instance's: only the database
 			// is put back unless the request asks for more.
 			arts, ss.Users = arts[:1], false
@@ -1089,7 +1145,11 @@ func (h *Helper) stageSet(env backupEnv, name string, m setManifest, restoreUser
 		spec.Sources = append(spec.Sources, ss)
 	}
 	var e *opErr
-	if spec.Tools, e = h.resolveTools(m.restorableSources(), true); e != nil {
+	var sources []BackupSource
+	for _, s := range spec.Sources {
+		sources = append(sources, s.BackupSource)
+	}
+	if spec.Tools, e = h.resolveTools(backupTools(env.cfg), sources, true); e != nil {
 		return "", e
 	}
 	stage, e := h.newStage(env, name, spec)
@@ -1276,7 +1336,7 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 		return refuse(resp, CodeRefused, "not enough room for the restore: %v", err)
 	}
 	opName := req.OperationID[:8]
-	stage, e := h.stageSet(env, opName+"r", m, req.RestoreUsers, lim.MaxEntries, lim.MaxBytes)
+	stage, e := h.stageSet(env, opName+"r", "restore", m, req.RestoreUsers, lim.MaxEntries, lim.MaxBytes)
 	if e != nil {
 		return respond(resp, e)
 	}
@@ -1285,18 +1345,23 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	// The tools of the restore were checked by staging the set; the copy of
 	// the current data needs its own, which must be there before the service
 	// is stopped.
-	if _, e := h.resolveTools(m.restorableSources(), false); e != nil {
+	if _, e := h.resolveTools(backupTools(env.cfg), m.restorableSources(), false); e != nil {
 		return respond(resp, e)
 	}
-	active, e := h.quiesce(ctx, env.svc)
+	if req.RestoreUsers {
+		if e := h.checkUsers(ctx, env, opName, m, lim); e != nil {
+			return respond(resp, e)
+		}
+	}
+	active, e := h.quiesce(ctx, env.svc, g)
 	if e != nil {
 		return respond(resp, e)
 	}
 	startAgain := func() *opErr {
-		if !active {
+		if len(active) == 0 {
 			return nil
 		}
-		return h.unitCtl(context.WithoutCancel(ctx), "start", env.svc)
+		return h.unitCtl(context.WithoutCancel(ctx), "start", active...)
 	}
 
 	pre := setParams{backupEnv: env, opID: req.OperationID, tag: "p", kind: KindPreRestore, mode: ModeStopped,
@@ -1349,13 +1414,30 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	if serr := startAgain(); serr != nil {
 		return refuse(resp, CodeFailed, "backup %s was restored (the previous data is in %s), but starting the service failed: %s", req.BackupID, pm.BackupID, serr.msg)
 	}
-	result.Started = active
+	result.Started = len(active) > 0
 	return resp
+}
+
+// checkUsers runs the worker's check of the set's MongoDB users before
+// anything is stopped or replaced: they must include the user the
+// connection string logs in as (see worker.checkUsers).
+func (h *Helper) checkUsers(ctx context.Context, env backupEnv, opName string, m setManifest, lim Limits) *opErr {
+	stage, e := h.stageSet(env, opName+"c", "check", m, true, lim.MaxEntries, lim.MaxBytes)
+	if e != nil {
+		return e
+	}
+	defer func() { _ = h.discard(stage) }()
+	if _, e := h.runWorker(ctx, "lcm-check-"+env.svc+"-"+opName, stage, setParams{backupEnv: env}, true, restoreWorkerSec); e != nil {
+		e.code = CodeRefused
+		e.msg = "the users of the set were not restored, and nothing was changed: " + e.msg
+		return e
+	}
+	return nil
 }
 
 // undoRestore applies the pre-restore set after a failed restore.
 func (h *Helper) undoRestore(ctx context.Context, env backupEnv, opName string, pm setManifest, restoreUsers bool, lim Limits) *opErr {
-	stage, e := h.stageSet(env, opName+"u", pm, restoreUsers, lim.MaxEntries, lim.MaxBytes)
+	stage, e := h.stageSet(env, opName+"u", "restore", pm, restoreUsers, lim.MaxEntries, lim.MaxBytes)
 	if e != nil {
 		return e
 	}

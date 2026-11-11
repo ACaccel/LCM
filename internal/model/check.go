@@ -32,6 +32,9 @@ type Check struct {
 	// needed before the check changes status; defaults to 1.
 	Threshold int            `yaml:"threshold,omitempty" json:"threshold,omitempty"`
 	Props     map[string]any `yaml:"props,omitempty" json:"props,omitempty"`
+	// Instance binds the check to one instance of a managed service. The
+	// check is paused while an operator keeps that instance stopped.
+	Instance string `yaml:"instance,omitempty" json:"instance,omitempty"`
 }
 
 // IsCritical reports whether a failing check makes its resource down.

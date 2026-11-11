@@ -108,20 +108,24 @@ func (a *fakeAdapter) set(f func(*fakeAdapter)) {
 type fakeRuntimes struct {
 	mu       sync.Mutex
 	adapters map[string]*fakeAdapter
-	names    map[model.Runtime]string
+	names    map[string]string
 }
 
 func (f *fakeRuntimes) For(r model.Runtime) (rt.Adapter, error) {
 	f.mu.Lock()
-	name := f.names[r]
+	name := f.names[runtimeKey(r)]
 	f.mu.Unlock()
 	return f.adapter(name), nil
 }
 
+// runtimeKey identifies a runtime value, which holds a slice and so is not
+// comparable.
+func runtimeKey(r model.Runtime) string { return fmt.Sprintf("%#v", r) }
+
 func (f *fakeRuntimes) learn(r model.Runtime, name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.names[r] = name
+	f.names[runtimeKey(r)] = name
 }
 
 func (f *fakeRuntimes) adapter(name string) *fakeAdapter {
@@ -240,7 +244,7 @@ func withRunner(r execx.Runner) envOption {
 func newEnv(t *testing.T, opts ...envOption) *env {
 	t.Helper()
 	e := &env{t: t, clk: clock.NewFake(epoch), locker: newFakeLocker(), work: filepath.Join(t.TempDir(), "work"),
-		runtime: &fakeRuntimes{adapters: map[string]*fakeAdapter{}, names: map[model.Runtime]string{}}}
+		runtime: &fakeRuntimes{adapters: map[string]*fakeAdapter{}, names: map[string]string{}}}
 	e.db = storetest.Open(t)
 	e.bus = signal.NewBus(testLogger(t), e.clk.Now)
 	e.audit = audit.New(e.db, audit.WithClock(e.clk.Now))

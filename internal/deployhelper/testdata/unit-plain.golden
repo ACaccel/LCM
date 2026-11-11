@@ -1,0 +1,43 @@
+# Written by the LCM deploy helper from its built-in template; do not edit.
+[Unit]
+Description=acaccel-site (managed by LCM)
+After=network.target
+
+[Service]
+Type=simple
+User=acaccel-site
+Group=acaccel-site
+WorkingDirectory=/opt/acaccel-site/current
+ExecStart=/opt/acaccel-site/current/bin/site
+EnvironmentFile=/etc/acaccel-site/env
+Environment=PORT=4200 HOST=127.0.0.1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+InaccessiblePaths=-/var/lib/lcm -/etc/lcm -/var/lib/lcm-deploy -/var/lib/lcm-machine-power
+SocketBindAllow=tcp:4200
+SocketBindDeny=any
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+PrivateIPC=yes
+ReadWritePaths=/var/lib/acaccel-site
+InaccessiblePaths=-/var/lib/lcm-build -/var/cache/lcm-build
+
+[Install]
+WantedBy=multi-user.target

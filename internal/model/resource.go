@@ -212,8 +212,32 @@ func ValidateResource(r *Resource) error {
 		}
 	}
 	validateChecks(sp.Checks, "spec.checks", &is)
+	validateCheckInstances(sp, &is)
 	validateRelations(sp.Relations, r.Metadata.Name, &is)
 	return is.Err()
+}
+
+// validateCheckInstances checks that a check bound to an instance names an
+// instance of its managed service.
+func validateCheckInstances(sp *ResourceSpec, is *Issues) {
+	var instances map[string]InstanceConfig
+	managed := false
+	if c, ok := sp.Config.(*ServiceConfig); ok && sp.Type == ResourceService && sp.Adapter == string(RuntimeManaged) {
+		instances, managed = c.Instances, true
+	}
+	for i, c := range sp.Checks {
+		if c.Instance == "" {
+			continue
+		}
+		p := fmt.Sprintf("spec.checks[%d].instance", i)
+		_, known := instances[c.Instance]
+		switch {
+		case !managed:
+			is.addf(p, "is only valid on a service with adapter managed")
+		case !known:
+			is.addf(p, "must name an instance of spec.config.instances")
+		}
+	}
 }
 
 func validateRelations(rels []Relation, self string, is *Issues) {

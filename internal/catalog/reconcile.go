@@ -67,7 +67,13 @@ func (m *Manager) Reconcile(ctx context.Context) ([]Change, error) {
 }
 
 func (m *Manager) reconcileOne(ctx context.Context, rec Record) (*Change, error) {
-	if rec.Phase != resource.PhaseManaged || rec.State == StateFailed {
+	if rec.Phase != resource.PhaseManaged {
+		m.forgetInstances(rec.Name)
+		return nil, nil
+	}
+	// A failed service keeps its state, but the instances of one are still
+	// observed: they decide which checks are paused.
+	if rec.State == StateFailed && len(rec.Config.Instances) == 0 {
 		return nil, nil
 	}
 	r := rec.Runtime()
@@ -78,6 +84,11 @@ func (m *Manager) reconcileOne(ctx context.Context, rec Record) (*Change, error)
 	st, statusErr := adapter.Status(ctx, r)
 	if statusErr != nil {
 		st.State = rt.StateUnknown
+	} else {
+		m.noteInstances(rec.Name, st)
+	}
+	if rec.State == StateFailed {
+		return nil, nil
 	}
 
 	var to State

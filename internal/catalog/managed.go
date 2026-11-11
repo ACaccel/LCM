@@ -136,7 +136,8 @@ func buildTimeoutSec(src *model.Source) int {
 // activateRequest is the activate request for release. Rollbacks run no
 // migration: the migration of the release being left may already have
 // changed the data, and running an older one again cannot undo that. A
-// service without start only publishes.
+// service without start only publishes. A service with instances sends
+// each instance's start and limits, resolved from the document's defaults.
 func (s *session) activateRequest(release string) deployhelper.Request {
 	cfg := s.cfg
 	req := deployhelper.Request{
@@ -144,7 +145,10 @@ func (s *session) activateRequest(release string) deployhelper.Request {
 		Runtime: cfg.RuntimeName, KeepReleases: cfg.KeepReleases,
 		Publish: publishRequest(cfg.Publish), Limits: limitsRequest(cfg.Limits),
 	}
-	if cfg.Start != "" {
+	switch {
+	case len(cfg.Instances) > 0:
+		req.Limits, req.Instances = nil, instanceRequests(cfg)
+	case cfg.Start != "":
 		req.Start = append([]string{cfg.Start}, cfg.StartArgs...)
 	}
 	if s.action != ActionRollback {
@@ -220,11 +224,33 @@ func (s *session) activate(ctx context.Context, release string, log *stepLog, id
 		log.note("published %s to %s: %d written, %d replaced, %d unchanged, %d removed, %d retained, %d hidden entries skipped",
 			s.cfg.Publish.Dir, hostsetup.ServicePublishDir(s.name), p.Written, p.Replaced, p.Unchanged, p.Deleted, p.Retained, p.Skipped)
 	}
+	noteInstances(log, s.name, resp.Activate)
 	if resp.Activate.Previous != "" {
 		log.note("previous release %s", resp.Activate.Previous)
 	}
 	log.note("installed release %s", release)
 	return nil
+}
+
+// noteInstances adds a line per instance of an activation to the log.
+func noteInstances(log *stepLog, svc string, a *deployhelper.ActivateResult) {
+	for _, in := range a.Instances {
+		switch {
+		case in.Restarted:
+			log.note("instance %s restarted", in.Name)
+		case !in.Enabled:
+			log.note("instance %s kept stopped (stopped with --instance)", in.Name)
+		default:
+			log.note("instance %s not restarted", in.Name)
+		}
+	}
+	for _, r := range a.Removed {
+		unit := svc + ".service"
+		if r != "" {
+			unit = svc + "@" + r + ".service"
+		}
+		log.note("removed unit %s", unit)
+	}
 }
 
 // activateRelease rolls back to target by activating its installed release
@@ -382,7 +408,7 @@ func (m *Manager) managedRollbackSteps(ctx context.Context, rec *Record) ([]mess
 
 // previousText is the English text of step.helperActivatePrevious.
 func previousText(rec *Record, release string) string {
-	if rec.Config.Start == "" {
+	if staticOnly(rec.Config) {
 		return fmt.Sprintf("publish the static content of the installed release %s of %s again and switch back to it", release, rec.Name)
 	}
 	text := fmt.Sprintf("switch %s back to its installed release %s and restart it, without running the migration", rec.Name, release)
@@ -401,9 +427,12 @@ func publishDir(cfg *model.ServiceConfig) string {
 	return cfg.Publish.Dir
 }
 
+// staticOnly reports a managed service that runs no process.
+func staticOnly(cfg *model.ServiceConfig) bool { return cfg.Start == "" && len(cfg.Instances) == 0 }
+
 // staticParam reports a managed service without a process as a step parameter.
 func staticParam(cfg *model.ServiceConfig) string {
-	if cfg.Start == "" {
+	if staticOnly(cfg) {
 		return "true"
 	}
 	return ""
@@ -417,12 +446,13 @@ func managedDeploySteps(rec *Record, action string) []message.Message {
 	install := message.New("step.helperInstall", fmt.Sprintf("install %s of the build as a new release of %s", cfg.Artifact, rec.Name),
 		"artifact", cfg.Artifact, "service", rec.Name)
 	dst, published := hostsetup.ServicePublishDir(rec.Name), publishDir(cfg)
-	if cfg.Start == "" {
+	if staticOnly(cfg) {
 		return []message.Message{build, install, message.New("step.helperPublish",
 			fmt.Sprintf("publish %s of the new release to %s and switch %s to it; it runs no process", published, dst, rec.Name),
 			"service", rec.Name, "publish", published, "target", dst)}
 	}
 	start := strings.Join(append([]string{cfg.Start}, cfg.StartArgs...), " ")
+	instances := strings.Join(cfg.InstanceNames(), ", ")
 	migrate := ""
 	if cfg.Migrate != nil && action != ActionRollback {
 		migrate = strings.Join(cfg.Migrate, " ")
@@ -436,6 +466,13 @@ func managedDeploySteps(rec *Record, action string) []message.Message {
 		parts = append(parts, fmt.Sprintf("publish %s of the new release to %s", published, dst))
 		params = append(params, "publish", published, "target", dst)
 	}
-	parts = append(parts, fmt.Sprintf("switch %s to the new release and restart it with %s", rec.Name, start))
+	if instances != "" {
+		// Instances an operator stopped get their new unit but stay
+		// stopped.
+		params = append(params, "instances", instances)
+		parts = append(parts, fmt.Sprintf("switch %s to the new release and restart its enabled instances (%s) together; stopped instances stay stopped", rec.Name, instances))
+	} else {
+		parts = append(parts, fmt.Sprintf("switch %s to the new release and restart it with %s", rec.Name, start))
+	}
 	return []message.Message{build, install, message.New("step.helperActivate", strings.Join(parts, ", then "), params...)}
 }

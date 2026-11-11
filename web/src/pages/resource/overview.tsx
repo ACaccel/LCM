@@ -1,6 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { seriesQuery, summaryQuery } from "../../api/queries";
-import type { ResourceDetail } from "../../api/types";
+import type { ResourceDetail, ServiceInstance } from "../../api/types";
 import { ManagedBadges } from "../../components/badges";
 import { RANGE_MS } from "../../components/chart";
 import { STRIP_CELLS, UptimeStrip } from "../../components/charts";
@@ -8,8 +9,9 @@ import { Pill, Tag } from "../../components/ui";
 import { actionLabel } from "../../lib/actions";
 import { formatDateTime, formatUptime, shortVersion } from "../../lib/format";
 import { bucketUptime, mergeSeries } from "../../lib/series";
-import { checkView } from "../../lib/status";
+import { checkView, healthView } from "../../lib/status";
 import { s } from "../../strings";
+import { ActionDialog } from "./action-dialog";
 import { HostDriftNotice } from "./machine/host-drift";
 import { MachineOverview } from "./machine/monitoring";
 import { OperationCard } from "./operations";
@@ -47,7 +49,11 @@ function ChecksPanel({ detail, selector, strip }: { detail: ResourceDetail; sele
           <ul className="plain-list">
             {checks.map((c) => (
               <li key={c.name} className="row between list-item">
-                <span>{c.name}</span>
+                <span className="row tight">
+                  <span>{c.name}</span>
+                  {c.instance && <Tag title={s.instances.checkInstance}>{c.instance}</Tag>}
+                  {c.paused && <Tag title={c.message}>{s.checks.paused}</Tag>}
+                </span>
                 <Pill view={checkView(c)} title={c.message} />
               </li>
             ))}
@@ -55,6 +61,69 @@ function ChecksPanel({ detail, selector, strip }: { detail: ResourceDetail; sele
           {strip && first && <UptimeStrip buckets={bucketUptime(points, Date.parse(first.from), Date.parse(first.to), STRIP_CELLS)} from={Date.parse(first.from)} to={Date.parse(first.to)} />}
         </>
       )}
+    </section>
+  );
+}
+
+type InstanceAction = "start" | "stop" | "restart";
+
+/**
+ * The instances of a managed service: each one's state, whether an operator
+ * stopped it, its health from its own checks, and restart, stop and start
+ * of that instance alone through the action dialog.
+ */
+export function InstancesPanel({ detail, instances }: { detail: ResourceDetail; instances: ServiceInstance[] }) {
+  const [open, setOpen] = useState<{ action: InstanceAction; instance: string } | null>(null);
+  return (
+    <section className="panel stack">
+      <h2>{s.instances.title}</h2>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>{s.instances.name}</th>
+            <th>{s.instances.port}</th>
+            <th>{s.instances.state}</th>
+            <th>{s.instances.health}</th>
+            <th>{s.instances.actions}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {instances.map((i) => (
+            <tr key={i.name}>
+              <td>
+                <code>{i.name}</code>
+              </td>
+              <td>{i.port ?? s.common.none}</td>
+              <td>
+                <span className="row tight">
+                  <span>{s.instances.states[i.state] ?? i.state}</span>
+                  {i.stopped && <Tag title={s.instances.disabledHint}>{s.instances.disabled}</Tag>}
+                </span>
+              </td>
+              <td>
+                <Pill view={healthView(i.health)} title={i.checks.join(", ")} />
+              </td>
+              <td>
+                <div className="row tight">
+                  {i.actions.map((a) => (
+                    <button
+                      key={a.name}
+                      type="button"
+                      className="btn small"
+                      disabled={!a.available}
+                      title={a.available ? undefined : (s.instances.unavailable[a.reason] ?? a.reason)}
+                      onClick={() => setOpen({ action: a.name, instance: i.name })}
+                    >
+                      {s.actionName[a.name] ?? a.name}
+                    </button>
+                  ))}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {open && <ActionDialog resource={detail.name} action={open.action} instance={open.instance} onClose={() => setOpen(null)} />}
     </section>
   );
 }
@@ -100,6 +169,7 @@ export function OverviewTab({ detail, selector }: { detail: ResourceDetail; sele
           <LatestDeployment detail={detail} />
         </div>
       )}
+      {detail.service?.instances && <InstancesPanel detail={detail} instances={detail.service.instances} />}
       {detail.type === "machine" && <HostDriftNotice />}
       {detail.type === "machine" && <MachineOverview resource={detail} selector={selector} />}
       {detail.type === "router" && <RouterOverview resource={detail} selector={selector} />}

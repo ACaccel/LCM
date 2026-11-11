@@ -24,15 +24,22 @@ func (h *Helper) ownUnit(resp Response, svc string) *Response {
 		return &r
 	}
 	if _, err := h.FS.Lstat(hostsetup.ServiceUnit(svc)); errors.Is(err, fs.ErrNotExist) {
-		r := refuse(resp, CodeNotFound, "%s has no unit yet; activate a release first", svc)
+		r := refuse(resp, CodeNotFound, "%s has no unit yet; deploy the service first", svc)
 		return &r
 	}
 	return nil
 }
 
-// unitAction starts, stops or restarts the service's unit.
-func (h *Helper) unitAction(ctx context.Context, req Request) Response {
+// unitAction starts, stops or restarts the service's unit, or the units of
+// a service granted instances.
+func (h *Helper) unitAction(ctx context.Context, req Request, g hostsetup.ServiceGrant) Response {
 	resp := reply(req)
+	switch {
+	case g.MultiInstance():
+		return h.instanceAction(ctx, req, g)
+	case req.Instance != "":
+		return refuse(resp, CodeRefused, "services.%s has no instances in %s", req.Service, hostsetup.ConfigPath)
+	}
 	if r := h.ownUnit(resp, req.Service); r != nil {
 		return *r
 	}
@@ -47,8 +54,14 @@ func (h *Helper) unitAction(ctx context.Context, req Request) Response {
 var unitValue = regexp.MustCompile(`^[a-z0-9-]{0,64}$`)
 
 // status reports the unit's state and the current release.
-func (h *Helper) status(ctx context.Context, req Request) Response {
+func (h *Helper) status(ctx context.Context, req Request, g hostsetup.ServiceGrant) Response {
 	resp := reply(req)
+	switch {
+	case g.MultiInstance():
+		return h.instanceStatus(ctx, req, g)
+	case req.Instance != "":
+		return refuse(resp, CodeRefused, "services.%s has no instances in %s", req.Service, hostsetup.ConfigPath)
+	}
 	if r := h.ownUnit(resp, req.Service); r != nil {
 		return *r
 	}

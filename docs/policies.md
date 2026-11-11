@@ -9,8 +9,8 @@ A service's *Policy* tab lists the deployed policies that act on it or listen to
 ## Resources in policies
 
 - `trigger.signal` filters on `kinds`, `resources` (names), `types` (`service`, `machine`, `router`), `labels`, `severities` and `statuses`. Health changes of machines and routers are `health.changed` signals like those of services. Config sync problems with resources are `resource.config.conflict` / `resource.config.invalid` signals, not `alert`.
-- `lifecycle.*` nodes name their target in the prop `resource` (a service). Their output and the action result carry `resource`. The prop `acknowledgeImpact: true` allows a disruptive action on a service that other managed resources depend on or are controlled through; without it the node fails permanently, also in dry runs ([impact](resources.md#relations)).
-- The expression variable `resource` holds every managed and retired resource by name ([fields](architecture.md#engine-semantics)), for example `resource[params.resource].health`.
+- `lifecycle.*` nodes name their target in the prop `resource` (a service). Their output and the action result carry `resource`. `lifecycle.start`, `stop` and `restart` also take `instance`: one [instance](services.md#instances) of a managed service (empty acts on the service); an instance stopped this way stays stopped until started by name. The prop `acknowledgeImpact: true` allows a disruptive action on a service that other managed resources depend on or are controlled through; without it the node fails permanently, also in dry runs ([impact](resources.md#relations)).
+- The expression variable `resource` holds every managed and retired resource by name ([fields](architecture.md#engine-semantics)), for example `resource[params.resource].health`. Its `checks` leave out paused checks (those of an instance an operator stopped), so a condition over all critical checks, such as `auto-deploy`'s, still passes.
 - Machine and router power operations have no node: policies cannot reboot or shut down anything but services.
 
 ## Templates

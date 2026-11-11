@@ -476,6 +476,7 @@ func TestRestoreRunsTheDatabaseTools(t *testing.T) {
 		"pg_restore":   script("pg_restore", record),
 		"mongodump":    script("mongodump", record+"for a in \"$@\"; do case $a in --archive=*) echo archive > ${a#--archive=};; esac; done\n"),
 		"mongorestore": script("mongorestore", record),
+		"bsondump":     script("bsondump", record+`echo '{"_id":"admin.admin","user":"admin","db":"admin"}'`+"\n"),
 	}
 	t.Setenv("MONGODB_URI", "mongodb://admin:secret@localhost/")
 	sources := []BackupSource{{Type: SourcePostgres, Database: "app"}, {Type: SourceMongoDB, Database: "app", Users: true}}
@@ -523,10 +524,12 @@ func TestRestoreRunsTheDatabaseTools(t *testing.T) {
 	if len(resp.Restore.Skipped) != 0 {
 		t.Errorf("skipped %v", resp.Restore.Skipped)
 	}
-	if want := []string{"pg_dump", "mongodump", "mongodump", "mongodump", "pg_restore", "mongorestore", "mongorestore", "mongorestore"}; !slices.Equal(tools, want) {
+	// The users of the set are checked first; the admin archive restores
+	// users, roles and the auth schema version together.
+	if want := []string{"bsondump", "pg_dump", "mongodump", "mongodump", "mongodump", "pg_restore", "mongorestore", "mongorestore"}; !slices.Equal(tools, want) {
 		t.Fatalf("tools run: %v\n%s", tools, raw)
 	}
-	for _, want := range []string{"--nsInclude=admin.system.users", "--nsInclude=admin.system.roles"} {
+	for _, want := range []string{"--nsInclude=admin.system.users --nsInclude=admin.system.roles --nsInclude=admin.system.version", "-users.bson"} {
 		if !strings.Contains(raw, want) {
 			t.Errorf("arguments lack %q:\n%s", want, raw)
 		}

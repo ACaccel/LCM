@@ -23,6 +23,8 @@ interface Props {
   backupId?: string;
   /** Job names of the service, offered by run-job. */
   jobs?: string[];
+  /** One instance of a managed service to start, stop or restart. */
+  instance?: string;
   onClose: () => void;
 }
 
@@ -108,7 +110,7 @@ function ActionProgress({ id, onClose }: { id: string; onClose: () => void }) {
  * service action. The buttons of the resource page are not shortcuts around policy:
  * the server checks the same preconditions for the preview and the run.
  */
-export function ActionDialog({ resource, action, version: presetVersion, backupId, jobs, onClose }: Props) {
+export function ActionDialog({ resource, action, version: presetVersion, backupId, jobs, instance, onClose }: Props) {
   const qc = useQueryClient();
   const [version, setVersion] = useState(presetVersion ?? "");
   const [job, setJob] = useState(jobs?.[0] ?? "");
@@ -119,6 +121,7 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
     ...(action === "deploy" && version.trim() ? { version: version.trim() } : {}),
     ...(action === "run-job" ? { job } : {}),
     ...(action === "restore" && backupId ? { backupId } : {}),
+    ...(instance ? { instance } : {}),
   };
   const key = JSON.stringify(body);
   const current = plan?.key === key;
@@ -160,7 +163,7 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
 
   return (
     <Dialog
-      title={s.action.confirmTitle(verb, resource)}
+      title={instance ? s.instances.confirmTitle(verb, resource, instance) : s.action.confirmTitle(verb, resource)}
       onClose={onClose}
       pending={run.isPending}
       footer={

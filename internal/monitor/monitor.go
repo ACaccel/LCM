@@ -78,6 +78,10 @@ type entry struct {
 	timer    clock.Timer
 	removed  bool
 	running  bool
+	// paused entries keep their place but are not scheduled and do not
+	// count towards health.
+	paused      bool
+	pauseReason string
 
 	status  Status
 	since   time.Time
@@ -372,6 +376,11 @@ func (m *Monitor) SyncAt(ctx context.Context, gen uint64, defs []Def) error {
 			issues = append(issues, model.Issue{Path: id, Message: err.Error()})
 			continue
 		}
+		if d.Paused {
+			// Pausing and resuming replace the entry like a changed
+			// definition; the check itself is built from c alone.
+			fp += " paused " + d.PauseReason
+		}
 		w := wanted{def: d, check: c, fp: fp}
 		if old := m.checks[id]; old != nil && old.fp == fp {
 			w.built = old.built
@@ -419,7 +428,8 @@ func (m *Monitor) SyncAt(ctx context.Context, gen uint64, defs []Def) error {
 		if old != nil && old.fp == w.fp {
 			continue
 		}
-		e := &entry{id: id, resource: w.def.Resource, check: w.check, fp: w.fp, built: w.built, status: StatusUnknown, since: now, anchor: now}
+		e := &entry{id: id, resource: w.def.Resource, check: w.check, fp: w.fp, built: w.built, status: StatusUnknown, since: now, anchor: now,
+			paused: w.def.Paused, pauseReason: w.def.PauseReason}
 		switch {
 		case old != nil:
 			old.removed = true
@@ -427,6 +437,10 @@ func (m *Monitor) SyncAt(ctx context.Context, gen uint64, defs []Def) error {
 				old.timer.Stop()
 			}
 			e.restore(old)
+			if old.paused && !e.paused {
+				// What it reported before the pause says nothing now.
+				e.status, e.since, e.okRun, e.failRun, e.stale = StatusUnknown, now, 0, 0, false
+			}
 		case m.persisted[id].id != "":
 			e.restorePersisted(m.persisted[id], now)
 		}
@@ -435,7 +449,9 @@ func (m *Monitor) SyncAt(ctx context.Context, gen uint64, defs []Def) error {
 		r := m.resourceLocked(w.def.Resource, now)
 		r.checks[w.check.Name] = e
 		touched[w.def.Resource] = true
-		e.timer = m.clock.AfterFunc(m.firstDelay(id, w.check.Interval.D()), func() { m.fire(e) })
+		if !e.paused {
+			e.timer = m.clock.AfterFunc(m.firstDelay(id, w.check.Interval.D()), func() { m.fire(e) })
+		}
 		recs = append(recs, e.row())
 	}
 

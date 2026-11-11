@@ -39,14 +39,17 @@ type actionDTO struct {
 	Action   string   `json:"action"`
 	Status   string   `json:"status"`
 	Actor    actorDTO `json:"actor"`
-	// Version, Job and BackupID echo the request options.
-	Version    string                `json:"version,omitempty"`
-	Job        string                `json:"job,omitempty"`
-	BackupID   string                `json:"backupId,omitempty"`
-	StartedAt  time.Time             `json:"startedAt"`
-	FinishedAt *time.Time            `json:"finishedAt"`
-	Result     *catalog.ActionResult `json:"result"`
-	Error      string                `json:"error"`
+	// Version, Job, BackupID, Instance and RestoreUsers echo the request
+	// options.
+	Version      string                `json:"version,omitempty"`
+	Job          string                `json:"job,omitempty"`
+	BackupID     string                `json:"backupId,omitempty"`
+	Instance     string                `json:"instance,omitempty"`
+	RestoreUsers bool                  `json:"restoreUsers,omitempty"`
+	StartedAt    time.Time             `json:"startedAt"`
+	FinishedAt   *time.Time            `json:"finishedAt"`
+	Result       *catalog.ActionResult `json:"result"`
+	Error        string                `json:"error"`
 }
 
 // actionTracker remembers recent actions so clients can poll their outcome.
@@ -140,6 +143,9 @@ type actionRequest struct {
 	Job               string `json:"job"`
 	BackupID          string `json:"backupId"`
 	AcknowledgeImpact bool   `json:"acknowledgeImpact"`
+	Instance          string `json:"instance"`
+	RestoreUsers      bool   `json:"restoreUsers"`
+	Confirm           string `json:"confirm"`
 }
 
 // actionPlanDTO is the dry run of an action: its steps and its impact.
@@ -179,10 +185,28 @@ func (s *Server) handleResourceAction(w http.ResponseWriter, r *http.Request) {
 	case req.BackupID != "" && !catalog.ValidBackupID(req.BackupID):
 		writeFieldError(w, "backupId", "is not a backup ID")
 		return
+	case req.Instance != "" && action != catalog.ActionStart && action != catalog.ActionStop && action != catalog.ActionRestart:
+		writeFieldError(w, "instance", "only start, stop and restart act on one instance")
+		return
+	case req.Instance != "" && !model.ValidInstanceName(req.Instance):
+		writeFieldError(w, "instance", "is not an instance name")
+		return
+	case req.RestoreUsers && action != catalog.ActionRestore:
+		writeFieldError(w, "restoreUsers", "only restore restores users")
+		return
+	case req.Confirm != "" && !req.RestoreUsers:
+		writeFieldError(w, "confirm", "only confirms restoreUsers")
+		return
 	}
-	opts := catalog.ActionOptions{Version: req.Version, Job: req.Job, BackupID: req.BackupID}
+	opts := catalog.ActionOptions{Version: req.Version, Job: req.Job, BackupID: req.BackupID, Instance: req.Instance, RestoreUsers: req.RestoreUsers}
 	rec, _, ok := s.writableRef(w, r)
 	if !ok {
+		return
+	}
+	// Restoring users replaces every account of the database instance, so
+	// the operator types the resource's name.
+	if req.RestoreUsers && req.Confirm != rec.Name {
+		writeFieldError(w, "confirm", "must be the resource's name to restore users")
 		return
 	}
 	// Lifecycle actions belong to services; other types act through
@@ -228,7 +252,8 @@ func (s *Server) handleResourceAction(w http.ResponseWriter, r *http.Request) {
 
 	actor := actorOf(r)
 	started := s.actions.begin(actionDTO{
-		Resource: name, Action: action, Actor: toActorDTO(actor), Version: req.Version, Job: req.Job, BackupID: req.BackupID, StartedAt: s.now().UTC(),
+		Resource: name, Action: action, Actor: toActorDTO(actor), Version: req.Version, Job: req.Job, BackupID: req.BackupID,
+		Instance: req.Instance, RestoreUsers: req.RestoreUsers, StartedAt: s.now().UTC(),
 	})
 	s.publishAction(started)
 	s.actions.wg.Add(1)

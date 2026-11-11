@@ -7,42 +7,70 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/ACaccel/lcm/internal/deployhelper"
 	"github.com/ACaccel/lcm/internal/execx"
 	"github.com/ACaccel/lcm/internal/model"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
-// Start starts a stopped, failed or newly registered service.
+// Start starts a stopped, failed or newly registered service. With an
+// instance, it starts that instance of a running or failed service.
 func (m *Manager) Start(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
-	return m.exec(ctx, name, ActionStart, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
+	return m.exec(ctx, name, ActionStart, opts, func(ctx context.Context, s *session, res *ActionResult) error {
+		if opts.Instance != "" {
+			return s.instanceAction(ctx, rt.InstanceStart, res)
+		}
 		if err := s.adapter.Start(ctx, s.rt); err != nil {
-			s.settle(ctx, false)
-			return err
+			return s.settleAfter(ctx, err)
 		}
 		return s.moveDone(ctx, StateRunning)
 	})
 }
 
-// Stop stops a running or failed service.
+// Stop stops a running or failed service. With an instance, it stops that
+// instance and keeps it stopped until it is started by name again; the
+// service stays running on its other instances.
 func (m *Manager) Stop(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
-	return m.exec(ctx, name, ActionStop, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
+	return m.exec(ctx, name, ActionStop, opts, func(ctx context.Context, s *session, res *ActionResult) error {
+		if opts.Instance != "" {
+			return s.instanceAction(ctx, rt.InstanceStop, res)
+		}
 		if err := s.adapter.Stop(ctx, s.rt); err != nil {
-			s.settle(ctx, false)
-			return err
+			return s.settleAfter(ctx, err)
 		}
 		return s.moveDone(ctx, StateStopped)
 	})
 }
 
 // Restart restarts the service; a stopped or failed service is started.
+// With an instance, it restarts (and so starts) that instance.
 func (m *Manager) Restart(ctx context.Context, name string, opts ActionOptions) (ActionResult, error) {
-	return m.exec(ctx, name, ActionRestart, opts, func(ctx context.Context, s *session, _ *ActionResult) error {
+	return m.exec(ctx, name, ActionRestart, opts, func(ctx context.Context, s *session, res *ActionResult) error {
+		if opts.Instance != "" {
+			return s.instanceAction(ctx, rt.InstanceRestart, res)
+		}
 		if err := s.restartOrStart(ctx); err != nil {
-			s.settle(ctx, false)
-			return err
+			return s.settleAfter(ctx, err)
 		}
 		return s.moveDone(ctx, StateRunning)
 	})
+}
+
+// settleAfter records the state a failed start, stop or restart leaves,
+// unless the deploy helper refused it before changing anything, such as a
+// service with instances that was never deployed: its state then stays.
+func (s *session) settleAfter(ctx context.Context, err error) error {
+	if refusedByHelper(err) {
+		return err
+	}
+	s.settle(ctx, false)
+	return err
+}
+
+// refusedByHelper reports a helper answer that proves nothing was done.
+func refusedByHelper(err error) bool {
+	var he *rt.HelperError
+	return errors.As(err, &he) && !he.Unknown && (he.Code == deployhelper.CodeRefused || he.Code == deployhelper.CodeNotFound || he.Code == deployhelper.CodeBusy)
 }
 
 // restartOrStart restarts an active service and starts an inactive one,

@@ -68,8 +68,15 @@ SSH 遠端機器、雲端 VM、硬體健康擴充與深入監控依下列項目�
 - security 元件併入 LCM，由 `host apply` 安裝。
 - 正式環境：ingress、security 元件與前兩個服務（含一個純靜態網站）於 2026-11-11 改由 LCM 管理，並完成部署與備份。
 
+已實作並通過容器端對端驗證，待正式切換（2026-11-11）：
+
+- 多實例 managed 服務（`instances`）：一個 release 跑多個 `<服務>@<實例>.service`，各自的連接埠、補充群組與啟動檔；以名稱停止的實例在部署後維持停止，其檢查暫停。
+- 主機授權新增 `groups`、`after`、`wants` 與 `backup.tools`；MongoDB 全資料庫備份（`all`）與僅限 CLI／API 的帳號還原（`restoreUsers`）。
+
 待辦：
 
+- 第一個多實例服務的正式切換。
+- 多實例後續：`lcm get` 的實例欄、主控台檢查分頁的實例與暫停標示、plan 列出維持停止的實例；只有 MongoDB 來源的備份 worker 改用服務以外的帳號執行（目前服務帳號在工具執行期間可讀到 `backup.env` 的連線字串）；`all` 來源的 URI 帶資料庫路徑時，在停止服務前就拒絕還原。
 - 自帶 root helper 的服務：先設計並確認「服務自有 helper」的 adapter 與統一操作協定，再切換。
 - 新機器安裝與搬家的完整步驟；各 repo 的 GitHub 說明更新。
 

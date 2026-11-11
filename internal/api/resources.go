@@ -217,6 +217,69 @@ type serviceExtrasDTO struct {
 	// Route is the outcome of sending the document's route section to the
 	// host; nil for a service without one.
 	Route *catalog.RouteStatus `json:"route"`
+	// Instances are the instances of a managed service with instances; nil
+	// for any other service.
+	Instances []serviceInstanceDTO `json:"instances"`
+}
+
+// serviceInstanceDTO is one instance of a managed service: its last
+// observed state, its health from the checks bound to it and what can be
+// done with it now.
+type serviceInstanceDTO struct {
+	Name       string              `json:"name"`
+	Port       *int                `json:"port"`
+	State      string              `json:"state"`
+	Enabled    bool                `json:"enabled"`
+	Stopped    bool                `json:"stopped"`
+	SubState   string              `json:"subState"`
+	PID        int                 `json:"pid"`
+	ObservedAt *time.Time          `json:"observedAt"`
+	Health     string              `json:"health"`
+	Checks     []string            `json:"checks"`
+	Actions    []instanceActionDTO `json:"actions"`
+}
+
+type instanceActionDTO struct {
+	Name      string `json:"name"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
+}
+
+// serviceInstances describes the instances of svc; checks are the
+// service's current check statuses.
+func (s *Server) serviceInstances(svc *catalog.Record, checks []monitor.CheckStatus) []serviceInstanceDTO {
+	names := svc.Config.InstanceNames()
+	if names == nil {
+		return nil
+	}
+	snap, observed := s.manager.Instances(svc.Name)
+	out := make([]serviceInstanceDTO, 0, len(names))
+	for _, name := range names {
+		d := serviceInstanceDTO{Name: name, State: "unknown", Checks: []string{}, Actions: []instanceActionDTO{}}
+		if observed {
+			d.ObservedAt = optTime(snap.At)
+			if in, ok := snap.Instance(name); ok {
+				d.State, d.Enabled, d.Stopped, d.SubState, d.PID = string(in.State), in.Enabled, in.Disabled, in.SubState, in.PID
+				if in.Port != 0 {
+					port := in.Port
+					d.Port = &port
+				}
+			}
+		}
+		var own []monitor.CheckStatus
+		for _, c := range checks {
+			if c.Instance == name {
+				own = append(own, c)
+				d.Checks = append(d.Checks, c.Name)
+			}
+		}
+		d.Health = string(monitor.ChecksHealth(own))
+		for _, a := range s.manager.InstanceActions(svc, name) {
+			d.Actions = append(d.Actions, instanceActionDTO{Name: a.Action, Available: a.Allowed, Reason: a.Reason})
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 type statusExtrasDTO struct {
@@ -379,6 +442,11 @@ func (s *Server) detail(ctx context.Context, r *http.Request, rec resource.Recor
 			if out.Service.Route, err = s.manager.RouteStatus(ctx, svc); err != nil {
 				return resourceDetailDTO{}, err
 			}
+			var checks []monitor.CheckStatus
+			if mst, ok := s.monitor.Resource(rec.Name); ok {
+				checks = mst.Checks
+			}
+			out.Service.Instances = s.serviceInstances(svc, checks)
 		}
 	}
 	return out, nil
@@ -1114,6 +1182,8 @@ type checkStatusDTO struct {
 	LastResult          *time.Time `json:"lastResult"`
 	LastLatencyMs       int64      `json:"lastLatencyMs"`
 	ConsecutiveFailures int        `json:"consecutiveFailures"`
+	Instance            string     `json:"instance,omitempty"`
+	Paused              bool       `json:"paused,omitempty"`
 }
 
 func optTime(t time.Time) *time.Time {
@@ -1129,5 +1199,6 @@ func toCheckStatusDTO(c monitor.CheckStatus) checkStatusDTO {
 		Name: c.Name, Type: c.Type, Critical: c.Critical, IntervalMs: c.Interval.Milliseconds(), Status: string(c.Status),
 		Stale: c.Stale, Since: optTime(c.Since), Message: c.Message, LastResult: optTime(c.LastResult),
 		LastLatencyMs: c.LastLatency.Milliseconds(), ConsecutiveFailures: c.ConsecutiveFailures,
+		Instance: c.Instance, Paused: c.Paused,
 	}
 }

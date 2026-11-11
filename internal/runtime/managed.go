@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/ACaccel/lcm/internal/deployhelper"
 	"github.com/ACaccel/lcm/internal/execx"
@@ -122,7 +123,7 @@ func CallHelper(ctx context.Context, h DeployHelper, req deployhelper.Request) (
 		return queryOutcome(ctx, h, req, fmt.Errorf("the reply reports state %q instead of succeeded", resp.State), true)
 	}
 	if code := deployhelper.CodeOf(err); code != "" {
-		return resp, &HelperError{Op: req.Op, OperationID: req.OperationID, Code: code, Message: resp.Message, Log: resp.Log}
+		return resp, &HelperError{Op: req.Op, OperationID: req.OperationID, Code: code, Message: olderHelperHint(code, resp.Message), Log: resp.Log}
 	}
 	if !req.Op.Changes() {
 		return resp, fmt.Errorf("deploy helper %s: %w", req.Op, err)
@@ -131,6 +132,15 @@ func CallHelper(ctx context.Context, h DeployHelper, req deployhelper.Request) (
 	// may not have recorded the operation yet.
 	cut := ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, execx.ErrTimeout)
 	return queryOutcome(ctx, h, req, err, cut)
+}
+
+// olderHelperHint explains a refusal of a field the pinned helper does not
+// know: it was installed by an older build than this LCM.
+func olderHelperHint(code deployhelper.Code, msg string) string {
+	if code == deployhelper.CodeRefused && (strings.Contains(msg, "unknown key") || strings.Contains(msg, "unknown field")) {
+		return msg + "; the pinned deploy helper is older than this LCM: run sudo bin/lcm host apply"
+	}
+	return msg
 }
 
 // queryOutcome asks the ledger what became of req after callErr left its
@@ -182,7 +192,7 @@ type managed struct {
 }
 
 func (m *managed) Status(ctx context.Context, r model.Runtime) (Status, error) {
-	if r.Start == "" {
+	if !r.RunsProcess() {
 		return Status{State: StateUnknown, Detail: map[string]string{"reason": staticOnly}}, nil
 	}
 	if m.helper == nil {
@@ -214,15 +224,13 @@ func (m *managed) Status(ctx context.Context, r model.Runtime) (Status, error) {
 	if u.Release != "" {
 		st.Detail["release"] = u.Release
 	}
-	switch u.ActiveState {
-	case "active", "reloading":
-		st.State = StateActive
-	case "inactive":
-		st.State = StateInactive
-	case "failed":
-		st.State = StateFailed
-	default:
-		st.State = StateUnknown
+	st.State = StateOf(u.ActiveState)
+	for _, in := range resp.Instances {
+		st.Instances = append(st.Instances, InstanceStatus{
+			Name: in.Name, State: StateOf(in.ActiveState), Enabled: in.UnitFileState == "enabled",
+			Disabled: in.LoadState != "not-found" && in.UnitFileState == "disabled",
+			SubState: in.SubState, PID: in.MainPID, Port: in.Port, Granted: in.Granted,
+		})
 	}
 	return st, nil
 }
@@ -231,7 +239,7 @@ func (m *managed) Status(ctx context.Context, r model.Runtime) (Status, error) {
 const staticOnly = "static content only: the service runs no process"
 
 func (m *managed) action(ctx context.Context, r model.Runtime, op deployhelper.Op) error {
-	if r.Start == "" {
+	if !r.RunsProcess() {
 		return fmt.Errorf("%w: %s (%s)", ErrUnsupported, op, staticOnly)
 	}
 	_, err := CallHelper(ctx, m.helper, deployhelper.Request{Op: op, OperationID: NewOperationID(), Service: r.Service})
@@ -248,4 +256,20 @@ func (m *managed) Stop(ctx context.Context, r model.Runtime) error {
 
 func (m *managed) Restart(ctx context.Context, r model.Runtime) error {
 	return m.action(ctx, r, deployhelper.OpRestart)
+}
+
+// InstanceAction starts, stops or restarts one instance of a managed
+// service with instances. The helper keeps a stopped instance disabled, so
+// it stays stopped across deployments, and refuses to stop the last
+// enabled one.
+func (m *managed) InstanceAction(ctx context.Context, r model.Runtime, action, instance string) error {
+	if len(r.Instances) == 0 {
+		return fmt.Errorf("%w: %s of an instance (the service has no instances)", ErrUnsupported, action)
+	}
+	op := map[string]deployhelper.Op{InstanceStart: deployhelper.OpStart, InstanceStop: deployhelper.OpStop, InstanceRestart: deployhelper.OpRestart}[action]
+	if op == "" {
+		return fmt.Errorf("%w: %s of an instance", ErrUnsupported, action)
+	}
+	_, err := CallHelper(ctx, m.helper, deployhelper.Request{Op: op, OperationID: NewOperationID(), Service: r.Service, Instance: instance})
+	return err
 }

@@ -51,6 +51,9 @@ func ServeLocal(ctx context.Context, in io.Reader, out io.Writer) error {
 		Lookup: func(ctx context.Context, name string) (hostsetup.Account, bool, error) {
 			return lookup(ctx, runner, name)
 		},
+		LookupGroup: func(ctx context.Context, name string) (hostsetup.Group, bool, error) {
+			return lookupGroup(ctx, runner, name)
+		},
 		Free: statfsFree,
 		IngressLock: func(legacy string) (func(), error) {
 			return hostsetup.LockIngress("", 0, legacy, ingressLockWait)
@@ -119,4 +122,16 @@ func lookup(ctx context.Context, r execx.Runner, name string) (hostsetup.Account
 		return hostsetup.Account{}, false, fmt.Errorf("getent passwd %s: %w", name, err)
 	}
 	return hostsetup.ParsePasswd(res.Output, name)
+}
+
+// lookupGroup reads a group with getent, which also consults NSS.
+func lookupGroup(ctx context.Context, r execx.Runner, name string) (hostsetup.Group, bool, error) {
+	res, err := r.Run(ctx, execx.Cmd{Argv: []string{getent, "group", name}, Dir: "/", Env: commandEnv, Timeout: 10 * time.Second, MaxOutput: 64 << 10})
+	if execx.ExitCode(err) == 2 {
+		return hostsetup.Group{}, false, nil
+	}
+	if err != nil {
+		return hostsetup.Group{}, false, fmt.Errorf("getent group %s: %w", name, err)
+	}
+	return hostsetup.ParseGroup(res.Output, name)
 }

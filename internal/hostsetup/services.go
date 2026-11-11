@@ -178,6 +178,7 @@ func (c Config) validateDeploy() []error {
 		} else if err := c.checkBackupDir(b.Dir); err != nil {
 			errs = append(errs, fmt.Errorf("backup.dir %w", err))
 		}
+		errs = append(errs, c.validateBackupTools()...)
 	}
 	ports := map[int]string{}
 	for _, name := range slices.Sorted(maps.Keys(c.Services)) {
@@ -194,6 +195,12 @@ func (c Config) validateDeploy() []error {
 			}
 		}
 		switch other, dup := ports[g.Port]; {
+		case g.MultiInstance() && g.Port != 0:
+			errs = append(errs, fmt.Errorf("%s.port must not be set with instances: each instance has its own port", at))
+		case g.MultiInstance() && g.Route != nil && g.Route.Static != ServicePublishDir(name):
+			errs = append(errs, fmt.Errorf("%s.route: a service with instances has no port to proxy to; its route can only serve route.static %s", at, ServicePublishDir(name)))
+		case g.MultiInstance():
+			// Each instance's port is checked with the instances.
 		case g.Port == 0 && g.External && g.Route != nil && g.Route.Static != "":
 			// A static-only external route needs no port.
 		case g.Port == 0 && g.External:
@@ -202,16 +209,17 @@ func (c Config) validateDeploy() []error {
 			// A managed service that only publishes static content runs
 			// no process.
 		case g.Port == 0:
-			errs = append(errs, fmt.Errorf("%s.port is required unless the service only publishes static content (route.static %s)", at, ServicePublishDir(name)))
+			errs = append(errs, fmt.Errorf("%s.port is required unless the service only publishes static content (route.static %s) or has instances", at, ServicePublishDir(name)))
 		case g.Port < 1024 || g.Port > 65535:
 			errs = append(errs, fmt.Errorf("%s.port must be between 1024 and 65535 (got %d)", at, g.Port))
 		case g.Port == ServePort || g.Port == c.Tailscale.Port:
 			errs = append(errs, fmt.Errorf("%s.port %d is LCM's own", at, g.Port))
 		case dup:
-			errs = append(errs, fmt.Errorf("%s.port %d is also the port of services.%s", at, g.Port, other))
+			errs = append(errs, fmt.Errorf("%s.port %d is also the port of %s", at, g.Port, other))
 		default:
-			ports[g.Port] = name
+			ports[g.Port] = at
 		}
+		errs = append(errs, c.validateGrantExtras(name, g, ports)...)
 		seen := map[string]bool{}
 		for _, r := range g.Runtimes {
 			if _, ok := c.Runtimes[r]; !ok || seen[r] {
@@ -273,22 +281,25 @@ func systemAccountProblem(acc Account, home, comment string, uidMin int) string 
 
 // uidMin reads the first user ID of login accounts from /etc/login.defs; IDs
 // below it are system accounts.
-func uidMin(fsys FS) int {
+func uidMin(fsys FS) int { return loginDefs(fsys, "UID_MIN", 1000) }
+
+// loginDefs reads a positive number of /etc/login.defs, or returns def.
+func loginDefs(fsys FS, key string, def int) int {
 	data, err := readAll(fsys, "/etc/login.defs")
 	if err != nil {
-		return 1000
+		return def
 	}
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
 		line, _, _ := strings.Cut(sc.Text(), "#")
 		f := strings.Fields(line)
-		if len(f) == 2 && f[0] == "UID_MIN" {
+		if len(f) == 2 && f[0] == key {
 			if n, err := strconv.Atoi(f[1]); err == nil && n > 0 {
 				return n
 			}
 		}
 	}
-	return 1000
+	return def
 }
 
 // unitSearchPath are the directories systemd loads system units and their
@@ -300,15 +311,20 @@ var unitSearchPath = []string{
 }
 
 // UnitConflict describes another unit or drop-in that would replace,
-// override or change the unit of service name, or returns "". Only a unit
-// that the deploy helper wrote, owned by rootUID (0 on a host), may be
-// replaced, and no drop-in may exist for it.
+// override or change the unit name.service, or returns "". name is a
+// service name or <service>@<instance>. Only a unit that the deploy helper
+// wrote, owned by rootUID (0 on a host), may be replaced, and no drop-in
+// may exist for it, including the ones systemd applies to every unit whose
+// name starts with a prefix ending in "-".
 func UnitConflict(fsys FS, name string, rootUID int) (string, error) {
+	dropIns := append([]string{name + ".service.d"}, dashDropIns(name)...)
 	for _, dir := range unitSearchPath {
-		if _, err := fsys.Lstat(dir + "/" + name + ".service.d"); err == nil {
-			return fmt.Sprintf("the drop-in directory %s/%s.service.d exists; it would change the service's unit", dir, name), nil
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return "", err
+		for _, d := range dropIns {
+			if _, err := fsys.Lstat(dir + "/" + d); err == nil {
+				return fmt.Sprintf("the drop-in directory %s/%s exists; it would change the service's unit", dir, d), nil
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return "", err
+			}
 		}
 		p := dir + "/" + name + ".service"
 		info, err := fsys.Lstat(p)
@@ -392,8 +408,53 @@ func (a *applier) checkGrant(ctx context.Context, name string, g ServiceGrant, u
 	if err != nil {
 		return grantState{}, err
 	}
+	if problem == "" && g.MultiInstance() {
+		if problem, err = InstanceConflicts(a.h.FS, name, slices.Sorted(maps.Keys(g.Instances)), 0); err != nil {
+			return grantState{}, err
+		}
+	}
+	if problem == "" {
+		if problem, err = a.groupsProblem(ctx, name, g); err != nil {
+			return grantState{}, err
+		}
+	}
 	st.problem = problem
 	return st, nil
+}
+
+// groupsProblem checks the supplementary groups of a grant against the
+// host: each must exist and pass GroupProblem.
+func (a *applier) groupsProblem(ctx context.Context, name string, g ServiceGrant) (string, error) {
+	groups := g.allGroups()
+	if len(groups) == 0 {
+		return "", nil
+	}
+	// The primary groups of LCM's accounts and of the other services'
+	// accounts: a group that holds their files is not granted.
+	primary := map[int]string{}
+	for _, n := range ProtectedAccounts(a.cfg, name) {
+		acc, ok, err := lookupAccount(ctx, a.h.Runner, n)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			primary[acc.GID] = n
+		}
+	}
+	min := gidMin(a.h.FS)
+	for _, gr := range groups {
+		found, ok, err := lookupGroup(ctx, a.h.Runner, gr)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return fmt.Sprintf("the group %s of services.%s does not exist; create a dedicated one with groupadd --system %s", gr, name, gr), nil
+		}
+		if p := GroupProblem(found, min, primary); p != "" {
+			return fmt.Sprintf("services.%s: %s", name, p), nil
+		}
+	}
+	return "", nil
 }
 
 // preflightDeploy checks the deploy component, runtimes and service grants.
@@ -519,6 +580,7 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 			if a.otherFilesystem(b.Dir, "/var/lib") {
 				s.note("backup.dir is on another file system than /var/lib; a service can keep a file of a backup open for writing and grow it past the limits, which only a quota or the same file system bounds (docs/operations.md#backups)")
 			}
+			a.checkBackupTools(s, b.Tools)
 		}
 		for _, limit := range SandboxLimits(ctx, a.h) {
 			s.note(limit)
@@ -529,6 +591,23 @@ func (a *applier) deployComponent(ctx context.Context, s *step) error {
 	// The grant comes last: it is useless before the wrapper and the
 	// pinned helper are in place.
 	return a.ensureGrant(ctx, s, DeploySudoers, asset("lcm-deploy-sudoers"))
+}
+
+// checkBackupTools checks the tools of backup.tools as the deploy helper
+// does before it uses them; it never falls back to another copy.
+func (a *applier) checkBackupTools(s *step, tools map[string]string) {
+	for _, name := range slices.Sorted(maps.Keys(tools)) {
+		p := tools[name]
+		info, err := TrustedTool(a.h.FS, p, 0)
+		if err != nil {
+			s.manual(fmt.Sprintf("backup.tools.%s: %v; install it so that only root can change it, or the helper refuses backups that need it", name, err))
+			continue
+		}
+		// The backup worker runs it as the service's account.
+		if info.Mode.Perm()&0o001 == 0 {
+			s.note(fmt.Sprintf("backup.tools.%s: %s is not executable by others; the backup worker runs it as the service's account", name, p))
+		}
+	}
 }
 
 // otherFilesystem reports whether p, or its nearest existing ancestor, is on
@@ -693,13 +772,84 @@ func (a *applier) grant(ctx context.Context, s *step, name string) error {
 			return err
 		}
 	}
-	return a.serviceEnvFile(s, name, gid)
+	if err := a.serviceEnvFile(s, name, ServiceEnvFile(name), gid); err != nil {
+		return err
+	}
+	g := a.cfg.Services[name]
+	for _, inst := range slices.Sorted(maps.Keys(g.Instances)) {
+		if err := a.instanceEnvFile(s, name, ServiceInstanceEnvFile(name, inst), gid); err != nil {
+			return err
+		}
+	}
+	a.instanceLeftovers(s, name, g)
+	for _, d := range TopLevelDropIns(a.h.FS) {
+		s.note(d + " exists; its drop-ins change every service unit of the host, this service's included")
+	}
+	return nil
 }
 
-// serviceEnvFile creates the service's empty environment file; an existing
-// one is never replaced, only its group and mode are fixed.
-func (a *applier) serviceEnvFile(s *step, name string, gid int) error {
-	fsys, p := a.h.FS, ServiceEnvFile(name)
+// instanceLeftovers notes the environment files and helper-written units
+// of instances that are no longer granted: they are kept, and such a unit
+// keeps running until the next deployment or a stop.
+//
+// A file <instance>.env of a service whose grant has no instances belongs to
+// an instance only when the helper wrote a unit for that instance: other
+// files of /etc/<name> are the service's own business.
+func (a *applier) instanceLeftovers(s *step, name string, g ServiceGrant) {
+	written := map[string]bool{}
+	if units, err := a.h.FS.ReadDir(UnitDir); err == nil {
+		for _, u := range units {
+			rest, ok := strings.CutPrefix(u, name+"@")
+			inst, isUnit := strings.CutSuffix(rest, ".service")
+			if !ok || !isUnit || !ValidInstanceName(inst) {
+				continue
+			}
+			if data, err := readAll(a.h.FS, UnitDir+"/"+u); err == nil && strings.HasPrefix(string(data), ServiceUnitMarker+"\n") {
+				written[inst] = true
+			}
+		}
+	}
+	if files, err := a.h.FS.ReadDir(ServiceEtcDir(name)); err == nil {
+		for _, f := range files {
+			inst, ok := strings.CutSuffix(f, ".env")
+			if _, granted := g.Instances[inst]; ok && ValidInstanceName(inst) && !granted && (g.MultiInstance() || written[inst]) {
+				s.note(fmt.Sprintf("%s/%s belongs to the instance %s, which is no longer granted; it is kept", ServiceEtcDir(name), f, inst))
+			}
+		}
+	}
+	for _, inst := range slices.Sorted(maps.Keys(written)) {
+		if _, granted := g.Instances[inst]; !granted {
+			s.note(fmt.Sprintf("%s belongs to the instance %s, which is no longer granted; it keeps running until the next deployment or stop", InstanceUnit(name, inst), inst))
+		}
+	}
+}
+
+// instanceEnvFile creates an instance's empty environment file. An
+// existing one is never changed: root:<name> 0640 and the stricter
+// root:root 0600 are both kept as they are (systemd reads the file as
+// root), and anything else is a manual action.
+func (a *applier) instanceEnvFile(s *step, name, p string, gid int) error {
+	fsys := a.h.FS
+	info, err := fsys.Lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return s.change(fmt.Sprintf("create an empty %s (root:%s 0640)", p, name), func() error {
+			return fsys.WriteFile(p, bytes.NewReader(nil), 0o640, 0, gid)
+		})
+	case err != nil:
+		return err
+	case !info.IsRegular():
+		s.manual(p + " is not a regular file; move it away")
+	case info.UID != 0 || (info.GID != gid && info.GID != 0) || info.Mode.Perm()&0o027 != 0 || info.Mode&(fs.ModeSetuid|fs.ModeSetgid|fs.ModeSticky) != 0:
+		s.manual(fmt.Sprintf("%s is %d:%d %04o; review its content, then make it root:%s 0640 or root:root 0600", p, info.UID, info.GID, info.Mode.Perm(), name))
+	}
+	return nil
+}
+
+// serviceEnvFile creates an empty environment file of the service; an
+// existing one is never replaced, only its group and mode are fixed.
+func (a *applier) serviceEnvFile(s *step, name, p string, gid int) error {
+	fsys := a.h.FS
 	info, err := fsys.Lstat(p)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

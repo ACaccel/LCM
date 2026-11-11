@@ -127,4 +127,36 @@ describe("ActionDialog", () => {
     expect(await screen.findByText("已完成")).toBeTruthy();
     expect(seen.find((s) => s.method === "POST" && s.query === "")?.body).toEqual({ acknowledgeImpact: true });
   });
+
+  it("names one instance in the title, the preview and the run", async () => {
+    const seen: Seen[] = [];
+    vi.stubGlobal("fetch", async (req: Request) => {
+      const url = new URL(req.url);
+      const text = await req.text();
+      seen.push({ method: req.method, path: url.pathname, query: url.search, body: text ? JSON.parse(text) : undefined });
+      const stopPlan: ActionPlan = {
+        ...plan,
+        action: "stop",
+        steps: ["stop and disable bots@alpha.service"],
+        stepMessages: [{ code: "step.instanceStop", params: { unit: "bots@alpha.service" }, message: "stop and disable bots@alpha.service" }],
+      };
+      const j = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      if (url.pathname === "/api/v1/actions/act-2") return j(200, { ...finished, id: "act-2", resource: "bots", action: "stop", result: null });
+      return url.search ? j(200, stopPlan) : j(202, { actionId: "act-2", status: "running" });
+    });
+    const user = userEvent.setup();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <ActionDialog resource="bots" action="stop" instance="alpha" onClose={() => undefined} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/停止並停用 bots@alpha.service/)).toBeTruthy();
+    expect(screen.getByText("停止 bots 的實例 alpha")).toBeTruthy();
+    expect(seen[0]).toMatchObject({ path: "/api/v1/resources/bots/actions/stop", query: "?dryRun=true", body: { instance: "alpha" } });
+    await user.click(screen.getByRole("button", { name: "確認執行" }));
+    await waitFor(() => expect(seen.find((s) => s.method === "POST" && s.query === "")?.body).toEqual({ instance: "alpha" }));
+  });
 });

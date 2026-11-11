@@ -156,7 +156,7 @@ func TestClient(t *testing.T) {
 	}
 	c := f.Calls()[0]
 	want := []string{"/usr/bin/sudo", "-n", "--", "/usr/local/libexec/lcm-deploy"}
-	if strings.Join(c.Argv, " ") != strings.Join(want, " ") || c.Timeout != 5*time.Minute || c.MaxOutput != MaxResponse+1 {
+	if strings.Join(c.Argv, " ") != strings.Join(want, " ") || c.Timeout != 8*time.Minute || c.MaxOutput != MaxResponse+1 {
 		t.Errorf("command %+v", c)
 	}
 	var sent Request
@@ -168,7 +168,7 @@ func TestClient(t *testing.T) {
 		t.Errorf("build timeout %s", Timeout(b))
 	}
 	a := Request{Version: Version, Op: OpActivate, OperationID: req.OperationID, Service: "web", ReleaseID: "20261109T120000Z-0a1b2c3d", Start: []string{"x"}}
-	if Timeout(a) != 35*time.Minute {
+	if Timeout(a) != 44*time.Minute {
 		t.Errorf("activate timeout %s", Timeout(a))
 	}
 	for op := range opFields {

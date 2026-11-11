@@ -209,7 +209,7 @@ func (e *env) handle(c execx.Cmd) (execx.Result, error) {
 		if strings.HasPrefix(arg(c, "--unit="), "lcm-build-") {
 			return result(build(e.real(arg(c, "--working-directory="))))
 		}
-		if unit := arg(c, "--unit="); strings.HasPrefix(unit, "lcm-backup-") || strings.HasPrefix(unit, "lcm-restore-") {
+		if unit := arg(c, "--unit="); strings.HasPrefix(unit, "lcm-backup-") || strings.HasPrefix(unit, "lcm-restore-") || strings.HasPrefix(unit, "lcm-check-") {
 			return result(e.worker(c))
 		}
 		i := slices.Index(c.Argv, "--")

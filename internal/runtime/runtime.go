@@ -35,6 +35,53 @@ type Status struct {
 	// Detail carries adapter specific facts such as pid, since, image and
 	// substate. Values are plain strings for easy display.
 	Detail map[string]string
+	// Instances are the instances of a managed service with instances;
+	// State is then the aggregate of the enabled ones.
+	Instances []InstanceStatus
+}
+
+// InstanceStatus is the state of one instance of a managed service.
+// Enabled is the instance's desired state. Disabled marks an instance an
+// operator stopped by name: its unit exists and is disabled, so it stays
+// stopped. An instance without a unit yet is neither. Granted is false for
+// an instance the host no longer grants, whose unit is left until the next
+// deployment.
+type InstanceStatus struct {
+	Name     string
+	State    State
+	Enabled  bool
+	Disabled bool
+	SubState string
+	PID      int
+	Port     int
+	Granted  bool
+}
+
+// Instance actions.
+const (
+	InstanceStart   = "start"
+	InstanceStop    = "stop"
+	InstanceRestart = "restart"
+)
+
+// InstanceController acts on one instance of a service. Only the managed
+// adapter implements it.
+type InstanceController interface {
+	InstanceAction(ctx context.Context, r model.Runtime, action, instance string) error
+}
+
+// StateOf maps a systemd ActiveState to a State; transitional states are
+// unknown.
+func StateOf(activeState string) State {
+	switch activeState {
+	case "active", "reloading":
+		return StateActive
+	case "inactive":
+		return StateInactive
+	case "failed":
+		return StateFailed
+	}
+	return StateUnknown
 }
 
 // Errors returned by adapters.
@@ -71,7 +118,7 @@ func CapabilitiesOf(r model.Runtime) Capabilities {
 	case model.RuntimeExternal:
 		return Capabilities{}
 	case model.RuntimeManaged:
-		if r.Start == "" {
+		if !r.RunsProcess() {
 			return Capabilities{}
 		}
 	case model.RuntimeCommand:
