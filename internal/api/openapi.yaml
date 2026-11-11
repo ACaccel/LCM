@@ -5735,9 +5735,12 @@ components:
                 Typed by `type` and `adapter` and validated strictly by the server (unknown
                 fields are refused). service: the runtime fields valid for the adapter
                 (`unit`, `scope`, `container`, `project`, `file`, `start`, `stop`,
-                `restart`, `status`; managed: `artifact`, `start`, `startArgs`, `runtime`,
-                `migrate`, `keepReleases`, and a required `source` with `build` and no
-                `install`) plus `source`, `backup` (`command` and `timeout`; managed:
+                `restart`, `status`; managed: `artifact`, `start` (optional with `publish`:
+                the service then only publishes static content), `startArgs`, `runtime`,
+                `migrate`, `keepReleases`, `publish` (`dir`, `retain`, `retainDays`),
+                `limits` (`memoryHigh`, `memoryMax`, `stopTimeout`), and a required
+                `source` with `build` and no `install`) plus `source`, `backup`
+                (`command` and `timeout`; managed:
                 `sources`, `mode`, `timeout`, `keep`), `jobs` and `route` (any adapter:
                 how the host's nginx site presents the service). machine:
                 `interval`, `staleAfter`, `filesystems`, `interfaces`, `units`, `journal`,

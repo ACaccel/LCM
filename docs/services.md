@@ -44,7 +44,7 @@ The adapter decides which process actions exist; its fields sit directly in `con
 | `compose` | `project`, `file` | `docker compose ps` | `docker compose up -d / stop / restart` |
 | `command` | `status`, `start`, `stop`, `restart` (each optional) | `status` exit code: 0 active, other inactive; unknown without `status` or when the shell cannot run it (126, 127) | the matching command (`sh -c`); restart falls back to stop then start. A missing command makes that action unsupported |
 | `external` | none | unknown | none: LCM only monitors it |
-| `managed` | `artifact`, `start`, `startArgs`, `runtime`, `migrate`, `keepReleases` ([below](#managed-services)) | the [deploy helper](operations.md#deploy-helper)'s `status` of `<name>.service`: active, inactive (also before the first activation), failed, otherwise unknown; unknown without the helper | the helper's `start/stop/restart` |
+| `managed` | `artifact`, `start`, `startArgs`, `runtime`, `migrate`, `keepReleases`, `publish`, `limits` ([below](#managed-services)) | the [deploy helper](operations.md#deploy-helper)'s `status` of `<name>.service`: active, inactive (also before the first activation), failed, otherwise unknown; unknown without the helper, and for a [static-only](#static-content) service | the helper's `start/stop/restart`; none for a static-only service |
 
 LCM's own service uses a `command` runtime with only `status`, because it must not stop or restart itself ([self-deploy](operations.md#self-deploy)).
 
@@ -65,6 +65,14 @@ spec:
     startArgs: [--quiet]           # optional, at most 32
     migrate: [node, scripts/migrate.mjs]   # optional: run as the service account before the switch
     keepReleases: 3                # 2-20, default 3
+    publish:                       # optional: static content, see below
+      dir: client/dist             # a directory of the release; "." is the whole release
+      retain: [assets/]            # optional, at most 16 directories below dir, each ending with "/"
+      retainDays: 14               # 1-90, default 14; only with retain
+    limits:                        # optional: tighten the unit
+      memoryHigh: 768M             # K, M or G (powers of 1024), 1M-16G
+      memoryMax: 1G                # memoryHigh <= memoryMax
+      stopTimeout: 60s             # whole seconds, 1s-10m
 ```
 
 | Field | Rule |
@@ -73,8 +81,24 @@ spec:
 | `artifact`, `start` | Required clean relative paths of letters, digits and `._-/` without `..` |
 | `startArgs`, `migrate` arguments | Letters, digits and `._/=:,@+-`; `migrate` starts with a release-relative executable or a program of the runtime. `migrate` must be idempotent: it runs again when the same commit is deployed again and when a deploy follows a rollback |
 | `runtime` | A runtime name; whether `host.json` grants it is checked by the helper when the service is deployed |
+| `publish` | `dir` is a release path like `artifact` (`.` is the whole release); `retain` entries are such paths ending with `/`, without components that start with `.` |
+| `limits` | Become `MemoryHigh=`, `MemoryMax=` and `TimeoutStopSec=` of the unit. They only tighten it: without them the unit has no memory limit and systemd's default stop timeout |
+| Without `start` | Needs `publish`; `startArgs`, `migrate` and `limits` are refused ([static content](#static-content)) |
 
 The other runtime fields (`unit`, `stop`, `restart`, `status`, ...) are refused, and the managed fields are refused for every other adapter. The helper checks every request again and refuses what the host does not grant; its message is shown as the error of the action.
+
+### Static content
+
+With `publish`, every activation copies `publish.dir` of the release to the service's publish directory `/opt/<name>/www`, which the service's route serves when the host grants it (`sudo bin/lcm host allow <name> --route PREFIX --publish`, [routes](operations.md#routes)); a document cannot choose another place, and the helper refuses `publish` while `route.static` in `host.json` is not that directory.
+
+- **Order.** New and changed files are written first, each through a temporary file and a rename, every one but the `.html` files; the `.html` files follow one by one. A page that a browser loads during the switch never names an asset that is not there yet. Unchanged files are left alone.
+- **Retention.** Every published file gets the time of the activation as its modification time. Files of the publish directory that the release does not contain are removed, except below a `retain` directory: those stay until they are `retainDays` old, that is `retainDays` after the last release that contained them, so that pages loaded before a deployment still find their assets.
+- **What is published.** Only directories and regular files owned by root (every release is): a symbolic link in `publish.dir` or on the way to it fails the activation, and entries whose name starts with `.` are skipped. Install's bounds apply (200,000 entries, 4 GiB).
+- **Failures.** A failure while writing fails the activation before anything is switched or restarted: files already written stay, unreferenced, and the `.html` files not yet replaced are the old ones. A failure to remove an old file is only noted in the deployment log.
+- **Rollback.** A rollback activates the earlier release, so it publishes that release's content again; newer files of retained directories stay for their `retainDays`.
+- **Static-only services.** A managed service without `start` runs no process. Its grant has no port, and the helper writes no unit: an activation publishes and switches the `current` link, `start`, `stop` and `restart` are `unsupported`, and the status is `unknown` like an external service's. Deploy, rollback and backup work as for any managed service.
+
+The deployment log records what each activation published (`published <dir> to /opt/<name>/www: N written, N replaced, ...`).
 
 **Without the helper.** When the deploy component is not installed (`/usr/local/libexec/lcm-deploy` is missing or not root-owned) or LCM's data directory is not `/var/lib/lcm`, `start`, `stop`, `restart`, `deploy`, `rollback`, `backup` and `restore` of managed services are unavailable with the reason `helperUnavailable` and refused before anything is recorded; jobs are unaffected. The reason message names the cause (wrapper missing, wrapper not a root-owned file only root can write, or another data directory) and the console shows it. The wrapper is checked at every use, so enabling the component needs no restart of LCM.
 
@@ -231,12 +255,12 @@ After LCM has fetched and detached its own checkout as `lcm` (unchanged), the he
 
 1. `build`: the helper copies the checkout, checks that its `HEAD` is the commit and runs `source.build` as the build account `lcmb-<name>` in its sandbox, with the `runtime` in `PATH` (dry-run step `step.helperBuild`).
 2. `install`: `artifact` of that build becomes a new release (`step.helperInstall`).
-3. `activate`: `migrate` runs as the service account in the new release, then `current` switches, the unit is written and the service restarted; releases beyond `keepReleases` are removed (`step.helperActivate`). The deployment log ends with `installed release <id>`.
+3. `activate`: `migrate` runs as the service account in the new release, the [static content](#static-content) is published, then `current` switches, the unit is written and the service restarted; releases beyond `keepReleases` are removed (`step.helperActivate`; `step.helperPublish` for a static-only service). The deployment log ends with `installed release <id>`.
 
 - **Durable intent.** Every helper call has a fresh operation ID, written to the running deployment's log (`deploy helper <op> operation <id>`) before the request is sent; the helper's own output follows indented (`  | `).
 - **Lost replies.** After a timeout or a lost reply LCM queries the helper's ledger by that ID: a recorded success continues the deployment, a recorded failure fails it, and an operation that is still running, was interrupted or cannot be looked up fails the deployment with `outcome unknown, query <id>`. It is never assumed to have succeeded. An ID the ledger does not know was not carried out.
 - **Failures.** A refused (`refused`, `busy`, `not_found`) or failed operation fails the deployment with the helper's message. The service is left `failed` when the helper may have changed it: an unknown outcome, or an `activate` that switched the release before a later step failed (the log says so; there is no automatic switch back, a rollback or a policy does that). When the helper certainly changed nothing (the checkout, `build` or `install` failed, or `activate` was refused or failed before it switched, for example in `migrate`), the state follows the runtime's status instead: `running` while the service runs, `failed` otherwise.
-- **Rollback.** Without rebuilding, a rollback activates the release recorded by the target deployment (or else the newest installed release built from the target commit) when the helper still keeps it and its manifest has the current `artifact` and `runtime` (`step.helperActivatePrevious`); otherwise it rebuilds the commit with the steps above. The old release starts with the current `start`, `startArgs` and `runtime` of the document, not those it was deployed with. A rollback never runs `migrate`: data the newer release migrated stays as it is, so migrations must stay compatible with the previous release or be restored from a backup.
+- **Rollback.** Without rebuilding, a rollback activates the release recorded by the target deployment (or else the newest installed release built from the target commit) when the helper still keeps it and its manifest has the current `artifact` and `runtime` (`step.helperActivatePrevious`); otherwise it rebuilds the commit with the steps above. The old release starts with the current `start`, `startArgs`, `runtime`, `publish` and `limits` of the document, not those it was deployed with, and its static content is published again. A rollback never runs `migrate`: data the newer release migrated stays as it is, so migrations must stay compatible with the previous release or be restored from a backup.
 - **Restarts of LCM.** A deployment that was running when LCM stopped is closed as `interrupted`, its error naming what the ledger reports for the last helper operation (for example `deploy helper build operation <id> succeeded`, `was not carried out: the helper has no record of it`, or `outcome unknown, query <id>`). When the ledger proves that the last operation was a successful `activate` of the deployment, LCM made that change, so the deployment is finished as `succeeded` instead: its log notes that the outcome was confirmed from the ledger and ends with `installed release <id>`, which rollback and the next deploy read. Reconciliation then takes the state from the helper's status.
 - **Helper errors in the API.** A dry-run or action request whose precheck gets a helper error answers 409 `precondition_failed` for `refused`, `not_found` and `disabled` (the host configuration does not enable the component, for example `components.ingress` for a route) and 409 `conflict` for `busy`, with the helper's message, and 502 `bad_gateway` for a failed or unknown operation. A managed `deploy` dry run asks the helper a read-only question (`releases`), so a service the administrator has not granted is refused in the dry run as in the real action.
 
