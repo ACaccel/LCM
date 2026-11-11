@@ -323,8 +323,10 @@ func (m *Manager) settlePending(ctx context.Context, name string, p routeEntry) 
 // SyncRoute sends the route of a service to the helper when the document's
 // options differ from the last recorded outcome. retry also sends options
 // whose last outcome was not "applied" (at startup, when the helper may
-// have been installed since). It returns ErrActive-like gate errors
-// unrecorded, for the caller to try again.
+// have been installed since). A service that is no longer managed
+// (unmanaged) has no options: those it last sent are removed from the
+// host. It returns ErrActive-like gate errors unrecorded, for the caller
+// to try again.
 func (m *Manager) SyncRoute(ctx context.Context, name string, retry bool) error {
 	ctx = withActor(ctx)
 	ctx, release, err := m.cat.gate.Acquire(ctx)
@@ -336,23 +338,37 @@ func (m *Manager) SyncRoute(ctx context.Context, name string, retry bool) error 
 	// that is still waiting for the helper.
 	m.routeMu.Lock()
 	defer m.routeMu.Unlock()
+	var route *ingress.Options
 	rec, err := m.cat.Get(ctx, name)
-	if errors.Is(err, ErrNotFound) {
-		return nil
-	}
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		rec = nil
+	case err != nil:
 		return err
+	default:
+		route = rec.Config.Route
 	}
 	latest, found, err := m.cat.latestRoute(ctx, name)
 	if err != nil {
 		return err
+	}
+	if rec == nil && !found {
+		return nil
 	}
 	if found && latest.State == RoutePending {
 		if latest, err = m.settlePending(ctx, name, latest); err != nil {
 			return err
 		}
 	}
-	want := routeDigest(rec.Config.Route)
+	if rec == nil {
+		// Only options the host may hold are removed, once.
+		if latest.Digest == "" {
+			return nil
+		}
+		_, err = m.pushRouteLocked(ctx, name, nil, "unmanaged", true)
+		return err
+	}
+	want := routeDigest(route)
 	have := ""
 	if found {
 		have = latest.Digest
@@ -367,7 +383,7 @@ func (m *Manager) SyncRoute(ctx context.Context, name string, retry bool) error 
 	if retry {
 		trigger = "startup"
 	}
-	_, err = m.pushRouteLocked(ctx, name, rec.Config.Route, trigger, true)
+	_, err = m.pushRouteLocked(ctx, name, route, trigger, true)
 	return err
 }
 
@@ -423,14 +439,15 @@ func (s *RouteSync) enqueue(name string, retry bool) {
 	}
 }
 
-// Changed queues a service whose document was created, saved or restored.
-// It implements the callback of resource.Store.Subscribe.
+// Changed queues a service whose document was created, saved or restored,
+// or that was unmanaged. It implements the callback of
+// resource.Store.Subscribe.
 func (s *RouteSync) Changed(c resource.Change) {
 	if c.Type != model.ResourceService {
 		return
 	}
 	switch c.Change {
-	case resource.ChangeCreated, resource.ChangeUpdated, resource.ChangeRestored:
+	case resource.ChangeCreated, resource.ChangeUpdated, resource.ChangeRestored, resource.ChangeUnmanaged:
 		s.enqueue(c.Name, false)
 	}
 }

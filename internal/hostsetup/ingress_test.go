@@ -408,10 +408,21 @@ func TestIngressUsesStoredOptions(t *testing.T) {
 	opts := ingress.Options{Static: &ingress.Static{SPA: true}, Headers: &ingress.Headers{CSP: "default-src 'self'"}}
 	th.fs.file(RouteOptionsFile("site"), string(EncodeRouteOptions(opts)), 0o600, 0, 0)
 	th.fs.file(RouteOptionsFile("gone"), string(EncodeRouteOptions(ingress.Options{})), 0o600, 0, 0)
+	// The options of a service no longer in services are removed.
+	if _, out, err := th.apply(Options{Check: true}); err != nil || !strings.Contains(out, "would change: remove "+RouteOptionsFile("gone")+": gone is no longer in services") {
+		t.Fatalf("check: %v\n%s", err, out)
+	}
 	th.converge()
 	if got := th.fs.content(SiteFile); got != string(th.wantSite(true, map[string]ingress.Options{"site": opts})) {
 		t.Fatalf("stored options not rendered:\n%s", got)
 	}
+	if _, err := th.fs.Lstat(RouteOptionsFile("gone")); err == nil {
+		t.Fatal("the options of a removed service are kept")
+	}
+	if _, err := th.fs.Lstat(RouteOptionsFile("site")); err != nil {
+		t.Fatalf("the options of a granted service were removed: %v", err)
+	}
+	th.expectConverged()
 	// Stored options that someone else could have written are refused.
 	th.fs.file(RouteOptionsFile("site"), string(EncodeRouteOptions(opts)), 0o666, 0, 0)
 	if res, out, err := th.apply(Options{}); err == nil && res.Manual == 0 {

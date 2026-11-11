@@ -74,6 +74,9 @@ func (a *applier) ingressStep(ctx context.Context, s *step) error {
 			return err
 		}
 	}
+	if err := a.removeStaleRoutes(s); err != nil {
+		return err
+	}
 	if err := a.ensureRootDir(s, i.webroot(), 0o755); err != nil {
 		return err
 	}
@@ -120,6 +123,34 @@ func (a *applier) ingressStep(ctx context.Context, s *step) error {
 	}
 	// The site serves the ACME webroot now, so renewals may use it.
 	return a.renewalConf(s, i)
+}
+
+// removeStaleRoutes removes the stored route options of services that are
+// no longer in services: the helper refuses every request for them, so
+// nothing else ever would, and a service granted again under the name
+// starts without them.
+func (a *applier) removeStaleRoutes(s *step) error {
+	fsys := a.h.FS
+	names, err := fsys.ReadDir(IngressRoutes)
+	if errors.Is(err, fs.ErrNotExist) && a.o.Check {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		service, ok := strings.CutSuffix(n, ".json")
+		if _, granted := a.cfg.Services[service]; !ok || granted || ValidServiceName(service) != nil {
+			continue
+		}
+		p := IngressRoutes + "/" + n
+		if err := s.change("remove "+p+": "+service+" is no longer in services", func() error {
+			return ignoreMissing(fsys.Remove(p))
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *applier) planIngress(env IngressEnv) (SitePlan, error) {

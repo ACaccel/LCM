@@ -10,6 +10,7 @@ import (
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/catalog"
 	"github.com/ACaccel/lcm/internal/deployhelper"
+	"github.com/ACaccel/lcm/internal/resource"
 	rt "github.com/ACaccel/lcm/internal/runtime"
 )
 
@@ -431,5 +432,40 @@ func TestRouteSyncQueue(t *testing.T) {
 	sync.Drain(e.ctx)
 	if st := routeStatus(t, e, "web"); st.State != catalog.RouteApplied {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+// TestRouteSyncRemovesTheOptionsOfAnUnmanagedService: unmanaging a service
+// removes the route options it last sent from the host, once.
+func TestRouteSyncRemovesTheOptionsOfAnUnmanagedService(t *testing.T) {
+	e, h := routeEnv(t)
+	e.put(svcDoc("web", routeA), 0)
+	e.put(svcDoc("plain", ""), 0)
+	if err := e.mgr.SyncRoute(e.ctx, "web", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"web", "plain"} {
+		for _, to := range []string{resource.PhaseRetired, resource.PhaseUnmanaged} {
+			if err := e.phase(e.ctx, name, to); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	sync := catalog.NewRouteSync(e.mgr)
+	for _, name := range []string{"web", "plain"} {
+		sync.Changed(resource.Change{Name: name, Type: "service", Change: resource.ChangeUnmanaged})
+	}
+	sync.Drain(e.ctx)
+	calls := h.ingressCalls()
+	if len(calls) != 2 || calls[1].Service != "web" || calls[1].Route != nil {
+		t.Fatalf("calls = %+v", calls)
+	}
+	entries := routeEntries(t, e, "web")
+	if entries[0].Data["state"] != catalog.RouteApplied || entries[0].Data["trigger"] != "unmanaged" || entries[0].Data["digest"] != "" {
+		t.Fatalf("entry = %+v", entries[0])
+	}
+	// Once removed, nothing more is sent.
+	if err := e.mgr.SyncRoute(e.ctx, "web", true); err != nil || len(h.ingressCalls()) != 2 {
+		t.Fatalf("sent again: %v %d", err, len(h.ingressCalls()))
 	}
 }
