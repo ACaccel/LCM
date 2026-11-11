@@ -142,6 +142,9 @@ func TestIngressApplyFailureKeepsTheOptions(t *testing.T) {
 	if resp.Code != CodeFailed || resp.State != StateFailed || !strings.Contains(resp.Message, "nginx -t refused the configuration") {
 		t.Fatalf("reply %+v", resp)
 	}
+	if !strings.Contains(resp.Message, "nginx: [emerg] test failure") || strings.Contains(resp.Message, "?") {
+		t.Errorf("the message lacks the nginx output or shows line breaks as ?: %q", resp.Message)
+	}
 	if e.read(hostsetup.RouteOptionsFile("web")) != before || e.read(hostsetup.SiteFile) != site {
 		t.Fatal("a failed apply changed the options or the site")
 	}

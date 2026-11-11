@@ -184,7 +184,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 	}
 	if err != nil {
 		h.stopUnit(ctx, unit, err)
-		return finish(refuse(resp, CodeFailed, "%s", commandFailure("the build", err)))
+		return finish(refuse(resp, CodeFailed, "%s", commandFailure("the build", res.Output, err)))
 	}
 	return finish(resp)
 }

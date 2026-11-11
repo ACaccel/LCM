@@ -154,7 +154,7 @@ func (h *Helper) activate(ctx context.Context, req Request, cfg hostsetup.Config
 		resp.Log = sanitizeLog(res.Output)
 		if err != nil {
 			h.stopUnit(ctx, unit, err)
-			return refuse(resp, CodeFailed, "%s; nothing was switched", commandFailure("the migration", err))
+			return refuse(resp, CodeFailed, "%s; nothing was switched", commandFailure("the migration", res.Output, err))
 		}
 	}
 	var published *PublishResult
@@ -266,20 +266,20 @@ func (h *Helper) switchAndRestart(ctx context.Context, req Request, resp Respons
 				_, rerr = h.run(ctx, systemctlTimeout, systemctl, "daemon-reload")
 			}
 			if rerr != nil {
-				return refuse(resp, CodeFailed, "%s, and restoring the previous unit and release failed: %v", commandFailure("systemctl daemon-reload", err), rerr)
+				return refuse(resp, CodeFailed, "%s, and restoring the previous unit and release failed: %v", commandFailure("systemctl daemon-reload", res.Output, err), rerr)
 			}
-			return refuse(resp, CodeFailed, "%s; the previous unit and release were restored", commandFailure("systemctl daemon-reload", err))
+			return refuse(resp, CodeFailed, "%s; the previous unit and release were restored", commandFailure("systemctl daemon-reload", res.Output, err))
 		}
 	}
 	if res, _ := h.run(ctx, systemctlTimeout, systemctl, "is-enabled", unitName(svc)); strings.TrimSpace(res.Output) != "enabled" {
 		if res, err := h.run(ctx, systemctlTimeout, systemctl, "enable", "--quiet", unitName(svc)); err != nil {
 			resp.Log = sanitizeLog(res.Output)
-			return refuse(resp, CodeFailed, "%s", commandFailure("systemctl enable", err))
+			return refuse(resp, CodeFailed, "%s", commandFailure("systemctl enable", res.Output, err))
 		}
 	}
 	if res, err := h.run(ctx, systemctlTimeout, systemctl, "restart", unitName(svc)); err != nil {
 		resp.Log = sanitizeLog(res.Output)
-		return refuse(resp, CodeFailed, "%s; the release is current", commandFailure("systemctl restart", err))
+		return refuse(resp, CodeFailed, "%s; the release is current", commandFailure("systemctl restart", res.Output, err))
 	}
 	h.pruneReleases(svc, keep, id, result.Previous)
 	return resp

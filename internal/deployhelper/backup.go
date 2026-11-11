@@ -389,7 +389,7 @@ func (h *Helper) activeState(ctx context.Context, svc string) string {
 
 func (h *Helper) unitCtl(ctx context.Context, verb, svc string) *opErr {
 	if res, err := h.run(ctx, systemctlTimeout, systemctl, verb, unitName(svc)); err != nil {
-		return failf(CodeFailed, "%s", commandFailure("systemctl "+verb, err)).withLog(res.Output)
+		return failf(CodeFailed, "%s", commandFailure("systemctl "+verb, res.Output, err)).withLog(res.Output)
 	}
 	return nil
 }
@@ -569,7 +569,7 @@ func (h *Helper) runWorker(ctx context.Context, unit, stage string, p setParams,
 	}
 	if err != nil {
 		h.stopUnit(ctx, unit, err)
-		return out, failf(CodeFailed, "%s", commandFailure("the backup worker", err)).withLog(res.Output)
+		return out, failf(CodeFailed, "%s", commandFailure("the backup worker", res.Output, err)).withLog(res.Output)
 	}
 	return out, nil
 }

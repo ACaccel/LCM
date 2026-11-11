@@ -922,10 +922,11 @@ func reloadNginx(ctx context.Context, env IngressEnv) error {
 	return nil
 }
 
-// commandMessage is the error of a command with the last line it printed.
+// commandMessage is the error of a command with the tail of what it
+// printed.
 func commandMessage(out string, err error) string {
-	if line := lastLine(out); line != "" {
-		return line + " (" + err.Error() + ")"
+	if tail := Excerpt(out); tail != "" {
+		return tail + " (" + err.Error() + ")"
 	}
 	return err.Error()
 }

@@ -482,13 +482,20 @@ func sanitizeLog(s string) string {
 	return s
 }
 
-// commandFailure describes a failed command.
-func commandFailure(what string, err error) string {
-	if code := execx.ExitCode(err); code > 0 {
-		return fmt.Sprintf("%s exited with status %d", what, code)
+// commandFailure describes a failed command with the tail of what it
+// printed, which usually names the cause.
+func commandFailure(what, output string, err error) string {
+	var msg string
+	switch code := execx.ExitCode(err); {
+	case code > 0:
+		msg = fmt.Sprintf("%s exited with status %d", what, code)
+	case errors.Is(err, execx.ErrTimeout):
+		msg = what + " timed out"
+	default:
+		msg = fmt.Sprintf("%s did not finish: %v", what, err)
 	}
-	if errors.Is(err, execx.ErrTimeout) {
-		return what + " timed out"
+	if tail := hostsetup.Excerpt(output); tail != "" {
+		msg += ": " + tail
 	}
-	return fmt.Sprintf("%s did not finish: %v", what, err)
+	return msg
 }

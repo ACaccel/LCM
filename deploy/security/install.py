@@ -186,9 +186,12 @@ class Host:
             # Children never inherit the installer's stdin, which carried its input.
             result = subprocess.run(argv, input=stdin if stdin is not None else b'', capture_output=True,
                                     timeout=timeout, check=False, env=ENV, cwd='/')
-            result = Result(result.returncode, result.stdout.decode('utf-8', 'replace'))
+            result = Result(result.returncode, result.stdout.decode('utf-8', 'replace'),
+                            result.stderr.decode('utf-8', 'replace'))
         if check and result.code != 0:
-            raise Failure('{} failed with status {}'.format(' '.join(argv[:3]), result.code))
+            message = '{} failed with status {}'.format(' '.join(argv[:3]), result.code)
+            tail = excerpt(result.err) or excerpt(result.out)
+            raise Failure('{}: {}'.format(message, tail) if tail else message)
         return result
 
     def info(self, path):
@@ -328,9 +331,24 @@ class Host:
 
 
 class Result:
-    def __init__(self, code: int, out: str):
+    def __init__(self, code: int, out: str, err: str = ''):
         self.code = code
         self.out = out
+        self.err = err
+
+
+EXCERPT_LINES = 6
+EXCERPT_CHARS = 600
+
+
+def excerpt(text: str) -> str:
+    """The last lines of a failed command's output on one printable line:
+    tools such as apt and nginx print the cause before their summary."""
+    lines = [line.strip() for line in text.replace('\r', '\n').replace('\t', ' ').split('\n')]
+    lines = [line for line in lines if line][-EXCERPT_LINES:]
+    flat = ' | '.join(lines)
+    flat = ''.join(c if c.isprintable() else '?' for c in flat)
+    return flat[-EXCERPT_CHARS:]
 
 
 def lock(host: Host, path: Path, busy: str, wait: float = 0) -> int:

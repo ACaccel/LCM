@@ -676,7 +676,7 @@ func TestActivateFailures(t *testing.T) {
 	// A migration failure switches nothing.
 	e.migrate = func(argv []string) (string, int) { return "relation exists\n", 3 }
 	r := e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel2, Start: []string{"index.js"}, Runtime: "node24", Migrate: []string{"node", "migrate.js", "--up"}},
-		CodeFailed, "the migration exited with status 3; nothing was switched")
+		CodeFailed, "the migration exited with status 3: relation exists; nothing was switched")
 	if r.Log != "relation exists\n" {
 		t.Errorf("log %q", r.Log)
 	}
@@ -726,7 +726,7 @@ func TestActivateFailures(t *testing.T) {
 	unit2 := e.read("/etc/systemd/system/web.service")
 	e.reloadFail = 1
 	r = e.refused(Request{Op: OpActivate, Service: "web", ReleaseID: rel1, Start: []string{"index.js"}, Runtime: "node24"},
-		CodeFailed, "systemctl daemon-reload exited with status 1; the previous unit and release were restored")
+		CodeFailed, "systemctl daemon-reload exited with status 1: Failed to reload daemon; the previous unit and release were restored")
 	if e.read("/etc/systemd/system/web.service") != unit2 || r.Activate.Switched {
 		t.Errorf("not restored: %+v", r.Activate)
 	}
@@ -952,5 +952,15 @@ func TestLookupKeepsTheAccountComment(t *testing.T) {
 	}
 	if _, ok, err := run("", 2); err != nil || ok {
 		t.Errorf("missing account: ok %v err %v", ok, err)
+	}
+}
+
+func TestCommandFailureIncludesTheOutputTail(t *testing.T) {
+	got := commandFailure("systemctl restart", "Job failed\nSee \"journalctl -xe\"\x1b[1m\n", &execx.ExitError{Code: 1})
+	if got != `systemctl restart exited with status 1: Job failed | See "journalctl -xe"?[1m` {
+		t.Errorf("message = %q", got)
+	}
+	if got := commandFailure("the build", "", execx.ErrTimeout); got != "the build timed out" {
+		t.Errorf("message = %q", got)
 	}
 }

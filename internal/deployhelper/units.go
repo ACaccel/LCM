@@ -39,7 +39,7 @@ func (h *Helper) unitAction(ctx context.Context, req Request) Response {
 	res, err := h.run(ctx, systemctlTimeout, systemctl, string(req.Op), unitName(req.Service))
 	if err != nil {
 		resp.Log = sanitizeLog(res.Output)
-		return refuse(resp, CodeFailed, "%s", commandFailure("systemctl "+string(req.Op), err))
+		return refuse(resp, CodeFailed, "%s", commandFailure("systemctl "+string(req.Op), res.Output, err))
 	}
 	return resp
 }
@@ -55,7 +55,7 @@ func (h *Helper) status(ctx context.Context, req Request) Response {
 	res, err := h.run(ctx, systemctlTimeout, systemctl, "show", "--property=LoadState,ActiveState,SubState,UnitFileState,MainPID", unitName(req.Service))
 	if err != nil {
 		resp.Log = sanitizeLog(res.Output)
-		return refuse(resp, CodeFailed, "%s", commandFailure("systemctl show", err))
+		return refuse(resp, CodeFailed, "%s", commandFailure("systemctl show", res.Output, err))
 	}
 	st := &UnitStatus{}
 	for line := range strings.SplitSeq(strings.TrimSpace(res.Output), "\n") {

@@ -147,7 +147,7 @@ func (r OSRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 	if c.MaxOutput > 0 {
 		stdout.max = c.MaxOutput
 	}
-	stderr := &limitedBuffer{max: maxStderr}
+	stderr := &tailBuffer{max: maxStderr}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	var ee *exec.ExitError
@@ -157,7 +157,7 @@ func (r OSRunner) Run(ctx context.Context, c Command) ([]byte, error) {
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("%s: %w", c, ctx.Err())
 	case errors.As(err, &ee) && ee.Exited():
-		return stdout.Bytes(), &ExitError{Command: c.String(), Code: ee.ExitCode(), Stderr: lastLine(stderr.String())}
+		return stdout.Bytes(), &ExitError{Command: c.String(), Code: ee.ExitCode(), Stderr: Excerpt(stderr.String())}
 	}
 	return nil, fmt.Errorf("%s: %w", c, err)
 }
@@ -175,12 +175,29 @@ func sysProcAttr(c Command) *syscall.SysProcAttr {
 	}}
 }
 
-// lastLine is the last non-empty line of a program's error output, which
-// names the failure without repeating everything it printed, made safe to
-// print: programs run as lcm or the operator choose what they write.
-func lastLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	return printable(strings.TrimSpace(lines[len(lines)-1]), 200)
+// excerptLines and excerptBytes bound what a failed program's output adds
+// to an error message.
+const (
+	excerptLines = 6
+	excerptBytes = 800
+)
+
+// Excerpt is the tail of a program's output made fit for an error
+// message: at most the last few non-empty lines joined by " | ", with
+// control characters replaced, because programs run as lcm or the
+// operator choose what they write. The tail is kept because tools such as
+// nginx -t and apt print the cause first and a summary last.
+func Excerpt(s string) string {
+	var lines []string
+	for l := range strings.SplitSeq(strings.ReplaceAll(s, "\r", "\n"), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > excerptLines {
+		lines = lines[len(lines)-excerptLines:]
+	}
+	return printable(strings.Join(lines, "\n"), excerptBytes)
 }
 
 func firstLine(s string) string {
@@ -188,12 +205,26 @@ func firstLine(s string) string {
 	return line
 }
 
-// printable replaces control and format characters (escape sequence
-// introducers, bidirectional overrides) and invalid UTF-8 by "?", and
-// shortens s to at most max bytes.
+// printable makes s safe to print on one line: control and format
+// characters (escape sequence introducers, bidirectional overrides) and
+// invalid UTF-8 become "?", tabs become spaces, line breaks become " | "
+// (empty lines vanish), and s is shortened to at most max bytes.
 func printable(s string, max int) string {
 	s = strings.ToValidUTF8(s, "?")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	if strings.Contains(s, "\n") {
+		var lines []string
+		for l := range strings.SplitSeq(s, "\n") {
+			if l = strings.TrimSpace(l); l != "" {
+				lines = append(lines, l)
+			}
+		}
+		s = strings.Join(lines, " | ")
+	}
 	s = strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return ' '
+		}
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 			return '?'
 		}
@@ -245,6 +276,26 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 			b.Buffer.Write(p)
 		}
 	}
+	return len(p), nil
+}
+
+// tailBuffer keeps the last max bytes written to it: a failing program
+// names its cause near the end of what it printed.
+type tailBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	if len(p) >= b.max {
+		b.Reset()
+		b.Buffer.Write(p[len(p)-b.max:])
+		return len(p), nil
+	}
+	if over := b.Len() + len(p) - b.max; over > 0 {
+		b.Next(over)
+	}
+	b.Buffer.Write(p)
 	return len(p), nil
 }
 

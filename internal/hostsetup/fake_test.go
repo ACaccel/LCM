@@ -657,7 +657,7 @@ func (r *fakeRunner) Run(_ context.Context, c Command) ([]byte, error) {
 		return nil, nil
 	case c.Path == "systemd-analyze":
 		if r.failAnalyze {
-			return nil, &ExitError{Command: "systemd-analyze verify", Code: 1, Stderr: lastLine(r.analyzeStderr)}
+			return nil, &ExitError{Command: "systemd-analyze verify", Code: 1, Stderr: Excerpt(r.analyzeStderr)}
 		}
 		return nil, nil
 	case c.Path == "systemctl":

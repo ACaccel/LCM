@@ -40,6 +40,7 @@ class FakeSystem:
         self.rules = {'-a always,exit -F arch=b64 -S execve -k unrelated'}
         self.audit_enabled = 1
         self.fail = None
+        self.fail_stderr = ''
         self.accounts = {'workstation-security': (COLLECTOR_ID, COLLECTOR_ID, '/usr/sbin/nologin', ()),
                          'www-data': (33, 33, '/usr/sbin/nologin', ())}
 
@@ -57,7 +58,7 @@ class FakeSystem:
     def __call__(self, argv, timeout=120, stdin=None):
         self.calls.append(argv)
         if self.fail and self.fail(argv):
-            return I.Result(1, '')
+            return I.Result(1, '', self.fail_stderr)
         program, args = argv[0], argv[1:]
         if program == '/usr/bin/systemctl':
             verb, unit = args[0], args[-1]
@@ -302,6 +303,30 @@ class InstallerTests(unittest.TestCase):
         self.assertFalse(self.exists(H.POLICY))
         manifest = json.loads(self.read(I.TRANSACTIONS / I.transactions(self.host)[-1] / 'manifest.json'))
         self.assertEqual(manifest['state'], 'reverted')
+
+    def test_failed_command_reports_the_end_of_its_stderr(self):
+        put(self.root, str(H.NGINX_CONF), '# hand-made\n')
+        self.system.fail = lambda argv: argv == [str(I.NGINX), '-t']
+        self.system.fail_stderr = 'nginx: [emerg] unknown directive "x"\r\nnginx: configuration file test failed\n\x1b[2J'
+        with self.assertRaises(I.Failure) as error:
+            self.install()
+        message = str(error.exception)
+        self.assertIn('nginx: [emerg] unknown directive "x" | nginx: configuration file test failed | ?[2J', message)
+        self.assertNotIn('\n', message)
+        self.assertNotIn('\x1b', message)
+
+    def test_host_run_failure_carries_stderr_not_a_bare_status(self):
+        script = 'i=0; while [ $i -lt 100 ]; do echo noise-$i >&2; i=$((i+1)); done; echo "E: cause" >&2; exit 3'
+        with self.assertRaises(I.Failure) as error:
+            I.Host().run(['/bin/sh', '-c', script])
+        message = str(error.exception)
+        self.assertTrue(message.endswith('failed with status 3: noise-95 | noise-96 | noise-97 | noise-98 | noise-99 | E: cause'), message)
+        with self.assertRaises(I.Failure) as error:
+            I.Host().run(['/bin/sh', '-c', 'echo only-stdout; exit 2'])
+        self.assertTrue(str(error.exception).endswith('status 2: only-stdout'))
+        with self.assertRaises(I.Failure) as error:
+            I.Host().run(['/bin/sh', '-c', 'exit 4'])
+        self.assertTrue(str(error.exception).endswith('status 4'))
 
     def test_failed_first_install_stops_what_it_started(self):
         # The helper check is the last step: everything before it ran.
