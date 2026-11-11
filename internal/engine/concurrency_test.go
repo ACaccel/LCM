@@ -76,6 +76,9 @@ func TestDrop(t *testing.T) {
 	}
 }
 
+// The new run of a replace policy starts once the cancelled one has
+// stopped, so each run below is started only after the previous one is
+// known to be running; nothing depends on how fast a run stops.
 func TestReplaceCancelsActive(t *testing.T) {
 	h := enginetest.New(t)
 	e := h.Open()
@@ -83,11 +86,12 @@ func TestReplaceCancelsActive(t *testing.T) {
 	first := h.Start(e, "r", map[string]any{"gate": "r0"})
 	h.Entered("r0")
 	second := h.Start(e, "r", map[string]any{"gate": "r1"})
-	third := h.Start(e, "r", map[string]any{"gate": "r2"})
 	v := h.Wait(e, first)
-	if v.Status != engine.RunCancelled || !strings.Contains(v.Error, "replaced by run") {
+	if v.Status != engine.RunCancelled || !strings.Contains(v.Error, "replaced by run "+second) {
 		t.Fatalf("first: %s (%s)", v.Status, v.Error)
 	}
+	h.Entered("r1")
+	third := h.Start(e, "r", map[string]any{"gate": "r2"})
 	v = h.Wait(e, second)
 	if v.Status != engine.RunCancelled || !strings.Contains(v.Error, "replaced by run "+third) {
 		t.Fatalf("second: %s (%s)", v.Status, v.Error)
@@ -97,8 +101,41 @@ func TestReplaceCancelsActive(t *testing.T) {
 	if v := h.Wait(e, third); v.Status != engine.RunSucceeded {
 		t.Fatalf("third: %s", v.Status)
 	}
+	if h.Calls("work") != 3 {
+		t.Fatalf("work ran %d times, want 3 (every run started before it was replaced)", h.Calls("work"))
+	}
+}
+
+// A cancelled run that has not stopped yet holds the place, so the runs
+// that arrive meanwhile are queued, and only the newest of them survives.
+func TestReplaceDropsQueuedRuns(t *testing.T) {
+	h := enginetest.New(t)
+	e := h.Open()
+	h.Deploy(e, policy("rq", `
+  concurrency: { mode: replace }
+  nodes:
+    - { id: start, type: trigger.manual, next: { out: [work] } }
+    - { id: work, type: test.read, props: { gate: "{{ trigger.gate }}", hold: "{{ trigger.hold }}" } }
+`))
+	first := h.Start(e, "rq", map[string]any{"gate": "q0", "hold": true})
+	h.Entered("q0")
+	second := h.Start(e, "rq", map[string]any{"gate": "q1", "hold": false})
+	third := h.Start(e, "rq", map[string]any{"gate": "q2", "hold": false})
+	v := h.Wait(e, second)
+	if v.Status != engine.RunCancelled || !strings.Contains(v.Error, "replaced by run "+third) {
+		t.Fatalf("second: %s (%s)", v.Status, v.Error)
+	}
+	h.Release("q0")
+	if v := h.Wait(e, first); v.Status != engine.RunCancelled || !strings.Contains(v.Error, "replaced by run "+second) {
+		t.Fatalf("first: %s (%s)", v.Status, v.Error)
+	}
+	h.Entered("q2")
+	h.Release("q2")
+	if v := h.Wait(e, third); v.Status != engine.RunSucceeded {
+		t.Fatalf("third: %s", v.Status)
+	}
 	if h.Calls("work") != 2 {
-		t.Fatalf("work ran %d times, want 2 (first and third)", h.Calls("work"))
+		t.Fatalf("work ran %d times, want 2 (the replaced queued run never started)", h.Calls("work"))
 	}
 }
 

@@ -206,7 +206,7 @@ func (h *Harness) count(nodeID string) {
 	h.mu.Unlock()
 }
 
-func (h *Harness) block(ctx context.Context, gate string) error {
+func (h *Harness) block(ctx context.Context, gate string, hold bool) error {
 	if gate == "" {
 		return nil
 	}
@@ -214,6 +214,10 @@ func (h *Harness) block(ctx context.Context, gate string) error {
 	ch := h.gateLocked(gate)
 	h.enteredLocked(gate) <- struct{}{}
 	h.mu.Unlock()
+	if hold {
+		<-ch
+		return nil
+	}
 	select {
 	case <-ch:
 		return nil
@@ -222,10 +226,13 @@ func (h *Harness) block(ctx context.Context, gate string) error {
 	}
 }
 
-// EchoProps configures test.echo and test.read.
+// EchoProps configures test.echo and test.read. With Hold the node keeps
+// waiting on its gate when its run is cancelled, so that a test controls
+// when a cancelled run stops.
 type EchoProps struct {
 	Value any    `json:"value"`
 	Gate  string `json:"gate"`
+	Hold  bool   `json:"hold"`
 }
 
 // FailProps configures test.fail: the first Times attempts fail (all
@@ -253,7 +260,7 @@ var ErrBoom = errors.New("boom")
 func (h *Harness) registerTestNodes() {
 	echo := func(ctx context.Context, rc *node.RunContext, p EchoProps) (node.Result, error) {
 		h.count(rc.NodeID)
-		if err := h.block(ctx, p.Gate); err != nil {
+		if err := h.block(ctx, p.Gate, p.Hold); err != nil {
 			return node.Result{}, err
 		}
 		return node.Result{Output: p.Value}, nil
