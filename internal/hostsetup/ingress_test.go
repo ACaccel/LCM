@@ -433,6 +433,14 @@ func TestIngressConfigValidation(t *testing.T) {
 	if err := base().Validate(); err != nil {
 		t.Fatalf("base: %v", err)
 	}
+	// A managed service may serve its publish directory, with or without
+	// a port.
+	ok := base()
+	ok.Services["web"] = ServiceGrant{Port: 3200, Route: &RouteGrant{Prefix: "/web/", Static: "/opt/web/www"}}
+	ok.Services["docs"] = ServiceGrant{Route: &RouteGrant{Prefix: "/docs/", Static: "/opt/docs/www"}}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("publish directories: %v", err)
+	}
 	for name, tc := range map[string]struct {
 		mutate func(c *Config)
 		want   string
@@ -471,7 +479,17 @@ func TestIngressConfigValidation(t *testing.T) {
 		}, "no runtimes or inputs"},
 		"no port no static": {func(c *Config) {
 			c.Services["x"] = ServiceGrant{Route: &RouteGrant{Prefix: "/x/"}}
-		}, "port must be between"},
+		}, "services.x.port is required unless the service only publishes static content (route.static /opt/x/www)"},
+		"managed static elsewhere": {func(c *Config) {
+			c.Services["web"].Route.Static = "/var/www/web"
+		}, "services.web.route.static must be empty or /opt/web/www"},
+		"managed static of another": {func(c *Config) {
+			c.Services["web"].Route.Static = "/opt/site/www"
+		}, "services.web.route.static must be empty or /opt/web/www"},
+		"managed no port elsewhere": {func(c *Config) {
+			c.Services["x"] = ServiceGrant{Route: &RouteGrant{Prefix: "/x/", Static: "/var/www/x"}}
+		}, "services.x.port is required unless"},
+		"external publish dir": {func(c *Config) { c.Services["site"].Route.Static = "/opt/web/www" }, "must not overlap /opt/web"},
 	} {
 		c := base()
 		c.Services = map[string]ServiceGrant{}
@@ -842,4 +860,65 @@ func TestIngressHooksMustBeRoots(t *testing.T) {
 	th := ingressHost(t, true)
 	th.fs.file(ingress.HooksDir+"/web/api-observe.conf", "", 0o644, 0, 0)
 	th.converge()
+}
+
+// TestAllowManagedPublish: a managed service's route may serve its publish
+// directory, which allow and apply create; without a port the service only
+// publishes.
+func TestAllowManagedPublish(t *testing.T) {
+	th := ingressHost(t, true)
+	th.cfg.Components.Deploy = true
+	th.writeConfig(th.cfg)
+	app := ServiceGrant{Port: 3300, Route: &RouteGrant{Prefix: "/app/", Static: ServicePublishDir("app")}}
+	if res, out, err := th.allow(AllowOptions{Name: "app", Grant: app}); err != nil || res.Manual != 0 {
+		t.Fatalf("allow: %+v %v\n%s", res, err, out)
+	}
+	docs := ServiceGrant{Route: &RouteGrant{Prefix: "/docs/", Static: ServicePublishDir("docs")}}
+	if res, out, err := th.allow(AllowOptions{Name: "docs", Grant: docs}); err != nil || res.Manual != 0 {
+		t.Fatalf("allow: %+v %v\n%s", res, err, out)
+	}
+	for _, d := range []string{"/opt/app/www", "/opt/docs/www"} {
+		if info, err := th.fs.Lstat(d); err != nil || !info.IsDir() || info.UID != 0 || info.Mode.Perm() != 0o755 {
+			t.Fatalf("%s: %+v %v", d, info, err)
+		}
+	}
+	// A managed service without a route gets no publish directory.
+	if res, out, err := th.allow(AllowOptions{Name: "api", Grant: ServiceGrant{Port: 3400}}); err != nil || res.Manual != 0 {
+		t.Fatalf("allow: %+v %v\n%s", res, err, out)
+	}
+	if _, err := th.fs.Lstat("/opt/api/www"); err == nil {
+		t.Fatal("a service without a route got a publish directory")
+	}
+	// Another static directory is refused for a managed service, and a
+	// static-only grant needs the publish directory.
+	if _, _, err := th.allow(AllowOptions{Name: "app", Grant: ServiceGrant{Port: 3300, Route: &RouteGrant{Prefix: "/app/", Static: "/srv/site"}}}); err == nil ||
+		!strings.Contains(err.Error(), "must be empty or /opt/app/www") {
+		t.Fatalf("other static: %v", err)
+	}
+	if _, _, err := th.allow(AllowOptions{Name: "docs", Grant: ServiceGrant{Route: &RouteGrant{Prefix: "/docs/"}}}); err == nil ||
+		!strings.Contains(err.Error(), "services.docs.port is required unless the service only publishes static content") {
+		t.Fatalf("no port: %v", err)
+	}
+
+	cfg, err := LoadConfig(th.fs, ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th.cfg = cfg
+	th.converge()
+	site := th.fs.content(SiteFile)
+	for _, want := range []string{`alias "/opt/app/www/";`, `alias "/opt/docs/www/";`} {
+		if !strings.Contains(site, want) {
+			t.Fatalf("site lacks %s:\n%s", want, site)
+		}
+	}
+	th.expectConverged()
+	// apply creates a missing publish directory again.
+	th.fs.remove("/opt/docs/www")
+	if out := th.converge(); !strings.Contains(out, "/opt/docs/www") {
+		t.Fatalf("apply:\n%s", out)
+	}
+	if _, err := th.fs.Lstat("/opt/docs/www"); err != nil {
+		t.Fatal(err)
+	}
 }

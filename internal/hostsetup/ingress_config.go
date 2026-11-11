@@ -126,6 +126,13 @@ func (c Config) checkPublicDir(dir string) error {
 	for _, r := range slices.Sorted(maps.Keys(c.Runtimes)) {
 		protected = append(protected, c.Runtimes[r])
 	}
+	// The releases and data of managed services are not public; their
+	// publish directory is served only through their own route.
+	for _, name := range slices.Sorted(maps.Keys(c.Services)) {
+		if !c.Services[name].External {
+			protected = append(protected, ServiceOptDir(name), ServiceDataDir(name), ServiceEtcDir(name))
+		}
+	}
 	for _, d := range protected {
 		if within(dir, d) || within(d, dir) {
 			return fmt.Errorf("must not overlap %s", d)
@@ -150,7 +157,14 @@ func (c Config) validateIngress() []error {
 		} else {
 			prefixes[r.Prefix] = name
 		}
-		if r.Static != "" {
+		switch g := c.Services[name]; {
+		case r.Static == "":
+		case !g.External && r.Static != ServicePublishDir(name):
+			// The deploy helper publishes a managed service's static
+			// content in one place, which is all its route may serve.
+			errs = append(errs, fmt.Errorf("%s.static must be empty or %s, where the deploy helper publishes the service's static content (got %q)",
+				at, ServicePublishDir(name), printable(r.Static, 200)))
+		case g.External:
 			if err := c.checkPublicDir(r.Static); err != nil {
 				errs = append(errs, fmt.Errorf("%s.static %w", at, err))
 			}

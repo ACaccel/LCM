@@ -198,6 +198,11 @@ func (c Config) validateDeploy() []error {
 			// A static-only external route needs no port.
 		case g.Port == 0 && g.External:
 			errs = append(errs, fmt.Errorf("%s.port is required unless the external service's route serves a static directory", at))
+		case g.Port == 0 && g.Route != nil && g.Route.Static == ServicePublishDir(name):
+			// A managed service that only publishes static content runs
+			// no process.
+		case g.Port == 0:
+			errs = append(errs, fmt.Errorf("%s.port is required unless the service only publishes static content (route.static %s)", at, ServicePublishDir(name)))
 		case g.Port < 1024 || g.Port > 65535:
 			errs = append(errs, fmt.Errorf("%s.port must be between 1024 and 65535 (got %d)", at, g.Port))
 		case g.Port == ServePort || g.Port == c.Tailscale.Port:
@@ -655,19 +660,28 @@ func (a *applier) grant(ctx context.Context, s *step, name string) error {
 	uid, gid := ids(st.acc)
 	buid, bgid := ids(st.build)
 	builder := BuildAccount(name)
-	for _, d := range []struct {
+	type dir struct {
 		path     string
 		perm     fs.FileMode
 		uid, gid int
 		desc     string
-	}{
+	}
+	dirs := []dir{
 		{ServiceOptDir(name), 0o755, 0, 0, "root:root"},
 		{ServiceReleases(name), 0o755, 0, 0, "root:root"},
+	}
+	if a.cfg.Services[name].Route != nil {
+		// The deploy helper publishes static content here; the route
+		// serves it when route.static names it.
+		dirs = append(dirs, dir{ServicePublishDir(name), 0o755, 0, 0, "root:root"})
+	}
+	dirs = append(dirs, []dir{
 		{ServiceDataDir(name), 0o750, uid, gid, name + ":" + name},
 		{ServiceEtcDir(name), 0o750, 0, gid, "root:" + name},
 		{ServiceBuildDir(name), 0o750, 0, bgid, "root:" + builder},
 		{ServiceCacheDir(name), 0o750, buid, bgid, builder + ":" + builder},
-	} {
+	}...)
+	for _, d := range dirs {
 		info, err := a.h.FS.Lstat(d.path)
 		if err == nil && info.IsDir() && !info.IsLink() && (info.UID != d.uid || info.GID != d.gid) {
 			// It was not made for this service; its owner could have
