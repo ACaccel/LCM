@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/netip"
 	"path"
 	"regexp"
 	"slices"
@@ -174,7 +175,7 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 		return finish(refuse(resp, CodeFailed, "prepare the build: %v", err))
 	}
 	unit := "lcm-build-" + svc + "-" + id
-	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs, backupDir(cfg))
+	argv := buildArgs(unit, dir, cache, builder, req, g.Inputs, backupDir(cfg), h.loopbackResolvers())
 	stop := h.watchBuild(ctx, unit, []string{dir + "/src", dir + "/home", cache}, freePaths, lim)
 	res, err := h.run(ctx, time.Duration(req.TimeoutSec)*time.Second+buildRunMargin, argv...)
 	resp.Log = sanitizeLog(res.Output)
@@ -197,13 +198,13 @@ func (h *Helper) build(ctx context.Context, req Request, cfg hostsetup.Config, g
 // back; other processes are invisible in /proc; it gets no capabilities, no
 // new privileges, a private /tmp and /dev, a time limit and a memory limit.
 // It has the network, to download dependencies, except the loopback
-// addresses (IPAddressDeny=localhost); other addresses of the host, Unix
-// sockets and abstract sockets stay reachable. Its environment is fixed: PATH
-// (the runtimes' bin directories first), HOME, LANG, the commit, the cache
-// (also as the npm and Go caches) and, with inputs, where they are mounted
-// read-only. The command is run from a root-owned script file, so that
-// systemd never expands anything in it.
-func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, inputs map[string]string, backup string) []string {
+// addresses (IPAddressDeny=localhost) other than the name servers'; other
+// addresses of the host, Unix sockets and abstract sockets stay reachable.
+// Its environment is fixed: PATH (the runtimes' bin directories first), HOME,
+// LANG, the commit, the cache (also as the npm and Go caches) and, with
+// inputs, where they are mounted read-only. The command is run from a
+// root-owned script file, so that systemd never expands anything in it.
+func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, inputs map[string]string, backup string, resolvers []netip.Addr) []string {
 	var paths []string
 	for _, rt := range req.Runtimes {
 		paths = append(paths, hostsetup.RuntimesDir+"/"+rt+"/bin")
@@ -225,8 +226,11 @@ func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, 
 		"--setenv=LCM_COMMIT=" + req.Commit,
 	}
 	props := sandbox("0022", backup)
+	props = append(props, "IPAddressDeny=localhost")
+	for _, a := range resolvers {
+		props = append(props, "IPAddressAllow="+a.String())
+	}
 	props = append(props,
-		"IPAddressDeny=localhost",
 		"TemporaryFileSystem="+hostsetup.BuildDir+":ro",
 		"TemporaryFileSystem="+hostsetup.BuildCacheDir+":ro",
 		"BindPaths="+dir+"/src",
@@ -251,6 +255,56 @@ func buildArgs(unit, dir, cache string, builder hostsetup.Account, req Request, 
 		args = append(args, "--property="+p)
 	}
 	return append(args, "--", shell, dir+"/build.sh")
+}
+
+// resolvConf is where the resolver of a build finds its name servers.
+const resolvConf = "/etc/resolv.conf"
+
+// loopbackResolvers are the name servers of resolvConf on a loopback address
+// other than 127.0.0.1 and ::1, such as the stub 127.0.0.53 of
+// systemd-resolved: a build is denied the loopback addresses and could not
+// resolve a name without them. A server on 127.0.0.1 or ::1 is left out, as
+// allowing it would also open every service listening only there; services
+// listening on every address are reachable through the host's other
+// addresses anyway. Links to the file are followed, as resolvConf usually
+// is one; a file that cannot be read gives none.
+func (h *Helper) loopbackResolvers() []netip.Addr {
+	p := resolvConf
+	for range 8 {
+		target, err := h.FS.Readlink(p)
+		if err != nil {
+			break
+		}
+		if !path.IsAbs(target) {
+			target = path.Join(path.Dir(p), target)
+		}
+		p = path.Clean(target)
+	}
+	f, err := h.FS.Open(p)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	if err != nil {
+		return nil
+	}
+	var out []netip.Addr
+	for line := range strings.Lines(string(raw)) {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "nameserver" {
+			continue
+		}
+		a, err := netip.ParseAddr(fields[1])
+		if err != nil {
+			continue
+		}
+		a = a.WithZone("").Unmap()
+		if a.IsLoopback() && a != netip.AddrFrom4([4]byte{127, 0, 0, 1}) && a != netip.IPv6Loopback() && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // hidden are the trees no build or service may read, whatever their

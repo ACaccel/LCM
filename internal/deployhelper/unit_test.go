@@ -2,6 +2,7 @@ package deployhelper
 
 import (
 	"context"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +31,7 @@ func TestRenderedUnitVerifies(t *testing.T) {
 	req := Request{Op: OpBuild, Service: "web", Commit: commit1, Command: "make", TimeoutSec: 600, Runtimes: []string{"node24"}}
 	builder := hostsetup.Account{Name: "lcmb-web", UID: 990, GID: 990}
 	argv := buildArgs("lcm-build-web-x", "/var/lib/lcm-build/web/x", "/var/cache/lcm-build/web", builder, req,
-		map[string]string{"assets": input}, "/var/backups/lcm")
+		map[string]string{"assets": input}, "/var/backups/lcm", []netip.Addr{netip.MustParseAddr("127.0.0.53")})
 	lines := []string{"[Service]", "Type=exec", "ExecStart=/bin/true"}
 	for _, a := range argv {
 		if p, ok := strings.CutPrefix(a, "--property="); ok {

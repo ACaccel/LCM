@@ -454,6 +454,30 @@ func TestBuildInstallActivate(t *testing.T) {
 	}
 }
 
+// TestBuildAllowsLoopbackResolvers checks that a build reaches the loopback
+// name servers of resolv.conf, through its link, but no other loopback
+// address.
+func TestBuildAllowsLoopbackResolvers(t *testing.T) {
+	e := newEnv(t)
+	e.mkdirReal(e.real("/run/systemd/resolve"))
+	e.write("/run/systemd/resolve/stub-resolv.conf", "# stub\nnameserver 127.0.0.53\nnameserver 127.0.0.1\nnameserver ::1\n"+
+		"nameserver 1.1.1.1\nnameserver 127.0.0.53\nnameserver ::ffff:127.0.1.1\nnameserver bogus\nsearch example\n", 0o644)
+	if err := os.Symlink("../run/systemd/resolve/stub-resolv.conf", e.real("/etc/resolv.conf")); err != nil {
+		t.Fatal(err)
+	}
+	e.ok(buildReq(commit1))
+	calls := e.runner.Calls()
+	var got []string
+	for _, a := range calls[len(calls)-1].Argv {
+		if v, ok := strings.CutPrefix(a, "--property=IPAddressAllow="); ok {
+			got = append(got, v)
+		}
+	}
+	if !slices.Equal(got, []string{"127.0.0.53", "127.0.1.1"}) {
+		t.Errorf("allowed addresses %q", got)
+	}
+}
+
 func TestBuildLimits(t *testing.T) {
 	e := newEnv(t)
 	free := uint64(10 << 30)
