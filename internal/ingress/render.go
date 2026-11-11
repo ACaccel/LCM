@@ -455,6 +455,15 @@ func routeLocations(r Route) ([]location, error) {
 	}
 	switch {
 	case r.Static != "":
+		// Every static location serves files of the static directory only:
+		// below it, a link is followed only to a file of the link's owner, and
+		// no path with a component starting with "." is served (.well-known is
+		// the domain's own location). The directory itself may be a link, such
+		// as a release's "current".
+		guard := []string{
+			"disable_symlinks if_not_owner " + w.qv(lit("from="), val(r.Static)) + ";",
+			`if ($uri ~ "/\.") { return 404; }`,
+		}
 		st := Static{}
 		if o.Static != nil {
 			st = *o.Static
@@ -463,7 +472,8 @@ func routeLocations(r Route) ([]location, error) {
 		if st.SPA {
 			fallback = w.q(p + "index.html")
 		}
-		body := []string{docroot(""), "try_files $uri $uri/ " + fallback + ";"}
+		body := append([]string{docroot("")}, guard...)
+		body = append(body, "try_files $uri $uri/ "+fallback+";")
 		if st.NotFound != "" {
 			body = append(body, "error_page 404 "+w.q(p+st.NotFound)+";")
 		}
@@ -471,13 +481,14 @@ func routeLocations(r Route) ([]location, error) {
 		body = append(body, gzipLines...)
 		add(location{category: CategoryStatic, path: p, body: body, extra: [][2]string{{"Cache-Control", "no-cache"}}})
 		for _, d := range st.Immutable {
-			body := append([]string{docroot(d), "try_files $uri =404;"}, gzipLines...)
+			body := append(append([]string{docroot(d)}, guard...), "try_files $uri =404;")
+			body = append(body, gzipLines...)
 			add(location{category: CategoryStatic, path: p + d, body: body,
 				extra: [][2]string{{"Cache-Control", "public, max-age=31536000, immutable"}}})
 		}
 		for _, d := range st.Downloads {
 			add(location{category: CategoryStatic, exact: true, path: p + d.Path,
-				body:  []string{docroot(d.Path), "types { }", "default_type " + w.raw(d.Type, mimeToken) + ";"},
+				body:  append(append([]string{docroot(d.Path)}, guard...), "types { }", "default_type "+w.raw(d.Type, mimeToken)+";"),
 				extra: [][2]string{{"Cache-Control", "no-cache"}, {"Content-Disposition", "attachment"}}})
 		}
 	case r.Port != 0:
