@@ -235,6 +235,86 @@ func TestSecurityRemovalNeedsRemove(t *testing.T) {
 	th.expectConverged()
 }
 
+func TestSecurityRevertRemovesWhatHostSetupInstalled(t *testing.T) {
+	th := securityHost(t)
+	th.converge()
+	th.r.sec.actions = nil
+	th.fs.resetOps()
+	th.r.resetCalls()
+	var out bytes.Buffer
+	res, err := SecurityRevert(context.Background(), th.host, SecurityOptions{Check: true, Out: &out})
+	if err != nil || res.Changes != 6 {
+		t.Fatalf("check: %+v %v\n%s", res, err, out.String())
+	}
+	for _, want := range []string{
+		"would change: remove " + SecurityRuntime,
+		"would change: remove " + SecuritySudoers,
+		"would change: remove " + SecurityDropIn,
+		"would change: remove " + SecurityDropInDir,
+		"would change: remove " + SecurityEnvFile,
+		"would change: restart lcm.service without the security settings",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("check output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if w := th.fs.writes(); len(w) > 0 || len(th.r.called("systemctl restart lcm.service")) != 0 {
+		t.Fatalf("check changed the host: %v", w)
+	}
+
+	out.Reset()
+	if res, err = SecurityRevert(context.Background(), th.host, SecurityOptions{Out: &out}); err != nil || res.Manual != 0 {
+		t.Fatalf("revert: %+v %v\n%s", res, err, out.String())
+	}
+	for _, p := range []string{SecurityRuntime, SecuritySudoers, SecurityDropIn, SecurityDropInDir, SecurityEnvFile} {
+		if th.fs.get(p) != nil {
+			t.Errorf("%s stayed", p)
+		}
+	}
+	if len(th.r.called("systemctl restart lcm.service")) != 1 {
+		t.Errorf("lcm.service was not restarted once: %v", th.r.calls)
+	}
+}
+
+func TestSecurityRevertKeepsSettingsItDidNotWrite(t *testing.T) {
+	th := securityHost(t)
+	th.converge()
+	lcm := th.r.accounts["lcm"]
+	th.fs.file(SecurityEnvFile, "LCM_SECURITY_ENABLED=true\nLCM_SECURITY_MACHINE_ID=m-1\nLCM_SECURITY_KONATA_URL=http://127.0.0.1:4100/x\n", 0o640, 0, lcm.GID)
+	var out bytes.Buffer
+	if _, err := SecurityRevert(context.Background(), th.host, SecurityOptions{Out: &out}); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out.String())
+	}
+	if th.fs.get(SecurityEnvFile) == nil || th.fs.get(SecurityDropIn) != nil || th.fs.get(SecuritySudoers) != nil ||
+		!strings.Contains(out.String(), "note: "+SecurityEnvFile+" holds other settings and is kept") {
+		t.Errorf("revert output:\n%s", out.String())
+	}
+
+	// A drop-in somebody edited stays, and keeps its settings file.
+	th = securityHost(t)
+	th.converge()
+	th.fs.file(SecurityDropIn, securityDropIn+"Environment=X=1\n", 0o644, 0, 0)
+	out.Reset()
+	if _, err := SecurityRevert(context.Background(), th.host, SecurityOptions{Out: &out}); err != nil {
+		t.Fatalf("revert: %v\n%s", err, out.String())
+	}
+	if th.fs.get(SecurityDropIn) == nil || th.fs.get(SecurityEnvFile) == nil || th.fs.get(SecuritySudoers) != nil {
+		t.Errorf("revert output:\n%s", out.String())
+	}
+}
+
+func TestSecurityRevertThatKeepsTheComponentKeepsItsGrant(t *testing.T) {
+	th := securityHost(t)
+	th.converge()
+	th.r.sec.replies = map[string]securityReply{"revert": {Changes: []string{"restore " + SecurityRuntime}}}
+	if _, err := SecurityRevert(context.Background(), th.host, SecurityOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if th.fs.get(SecuritySudoers) == nil || th.fs.get(SecurityDropIn) == nil || th.fs.get(SecurityEnvFile) == nil {
+		t.Error("a revert that leaves the component removed its grant or settings")
+	}
+}
+
 func TestSecurityMaintenance(t *testing.T) {
 	th := newTestHost(t)
 	th.r.sec.replies = map[string]securityReply{

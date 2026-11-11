@@ -365,9 +365,19 @@ undoes its own transaction, including the units and the kernel's audit watches, 
 restarts the collector when its files were restored.
 `sudo bin/lcm host security revert --check|--apply [--transaction <id>]` undoes the last
 one when no file it changed was changed since (otherwise it names the file and changes
-nothing). Data written since (reports, rotation state, the recorded permissions),
-installed packages and the account stay. The newest 10 transactions are kept; older
-ones, with their file copies (which can include an ingest token), are deleted.
+nothing). The helper rewrites some files on purpose after the install: its policy and the
+files whose current content the policy pins (the Nginx zones and hooks, the AIDE schedule,
+the optional audit rules). Those do not block a revert; a hand edit does not match the pin
+and still does. When the revert of an install removes the component, it also removes the
+optional files the helper wrote since (and unloads their audit watches), and then what
+host setup installed around it: the sudoers rule, the `lcm.service` drop-in and the
+settings file the drop-in loads, followed by a restart of `lcm.service`. A drop-in that
+differs from what host setup wrote stays, with its settings file; a settings file with
+other settings (such as the Konata delivery) stays too, unread once the drop-in is gone.
+Data written since (reports, rotation state, the recorded permissions), installed
+packages and the account stay; revoke the ingest token in LCM. The newest 10 transactions
+are kept; older ones, with their file copies (which can include an ingest token), are
+deleted.
 
 **Locking.** The installer holds `/run/lcm-security.lock`, waiting up to a minute for it.
 While it waits and works, `/run/lcm-security.pending` makes the helper refuse new

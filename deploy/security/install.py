@@ -779,13 +779,32 @@ def load_manifest(host: Host, identity: str) -> dict:
     return manifest
 
 
-def restore_entries(host: Host, manifest: dict, dry: bool) -> tuple[list[str], list[str]]:
+def helper_digests(host: Host, helper) -> dict[str, str]:
+    """The digests the helper's policy pins for the files it wrote."""
+    try:
+        policy = json.loads(host.read_optional(helper.POLICY, 65536) or b'{}')
+    except ValueError:
+        return {}
+    pinned = {}
+    for key in ('files', 'optionalFiles'):
+        value = policy.get(key) if isinstance(policy, dict) else None
+        if isinstance(value, dict):
+            pinned.update({path: item for path, item in value.items() if isinstance(item, str)})
+    return pinned
+
+
+def restore_entries(host: Host, manifest: dict, dry: bool, helper=None) -> tuple[list[str], list[str]]:
     """Undo a transaction's entries in reverse order. An entry whose path no
-    longer holds what the transaction left is a conflict and stays."""
+    longer holds what the transaction left is a conflict and stays, except
+    (when helper is given) for the helper's policy and the files whose
+    current content the policy pins: the helper rewrote those on purpose,
+    so revert still puts back or removes them. A hand edit does not match
+    the pin and stays a conflict."""
     done, conflicts = [], []
     removed = set()
     directory = TRANSACTIONS / manifest['id']
     keys = ('exists', 'dir', 'sha256', 'mode')
+    pinned = helper_digests(host, helper) if helper is not None else {}
     for entry in reversed(manifest['entries']):
         path, kind, before, after = Path(entry['path']), entry.get('kind'), entry['before'], entry.get('after')
         if kind == 'unit':
@@ -809,7 +828,11 @@ def restore_entries(host: Host, manifest: dict, dry: bool) -> tuple[list[str], l
         if now == {key: before[key] for key in keys if key in before}:
             continue
         # An entry without "after" was interrupted: the path holds either state.
-        if after is not None and now != after:
+        drifted = after is not None and now != after
+        if drifted and helper is not None and kind == 'file' and now.get('sha256') and (
+                path == helper.POLICY or pinned.get(str(path)) == now['sha256']):
+            drifted = False
+        if drifted:
             conflicts.append(str(path))
             continue
         if not before['exists'] and now.get('dir') and [name for name in host.listdir(path) if str(path / name) not in removed]:
@@ -858,13 +881,16 @@ class Plan:
         self.manual: list[str] = []
         self.notes: list[str] = []
         self.token_missing = False
+        # Set by a revert that takes the component away: the caller then
+        # removes what it installed around it (the sudo grant, the settings).
+        self.removes_component = False
 
     def add(self, what: str, action) -> None:
         self.steps.append(Step(what, action))
 
     def result(self) -> dict:
         return {'ok': True, 'changes': [step.what for step in self.steps], 'manual': self.manual,
-                'notes': self.notes, 'tokenMissing': self.token_missing}
+                'notes': self.notes, 'tokenMissing': self.token_missing, 'componentRemoved': self.removes_component}
 
 
 def runtime_rules(host: Host) -> set[str]:
@@ -1483,12 +1509,7 @@ def removal_plan(host: Host, helper) -> Plan:
         def unload(tx):
             # The rules files are gone: managed watches go; optional ones too.
             load_rules(host, helper)
-            out = host.run(['/usr/sbin/auditctl', '-l'], check=False).out
-            for line in sorted(out.splitlines()):
-                match = re.fullmatch(r'-w (/[A-Za-z0-9_./-]+) -p ([rwxa]+) -k (wssec_optional_[a-z0-9_]+)', line)
-                if match:
-                    host.run(['/usr/sbin/auditctl', '-W', match[1], '-p', match[2], '-k', match[3]])
-            host.run(['/usr/sbin/augenrules'])
+            unload_optional_audit(host)
         plan.add('remove the managed audit watches from the kernel (unrelated rules are kept)', unload)
     if nginx:
         plan.locks.append(helper.NGINX_LOCK)
@@ -1521,6 +1542,19 @@ def removal_plan(host: Host, helper) -> Plan:
                       'the packages, the account {} and the auditd settings; revoke the ingest token in LCM'.format(
                           BASE, HELPER_STATE, USER))
     return plan
+
+
+def unload_optional_audit(host: Host) -> None:
+    """Remove the optional watches from the kernel and regenerate the boot
+    rules; unrelated rules are kept."""
+    if not host.exists('/usr/sbin/auditctl'):
+        return
+    out = host.run(['/usr/sbin/auditctl', '-l'], check=False).out
+    for line in sorted(out.splitlines()):
+        match = re.fullmatch(r'-w (/[A-Za-z0-9_./-]+) -p ([rwxa]+) -k (wssec_optional_[a-z0-9_]+)', line)
+        if match:
+            host.run(['/usr/sbin/auditctl', '-W', match[1], '-p', match[2], '-k', match[3]])
+    host.run(['/usr/sbin/augenrules'])
 
 
 def references(host: Host, needle: str) -> list[str]:
@@ -1614,7 +1648,7 @@ def revert_plan(host: Host, helper, identity: str | None) -> Plan:
     if any(entry.get('kind') == 'tree' for entry in manifest['entries']):
         plan.manual.append('transaction {} removed leftover trees; they cannot be restored'.format(identity))
         return plan
-    done, conflicts = restore_entries(host, manifest, dry=True)
+    done, conflicts = restore_entries(host, manifest, dry=True, helper=helper)
     for path in conflicts:
         plan.manual.append('{} changed after transaction {}; review it by hand'.format(path, identity))
     if conflicts:
@@ -1624,11 +1658,32 @@ def revert_plan(host: Host, helper, identity: str | None) -> Plan:
     if not done:
         return plan
 
+    # Reverting the install itself removes the component. The optional files
+    # the helper created since, which no entry records, go with it, unless a
+    # policy of an earlier installation existed (an adoption), which owns them.
+    created = {entry['path'] for entry in manifest['entries'] if not entry['before'].get('exists')}
+    recorded = {entry['path'] for entry in manifest['entries']}
+    plan.removes_component = host.exists(HELPER) and str(HELPER) in created
+    extra = []
+    if plan.removes_component and str(helper.POLICY) in created:
+        pinned = helper_digests(host, helper)
+        for path in (helper.AUDIT_OPTIONAL, helper.AIDE_DROPIN):
+            if str(path) not in recorded and str(path) in pinned and host.exists(path):
+                extra.append(path)
+                plan.add('remove ' + str(path), None)
+
     if manifest.get('nginx'):
         plan.locks.append(helper.NGINX_LOCK)
 
     def revert(tx):
-        restore_entries(host, manifest, dry=False)
+        restore_entries(host, manifest, dry=False, helper=helper)
+        for path in extra:
+            host.remove(path)
+        parent = helper.AIDE_DROPIN.parent
+        if extra and host.exists(parent) and not host.listdir(parent):
+            host.remove(parent)
+        if helper.AUDIT_OPTIONAL in extra:
+            unload_optional_audit(host)
         after_restore(host, helper, manifest, strict=True)
         manifest['state'] = 'reverted'
         manifest['revertedAt'] = stamp()

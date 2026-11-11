@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -43,6 +44,8 @@ type securityReply struct {
 	Notes        []string `json:"notes"`
 	TokenMissing bool     `json:"tokenMissing"`
 	Transaction  string   `json:"transaction"`
+	// ComponentRemoved is set by a revert that takes the helper away.
+	ComponentRemoved bool `json:"componentRemoved"`
 }
 
 // securityAssets are the installer and the files it installs, staged
@@ -448,7 +451,10 @@ func SecurityCleanup(ctx context.Context, h Host, o SecurityOptions) (Result, er
 }
 
 // SecurityRevert undoes the last recorded transaction of the security
-// installer, or the one named, when no file it changed was changed since.
+// installer, or the one named, when no file it changed was changed since
+// (the helper's own policy and the files the policy pins excepted). A
+// revert that removes the component also removes the sudo grant, the
+// lcm.service drop-in and the settings file host setup wrote around it.
 func SecurityRevert(ctx context.Context, h Host, o SecurityOptions) (Result, error) {
 	action := "revert"
 	if o.Check {
@@ -488,6 +494,92 @@ func securityMaintenance(ctx context.Context, h Host, o SecurityOptions, name, a
 		}
 	}
 	s.installerReport(reply)
+	if reply.ComponentRemoved && len(reply.Manual) == 0 {
+		// The component is gone, so what host setup installed around it
+		// has nothing to talk to.
+		if err := a.removeSecuritySettings(ctx, s); err != nil {
+			s.finish()
+			return a.res, safeError{err}
+		}
+	}
 	s.finish()
 	return a.res, nil
+}
+
+// removeSecuritySettings removes what host setup installed around the
+// security component: the sudo grant for its helper, the lcm.service
+// drop-in and the settings file the drop-in loads. A file that was changed
+// since host setup wrote it, or that holds other settings (such as the
+// Konata delivery), is kept and reported.
+func (a *applier) removeSecuritySettings(ctx context.Context, s *step) error {
+	fsys := a.h.FS
+	remove := func(p string) error {
+		return s.change("remove "+p, func() error { return fsys.Remove(p) })
+	}
+	if _, err := fsys.Lstat(SecuritySudoers); err == nil {
+		if err := remove(SecuritySudoers); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	loaded := false // the drop-in stays, so lcm.service still reads the settings
+	restart := false
+	data, err := readAll(fsys, SecurityDropIn)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return err
+	case string(data) != securityDropIn:
+		loaded = true
+		s.note(SecurityDropIn + " differs from what host setup wrote and is kept; remove it by hand")
+	default:
+		restart = true
+		names, _ := fsys.ReadDir(SecurityDropInDir)
+		onlyOurs := len(names) == 1 && names[0] == path.Base(SecurityDropIn)
+		if err := remove(SecurityDropIn); err != nil {
+			return err
+		}
+		if onlyOurs {
+			if err := remove(SecurityDropInDir); err != nil {
+				return err
+			}
+		}
+	}
+	if data, err := readAll(fsys, SecurityEnvFile); err == nil {
+		switch {
+		case loaded:
+			s.note(SecurityEnvFile + " is kept while the drop-in is")
+		case ownSecuritySettings(string(data)):
+			restart = true
+			if err := remove(SecurityEnvFile); err != nil {
+				return err
+			}
+		default:
+			s.note(SecurityEnvFile + " holds other settings and is kept; lcm.service no longer reads it")
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if !restart {
+		return nil
+	}
+	return s.change("restart "+UnitName+" without the security settings", func() error {
+		if _, err := a.systemctl(ctx, "daemon-reload"); err != nil {
+			return err
+		}
+		if _, err := a.systemctl(ctx, "restart", UnitName); err != nil {
+			return err
+		}
+		return waitHealthy(ctx, a.h, healthWait)
+	})
+}
+
+// ownSecuritySettings reports whether a settings file holds only the two
+// settings host setup writes.
+func ownSecuritySettings(content string) bool {
+	settings := envSettings(content)
+	_, enabled := settings["LCM_SECURITY_ENABLED"]
+	_, machine := settings["LCM_SECURITY_MACHINE_ID"]
+	return enabled && machine && len(settings) == 2
 }

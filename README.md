@@ -49,7 +49,7 @@ The console (Traditional Chinese, light and dark themes) shows an overview (what
 | `lcm host status` | Compare installed host files with this build, as any user (the rendered ingress site needs root) |
 | `lcm host cert issue [--config path]` | As root: obtain the ingress domain's first certificate with certbot's webroot authenticator, then serve HTTPS ([certificates](docs/operations.md#certificates)) |
 | `lcm host ingress revert [--check] [--config path]` | As root: remove LCM's nginx site and enable the adopted hand-made site again; `--check` changes nothing and exits 3 while changes are pending ([cutover and revert](docs/operations.md#cutover-and-revert)) |
-| `lcm host security cleanup\|revert --check\|--apply [--transaction id]` | As root, from a reviewed build: remove the known leftovers of the installers the security component replaced, or undo the security installer's last recorded transaction ([security component](docs/security.md#host-component)) |
+| `lcm host security cleanup\|revert --check\|--apply [--transaction id]` | As root, from a reviewed build: remove the known leftovers of the installers the security component replaced, or undo the security installer's last recorded transaction, including the sudoers rule and settings around an installation it removes ([security component](docs/security.md#host-component)) |
 | `lcm convert -f <file\|dir> [-f ...]` | Print `lcm/v1` documents converted to `lcm/v2`, offline; [rules](docs/policies.md#policy-as-code) |
 | `lcm apply -f <file\|dir> [-f ...] [--dry-run] [--force]` | Apply Resource, Policy and Module documents; prints a result and a diff per document |
 | `lcm export [kind[/name]]` | Print documents as YAML (`resource`, `policy`, `module`, or everything) |

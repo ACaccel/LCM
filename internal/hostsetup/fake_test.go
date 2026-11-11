@@ -491,6 +491,18 @@ func (r *fakeRunner) securityInstaller(c Command) ([]byte, error) {
 			r.fs.file("/etc/workstation-security/ingest-token", in.Token+"\n", 0o600, 0, 0)
 			reply.TokenMissing = false
 			reply.Transaction = testTransaction
+		case "revert-plan", "revert":
+			if installed {
+				reply.Changes = []string{"remove " + SecurityRuntime}
+				reply.ComponentRemoved = true
+			}
+			if action == "revert" {
+				for _, f := range append(slices.Clone(securityFiles), rootFile{path: SecurityCollector}) {
+					if f.path != SecuritySudoers {
+						r.fs.remove(f.path)
+					}
+				}
+			}
 		case "remove-plan", "remove":
 			if installed {
 				reply.Changes = []string{"remove " + SecurityRuntime}

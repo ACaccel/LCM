@@ -602,6 +602,59 @@ class InstallerTests(unittest.TestCase):
             H.NGINX_CONF, I.transactions(self.host)[-1])])
         self.assertEqual(self.read(H.NGINX_CONF), b'# edited later\n')
 
+    def helper_rewrites(self, **extra):
+        """What the restricted helper does after an install: rewrite files and
+        pin their new digests in its policy."""
+        policy = json.loads(self.read(H.POLICY))
+        for path, content in {str(H.NGINX_CONF): '# thresholds changed by the helper\n', **extra}.items():
+            put(self.root, path, content)
+            key = 'optionalFiles' if path in (str(H.AIDE_DROPIN), str(H.AUDIT_OPTIONAL)) else 'files'
+            policy.setdefault(key, {})[path] = I.digest(content.encode())
+        put(self.root, str(H.POLICY), json.dumps(policy), 0o600)
+
+    def test_revert_works_after_the_helper_changed_its_files(self):
+        self.install()
+        self.helper_rewrites()
+        plan = self.run_action('revert-plan')
+        self.assertEqual(plan['manual'], [])
+        self.assertTrue(plan['componentRemoved'])
+        result = self.run_action('revert')
+        self.assertEqual(result['manual'], [])
+        self.assertFalse(self.exists(H.NGINX_CONF))
+        self.assertFalse(self.exists(H.POLICY))
+        self.assertFalse(self.exists(I.HELPER))
+        self.assertEqual(json.loads(self.read(I.TRANSACTIONS / I.transactions(self.host)[-1] / 'manifest.json'))['state'], 'reverted')
+        self.assertTrue(result['componentRemoved'])
+
+    def test_revert_removes_optional_files_the_helper_wrote(self):
+        self.install()
+        optional = {str(H.AUDIT_OPTIONAL): '-w /etc/hosts -p wa -k wssec_optional_hosts\n',
+                    str(H.AIDE_DROPIN): '[Timer]\nOnCalendar=*-*-* 05:00:00\n'}
+        self.helper_rewrites(**optional)
+        self.system.rules.add('-w /etc/hosts -p wa -k wssec_optional_hosts')
+        plan = self.run_action('revert-plan')
+        self.assertIn('remove ' + str(H.AUDIT_OPTIONAL), plan['changes'])
+        self.run_action('revert')
+        self.assertFalse(self.exists(H.AUDIT_OPTIONAL))
+        self.assertFalse(self.exists(H.AIDE_DROPIN))
+        self.assertFalse(self.exists(H.AIDE_DROPIN.parent))
+        self.assertNotIn('-w /etc/hosts -p wa -k wssec_optional_hosts', self.system.rules)
+
+    def test_revert_keeps_files_the_policy_does_not_pin(self):
+        self.install()
+        self.helper_rewrites()
+        put(self.root, str(H.NGINX_CONF), '# edited by hand\n')
+        plan = self.run_action('revert')
+        self.assertEqual(len(plan['manual']), 1)
+        self.assertIn(str(H.NGINX_CONF), plan['manual'][0])
+        self.assertTrue(self.exists(I.HELPER))
+
+    def test_revert_of_a_removal_does_not_remove_the_component(self):
+        self.install()
+        self.run_action('remove')
+        plan = self.run_action('revert-plan')
+        self.assertFalse(plan['componentRemoved'])
+
     def test_adoption_refuses_another_machine(self):
         self.legacy()
         policy = json.loads(self.read(H.POLICY))
