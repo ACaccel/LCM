@@ -270,7 +270,7 @@ func (m *Manager) pushRouteLocked(ctx context.Context, name string, o *ingress.O
 	if err := m.cat.appendRoute(ctx, name, pending); err != nil {
 		return routeEntry{}, fmt.Errorf("record the route request: %w", err)
 	}
-	resp, callErr := rt.CallHelper(ctx, m.deploy, req)
+	resp, callErr := m.callRoute(ctx, name, &req)
 	entry.OperationID = req.OperationID
 	switch {
 	case callErr != nil:
@@ -286,6 +286,35 @@ func (m *Manager) pushRouteLocked(ctx context.Context, name string, o *ingress.O
 		}
 	}
 	return finish(entry)
+}
+
+// routeBusyBackoff are the waits before the retries of an ingress.apply the
+// helper answered "busy" to: another change of the nginx site (an
+// administrator's apply, another route) held the site's lock. The helper
+// has already waited for the lock itself, so the waits are short and the
+// whole sequence stays bounded.
+var routeBusyBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// callRoute calls the helper and, while it answers "busy", calls it again
+// after a backoff on the catalog's clock. A busy answer means nothing was
+// changed, and the helper's ledger would answer the same operation ID with
+// the recorded refusal, so every attempt takes a new one; req holds the
+// last one used. Another failure, a cancelled context or the end of the
+// backoff returns the last answer.
+func (m *Manager) callRoute(ctx context.Context, name string, req *deployhelper.Request) (deployhelper.Response, error) {
+	for attempt := 0; ; attempt++ {
+		resp, err := rt.CallHelper(ctx, m.deploy, *req)
+		var he *rt.HelperError
+		if !errors.As(err, &he) || he.Code != deployhelper.CodeBusy || attempt >= len(routeBusyBackoff) {
+			return resp, err
+		}
+		wait := routeBusyBackoff[attempt]
+		m.log.Info("the nginx site is busy; trying the route again", "service", name, "attempt", attempt+1, "wait", wait)
+		if !m.cat.sleep(ctx, wait) {
+			return resp, err
+		}
+		req.OperationID = rt.NewOperationID()
+	}
 }
 
 // settlePending resolves a request that was recorded but whose outcome was

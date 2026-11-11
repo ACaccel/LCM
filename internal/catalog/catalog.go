@@ -138,6 +138,20 @@ func requireActor(ctx context.Context) (auth.Actor, error) {
 
 func (c *Catalog) now() time.Time { return c.clk.Now() }
 
+// sleep waits d on the catalog's clock and reports false when ctx ended
+// first.
+func (c *Catalog) sleep(ctx context.Context, d time.Duration) bool {
+	done := make(chan struct{})
+	t := c.clk.AfterFunc(d, func() { close(done) })
+	defer t.Stop()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (c *Catalog) timelineAdded(e Entry) {
 	if c.onTL != nil {
 		c.onTL(e)

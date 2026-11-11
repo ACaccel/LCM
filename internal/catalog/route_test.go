@@ -5,7 +5,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ACaccel/lcm/internal/audit"
 	"github.com/ACaccel/lcm/internal/catalog"
@@ -165,7 +167,6 @@ func TestRouteFailureStates(t *testing.T) {
 		state   string
 	}{
 		{"failed", deployhelper.CodeFailed, "", catalog.RouteFailed},
-		{"busy", deployhelper.CodeBusy, "", catalog.RouteFailed},
 		{"component off", deployhelper.CodeDisabled, "components.ingress is not configured in /etc/lcm/host.json", catalog.RouteSkipped},
 		{"refused with the same text", deployhelper.CodeRefused, "components.ingress is not configured in /etc/lcm/host.json", catalog.RouteRefused},
 	}
@@ -192,6 +193,97 @@ func TestRouteFailureStates(t *testing.T) {
 				t.Fatalf("status = %+v", st)
 			}
 		})
+	}
+}
+
+// syncBusy runs SyncRoute while the helper answers "busy" to the first
+// busyFor ingress.apply calls and returns the waits the manager asked for.
+func syncBusy(t *testing.T, e *env, h *simHelper, busyFor int) []time.Duration {
+	t.Helper()
+	var calls atomic.Int32
+	h.intercept = func(req deployhelper.Request) (deployhelper.Response, error, bool) {
+		if req.Op != deployhelper.OpIngressApply || int(calls.Add(1)) > busyFor {
+			return deployhelper.Response{}, nil, false
+		}
+		resp := helperReply(req)
+		resp.State = deployhelper.StateFailed
+		resp, err := refusal(resp, deployhelper.CodeBusy, "another change of the nginx site is running")
+		return resp, err, true
+	}
+	done := make(chan error, 1)
+	go func() { done <- e.mgr.SyncRoute(e.ctx, "web", false) }()
+	var waits []time.Duration
+	for {
+		armed := make(chan error, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { armed <- e.clk.WaitForTimers(ctx, 1) }()
+		select {
+		case err := <-done:
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			return waits
+		case err := <-armed:
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(10 * time.Second):
+			cancel()
+			t.Fatal("neither a backoff timer nor a result")
+		}
+		// Step until the backoff timer fires to learn how long it was.
+		start := e.clk.Now()
+		for e.clk.Pending() > 0 {
+			e.clk.Advance(time.Second)
+		}
+		waits = append(waits, e.clk.Now().Sub(start))
+	}
+}
+
+func TestRouteRetriesWhileTheHelperIsBusy(t *testing.T) {
+	e, h := routeEnv(t)
+	e.put(svcDoc("web", routeA), 0)
+	waits := syncBusy(t, e, h, 2)
+	if !slices.Equal(waits, []time.Duration{5 * time.Second, 15 * time.Second}) {
+		t.Errorf("waits = %v", waits)
+	}
+	st := routeStatus(t, e, "web")
+	if st.State != catalog.RouteApplied || !st.Current {
+		t.Fatalf("status = %+v", st)
+	}
+	calls := h.ingressCalls()
+	if len(calls) != 3 {
+		t.Fatalf("%d ingress.apply calls", len(calls))
+	}
+	ids := map[string]bool{}
+	for _, c := range calls {
+		ids[c.OperationID] = true
+	}
+	if len(ids) != 3 || st.OperationID != calls[2].OperationID {
+		t.Errorf("each attempt needs its own operation ID: %v, status %s", ids, st.OperationID)
+	}
+	for _, en := range routeEntries(t, e, "web") {
+		if en.Data["state"] == catalog.RouteFailed {
+			t.Errorf("a busy attempt was recorded as a failure: %+v", en)
+		}
+	}
+}
+
+func TestRouteFailsOnlyAfterTheBusyRetries(t *testing.T) {
+	e, h := routeEnv(t)
+	e.put(svcDoc("web", routeA), 0)
+	waits := syncBusy(t, e, h, 100)
+	if !slices.Equal(waits, []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}) {
+		t.Errorf("waits = %v", waits)
+	}
+	if n := len(h.ingressCalls()); n != 4 {
+		t.Errorf("%d ingress.apply calls, want 4", n)
+	}
+	st := routeStatus(t, e, "web")
+	if st.State != catalog.RouteFailed || !strings.Contains(st.Message, "another change of the nginx site") {
+		t.Fatalf("status = %+v", st)
 	}
 }
 
