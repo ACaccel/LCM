@@ -1,9 +1,12 @@
 # Scenario 1: deploy every new commit of a branch once CI is green.
 #
-# trigger.git -> (CI check) -> deploy window -> lifecycle.deploy ->
-# wait for health -> notify; an unhealthy or failed deploy rolls back, except
-# a deploy that reports deploy.needsUpgrade (the candidate needs an action by
-# the operator and nothing was changed): that is announced and not rolled back.
+# trigger.git -> (CI check) -> deploy window -> (lifecycle.backup) ->
+# lifecycle.deploy -> wait for health -> notify; an unhealthy or failed deploy
+# rolls back, except a deploy that reports deploy.needsUpgrade (the candidate
+# needs an action by the operator and nothing was changed): that is announced
+# and not rolled back. With backupBeforeDeploy the service's backup runs
+# first; when it fails nothing is deployed or rolled back, and that is
+# announced.
 # One message per deployment, on Discord (notifySecret) or a BotFleet konata
 # relay (notifyTarget: konata, notifyUrl, notifyTokenSecret), is created at
 # the start and edited as the stages finish.
@@ -29,6 +32,7 @@ spec:
       - { start: "00:00", end: "24:00" }
     timezone: Asia/Taipei
     healthTimeout: 5m
+    backupBeforeDeploy: false
     notifyTarget: discord
     notifySecret: ""
     notifyUrl: ""
@@ -106,7 +110,16 @@ spec:
           - { label: Deploy window, state: done }
           - { label: Build and install, state: running }
           - { label: Health check, state: pending }
-      next: { out: [deploy], error: [deploy] }
+      next: { out: [backup_gate], error: [backup_gate] }
+
+    - id: backup_gate
+      type: flow.if
+      props: { condition: params.backupBeforeDeploy }
+      next: { true: [backup], false: [deploy] }
+    - id: backup
+      type: lifecycle.backup
+      props: { resource: "{{ params.resource }}" }
+      next: { out: [deploy], error: [backup_failed] }
 
     - id: deploy
       type: lifecycle.deploy
@@ -269,6 +282,24 @@ spec:
         stages:
           - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
           - { label: Deploy window, state: failed }
+          - { label: Build and install, state: skipped }
+          - { label: Health check, state: skipped }
+    - id: backup_failed
+      type: notify
+      props:
+        target: "{{ params.notifyTarget }}"
+        optional: true
+        urlSecret: "{{ params.notifySecret }}"
+        url: "{{ params.notifyUrl }}"
+        tokenSecret: "{{ params.notifyTokenSecret }}"
+        stateKey: deploy-message
+        title: "{{ params.resource }} {{ trigger.commit[:7] }}"
+        message: "The backup before deploying {{ trigger.commit[:7] }} failed, so it was not deployed; the running version is unchanged. {{ nodes.backup.message }}"
+        status: failed
+        link: "{{ params.ciRepo == '' ? '' : 'https://github.com/' + params.ciRepo + '/commit/' + trigger.commit }}"
+        stages:
+          - { label: CI, state: "{{ params.requireCI ? 'done' : 'skipped' }}" }
+          - { label: Deploy window, state: done }
           - { label: Build and install, state: skipped }
           - { label: Health check, state: skipped }
     - id: needs_upgrade

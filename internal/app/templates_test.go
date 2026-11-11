@@ -138,6 +138,9 @@ type deployFixture struct {
 	// needsUpgrade is a commit whose build reports that it cannot be
 	// installed without the operator.
 	needsUpgrade atomic.Value
+	// backups counts the backups; badBackup makes them fail.
+	backups   atomic.Int32
+	badBackup atomic.Bool
 }
 
 // newDeployFixture instantiates auto-deploy with Discord notifications;
@@ -168,6 +171,13 @@ func newDeployFixture(t *testing.T, params ...map[string]any) *deployFixture {
 	})
 	runner.On(matchCmd("checkout --detach"), func(c execx.Cmd) (execx.Result, error) {
 		f.served.Store(c.Argv[len(c.Argv)-1])
+		return execx.Result{}, nil
+	})
+	runner.On(matchCmd("web-backup"), func(execx.Cmd) (execx.Result, error) {
+		f.backups.Add(1)
+		if f.badBackup.Load() {
+			return execx.Result{ExitCode: 1, Output: "disk full\n"}, &execx.ExitError{Code: 1}
+		}
 		return execx.Result{}, nil
 	})
 	runner.On(matchCmd("web-build"), func(execx.Cmd) (execx.Result, error) {
@@ -202,7 +212,7 @@ metadata: { name: web }
 spec:
   type: service
   adapter: command
-  config: { start: web-start, stop: web-stop, restart: web-restart, status: web-status, source: { url: "https://example.com/web.git", branch: main, build: web-build, install: "true" } }
+  config: { start: web-start, stop: web-stop, restart: web-restart, status: web-status, source: { url: "https://example.com/web.git", branch: main, build: web-build, install: "true" }, backup: { command: web-backup } }
   checks:
     - { name: http, type: http, interval: %s, timeout: 2s, props: { url: %q } }
 `, checkInterval, f.web.srv.URL))
@@ -298,6 +308,10 @@ func TestAutoDeployTemplateDeploysHealthyCommit(t *testing.T) {
 	if f.served.Load() != shaA {
 		t.Errorf("checkout = %v, want %s", f.served.Load(), shaA)
 	}
+	// backupBeforeDeploy is off by default.
+	if n, _ := view.Node("backup"); n.Status == engine.NodeCompleted || f.backups.Load() != 0 {
+		t.Errorf("backed up without backupBeforeDeploy: %s, %d", n.Status, f.backups.Load())
+	}
 	// One message, posted at the start and edited at each stage.
 	msgs := f.discord.all()
 	if len(msgs) != 4 || !strings.HasPrefix(msgs[0], "POST ") || !strings.HasPrefix(msgs[3], "PATCH ") ||
@@ -385,6 +399,51 @@ func TestAutoDeployTemplateDoesNotRollBackAnUpgradeRequest(t *testing.T) {
 	last := msgs[len(msgs)-1]
 	if !strings.Contains(last, "bbbbbbb needs an operator action and was not installed") || !strings.Contains(last, "deploy.needsUpgrade: storage schema 16 -> 17 needs the operator") ||
 		!strings.Contains(last, "Status: failed") || strings.Contains(last, "Rolling back") {
+		t.Fatalf("discord = %q", msgs)
+	}
+}
+
+// With backupBeforeDeploy the backup runs before the deployment; a failed
+// backup stops it, without a rollback, and is announced.
+func TestAutoDeployTemplateBacksUpFirst(t *testing.T) {
+	f := newDeployFixture(t, map[string]any{"backupBeforeDeploy": true})
+	f.web.healthy.Store(true)
+	view := f.finish(f.push(shaA))
+	if view.Status != engine.RunSucceeded {
+		t.Fatalf("run = %s (%s)", view.Status, view.Error)
+	}
+	for _, id := range []string{"backup", "deploy", "done"} {
+		if n, _ := view.Node(id); n.Status != engine.NodeCompleted {
+			t.Errorf("node %s = %s", id, n.Status)
+		}
+	}
+	if f.backups.Load() != 1 || f.served.Load() != shaA {
+		t.Fatalf("backups = %d, checkout = %v", f.backups.Load(), f.served.Load())
+	}
+
+	f.badBackup.Store(true)
+	f.git.set(shaB)
+	f.advance(time.Minute)
+	ev := f.events.WaitFor(t, "second deploy run", func(e engine.Event) bool {
+		return e.Kind == engine.EventRunQueued && e.Policy == "web-auto-deploy" && e.RunID != view.ID
+	})
+	view = f.finish(ev.RunID)
+	if view.Status != engine.RunSucceeded {
+		t.Fatalf("run = %s (%s)", view.Status, view.Error)
+	}
+	if n, _ := view.Node("backup_failed"); n.Status != engine.NodeCompleted {
+		t.Fatalf("backup_failed = %s", n.Status)
+	}
+	for _, id := range []string{"deploy", "rolling_back", "rollback", "done"} {
+		if n, _ := view.Node(id); n.Status == engine.NodeCompleted {
+			t.Errorf("node %s ran after a failed backup", id)
+		}
+	}
+	if f.served.Load() != shaA {
+		t.Errorf("checkout = %v after a failed backup, want %s", f.served.Load(), shaA)
+	}
+	msgs := f.discord.all()
+	if last := msgs[len(msgs)-1]; !strings.Contains(last, "The backup before deploying bbbbbbb failed, so it was not deployed") || !strings.Contains(last, "Status: failed") {
 		t.Fatalf("discord = %q", msgs)
 	}
 }

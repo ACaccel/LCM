@@ -145,6 +145,8 @@ var descriptors = []descriptor{
 			{Name: "windows", Type: TypeWindows, Description: "Deploy windows: days of the week (every day when empty), start and end as HH:MM. The default allows every time."},
 			{Name: "timezone", Type: TypeString, Description: "IANA time zone of the windows."},
 			healthTimeout(),
+			{Name: "backupBeforeDeploy", Type: TypeBool, Description: "Run the service's backup before each deployment. " +
+				"When the backup fails the commit is not deployed, nothing is rolled back and the failure is notified. The service needs a backup section."},
 		}, deployNotify...),
 	},
 	{
