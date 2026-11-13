@@ -176,6 +176,7 @@ func (a *app) resource(ctx context.Context, args []string) error {
 		}
 		return apiError(err)
 	}
+	phaseChange := pos[0] == "retire" || pos[0] == "resume" || pos[0] == "unmanage"
 	operationResponse := power || pos[0] == "operation" || pos[0] == "resolve"
 	if len(resp.Body) == 0 {
 		if power {
@@ -197,6 +198,12 @@ func (a *app) resource(ctx context.Context, args []string) error {
 			return fmt.Errorf("decode response: %w; inspect operations, then %s", err, retry)
 		}
 		return fmt.Errorf("decode response: %w", err)
+	}
+	if phaseChange {
+		// The response is the whole resource document; the sibling write
+		// commands without an operation answer with one line.
+		_, err = fmt.Fprintf(a.stdout, "%s %s: request accepted\n", pos[0], pos[1])
+		return err
 	}
 	operationState := ""
 	if operationResponse {

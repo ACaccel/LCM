@@ -208,6 +208,9 @@ func TestResourceCLIWrites(t *testing.T) {
 					t.Errorf("stderr lacks %q:\n%s", want, got.stderr)
 				}
 			}
+			if tt.path == "/resources/workstation/phase" && got.stdout != tt.args[0]+" workstation: request accepted\n" {
+				t.Fatalf("phase output: %q", got.stdout)
+			}
 			if strings.Contains(got.stdout, "succeeded") || strings.Contains(got.stdout, "cancelled") {
 				t.Fatalf("false completion: %s", got.stdout)
 			}

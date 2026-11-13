@@ -424,11 +424,11 @@ func TestResourcePhaseCommand(t *testing.T) {
 	write := func(command string) []string {
 		return []string{"resource", command, "web", "--reason", "decommission", "--confirm", "web", "--yes"}
 	}
-	s.cli("", write("retire")...).want(t, 0, `"phase": "retired"`)
+	s.cli("", write("retire")...).want(t, 0, "retire web: request accepted")
 	s.cli("", "get", "resources", "web").want(t, 0, "retired")
-	s.cli("", write("resume")...).want(t, 0, `"phase": "managed"`)
+	s.cli("", write("resume")...).want(t, 0, "resume web: request accepted")
 	s.cli("", write("retire")...).want(t, 0)
-	s.cli("", write("unmanage")...).want(t, 0, `"phase": "unmanaged"`)
+	s.cli("", write("unmanage")...).want(t, 0, "unmanage web: request accepted")
 	s.cli("", "get", "resources", "web").want(t, 1)
 	// A stale version is refused by the server, not retried.
 	s.cli("", "apply", "-f", writeFile(t, t.TempDir(), "s.yaml", svcDoc("api", ""))).want(t, 0)
