@@ -71,8 +71,11 @@ type specSource struct {
 
 // workerSpec is <in>/spec.json, written by the helper.
 type workerSpec struct {
-	Version int          `json:"version"`
-	Mode    string       `json:"mode"` // "backup" or "restore"
+	Version int `json:"version"`
+	// Mode is "backup" or "restore"; "check" and "preflight" run before
+	// anything is stopped: "preflight" refuses a MONGODB_URI the sources
+	// cannot use, "check" also reads the users of a set.
+	Mode    string       `json:"mode"`
 	Service string       `json:"service"`
 	Sources []specSource `json:"sources"`
 	// MaxBytes and MaxEntries bound what the worker writes or extracts.
@@ -162,6 +165,8 @@ func RunWorker(ctx context.Context, host WorkerHost, inDir, outDir string, log i
 		return w.restore(ctx)
 	case "check":
 		return w.checkUsers(ctx)
+	case "preflight":
+		return w.checkURIs()
 	}
 	return w.backup(ctx)
 }
@@ -186,7 +191,7 @@ func readSpec(inDir string) (workerSpec, error) {
 		return spec, fmt.Errorf("specification: %w", err)
 	}
 	switch {
-	case spec.Version != Version || (spec.Mode != "backup" && spec.Mode != "restore" && spec.Mode != "check"):
+	case spec.Version != Version || (spec.Mode != "backup" && spec.Mode != "restore" && spec.Mode != "check" && spec.Mode != "preflight"):
 		return spec, errors.New("specification: unsupported version or mode")
 	case hostsetup.ValidServiceName(spec.Service) != nil:
 		return spec, errors.New("specification: invalid service")
@@ -729,11 +734,31 @@ func (w *worker) restore(ctx context.Context) error {
 	return nil
 }
 
-// checkUsers runs before a restore of MongoDB users replaces anything: the
-// users of the set must include the one the connection string logs in as,
-// because mongorestore removes every user the set does not hold, and the
-// backups and the undo of this very restore need that user.
+// checkURIs refuses a MongoDB connection string that the MongoDB sources
+// cannot use. It runs again inside the backup and restore workers, but a
+// run before anything is stopped keeps a bad string from stopping and
+// restarting the service for nothing.
+func (w *worker) checkURIs() error {
+	for i, src := range w.spec.Sources {
+		if src.Type != SourceMongoDB {
+			continue
+		}
+		if err := checkURIPath(src.BackupSource); err != nil {
+			return fmt.Errorf("source %d (%s): %w", i, describeSource(src.BackupSource), err)
+		}
+	}
+	return nil
+}
+
+// checkUsers runs before a restore replaces anything. It applies the checks
+// of the connection string, and for a restore of MongoDB users the users of
+// the set must include the one the connection string logs in as, because
+// mongorestore removes every user the set does not hold, and the backups
+// and the undo of this very restore need that user.
 func (w *worker) checkUsers(ctx context.Context) error {
+	if err := w.checkURIs(); err != nil {
+		return err
+	}
 	in, err := os.OpenRoot(w.in)
 	if err != nil {
 		return err

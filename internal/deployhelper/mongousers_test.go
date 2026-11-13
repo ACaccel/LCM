@@ -45,6 +45,54 @@ func TestAllRefusesAURIWithADatabase(t *testing.T) {
 	e.ok(backupReq(BackupSource{Type: SourceMongoDB, Database: "app"}))
 }
 
+// A connection string the sources cannot use is refused before the service
+// is stopped, whether the backup is stopped-mode or the restore replaces
+// anything; the worker that does the work checks it again.
+func TestBadMongoURIIsRefusedBeforeStopping(t *testing.T) {
+	e, argsFile := mongoToolsEnv(t)
+	e.deploy(commit1)
+	e.active = true
+	t.Setenv("MONGODB_URI", "mongodb://lcm-backup:pw@localhost/?authSource=admin")
+	set := e.ok(backupReq(BackupSource{Type: SourceMongoDB, All: true, Users: true})).Backup
+	readArgs(t, argsFile)
+
+	t.Setenv("MONGODB_URI", "mongodb://lcm-backup:pw@localhost/app?authSource=admin")
+	n := len(e.systemctlCalls())
+	for name, src := range map[string]BackupSource{
+		"all":            {Type: SourceMongoDB, All: true},
+		"database users": {Type: SourceMongoDB, Database: "app", Users: true},
+	} {
+		req := backupReq(src)
+		req.Mode = ModeStopped
+		r := e.refused(req, CodeRefused, `MONGODB_URI names the database "app"`)
+		if !strings.Contains(r.Message, "the service was not stopped") || !strings.Contains(r.Message, "?authSource=admin") {
+			t.Errorf("%s: message %q", name, r.Message)
+		}
+	}
+	r := e.restoreReq(set.BackupID)
+	e.refused(r, CodeRefused, `MONGODB_URI names the database "app"`)
+	r.RestoreUsers = true
+	e.refused(r, CodeRefused, `MONGODB_URI names the database "app"`)
+	if got := e.systemctlCalls()[n:]; len(got) != 0 || !e.active {
+		t.Fatalf("the service was touched: %q (active %v)", got, e.active)
+	}
+	if raw := readArgs(t, argsFile); raw != "" {
+		t.Fatalf("tools ran:\n%s", raw)
+	}
+	if list := e.ok(Request{Op: OpBackups, Service: "web"}).Backups; len(list) != 1 {
+		t.Fatalf("a set was made: %+v", list)
+	}
+
+	// With a good string a stopped-mode backup goes on and stops the service.
+	t.Setenv("MONGODB_URI", "mongodb://lcm-backup:pw@localhost/?authSource=admin")
+	req := backupReq(BackupSource{Type: SourceMongoDB, All: true})
+	req.Mode = ModeStopped
+	e.ok(req)
+	if got := e.systemctlCalls()[n:]; len(got) == 0 {
+		t.Error("a stopped-mode backup did not stop the service")
+	}
+}
+
 // A restore of users that would remove the user the backups log in as is
 // refused before anything is stopped or replaced.
 func TestRestoreUsersKeepsTheBackupUser(t *testing.T) {
@@ -59,7 +107,7 @@ func TestRestoreUsersKeepsTheBackupUser(t *testing.T) {
 	n := len(e.systemctlCalls())
 	r := e.restoreReq(set.BackupID)
 	r.RestoreUsers = true
-	resp := e.refused(r, CodeRefused, "the users of the set were not restored, and nothing was changed")
+	resp := e.refused(r, CodeRefused, "nothing was restored or changed")
 	if !strings.Contains(resp.Message, "the set holds no user lcm-backup of the database admin") {
 		t.Errorf("message %q", resp.Message)
 	}

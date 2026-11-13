@@ -455,6 +455,9 @@ func (h *Helper) backup(ctx context.Context, req Request, cfg hostsetup.Config, 
 	var stopped []string
 	if p.mode == ModeStopped {
 		var e *opErr
+		if e = h.preflightBackup(ctx, p); e != nil {
+			return respond(resp, e)
+		}
 		if stopped, e = h.quiesce(ctx, req.Service, g); e != nil {
 			return respond(resp, e)
 		}
@@ -1117,8 +1120,9 @@ func restorable(m setManifest) []int {
 // hashes are computed on the bytes copied, so what is staged is what was
 // verified.
 //
-// In mode "check" it stages only the users of the MongoDB sources that hold
-// them, for the check that runs before their restore.
+// In mode "check" it stages only what the check before the restore reads:
+// the users of the MongoDB sources whose users are restored, and the
+// MongoDB sources whose connection string is checked.
 func (h *Helper) stageSet(env backupEnv, name, mode string, m setManifest, restoreUsers bool, maxEntries int, maxBytes int64) (string, *opErr) {
 	spec := workerSpec{Version: Version, Mode: mode, Service: env.svc, MaxBytes: maxBytes, MaxEntries: maxEntries}
 	files := map[string]manifestFile{}
@@ -1130,10 +1134,13 @@ func (h *Helper) stageSet(env backupEnv, name, mode string, m setManifest, resto
 		ss := specSource{BackupSource: s.BackupSource, Absent: s.Absent, Mode: s.Mode}
 		arts := s.Artifacts
 		switch {
-		case mode == "check" && (s.Type != SourceMongoDB || !s.Users):
+		case mode == "check" && !needsMongoCheck(s.BackupSource, restoreUsers):
 			continue
-		case mode == "check":
+		case mode == "check" && s.Users && restoreUsers:
 			arts = slices.DeleteFunc(slices.Clone(arts), func(a string) bool { return !strings.HasSuffix(a, "-users.bson") })
+		case mode == "check":
+			// Only the connection string is checked.
+			arts, ss.Users = nil, false
 		case s.Type == SourceMongoDB && s.Users && !restoreUsers:
 			// The users and roles are the whole instance's: only the database
 			// is put back unless the request asks for more.
@@ -1348,8 +1355,8 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	if _, e := h.resolveTools(backupTools(env.cfg), m.restorableSources(), false); e != nil {
 		return respond(resp, e)
 	}
-	if req.RestoreUsers {
-		if e := h.checkUsers(ctx, env, opName, m, lim); e != nil {
+	if slices.ContainsFunc(m.restorableSources(), func(s BackupSource) bool { return needsMongoCheck(s, req.RestoreUsers) }) {
+		if e := h.checkMongo(ctx, env, opName, m, req.RestoreUsers, lim); e != nil {
 			return respond(resp, e)
 		}
 	}
@@ -1418,18 +1425,53 @@ func (h *Helper) restore(ctx context.Context, req Request, cfg hostsetup.Config,
 	return resp
 }
 
-// checkUsers runs the worker's check of the set's MongoDB users before
-// anything is stopped or replaced: they must include the user the
-// connection string logs in as (see worker.checkUsers).
-func (h *Helper) checkUsers(ctx context.Context, env backupEnv, opName string, m setManifest, lim Limits) *opErr {
-	stage, e := h.stageSet(env, opName+"c", "check", m, true, lim.MaxEntries, lim.MaxBytes)
+// needsMongoCheck reports whether a restore of the source needs the check
+// that runs before anything is stopped: the connection string must suit a
+// source of all databases, and the users of a set that restores them must
+// include the one it logs in as (see worker.checkUsers).
+func needsMongoCheck(s BackupSource, restoreUsers bool) bool {
+	return s.Type == SourceMongoDB && (s.All || (s.Users && restoreUsers))
+}
+
+// checkMongo runs the worker's check of the connection string and the set's
+// MongoDB users before anything is stopped or replaced.
+func (h *Helper) checkMongo(ctx context.Context, env backupEnv, opName string, m setManifest, restoreUsers bool, lim Limits) *opErr {
+	stage, e := h.stageSet(env, opName+"c", "check", m, restoreUsers, lim.MaxEntries, lim.MaxBytes)
 	if e != nil {
 		return e
 	}
 	defer func() { _ = h.discard(stage) }()
 	if _, e := h.runWorker(ctx, "lcm-check-"+env.svc+"-"+opName, stage, setParams{backupEnv: env}, true, restoreWorkerSec); e != nil {
 		e.code = CodeRefused
-		e.msg = "the users of the set were not restored, and nothing was changed: " + e.msg
+		e.msg = "nothing was restored or changed: " + e.msg
+		return e
+	}
+	return nil
+}
+
+// preflightBackup runs the worker's check of the connection string of the
+// MongoDB sources before the service is stopped for a backup, so that a
+// string the sources cannot use does not stop and restart it for nothing.
+func (h *Helper) preflightBackup(ctx context.Context, p setParams) *opErr {
+	lim := h.backupLimits()
+	spec := workerSpec{Version: Version, Mode: "preflight", Service: p.svc, MaxBytes: lim.MaxBytes, MaxEntries: lim.MaxEntries}
+	for _, s := range p.sources {
+		if s.Type == SourceMongoDB && (s.All || s.Users) {
+			spec.Sources = append(spec.Sources, specSource{BackupSource: s})
+		}
+	}
+	if len(spec.Sources) == 0 {
+		return nil
+	}
+	name := p.opID[:8] + "c"
+	stage, e := h.newStage(p.backupEnv, name, spec)
+	if e != nil {
+		return e
+	}
+	defer func() { _ = h.discard(stage) }()
+	if _, e := h.runWorker(ctx, "lcm-check-"+p.svc+"-"+name, stage, p, true, restoreWorkerSec); e != nil {
+		e.code = CodeRefused
+		e.msg = "the backup was not made and the service was not stopped: " + e.msg
 		return e
 	}
 	return nil
