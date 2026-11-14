@@ -26,6 +26,9 @@ type getKind struct {
 	perPage int
 	// typed lists accept the --type filter.
 	typed bool
+	// parent, when set, makes the name argument required and selects the
+	// resource whose items are listed; it returns the collection path.
+	parent func(name string) string
 }
 
 var getKinds = map[string]getKind{
@@ -66,6 +69,13 @@ var getKinds = map[string]getKind{
 		header: []string{"NAME", "TYPE", "ALLOW ACTIONS", "ALLOW RESOURCES", "USED BY"},
 		row: func(m map[string]any) []string {
 			return []string{field(m, "name"), field(m, "type"), list(m, "allowActions", "-"), list(m, "allowResources", "any"), list(m, "resources", "-")}
+		},
+	},
+	"backups": {
+		parent: func(n string) string { return client.Path("resources", n, "backups") }, key: "backupId",
+		header: []string{"BACKUP ID", "KIND", "STARTED", "OUTCOME", "RESTORABLE", "SIZE"},
+		row: func(m map[string]any) []string {
+			return []string{field(m, "backupId"), field(m, "kind"), when(m, "startedAt"), field(m, "outcome"), field(m, "restorable"), byteSize(m, "size")}
 		},
 	},
 	"sources": {
@@ -114,6 +124,24 @@ func when(m map[string]any, path string) string {
 		return s
 	}
 	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+// byteSize renders a byte count with a binary unit; zero and missing are "-".
+func byteSize(m map[string]any, path string) string {
+	f, err := strconv.ParseFloat(field(m, path), 64)
+	if err != nil || f <= 0 {
+		return "-"
+	}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	i := 0
+	for f >= 1024 && i < len(units)-1 {
+		f /= 1024
+		i++
+	}
+	if i == 0 {
+		return strconv.FormatFloat(f, 'f', 0, 64) + " B"
+	}
+	return strconv.FormatFloat(f, 'f', 1, 64) + " " + units[i]
 }
 
 func short(s string) string {
@@ -187,11 +215,17 @@ func (a *app) get(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(pos) < 1 || len(pos) > 2 {
-		return usagef("get: expected <resources|policies|runs|locks|sources|connections> [name]")
+		return usagef("get: expected <resources|policies|runs|locks|sources|connections> [name] or backups <resource>")
 	}
 	res, ok := getKinds[pos[0]]
 	if !ok {
-		return usagef("get: unknown kind %q; expected resources, policies, runs, locks, sources or connections", pos[0])
+		return usagef("get: unknown kind %q; expected resources, policies, runs, locks, sources, connections or backups", pos[0])
+	}
+	if res.parent != nil {
+		if len(pos) != 2 {
+			return usagef("get: expected backups <resource>")
+		}
+		res.list = res.parent(pos[1])
 	}
 	if *typ != "" && !res.typed {
 		return usagef("get: --type only applies to resources")
@@ -210,7 +244,7 @@ func (a *app) get(ctx context.Context, args []string) error {
 	}
 
 	var items []map[string]any
-	single := len(pos) == 2
+	single := len(pos) == 2 && res.parent == nil
 	switch {
 	case single && res.show != nil:
 		var m map[string]any

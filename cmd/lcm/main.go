@@ -48,6 +48,7 @@ Commands that talk to a running server (see the README):
   export [kind[/name]]                        Print documents as YAML (kind: resource, policy, module)
   validate -f <file|dir>                      Check documents on the server
   get resources|policies|runs|locks|sources|connections [name] [--type t] [-o table|json|yaml]
+  get backups <resource> [-o table|json|yaml]  List the backup sets of a service
   resource <command> <name> [flags]           Act on a resource: action, observe, maintenance,
                                               reboot, retire, impact, group-action, ... (see -h)
   policy pause|resume <name>                  Stop or allow the triggers of a policy to start runs

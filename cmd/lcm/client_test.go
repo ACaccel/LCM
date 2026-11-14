@@ -407,7 +407,7 @@ func TestClientCredentials(t *testing.T) {
 func TestClientCommandsInUsage(t *testing.T) {
 	a, out, errb, _ := newApp(t, "")
 	r := runCLI(t, a, out, errb, "help")
-	for _, want := range []string{"apply -f", "export [kind", "validate -f", "get resources", "run <policy>", "resource <command>", "policy pause|resume", "LCM_TOKEN", "Exit status"} {
+	for _, want := range []string{"apply -f", "export [kind", "validate -f", "get resources", "run <policy>", "resource <command>", "get backups <resource>", "policy pause|resume","LCM_TOKEN", "Exit status"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Errorf("usage lacks %q", want)
 		}
