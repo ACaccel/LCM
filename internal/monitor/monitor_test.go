@@ -457,6 +457,10 @@ func TestSlowProbeIsNotStartedTwice(t *testing.T) {
 	h := newHarness(t, func(c *Config) { c.Concurrency = 1 })
 	h.gates["s/a"] = make(chan struct{})
 	h.gates["s/b"] = make(chan struct{})
+	// The timeout is shorter than the interval, so a probe that honored it
+	// could finish within the Advance below and legitimately run again.
+	// Either probe may be the one that gets the slot.
+	h.stubborn["s/a"], h.stubborn["s/b"] = true, true
 	h.sync(fakeDef("s", "a"), fakeDef("s", "b"))
 	h.clk.Advance(0)
 	<-h.enter

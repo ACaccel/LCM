@@ -40,16 +40,19 @@ type harness struct {
 	// gate, when set for a key, blocks that key's probe until released or
 	// canceled.
 	gates map[string]chan struct{}
-	enter chan string
-	cur   int
-	peak  int
+	// stubborn keys ignore cancellation while gated, so their probe
+	// outlives its timeout instead of racing the next firing.
+	stubborn map[string]bool
+	enter    chan string
+	cur      int
+	peak     int
 }
 
 func newHarness(t *testing.T, mod ...func(*Config)) *harness {
 	t.Helper()
 	h := &harness{
 		t: t, db: storetest.Open(t), clk: clock.NewFake(epoch), ctx: context.Background(),
-		res: map[string]Result{}, calls: map[string]int{}, gates: map[string]chan struct{}{}, enter: make(chan string, 64),
+		res: map[string]Result{}, calls: map[string]int{}, gates: map[string]chan struct{}{}, stubborn: map[string]bool{}, enter: make(chan string, 64),
 	}
 	h.bus = signal.NewBus(slog.New(slog.DiscardHandler), h.clk.Now)
 	h.sub = h.bus.Subscribe("test", 256)
@@ -91,7 +94,7 @@ func (h *harness) buildFake(_ model.Check, p fakeProps, _ Env) (Built, error) {
 	return Built{Probe: func(ctx context.Context) Result {
 		h.mu.Lock()
 		h.calls[p.Key]++
-		gate := h.gates[p.Key]
+		gate, stubborn := h.gates[p.Key], h.stubborn[p.Key]
 		h.cur++
 		h.peak = max(h.peak, h.cur)
 		r, ok := h.res[p.Key]
@@ -103,6 +106,9 @@ func (h *harness) buildFake(_ model.Check, p fakeProps, _ Env) (Built, error) {
 		}()
 		if gate != nil {
 			h.enter <- p.Key
+			if stubborn {
+				<-gate
+			}
 			select {
 			case <-gate:
 			case <-ctx.Done():
