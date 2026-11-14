@@ -1,6 +1,6 @@
 # Operations
 
-How to run LCM on a host. Build and general configuration reference: [README](../README.md). Resource model, connections and routers: [resources.md](resources.md). Local machine configuration and control: [machines.md](machines.md). Design and security notes: [architecture.md](architecture.md).
+How to run LCM on a host. Build and general configuration reference: [README](../README.md). Resource model, connections and routers: [resources.md](resources.md). Local machine configuration and control: [machines.md](machines.md). Design and security notes: [architecture.md](architecture.md). Installing a fresh machine and moving a host with its services: [migration.md](migration.md).
 
 ## Install
 
@@ -254,7 +254,7 @@ With `backup.dir` set in `host.json`, the deploy helper backs up and restores th
 
 A restore touches the `admin` users and roles of a MongoDB instance only with `restoreUsers` (`--restore-users --confirm <service>`; [services](services.md#backup-and-restore-of-managed-services)): `users: true` saves them for a `mongod` that serves only this service. A set with `all` holds the `admin` database in its main archive as well, password hashes included, even without `users`; the sets are root-only.
 
-**On a new machine.** Install LCM and the deploy component, set `backup.dir`, `host allow` the service and run `apply`, create the (empty) databases of `postgres` and `mongodb` sources, copy the set directory `<backup.dir>/<service>/<id>/` from the old machine to the same place (root 0700, files root 0600, manifest unchanged), and deploy the service once so that its unit and account exist. Then restore: `lcm resource action <service> restore --backup-id <id>`, or without the id for the newest set. LCM has no record of a copied set, so it asks the helper to list the sets (`backups`) and records the one it restores; a set whose manifest cannot be read is not offered. The restore verifies every artifact against the manifest, so a damaged copy is refused before anything is changed.
+**On a new machine**, copy a set directory `<backup.dir>/<service>/<id>/` unchanged (root 0700, files root 0600) and restore it after the service's first deploy: the full procedure is in [migration.md](migration.md#moving-to-a-new-machine). LCM has no record of a copied set, so it asks the helper to list the sets (`backups`) and records the one it restores; a set whose manifest cannot be read is not offered. The restore verifies every artifact against the manifest, so a damaged copy is refused before anything is changed.
 
 **Prerequisites.** `sqlite` and `files` need nothing installed. `pg_dump`/`pg_restore` and `mongodump`/`mongorestore` must be installed for their sources. Do not put `backup.dir` under `/home`, `/root` or `/run/user`: the sandbox hides them.
 
