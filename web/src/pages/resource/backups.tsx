@@ -25,6 +25,11 @@ export function restorable(src: BackupSource): boolean {
   return src.type !== "command";
 }
 
+/** Whether a set holds the users and roles of a MongoDB instance, which a restore may put back. */
+export function holdsUsers(sources: BackupSource[]): boolean {
+  return sources.some((src) => src.type === "mongodb" && !!src.users);
+}
+
 /** Backup sets, pre-restore copies and restores of a service, with restore from a set. */
 export function BackupsTab({ resource, canRestore, onRestore }: { resource: string; canRestore: boolean; onRestore: (backupId: string) => void }) {
   const q = useQuery(backupsQuery(resource));

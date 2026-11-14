@@ -381,6 +381,10 @@ export const s = {
     jobLabel: "作業名稱",
     backupLabel: "要還原的備份",
     backupNewest: "最新的備份",
+    restoreUsers: "同時還原 MongoDB 的使用者與角色",
+    restoreUsersHint:
+      "會用備份內的帳號取代這個 mongod 執行個體的所有帳號與角色，不在備份內的帳號都會被移除；執行前請確認 MONGODB_URI 的使用者也在備份內。備份由服務自己的帳號寫出，只有在備份當時服務仍可信時才適合還原帳號。",
+    restoreUsersConfirm: (name: string) => `輸入服務名稱 ${name} 以確認`,
     preview: "預覽 (dry-run)",
     previewing: "預覽中…",
     planTitle: "將執行的步驟",

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { client, unwrap } from "../../api/client";
-import { actionQuery, qk } from "../../api/queries";
+import { actionQuery, backupsQuery, qk } from "../../api/queries";
 import type { Action, ActionName, ActionPlan, ActionStarted } from "../../api/types";
 import { Dialog } from "../../components/dialog";
 import { ErrorBox, Field, Pill, Spinner } from "../../components/ui";
@@ -11,6 +11,7 @@ import { actionStatusView } from "../../lib/status";
 import { translate } from "../../lib/messages";
 import { useLiveState } from "../../live";
 import { s } from "../../strings";
+import { holdsUsers } from "./backups";
 import { confirmLabel, ImpactAcknowledgement, useAck } from "./impact";
 
 interface Props {
@@ -116,12 +117,22 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
   const [job, setJob] = useState(jobs?.[0] ?? "");
   const [plan, setPlan] = useState<{ plan: ActionPlan; key: string } | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [restoreUsers, setRestoreUsers] = useState(false);
+  const [typedName, setTypedName] = useState("");
+
+  // Only a set that holds MongoDB users offers to restore them; the server
+  // refuses the request for any other set.
+  const sets = useQuery({ ...backupsQuery(resource), enabled: action === "restore" });
+  const target = sets.data?.items.find((b) => (backupId ? b.backupId === backupId : b.kind === "backup" && b.restorable));
+  const usersOffered = action === "restore" && !!target && holdsUsers(target.sources);
+  const withUsers = usersOffered && restoreUsers;
 
   const body = {
     ...(action === "deploy" && version.trim() ? { version: version.trim() } : {}),
     ...(action === "run-job" ? { job } : {}),
     ...(action === "restore" && backupId ? { backupId } : {}),
     ...(instance ? { instance } : {}),
+    ...(withUsers ? { restoreUsers: true } : {}),
   };
   const key = JSON.stringify(body);
   const current = plan?.key === key;
@@ -132,7 +143,7 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
     mutationFn: async () =>
       expectPlan(
         await unwrap(
-          client.POST("/resources/{resource}/actions/{action}", { params: { path: { resource, action }, query: { dryRun: true } }, body }),
+          client.POST("/resources/{resource}/actions/{action}", { params: { path: { resource, action }, query: { dryRun: true } }, body: withUsers ? { ...body, confirm: resource } : body }),
         ),
       ),
     onSuccess: (p) => setPlan({ plan: p, key }),
@@ -143,7 +154,7 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
         await unwrap(
           client.POST("/resources/{resource}/actions/{action}", {
             params: { path: { resource, action } },
-            body: { ...body, ...(ack.acknowledged ? { acknowledgeImpact: true } : {}) },
+            body: { ...body, ...(withUsers ? { confirm: typedName } : {}), ...(ack.acknowledged ? { acknowledgeImpact: true } : {}) },
           }),
         ),
       ),
@@ -182,7 +193,7 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
             <button
               type="button"
               className={`btn ${DANGEROUS.has(action) ? "danger solid" : "primary"}`}
-              disabled={!current || !ack.ready || run.isPending || (action === "run-job" && !job)}
+              disabled={!current || !ack.ready || run.isPending || (action === "run-job" && !job) || (withUsers && typedName !== resource)}
               title={current ? undefined : s.action.needPreview}
               onClick={() => run.mutate()}
             >
@@ -205,6 +216,27 @@ export function ActionDialog({ resource, action, version: presetVersion, backupI
             <p className="meta">
               {s.action.backupLabel}: {backupId ? <code>{backupId}</code> : s.action.backupNewest}
             </p>
+          )}
+          {usersOffered && (
+            <div className="stack">
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={restoreUsers}
+                  onChange={(e) => {
+                    setRestoreUsers(e.target.checked);
+                    setTypedName("");
+                  }}
+                />{" "}
+                {s.action.restoreUsers}
+              </label>
+              <p className="meta">{s.action.restoreUsersHint}</p>
+              {restoreUsers && (
+                <Field label={s.action.restoreUsersConfirm(resource)} htmlFor="act-confirm-name">
+                  <input id="act-confirm-name" type="text" value={typedName} onChange={(e) => setTypedName(e.target.value)} spellCheck={false} autoComplete="off" />
+                </Field>
+              )}
+            </div>
           )}
           {action === "run-job" && (
             <Field label={s.action.jobLabel} htmlFor="act-job">

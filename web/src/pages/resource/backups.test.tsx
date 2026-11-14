@@ -131,6 +131,7 @@ describe("restore dialog", () => {
     vi.stubGlobal("fetch", async (req: Request) => {
       const url = new URL(req.url);
       const text = await req.text();
+      if (url.pathname.endsWith("/backups")) return jsonResponse({ items: [backup({ backupId: SET })], nextCursor: null });
       seen.push({ path: url.pathname, query: url.search, body: text ? JSON.parse(text) : undefined });
       if (url.searchParams.get("dryRun") === "true") return jsonResponse(plan);
       if (url.pathname === "/api/v1/actions/act-1") {
@@ -160,5 +161,64 @@ describe("restore dialog", () => {
     await waitFor(() => expect(seen.some((x) => x.query === "" && x.path.endsWith("/actions/restore"))).toBe(true));
     expect(seen.find((x) => x.query === "")?.body).toEqual({ backupId: SET });
     expect(within(document.body).queryByText(/最新的備份/)).toBeNull();
+  });
+  it("offers the MongoDB users of a set that holds them and sends the typed name with the request", async () => {
+    const seen: { path: string; query: string; body: unknown }[] = [];
+    const withUsers = backup({ backupId: SET, sources: [{ type: "mongodb", database: "app", users: true }] });
+    vi.stubGlobal("fetch", async (req: Request) => {
+      const url = new URL(req.url);
+      const text = await req.text();
+      if (url.pathname.endsWith("/backups")) return jsonResponse({ items: [withUsers], nextCursor: null });
+      seen.push({ path: url.pathname, query: url.search, body: text ? JSON.parse(text) : undefined });
+      if (url.searchParams.get("dryRun") === "true") return jsonResponse(plan);
+      if (url.pathname === "/api/v1/actions/act-1") {
+        return jsonResponse({
+          id: "act-1", resource: "web", action: "restore", status: "running", actor: { kind: "user", id: "1", name: "admin" },
+          startedAt: "2026-11-01T12:00:00Z", finishedAt: null, result: null, error: "",
+        });
+      }
+      return jsonResponse({ actionId: "act-1", status: "running" }, 202);
+    });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ActionDialog resource="web" action="restore" onClose={() => undefined} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    // The option is off by default and the plain request carries no users.
+    const box = await screen.findByRole("checkbox", { name: /MongoDB 的使用者與角色/ });
+    expect((box as HTMLInputElement).checked).toBe(false);
+    expect(seen[0]?.body).toEqual({});
+
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: /預覽/ }));
+    await waitFor(() => expect(seen.at(-1)?.body).toEqual({ restoreUsers: true, confirm: "web" }));
+    // Replacing every account needs the service name typed first.
+    const run = screen.getByRole("button", { name: /確認執行/ }) as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+    await user.type(screen.getByLabelText(/輸入服務名稱 web/), "web");
+    await waitFor(() => expect(run.disabled).toBe(false));
+    await user.click(run);
+    await waitFor(() => expect(seen.some((x) => x.query === "" && x.path.endsWith("/actions/restore"))).toBe(true));
+    expect(seen.find((x) => x.query === "")?.body).toEqual({ restoreUsers: true, confirm: "web" });
+  });
+
+  it("does not offer users for a set without them", async () => {
+    vi.stubGlobal("fetch", async (req: Request) => {
+      const url = new URL(req.url);
+      if (url.pathname.endsWith("/backups")) return jsonResponse({ items: [backup({ backupId: SET })], nextCursor: null });
+      return jsonResponse(plan);
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <ActionDialog resource="web" action="restore" backupId={SET} onClose={() => undefined} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText(`用 manifest 的 SHA-256 驗證備份 ${SET}`);
+    expect(screen.queryByRole("checkbox")).toBeNull();
   });
 });
