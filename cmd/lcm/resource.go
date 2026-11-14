@@ -46,6 +46,9 @@ Commands:
   reboot | shutdown <name>    Submit a power request; acceptance is not completion
   resolve <name> <id>         Close an operation with an unverified outcome
   retire | resume | unmanage <name>  Change the management phase
+  rebind-identity <name>      Accept the device identity the machine reports now as
+                              the expected one, after its database was restored on
+                              other hardware (only while the identity reads changed)
   impact <name>               Show the resources that depend on this one or are
                               controlled through it
   group-action <action>       Run a service action on the managed services matching
@@ -61,10 +64,10 @@ accepts it. Without a terminal, and with --yes, the command is refused unless
 first.
 
 Writes (maintenance enter/exit, reboot, shutdown, resolve, retire, resume,
-unmanage) require --reason and --confirm <name>; the current document version
+unmanage, rebind-identity) require --reason and --confirm <name>; the current document version
 is read from the server. A machine reboot or shutdown enters maintenance itself
-unless it is already active. Reboot, shutdown, maintenance enter, retire and
-unmanage print what they affect first and ask before sending; --yes skips the
+unless it is already active. Reboot, shutdown, maintenance enter, retire,
+unmanage and rebind-identity print what they affect first and ask before sending; --yes skips the
 question, which scripts need because a stdin that is not a terminal is refused.
 The request acknowledges partial workload coverage, controller downtime and
 manual recovery.
@@ -176,7 +179,7 @@ func (a *app) resource(ctx context.Context, args []string) error {
 		}
 		return apiError(err)
 	}
-	phaseChange := pos[0] == "retire" || pos[0] == "resume" || pos[0] == "unmanage"
+	phaseChange := pos[0] == "retire" || pos[0] == "resume" || pos[0] == "unmanage" || pos[0] == "rebind-identity"
 	operationResponse := power || pos[0] == "operation" || pos[0] == "resolve"
 	if len(resp.Body) == 0 {
 		if power {
@@ -200,7 +203,7 @@ func (a *app) resource(ctx context.Context, args []string) error {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if phaseChange {
-		// The response is the whole resource document; the sibling write
+		// The response is the whole resource; the sibling write
 		// commands without an operation answer with one line.
 		_, err = fmt.Fprintf(a.stdout, "%s %s: request accepted\n", pos[0], pos[1])
 		return err
@@ -257,13 +260,15 @@ type resourceCall struct {
 	// its hash.
 	impact string
 	enter  bool
+	// rebind is an identity rebind, which prints what it accepts first.
+	rebind bool
 	// version is If-Match: --version, or the current version once read.
 	version int
 	key     string
 }
 
 // asks reports whether the write prints a preview and asks before sending.
-func (c resourceCall) asks() bool { return c.impact != "" || c.enter }
+func (c resourceCall) asks() bool { return c.impact != "" || c.enter || c.rebind }
 
 // request returns the HTTP request with its body encoded.
 func (c resourceCall) request() (client.Request, error) {
@@ -302,7 +307,7 @@ func resourceRequest(pos []string, f resourceFlags) (resourceCall, error) {
 	}
 	req := client.Request{Method: http.MethodGet, Path: client.Path("resources", name)}
 	var body map[string]any
-	write, power, enter, impact := false, false, false, ""
+	write, power, enter, rebind, impact := false, false, false, false, ""
 	nargs := 2
 	switch command {
 	case "observe":
@@ -360,6 +365,9 @@ func resourceRequest(pos []string, f resourceFlags) (resourceCall, error) {
 		if f.ackImpact {
 			body["acknowledgeImpact"] = true
 		}
+	case "rebind-identity":
+		req.Method, req.Path, write, rebind = http.MethodPost, client.Path("resources", name, "identity", "rebind"), true, true
+		body = map[string]any{"reason": f.reason, "confirm": f.confirm}
 	case "retire", "resume", "unmanage":
 		req.Method, req.Path, write = http.MethodPost, client.Path("resources", name, "phase"), true
 		phase := map[string]string{"retire": "retired", "resume": "managed", "unmanage": "unmanaged"}[command]
@@ -376,7 +384,7 @@ func resourceRequest(pos []string, f resourceFlags) (resourceCall, error) {
 	if len(pos) != nargs || strings.TrimSpace(name) == "" {
 		return fail("unexpected or missing arguments; use lcm resource -h")
 	}
-	call := resourceCall{req: req, body: body, name: name, write: write, power: power, impact: impact, enter: enter}
+	call := resourceCall{req: req, body: body, name: name, write: write, power: power, impact: impact, enter: enter, rebind: rebind}
 	if write {
 		if f.version != "" {
 			version, err := strconv.Atoi(f.version)
@@ -458,6 +466,16 @@ func (a *app) prepareWrite(ctx context.Context, cl *client.Client, c *resourceCa
 				return usagef("resource: %s %s reaches the resources above; add --acknowledge-impact", c.impact, c.name)
 			}
 			accepting = true
+		}
+	}
+	if c.rebind {
+		for _, line := range []string{
+			"identity: the machine now reports another device identity than the one LCM expects (a database restored on other hardware, a reinstalled OS)",
+			"identity: this accepts the identity it reports now; the resource keeps its ID, history and maintenance, and the audit log records both identities",
+			"identity: operations whose outcome is open and that can no longer act are closed unverified; the request is refused when one still can",
+			"identity: the power helper of this host must be provisioned for this machine's ID; its receipts are not read or changed",
+		} {
+			_, _ = fmt.Fprintln(a.stderr, line)
 		}
 	}
 	if c.enter || (c.power && cur.Type == "machine") {

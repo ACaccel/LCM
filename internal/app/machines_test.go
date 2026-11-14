@@ -18,13 +18,23 @@ import (
 	"github.com/ACaccel/lcm/internal/model"
 )
 
-type machineProbe struct{ n uint64 }
+type machineProbe struct {
+	n uint64
+	// device and boot replace the synthetic identity when set.
+	device, boot string
+}
 
 func (p *machineProbe) Observe(context.Context, model.MachineConfig) (machine.Snapshot, error) {
 	p.n += 100
 	s := machine.Snapshot{DeviceHash: "synthetic-device", BootID: "boot-a", Init: "systemd", CPUTotal: p.n, CPUIdle: p.n * 9 / 10, CPUCount: 4, MemoryTotal: 100, MemoryAvailable: 90, Filesystems: []machine.Filesystem{{Path: "/", Total: 100, Available: 90}}, Coverage: map[string]machine.Coverage{}}
 	for _, key := range []string{"identity", "boot", "init", "uptime", "cpu", "memory"} {
 		s.Coverage[key] = machine.Coverage{State: "available"}
+	}
+	if p.device != "" {
+		s.DeviceHash = p.device
+	}
+	if p.boot != "" {
+		s.BootID = p.boot
 	}
 	return s, nil
 }
@@ -169,6 +179,92 @@ func TestMachineHTTPAndMaintenanceIntegration(t *testing.T) {
 	// Recovery remains available through HTTP while producers wait for maintenance.
 	call("GET", "/resources/workstation/operations/"+op.ID, "", admin, "", 200)
 	call("GET", "/health", "", "", "", http.StatusOK)
+}
+
+// A machine restored on other hardware reads a changed identity until an
+// administrator accepts it; the resource keeps its ID and history.
+func TestMachineIdentityRebindThroughHTTP(t *testing.T) {
+	clk := clock.NewFake(epoch)
+	probe := &machineProbe{}
+	h := newHarness(t, func(o *testOpts) {
+		o.clk = clk
+		o.machineObserver = probe
+		o.machinePower = &machinePowerFake{clk: clk}
+	})
+	_, admin, err := h.app.Auth.CreateToken(h.ctx, "machine-admin", auth.ScopeAdmin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body, version string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer "+admin)
+		if version != "" {
+			r.Header.Set("If-Match", version)
+		}
+		w := httptest.NewRecorder()
+		h.app.Handler().ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: got %d want %d: %s", method, path, w.Code, want, w.Body.String())
+		}
+		return w
+	}
+	doc := `{"apiVersion":"lcm/v2","kind":"Resource","metadata":{"name":"workstation"},"spec":{"type":"machine","adapter":"local"}}`
+	var created struct{ ID string }
+	if err = json.Unmarshal(call("POST", "/resources", doc, "", 201).Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	observe := func() {
+		clk.Advance(30 * time.Second)
+		call("POST", "/resources/workstation/observe", "", "", 200)
+	}
+	observe()
+	rebind := `{"reason":"host moved","confirm":"workstation"}`
+	call("POST", "/resources/workstation/identity/rebind", rebind, "1", 409)
+	probe.device, probe.boot = "synthetic-new-device", "boot-new"
+	observe()
+	identity := func() string {
+		var d struct {
+			Machine struct{ Status struct{ Identity string } }
+			Actions []struct {
+				Name      string
+				Available bool
+			}
+		}
+		if err := json.Unmarshal(call("GET", "/resources/workstation", "", "", 200).Body.Bytes(), &d); err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range d.Actions {
+			if a.Name == "rebind-identity" && a.Available != (d.Machine.Status.Identity == "changed") {
+				t.Fatalf("rebind-identity available = %v with identity %s", a.Available, d.Machine.Status.Identity)
+			}
+		}
+		return d.Machine.Status.Identity
+	}
+	if got := identity(); got != "changed" {
+		t.Fatalf("identity = %s", got)
+	}
+	call("POST", "/resources/workstation/identity/rebind", `{"reason":"host moved","confirm":"other"}`, "1", 409)
+	call("POST", "/resources/workstation/identity/rebind", rebind, "", 400)
+	call("POST", "/resources/workstation/identity/rebind", rebind, "2", 409)
+	clk.Advance(30 * time.Second)
+	w := call("POST", "/resources/workstation/identity/rebind", rebind, "1", 200)
+	var detail struct{ ID string }
+	if err = json.Unmarshal(w.Body.Bytes(), &detail); err != nil || detail.ID != created.ID {
+		t.Fatalf("detail %s (%v)", w.Body.String(), err)
+	}
+	if got := identity(); got != "verified" {
+		t.Fatalf("identity = %s", got)
+	}
+	var entries int
+	if err = h.app.DB.Reader().QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action='machine.identity.rebind' AND json_extract(details,'$.acceptedIdentity')='synthetic-new-device' AND json_extract(details,'$.previousIdentity')='synthetic-device'`).Scan(&entries); err != nil || entries != 1 {
+		t.Fatalf("audit entries %d, %v", entries, err)
+	}
+	observe()
+	if got := identity(); got != "verified" {
+		t.Fatalf("identity after the next sample = %s", got)
+	}
 }
 
 // One confirmed request enters maintenance and submits the power request;

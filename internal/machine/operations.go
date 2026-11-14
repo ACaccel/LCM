@@ -643,6 +643,30 @@ func rebootVerified(op Operation, receipt Receipt, r Record) bool {
 	return !receipt.AcceptedAt.Before(op.CreatedAt) && !receipt.AcceptedAt.After(op.Request.ValidUntil) && !bootAt.Before(receipt.AcceptedAt.Add(-time.Minute)) && !bootAt.After(op.Request.Deadline.Add(time.Minute))
 }
 
+// checkQuiescent returns why op may still cause an OS action on the boot r
+// observes, or nil. A request is bound to one boot, which the helper
+// checks, so an operation of another boot can no longer act. On the same
+// boot its validity must have ended and the helper must show that nothing
+// was requested from the OS: expiry alone does not revoke an accepted
+// action. A helper without a receipt of the request never prepared it and
+// so cannot submit it.
+func (m *Manager) checkQuiescent(ctx context.Context, op Operation, r Record) error {
+	if r.Status.Snapshot == nil || r.Status.Snapshot.BootID != op.Request.BootID {
+		return nil
+	}
+	if m.clk.Now().Before(op.Request.ValidUntil) || m.power == nil {
+		return precondition("an accepted or uncertain request requires a verified new boot before manual resolution")
+	}
+	receipt, err := m.power.Query(ctx, op.Request)
+	if errors.Is(err, ErrReceiptMissing) {
+		return nil
+	}
+	if err != nil || (receipt.State != "prepared" && receipt.State != "failed") {
+		return precondition("request quiescence is unverified; expiry does not revoke an accepted OS action")
+	}
+	return nil
+}
+
 // Resolve closes review without rewriting an unverified operation as success.
 func (m *Manager) Resolve(ctx context.Context, name, id, reason string, expected int) (Operation, error) {
 	m.controlMu.Lock()
@@ -676,14 +700,8 @@ func (m *Manager) Resolve(ctx context.Context, name, id, reason string, expected
 	if r.Version != expected {
 		return Operation{}, ErrConflict
 	}
-	if r.Status.Snapshot.BootID == op.Request.BootID {
-		if m.clk.Now().Before(op.Request.ValidUntil) || m.power == nil {
-			return Operation{}, precondition("an accepted or uncertain request requires a verified new boot before manual resolution")
-		}
-		receipt, err := m.power.Query(ctx, op.Request)
-		if err != nil || (receipt.State != "prepared" && receipt.State != "failed") {
-			return Operation{}, precondition("request quiescence is unverified; expiry does not revoke an accepted OS action")
-		}
+	if err := m.checkQuiescent(ctx, op, r); err != nil {
+		return Operation{}, err
 	}
 	op.MarkResolved(actorInfo(a), reason, m.clk.Now().UTC())
 	err = m.ops.Save(ctx, &op, operation.Change{Audit: &operation.Audit{

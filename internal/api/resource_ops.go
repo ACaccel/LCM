@@ -52,15 +52,16 @@ func (s *Server) operations(w http.ResponseWriter, r *http.Request, write bool) 
 	return rec, reg.Operations, true
 }
 
-// maintained returns the path's machine for the maintenance routes, which
-// only the local machine has. It has written the response on failure.
-func (s *Server) maintained(w http.ResponseWriter, r *http.Request, write bool) (resource.Record, bool) {
+// maintained returns the path's machine for the routes only the local
+// machine has (maintenance, identity); feature names the route in a
+// refusal. It has written the response on failure.
+func (s *Server) maintained(w http.ResponseWriter, r *http.Request, write bool, feature string) (resource.Record, bool) {
 	rec, _, ok := s.ref(w, r, write)
 	if !ok {
 		return resource.Record{}, false
 	}
 	if rec.Type != model.ResourceMachine {
-		s.fail(w, r, unsupported(rec, "maintenance mode"), nil)
+		s.fail(w, r, unsupported(rec, feature), nil)
 		return resource.Record{}, false
 	}
 	if s.machines == nil {
@@ -277,7 +278,7 @@ func (s *Server) handleResourceCapabilities(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleResourceMaintenance(w http.ResponseWriter, r *http.Request) {
-	rec, ok := s.maintained(w, r, false)
+	rec, ok := s.maintained(w, r, false, "maintenance mode")
 	if !ok {
 		return
 	}
@@ -290,7 +291,7 @@ func (s *Server) handleResourceMaintenance(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleMaintenancePreview(w http.ResponseWriter, r *http.Request) {
-	rec, ok := s.maintained(w, r, false)
+	rec, ok := s.maintained(w, r, false, "maintenance mode")
 	if !ok {
 		return
 	}
@@ -318,7 +319,7 @@ func (s *Server) handleEnterMaintenance(w http.ResponseWriter, r *http.Request) 
 		writeFieldError(w, "previewHash", "send the hash of a maintenance preview or leave it out")
 		return
 	}
-	rec, ok := s.maintained(w, r, true)
+	rec, ok := s.maintained(w, r, true, "maintenance mode")
 	if !ok {
 		return
 	}
@@ -341,7 +342,7 @@ func (s *Server) handleExitMaintenance(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	rec, ok := s.maintained(w, r, true)
+	rec, ok := s.maintained(w, r, true, "maintenance mode")
 	if !ok {
 		return
 	}
@@ -350,6 +351,29 @@ func (s *Server) handleExitMaintenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRebindIdentity(w http.ResponseWriter, r *http.Request) {
+	expected, ok := requiredIfMatch(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Reason  string `json:"reason"`
+		Confirm string `json:"confirm"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	rec, ok := s.maintained(w, r, true, "device identity")
+	if !ok {
+		return
+	}
+	if _, err := s.machines.RebindIdentity(machine.DirectRequest(r.Context()), refOf(rec), expected, req.Reason, req.Confirm); err != nil {
+		s.fail(w, r, err, nil)
+		return
+	}
+	s.writeDetail(w, r, rec.ID, http.StatusOK)
 }
 
 func (s *Server) handleListOperations(w http.ResponseWriter, r *http.Request) {

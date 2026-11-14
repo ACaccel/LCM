@@ -180,6 +180,7 @@ var machineActions = []resource.Action{
 	{Name: "observe", Risk: resource.RiskRead, Kind: resource.KindAction},
 	{Name: "maintenance-enter", Risk: resource.RiskReversible, Kind: resource.KindAction},
 	{Name: "maintenance-exit", Risk: resource.RiskReversible, Kind: resource.KindAction},
+	{Name: "rebind-identity", Risk: resource.RiskReversible, Kind: resource.KindAction},
 	{Name: "reboot", Risk: resource.RiskDisruptive, Kind: resource.KindOperation},
 	{Name: "graceful-shutdown", Risk: resource.RiskDestructive, Kind: resource.KindOperation},
 	{Name: "power-on", Risk: resource.RiskReversible, Kind: resource.KindOperation},
@@ -268,6 +269,17 @@ func (t machineType) Actions(ctx context.Context, rec resource.Record) []resourc
 	out = append(out, action("maintenance-enter", ok, reason))
 	ok, reason = unavailable(maint == 0, resource.MaintenanceInactive)
 	out = append(out, action("maintenance-exit", ok, reason))
+
+	ok, reason = unavailable(!managed, resource.MachineNotManaged)
+	if ok && m.observer == nil {
+		ok, reason = false, resource.NoObserver
+	}
+	if ok {
+		if r, err := m.view(ctx, rec); err != nil || !r.Status.Fresh || r.Status.Identity != "changed" {
+			ok, reason = false, resource.IdentityNotChanged
+		}
+	}
+	out = append(out, action("rebind-identity", ok, reason))
 
 	power := map[string]Capability{}
 	if caps, err := m.Capabilities(ctx, "@"+rec.ID); err == nil {

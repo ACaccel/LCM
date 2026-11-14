@@ -1145,6 +1145,52 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
         "503": { $ref: "#/components/responses/Unavailable" }
+  /resources/{resource}/identity/rebind:
+    post:
+      tags: [Resources]
+      operationId: rebindResourceIdentity
+      summary: Accept the current device identity of the local machine
+      description: |
+        For a machine whose `status.identity` reads `changed`, typically after its database
+        was restored on new hardware: records the identity the machine reports now as the
+        expected one. The resource keeps its ID, history and maintenance. `confirm` must be
+        the machine's exact name. Operations still unresolved are closed first, without
+        verification, when they can no longer act. The request is refused with 409
+        `precondition_failed` when one still can, when the identity does not read `changed`
+        or when the observation is not fresh. The audit entry carries the previous and the
+        accepted identity hashes. Direct administrator requests only; policies are refused.
+        The power helper's receipts are not read or changed.
+      parameters:
+        - $ref: "#/components/parameters/Resource"
+        - name: If-Match
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, confirm]
+              properties:
+                reason: { type: string }
+                confirm: { type: string }
+      responses:
+        "200":
+          description: The machine after the rebind.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResourceDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /resources/{resource}/operations:
     parameters:
       - $ref: "#/components/parameters/Resource"

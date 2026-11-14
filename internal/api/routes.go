@@ -81,6 +81,7 @@ func (s *Server) routes() http.Handler {
 	handle("POST", v1+"/resources/{resource}/maintenance", admin(s.handleEnterMaintenance))
 	handle("GET", v1+"/resources/{resource}/maintenance/preview", admin(s.handleMaintenancePreview))
 	handle("POST", v1+"/resources/{resource}/maintenance/exit", admin(s.handleExitMaintenance))
+	handle("POST", v1+"/resources/{resource}/identity/rebind", admin(s.handleRebindIdentity))
 	handle("GET", v1+"/resources/{resource}/operations", admin(s.handleListOperations))
 	handle("POST", v1+"/resources/{resource}/operations", admin(s.handleSubmitOperation))
 	handle("GET", v1+"/resources/{resource}/operations/{id}", admin(s.handleGetOperation))

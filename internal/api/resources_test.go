@@ -181,7 +181,7 @@ func TestResourceTypes(t *testing.T) {
 func TestResourceRoutesOfOtherTypesAreUnsupported(t *testing.T) {
 	x := newSite(t)
 	x.createService(serviceDoc("web", ""))
-	for _, path := range []string{"/observe", "/maintenance/exit"} {
+	for _, path := range []string{"/observe", "/maintenance/exit", "/identity/rebind"} {
 		x.call("POST", v1+"/resources/web"+path, map[string]any{"reason": "x"}, ifMatch("1")).wantError(http.StatusConflict, "unsupported")
 	}
 	for _, path := range []string{"/history", "/events", "/capabilities", "/operations", "/maintenance", "/maintenance/preview"} {
@@ -358,6 +358,7 @@ func TestArchiveIsReadOnly(t *testing.T) {
 	x.call("POST", host+"/maintenance/exit", map[string]any{"reason": "x"}, ifMatch("1")).wantError(http.StatusConflict, "precondition_failed")
 	x.call("POST", host+"/operations", map[string]any{"action": "reboot", "idempotencyKey": "k", "reason": "x", "confirm": "host"}, ifMatch("1")).
 		wantError(http.StatusConflict, "precondition_failed")
+	x.call("POST", host+"/identity/rebind", map[string]any{"reason": "x", "confirm": "host"}, ifMatch("1")).wantError(http.StatusConflict, "precondition_failed")
 	x.call("POST", host+"/operations/x/resolve", map[string]any{"reason": "x"}, ifMatch("1")).wantError(http.StatusConflict, "precondition_failed")
 	x.call("GET", host+"/history", nil).want(http.StatusOK)
 	x.call("GET", host+"/operations", nil).want(http.StatusOK)

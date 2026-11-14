@@ -23,6 +23,7 @@ const (
 	NoObserver                = "no observer is configured"
 	MaintenanceActive         = "maintenance is already active"
 	MaintenanceInactive       = "maintenance is not active"
+	IdentityNotChanged        = "the device identity has not changed"
 	NoPowerHelper             = "restricted helper is not configured"
 	MachineRetired            = "machine is retired"
 	PowerNeedsSystemd         = "power control requires a verified Linux/systemd host"
@@ -79,6 +80,7 @@ var unavailableReasons = map[string]message.Message{
 	NoObserver:                message.New("action.noObserver", NoObserver),
 	MaintenanceActive:         message.New("action.maintenanceActive", MaintenanceActive),
 	MaintenanceInactive:       message.New("action.maintenanceInactive", MaintenanceInactive),
+	IdentityNotChanged:        message.New("action.identityNotChanged", IdentityNotChanged),
 	NoPowerHelper:             message.New("capability.noHelper", NoPowerHelper),
 	MachineRetired:            message.New("capability.machineRetired", MachineRetired),
 	PowerNeedsSystemd:         message.New("capability.needsSystemd", PowerNeedsSystemd),

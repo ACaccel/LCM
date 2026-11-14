@@ -160,6 +160,8 @@ func TestResourceCLIWrites(t *testing.T) {
 			body: map[string]any{"reason": "scheduled work"}, response: `{"id":"op-1","state":"indeterminate","unresolved":false}`},
 		{name: "retire", args: confirmed("retire", "workstation"), method: "POST", path: "/resources/workstation/phase",
 			body: map[string]any{"phase": "retired", "reason": "scheduled work", "version": float64(7)}, response: `{"name":"workstation","phase":"retired"}`, stderr: []string{"impact: no other managed resource"}},
+		{name: "rebind identity", args: confirmed("rebind-identity", "workstation"), method: "POST", path: "/resources/workstation/identity/rebind",
+			body: map[string]any{"reason": "scheduled work", "confirm": "workstation"}, response: `{"name":"workstation","type":"machine"}`, stderr: []string{"identity: this accepts the identity", "power helper"}},
 		{name: "resume", args: confirmed("resume", "workstation"), method: "POST", path: "/resources/workstation/phase",
 			body: map[string]any{"phase": "managed", "reason": "scheduled work", "version": float64(7)}, response: `{"name":"workstation","phase":"managed"}`},
 		{name: "unmanage", args: confirmed("unmanage", "workstation"), method: "POST", path: "/resources/workstation/phase",
@@ -208,7 +210,7 @@ func TestResourceCLIWrites(t *testing.T) {
 					t.Errorf("stderr lacks %q:\n%s", want, got.stderr)
 				}
 			}
-			if tt.path == "/resources/workstation/phase" && got.stdout != tt.args[0]+" workstation: request accepted\n" {
+			if (tt.path == "/resources/workstation/phase" || tt.args[0] == "rebind-identity") && got.stdout != tt.args[0]+" workstation: request accepted\n" {
 				t.Fatalf("phase output: %q", got.stdout)
 			}
 			if strings.Contains(got.stdout, "succeeded") || strings.Contains(got.stdout, "cancelled") {
@@ -320,6 +322,7 @@ func TestResourceCLIRejectsUnconfirmedWrites(t *testing.T) {
 		{"resource", "retire", "workstation"},
 		{"resource", "resume", "workstation"},
 		{"resource", "unmanage", "workstation"},
+		{"resource", "rebind-identity", "workstation"},
 		{"resource", "resolve", "workstation", "op-1"},
 		append(append([]string{}, base...), "--idempotency-key", "bad key"),
 		append(append([]string{}, base...), "--version", "0"),

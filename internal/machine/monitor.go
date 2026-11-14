@@ -17,6 +17,12 @@ import (
 func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 	m.pollMu.Lock()
 	defer m.pollMu.Unlock()
+	return m.observeLocked(ctx, name, nil)
+}
+
+// observeLocked is Observe for a caller holding pollMu. A non-nil accept
+// makes the sample also accept its device identity (see RebindIdentity).
+func (m *Manager) observeLocked(ctx context.Context, name string, accept *identityAccept) (Record, error) {
 	r, err := m.Get(ctx, name)
 	if err != nil {
 		return Record{}, err
@@ -53,7 +59,7 @@ func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 	if len(batch.Events) > 1000 || len(batch.Cursor) > 4096 {
 		return Record{}, precondition("journal batch exceeds bounds")
 	}
-	events, err := m.commitSample(ctx, r, snap, batch)
+	events, err := m.commitSample(ctx, r, snap, batch, accept)
 	if err != nil {
 		return Record{}, err
 	}
@@ -66,7 +72,7 @@ func (m *Manager) Observe(ctx context.Context, name string) (Record, error) {
 	return latest, nil
 }
 
-func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, batch JournalBatch) ([]Event, error) {
+func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, batch JournalBatch, accept *identityAccept) ([]Event, error) {
 	snap.CPUPercent = nil
 	var published []Event
 	err := m.db.Write(ctx, func(tx *sql.Tx) error {
@@ -89,6 +95,12 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 			identity = snap.DeviceHash
 		} else if identity != snap.DeviceHash {
 			next.Identity = "changed"
+		}
+		var rebound *Event
+		if accept != nil {
+			if rebound, err = m.acceptIdentityTx(ctx, tx, r, cur, accept, &next.Status, snap, &identity); err != nil {
+				return err
+			}
 		}
 		staleAfter := r.Config.StaleAfter.D()
 		continuous := old.Snapshot != nil && old.Snapshot.BootID == snap.BootID && snap.ObservedAt.After(old.Snapshot.ObservedAt) && snap.ObservedAt.Sub(old.Snapshot.ObservedAt) <= staleAfter
@@ -182,6 +194,9 @@ func (m *Manager) commitSample(ctx context.Context, r Record, snap Snapshot, bat
 			if _, err := tx.ExecContext(ctx, `INSERT INTO machine_cursors(resource_id,source,cursor,updated_at) VALUES(?,'journal',?,?) ON CONFLICT(resource_id,source) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at`, r.ID, batch.Cursor, snap.ObservedAt.UnixMilli()); err != nil {
 				return err
 			}
+		}
+		if rebound != nil {
+			published = append(published, *rebound)
 		}
 		// Receipts and completion evidence live in operations, independently of event retention.
 		if err = trimEvents(ctx, tx, r.ID); err != nil {
