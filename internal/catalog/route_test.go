@@ -233,9 +233,11 @@ func syncBusy(t *testing.T, e *env, h *simHelper, busyFor int) []time.Duration {
 			cancel()
 			t.Fatal("neither a backoff timer nor a result")
 		}
-		// Step until the backoff timer fires to learn how long it was.
-		start := e.clk.Now()
-		for e.clk.Pending() > 0 {
+		// Step until the backoff timer fires to learn how long it was. The
+		// retry it wakes may arm the next timer before Pending is read, so
+		// the attempt it starts also ends the step.
+		start, attempts := e.clk.Now(), calls.Load()
+		for e.clk.Pending() > 0 && calls.Load() == attempts {
 			e.clk.Advance(time.Second)
 		}
 		waits = append(waits, e.clk.Now().Sub(start))
