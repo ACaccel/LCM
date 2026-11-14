@@ -20,6 +20,26 @@ func (l *listFlag) Set(v string) error {
 	return nil
 }
 
+// nameValues parses the values of a repeatable NAME=VALUE flag into a map;
+// it returns nil when the flag was not given.
+func nameValues(cmd, flagName string, values []string) (map[string]string, error) {
+	var out map[string]string
+	for _, v := range values {
+		name, value, ok := strings.Cut(v, "=")
+		if !ok || name == "" || value == "" {
+			return nil, usagef("%s: --%s must be NAME=PATH (got %q)", cmd, flagName, v)
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		if _, dup := out[name]; dup {
+			return nil, usagef("%s: --%s %q is given twice", cmd, flagName, name)
+		}
+		out[name] = value
+	}
+	return out, nil
+}
+
 func (a *app) hostAllow(ctx context.Context, fs *flag.FlagSet, args []string) error {
 	port := fs.Int("port", 0, "port the service listens on, on 127.0.0.1 (1024-65535); optional with --external --static, and with --publish for a service that only publishes static content")
 	route := fs.String("route", "", "publish the service through the ingress component at this path prefix (\"/\" or ending with \"/\")")
@@ -98,19 +118,11 @@ func (a *app) hostAllow(ctx context.Context, fs *flag.FlagSet, args []string) er
 			grant.Route.Static = hostsetup.ServicePublishDir(pos[0])
 		}
 	}
-	for _, in := range inputs {
-		name, dir, ok := strings.Cut(in, "=")
-		if !ok || name == "" || dir == "" {
-			return usagef("host allow: --input must be NAME=PATH (got %q)", in)
-		}
-		if grant.Inputs == nil {
-			grant.Inputs = map[string]string{}
-		}
-		if _, dup := grant.Inputs[name]; dup {
-			return usagef("host allow: input %q is given twice", name)
-		}
-		grant.Inputs[name] = dir
+	inputMap, err := nameValues("host allow", "input", inputs)
+	if err != nil {
+		return err
 	}
+	grant.Inputs = inputMap
 	h, err := a.hostEnv()
 	if err != nil {
 		return err

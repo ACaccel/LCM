@@ -60,6 +60,14 @@ func (a *app) hostInit(ctx context.Context, fs *flag.FlagSet, args []string) err
 	port := fs.Int("ts-port", hostsetup.DefaultTailscalePort, "HTTPS port of tailscale serve")
 	power := fs.Bool("machine-power", false, "install the machine power helper component")
 	machineID := fs.String("security-machine-id", "", "install the security component for the Machine with this immutable ID")
+	deploy := fs.Bool("deploy", false, "install the deploy helper and the build account, which managed services need")
+	backupDir := fs.String("backup-dir", "", "directory of its own where service backups are kept (needs --deploy)")
+	var backupTools, runtimes listFlag
+	fs.Var(&backupTools, "backup-tool", "database tool the backup worker runs as NAME=PATH, such as pg_dump=/usr/bin/pg_dump (repeatable; needs --backup-dir)")
+	fs.Var(&runtimes, "runtime", "runtime managed services may use as NAME=DIR, such as node24=/home/alice/.local/node (repeatable)")
+	domain := fs.String("ingress-domain", "", "enable the ingress component for this domain (needs --ingress-email)")
+	email := fs.String("ingress-email", "", "email address for certbot (needs --ingress-domain)")
+	webroot := fs.String("ingress-webroot", "", "ACME webroot (default "+hostsetup.DefaultACMEWebroot+"; needs --ingress-domain)")
 	path := fs.String("config", hostsetup.ConfigPath, "host configuration file to write")
 	pos, err := parseArgs(fs, args)
 	if err != nil {
@@ -70,6 +78,24 @@ func (a *app) hostInit(ctx context.Context, fs *flag.FlagSet, args []string) err
 	}
 	if *operator == "" {
 		return usagef("host init: --operator is required")
+	}
+	switch {
+	case *backupDir != "" && !*deploy:
+		return usagef("host init: --backup-dir needs --deploy: only the deploy component runs backups")
+	case len(backupTools) > 0 && *backupDir == "":
+		return usagef("host init: --backup-tool needs --backup-dir")
+	case (*domain == "") != (*email == ""):
+		return usagef("host init: --ingress-domain and --ingress-email go together")
+	case *webroot != "" && *domain == "":
+		return usagef("host init: --ingress-webroot needs --ingress-domain")
+	}
+	toolMap, err := nameValues("host init", "backup-tool", backupTools)
+	if err != nil {
+		return err
+	}
+	runtimeMap, err := nameValues("host init", "runtime", runtimes)
+	if err != nil {
+		return err
 	}
 	h, err := a.hostEnv()
 	if err != nil {
@@ -93,6 +119,14 @@ func (a *app) hostInit(ctx context.Context, fs *flag.FlagSet, args []string) err
 	}
 	if *machineID != "" {
 		cfg.Components.Security = &hostsetup.Security{MachineID: *machineID}
+	}
+	cfg.Components.Deploy = *deploy
+	cfg.Runtimes = runtimeMap
+	if *backupDir != "" {
+		cfg.Backup = &hostsetup.Backup{Dir: *backupDir, Tools: toolMap}
+	}
+	if *domain != "" {
+		cfg.Components.Ingress = &hostsetup.Ingress{Domain: *domain, ACMEWebroot: *webroot, TLS: hostsetup.IngressTLS{Email: *email}}
 	}
 	if err := hostsetup.Init(h, *path, cfg); err != nil {
 		return err

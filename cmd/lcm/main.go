@@ -28,7 +28,8 @@ Commands:
   version                     Print version information
   storage-schema [--data-dir] Print the supported storage version (or the database's)
   convert -f <file|dir>       Print lcm/v1 documents converted to lcm/v2 (offline)
-  host init --operator <user> Write the host configuration /etc/lcm/host.json (root)
+  host init --operator <user> [--deploy] [--backup-dir D] [--runtime N=D]
+                              Write the host configuration /etc/lcm/host.json (root)
   host apply [--check]        Install or converge LCM's host components (root)
   host upgrade [--check]      Upgrade a schema-changing build with backup and rollback (root)
   host allow <service> --port N [--runtime R] [--input NAME=PATH] [--check]

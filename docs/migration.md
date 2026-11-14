@@ -19,7 +19,7 @@ Two procedures built from the commands documented in [operations.md](operations.
 **Procedure**
 
 1. As the operator, clone LCM from a reviewed source and `make build`. Root runs only this build.
-2. `sudo bin/lcm host init --operator alice` writes `/etc/lcm/host.json` ([flags](operations.md#host-configuration)). It has no flags for `components.deploy`, `components.ingress`, `runtimes`, `backup.dir` or `backup.tools`: edit the file (`sudoedit /etc/lcm/host.json`, root-owned, not group-writable) to turn on what this host needs. Set `backup.dir` to a directory of its own such as `/var/backups/lcm-services`. Leave `components.security` `null` for now.
+2. `sudo bin/lcm host init --operator alice` writes `/etc/lcm/host.json` ([flags](operations.md#host-configuration)). Add `--deploy`, `--backup-dir /var/backups/lcm-services` (a directory of its own), `--backup-tool NAME=PATH`, `--runtime NAME=DIR` and `--ingress-domain`/`--ingress-email` as this host needs. Other ingress settings (listen addresses, HSTS, domain-level files, a site to adopt) have no flags: edit the file afterwards (`sudoedit /etc/lcm/host.json`, root-owned, not group-writable). Leave `components.security` `null` for now.
 3. `sudo bin/lcm host apply --check`, review, then `sudo bin/lcm host apply` (or `sudo deploy/bootstrap.sh`, which does both steps). Set the console's admin password when asked; `~alice/.config/lcm/token` receives the first admin token ([what apply does](operations.md#procedure)).
 4. As the operator, `deploy/seed.sh` registers the self-deploy service and policy.
 5. Register the host as a [machine](machines.md#registration-and-configuration) (`lcm apply -f workstation.yaml`) and note its immutable ID (`lcm get resources workstation -o json`, field `id`).
