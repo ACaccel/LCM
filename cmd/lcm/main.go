@@ -50,6 +50,7 @@ Commands that talk to a running server (see the README):
   get resources|policies|runs|locks|sources|connections [name] [--type t] [-o table|json|yaml]
   resource <command> <name> [flags]           Act on a resource: action, observe, maintenance,
                                               reboot, retire, impact, group-action, ... (see -h)
+  policy pause|resume <name>                  Stop or allow the triggers of a policy to start runs
   run <policy> [--trigger id] [--event json] [--dry-run] [--wait]
 
 Run "lcm <command> -h" for the flags of a command.
@@ -149,6 +150,8 @@ func (a *app) dispatch(ctx context.Context, args []string) error {
 		return a.runPolicy(ctx, rest)
 	case "resource":
 		return a.resource(ctx, rest)
+	case "policy":
+		return a.policy(ctx, rest)
 	case "machine-helper":
 		return a.machineHelper(ctx, rest)
 	case "deploy-helper":
