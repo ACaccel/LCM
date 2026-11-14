@@ -63,9 +63,27 @@ Read these dimensions separately:
 - **Freshness:** `status.fresh` indicates whether the latest observation is within `staleAfter`. Missing, future-dated or stale observations read as health `unknown`. A changed document also reads unknown until observed with that configuration.
 - **Coverage:** each source has its own state/reason. Available means readable and parsed, not healthy. Missing optional PSI or journal access reduces that source's coverage without alone declaring the machine unhealthy. Failed required observations produce unknown health.
 - **Health:** native health is `healthy`, `degraded` or `unknown`, with reasons. Threshold transitions use persisted consecutive-sample baselines and hysteresis. Combined health changes are `health.changed` signals that policies can react to; a degraded or unknown machine is not evidence of power-off, and no policy node can reboot it.
-- **Identity:** a hash derived from the local machine-id is bound on observation; the raw machine-id is not exposed. Missing or changed identity blocks verified control. Cloned machine-ids cannot be distinguished by this mechanism. Boot ID identifies a boot, separately from device identity.
+- **Identity:** a hash derived from the local machine-id is bound on observation; the raw machine-id is not exposed. Missing or changed identity blocks verified control until an administrator [accepts the new identity](#changed-device-identity). Cloned machine-ids cannot be distinguished by this mechanism. Boot ID identifies a boot, separately from device identity.
 
 CPU utilization requires two valid counter samples from the same boot. The first sample, counter reset, boot change or stale interval leaves `cpuPercent` unknown; zero must not substitute for it. Required CPU health can therefore remain unknown until the next valid sample. Load averages retain their raw values with CPU count for context.
+
+### Changed device identity
+
+Identity reads `changed` when the machine-id hash of a sample differs from the one bound earlier, typically after the database was restored on new hardware ([migration](migration.md#moving-to-a-new-machine)) or the OS was reinstalled. Health reads `unknown` and power control stays blocked; observation and history continue. Nothing accepts a new identity by itself, since an unexpected change may mean the wrong host is answering.
+
+```sh
+lcm resource rebind-identity workstation --reason 'Host moved' --confirm workstation
+```
+
+`POST /api/v1/resources/{resource}/identity/rebind` (`If-Match`, `{reason, confirm}`) and the console action on the machine's Maintenance and operations tab do the same. The request is a direct administrator request (policies are refused) and is refused unless the machine is managed, its identity reads `changed` in a fresh observation and `confirm` is the exact machine name. It then takes a new sample and, in the transaction that stores it, makes that sample's device hash the expected one. An incomplete sample (probe failure, missing identity or boot ID) or one that matches the old identity again is refused and not stored.
+
+What it keeps and records:
+
+- **Kept:** the resource ID, documents, version, history, events, maintenance and Git ownership. The ID is also the helper `controllerID` and the security component's `machineId`, so neither changes.
+- **Recorded:** the audit entry `machine.identity.rebind` carries the reason, the previous and the accepted identity hashes (SHA-256 of the machine-id, never the machine-id) and the IDs of operations it closed; a control event `machine.identity.rebind` reaches the resource timeline and the observation stream. Health is evaluated by the same sample, so a health change reaches policies as the usual `health.changed` signal; there is no lifecycle signal for machines.
+- **Operations:** no operation may survive a rebind that could still act. A pending or submitting request is closed first, after a helper receipt query, as at recovery. Every other unresolved operation is resolved without verification (audited as `machine.operation.resolve` with `identityRebind`) when it can no longer act: its request is bound to another boot than the current one, which the helper rejects, or on the same boot its validity has ended and the helper shows that nothing was requested from the OS or has no receipt of it. Otherwise the rebind is refused and the operation stays for [manual resolution](#maintenance-and-power-requests) once the identity reads verified again. LCM never resubmits an operation.
+- **Power helper:** its receipt ledger and `machine-power.json` are neither read nor changed, and a rebind grants no power permission. A helper on new hardware starts with an empty ledger and must be provisioned for the machine's ID like a new installation ([helper](operations.md#local-machine-power-helper)); until then power requests fail their preflight. Receipts of the old host stay with the old host and cannot confirm a request on the new one.
+- **Maintenance:** an active maintenance stays and is exited as usual. The exit needs a healthy observation newer than the resolutions; observe again if the rebind's own sample is not.
 
 ### Events, gaps and history
 
@@ -147,7 +165,7 @@ lcm resource maintenance workstation exit --reason 'Recovery verified' --confirm
 
 ## Retirement and archives
 
-`lcm resource retire <name>`, `resume <name>` and `unmanage <name>` use the same write-confirmation flags above, print one line on success (read the document with `lcm get`) and follow the [shared phase rules](resources.md#identity-phases-and-archives). Retirement stops observation/control while retaining registration and history; resume returns to managed. Unmanage requires a retired machine, archives it and frees its active slot. None changes OS power or destroys hardware. Unresolved operations block phase changes; release Git ownership before unmanage.
+`lcm resource retire <name>`, `resume <name>` and `unmanage <name>` use the same write-confirmation flags above, print one line on success (read the document with `lcm get`) and follow the [shared phase rules](resources.md#identity-phases-and-archives). Retirement stops observation/control while retaining registration and history; resume returns to managed. Unmanage requires a retired machine, archives it and frees its active slot. None changes OS power or destroys hardware. Unresolved operations block phase changes; release Git ownership before unmanage. Retiring and unmanaging is not the way to accept a [changed device identity](#changed-device-identity): re-registering gives the machine a new ID.
 
 `GET /api/v1/resource-archives?type=machine` discovers archived machines; the console opens their read-only details by immutable ID. `@<immutable-id>` selects an archive in every resource read, version, history, event and operation endpoint, for example `lcm get resources @<immutable-id> -o json` or `lcm resource events @<immutable-id>`. Archive reads remain subject to retention. Reusing a name creates a separate incarnation with a new ID; a plain name selects the active machine and never combines its history with older ones. The upgrade to `lcm/v2` kept every machine ID, so helper `controllerID` and `LCM_SECURITY_MACHINE_ID` values stay valid.
 
