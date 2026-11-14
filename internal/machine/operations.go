@@ -648,8 +648,8 @@ func rebootVerified(op Operation, receipt Receipt, r Record) bool {
 // checks, so an operation of another boot can no longer act. On the same
 // boot its validity must have ended and the helper must show that nothing
 // was requested from the OS: expiry alone does not revoke an accepted
-// action. A helper without a receipt of the request never prepared it and
-// so cannot submit it.
+// action. A missing receipt proves nothing here, as at recovery: the
+// helper's ledger may have been provisioned again since the submit.
 func (m *Manager) checkQuiescent(ctx context.Context, op Operation, r Record) error {
 	if r.Status.Snapshot == nil || r.Status.Snapshot.BootID != op.Request.BootID {
 		return nil
@@ -658,9 +658,6 @@ func (m *Manager) checkQuiescent(ctx context.Context, op Operation, r Record) er
 		return precondition("an accepted or uncertain request requires a verified new boot before manual resolution")
 	}
 	receipt, err := m.power.Query(ctx, op.Request)
-	if errors.Is(err, ErrReceiptMissing) {
-		return nil
-	}
 	if err != nil || (receipt.State != "prepared" && receipt.State != "failed") {
 		return precondition("request quiescence is unverified; expiry does not revoke an accepted OS action")
 	}

@@ -204,6 +204,30 @@ func TestRebindIdentityRefusesALiveRequest(t *testing.T) {
 	}
 }
 
+// A helper without a receipt does not prove that an expired request of the
+// current boot never reached the OS, so the rebind is refused.
+func TestRebindIdentityRefusesAnUnprovenRequestOfThisBoot(t *testing.T) {
+	e, p := readyPower(t)
+	enter(t, e)
+	op, err := e.m.Submit(DirectRequest(e.ctx), "workstation", powerReq("graceful-shutdown", "expired", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.clk.Advance(time.Hour)
+	p.receipt, p.queryErr = Receipt{}, ErrReceiptMissing
+	e.probe.snapshot.DeviceHash = "device-b"
+	r := e.poll(t)
+	if r.Status.Identity != "changed" {
+		t.Fatalf("identity %s", r.Status.Identity)
+	}
+	if _, err := e.m.RebindIdentity(DirectRequest(e.ctx), "workstation", r.Version, "reinstalled", "workstation"); !errors.Is(err, ErrPrecondition) {
+		t.Fatalf("unproven request: %v", err)
+	}
+	if got, _ := e.m.Operation(e.ctx, "workstation", op.ID); !got.Unresolved {
+		t.Fatalf("operation resolved: %+v", got)
+	}
+}
+
 // Rebind is offered only while the identity reads changed.
 func TestRebindIdentityAction(t *testing.T) {
 	e, _ := readyPower(t)
