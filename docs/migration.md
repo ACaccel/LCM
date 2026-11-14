@@ -29,7 +29,7 @@ Two procedures built from the commands documented in [operations.md](operations.
    3. Create the empty databases of `postgres` and `mongodb` sources, with their users.
 7. Apply the Resource and Policy documents, either way:
    - `lcm apply -f <dir>` from a checkout, or
-   - register a [config source](policies.md#policy-as-code) (console *設定 > 設定來源*, or `POST /api/v1/config/sources`; there is no CLI command for it). LCM clones as the `lcm` account, so a private repository needs an SSH key without passphrase or a credential helper for that account.
+   - register a [config source](policies.md#policy-as-code) (`lcm source add --name <name> --repo <url> --branch main --path lcm`, or console *設定 > 設定來源*; `lcm source sync <name> --wait` syncs at once). LCM clones as the `lcm` account, so a private repository needs an SSH key without passphrase or a credential helper for that account.
 8. `lcm resource action <svc> deploy --wait` per service; add `--version <commit>` to deploy a known commit instead of the branch head. The first deploy writes the unit, builds and starts it.
 9. Ingress: `sudo bin/lcm host apply --check` shows the rendered site; when the domain resolves to this host, `sudo bin/lcm host cert issue` obtains the first certificate ([certificates](operations.md#certificates)). To replace a hand-made nginx site follow the [cutover](operations.md#cutover-and-revert).
 10. Security component: set `components.security.machineId` to the ID from step 5, `sudo bin/lcm host apply --check`, `sudo bin/lcm host apply`. Then review the host and accept the AIDE baseline locally; `apply` never does ([baseline](security.md#aide-baseline)). List root deploy tooling that other projects still use in `watch.deploy` ([adoption](security.md#install-adopt-and-upgrade)).
@@ -56,9 +56,9 @@ Choose a quiet window and lower the DNS TTL of the domain in advance.
 
 **Old host: freeze and back up**
 
-1. Pause every deployed policy so that nothing deploys or restarts meanwhile: console, or `curl -X POST -H "Authorization: Bearer $(head -n1 ~/.config/lcm/token)" http://127.0.0.1:7800/api/v1/policies/<policy>/pause` (there is no CLI command; active runs continue, so wait for them).
+1. Pause every deployed policy so that nothing deploys or restarts meanwhile: `lcm policy pause <policy>` (active runs continue, so wait for them).
 2. Note the commit each service runs (console deployments) and `lcm version` with `lcm storage-schema`.
-3. For each service: `lcm resource action <svc> stop --wait --acknowledge-impact`, then `lcm resource action <svc> backup --wait`. Stopped services make the sets consistent across sources. Check the new set in the console *備份* tab.
+3. For each service: `lcm resource action <svc> stop --wait --acknowledge-impact`, then `lcm resource action <svc> backup --wait`. Stopped services make the sets consistent across sources. Check the new set with `lcm get backups <svc>` (`restorable` is `true`).
 4. Copy `/etc/<svc>/*.env`, `host.json`, `lcm.env` and the connections file to the new host over a channel you trust, and the sets as root, for example:
 
    ```sh
@@ -72,18 +72,18 @@ Choose a quiet window and lower the DNS TTL of the domain in advance.
 
 6. Do steps 1 to 3 of the [new machine](#new-machine) procedure, but instead of `host init` install the copied `host.json` as root:root 0644 and review it (`host init` never replaces a file); the grants of its `services` are applied by `host apply`. Build from the commit the old host ran, so that the storage schemas are equal, and keep `components.security` `null` for now. Then set `LCM_AUTOMATION=off` in `/etc/lcm/lcm.env` and `sudo systemctl restart lcm.service`, so that no policy, trigger or config sync runs until step 12 (API and CLI actions still work). The admin password asked for during `apply` is replaced by the restore.
 7. Restore LCM's state: stop `lcm.service`, replace `lcm.db` (removing stale `-wal`/`-shm`) and `secrets/` from the staging directory, set the owner to the new host's `lcm` account (`chown lcm:lcm`; user IDs differ between hosts, so do not extract with `--same-owner`), modes 0600 and 0700, start LCM. The old admin account and tokens apply now; `~alice/.config/lcm/token` from step 3 does not, so create a new one: `(umask 077; sudo -u lcm /usr/local/bin/lcm token create --name cli --data-dir /var/lib/lcm > ~/.config/lcm/token)`.
-8. Re-register the machine. The restored machine resource keeps the device identity of the old host, which reads as `changed` and blocks verified control ([identity](machines.md#observations-and-health)). Release its Git ownership if a config source owns it (console, or `DELETE /api/v1/config/ownership/resource/<name>`), `lcm resource retire <name> --reason "host moved" --confirm <name>`, `lcm resource unmanage <name> --reason ... --confirm <name>`, then apply the machine document again with `lcm apply` (config sync is off until step 12): it gets a new ID, the old one stays readable as an archive.
+8. Re-register the machine. The restored machine resource keeps the device identity of the old host, which reads as `changed` and blocks verified control ([identity](machines.md#observations-and-health)). Release its Git ownership if a config source owns it (`lcm source release resource <name>`), `lcm resource retire <name> --reason "host moved" --confirm <name>`, `lcm resource unmanage <name> --reason ... --confirm <name>`, then apply the machine document again with `lcm apply` (config sync is off until step 12): it gets a new ID, the old one stays readable as an archive.
 9. Restore the services, one at a time:
    1. Copy the service secrets into place and create the empty databases and users.
    2. `lcm resource action <svc> deploy --version <commit> --wait` with the commit noted in step 2 creates the account, unit and release.
-   3. `lcm resource action <svc> restore --backup-id <id> --wait` (newest set when omitted); LCM lists the copied sets itself and the helper verifies every artifact against the manifest. MongoDB users are restored only with `--restore-users --confirm <svc>` ([rules](operations.md#backups)).
+   3. `lcm resource action <svc> restore --backup-id <id> --wait` (newest set when omitted); `lcm get backups <svc>` lists the copied sets and the helper verifies every artifact against the manifest. MongoDB users are restored only with `--restore-users --confirm <svc>` ([rules](operations.md#backups)).
    4. `lcm resource action <svc> apply-route` sends the route options to the ingress.
 10. Ingress and certificates: copy `/etc/letsencrypt` before the first `host apply` that has `components.ingress` (it then reuses the certificate), or switch DNS first and run `sudo bin/lcm host cert issue`. Set `ingress.listen` to this host's addresses. Check the site before the switch: `curl --resolve example.com:443:203.0.113.10 https://example.com/<svc>/`.
 11. Security component and power helper: put the new machine ID into `components.security.machineId` and `sudo bin/lcm host apply`; review and accept a new baseline ([security](security.md#aide-baseline)). For machine power provision the ledger and `machine-power.json` again by hand with the new ID ([helper](operations.md#local-machine-power-helper)).
 
 **Switch and verify**
 
-12. Switch DNS to the new host. Verify: `lcm host status`, `lcm get resources` (health, deployments), routes over HTTPS, a fresh backup of each service (`lcm resource action <svc> backup --wait`), the admin login. Then remove `LCM_AUTOMATION=off`, restart LCM, resume the policies (`.../policies/<policy>/resume`) and check that config sync runs without conflicts.
+12. Switch DNS to the new host. Verify: `lcm host status`, `lcm get resources` (health, deployments), routes over HTTPS, a fresh backup of each service (`lcm resource action <svc> backup --wait`), the admin login. Then remove `LCM_AUTOMATION=off`, restart LCM, resume the policies (`lcm policy resume <policy>`) and check that config sync runs without conflicts.
 13. Keep the old host stopped for a few days. Then decommission it, as far as LCM goes: `sudo deploy/uninstall.sh --purge` removes LCM, its data, `/etc/lcm` and the account, but not the managed services' units, accounts, `/opt/<svc>`, `/var/lib/<svc>`, the helper files and ledgers, the ingress site or the security component. Remove those by hand (`sudo bin/lcm host apply --remove` with `components.security` `null`, `sudo bin/lcm host ingress revert`), and remove the old node from the tailnet.
 
 ### Rollback

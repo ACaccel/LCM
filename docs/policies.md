@@ -45,17 +45,17 @@ curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/templat
 
 The console and API are the default way to configure LCM and take effect at once. Git management is opt-in per document: resources, policies and modules can also live as YAML in a repository that LCM pulls and applies. Documents describe resources only; command allowlists, the `systemctl` privilege prefix and the units LCM may touch stay in host configuration.
 
-Register a repository as a **config source** (admin API, or *設定 > 設定來源* in the console):
+Register a repository as a **config source** (`lcm source add`, the admin API, or *設定 > 設定來源* in the console):
 
 ```sh
-curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/config/sources \
-     -d '{"name":"infra","repo":"git@host:me/infra.git","branch":"main","path":"lcm","interval":"1m"}'
+lcm source add --name infra --repo git@host:me/infra.git --branch main --path lcm --interval 1m
+lcm source sync infra --wait   # sync now; `source delete <name>` removes it
 ```
 
 **Sync.**
 
 - LCM fetches the branch into its own clone under `<data dir>/sources`, reads every `*.yaml` and `*.yml` under `path` (recursively; several documents per file; `*.test.yaml` skipped), validates, and applies modules, then resources, then policies.
-- It syncs every `interval` (default 1m, 10s to 24h), on `POST /config/sources/{name}/sync` (202 at once; read `lastSyncAt`, `lastCommit`, `lastError` and `syncing`; concurrent requests join the running sync), and when a GitHub push webhook (`/hooks/github`) names the repository and branch.
+- It syncs every `interval` (default 1m, 10s to 24h), on `lcm source sync` (`POST /config/sources/{name}/sync`; 202 at once; read `lastSyncAt`, `lastCommit`, `lastError` and `syncing`; concurrent requests join the running sync), and when a GitHub push webhook (`/hooks/github`) names the repository and branch.
 - A document that fails validation leaves its resource unchanged; the error is on the source (`lastError`), on the resource timeline (`config.invalid`) and published with source `configsync`: a `resource.config.invalid` signal for a Resource, a warning `alert` signal for a Policy or Module. `lcm/v1` documents fail this way; convert them (below). So does a service document that still has `source.repo` or `source.remote` (before storage schema 15): the issue names the field; replace them with [`source.url`](services.md#source).
 - The repository URL (of a source or a `trigger.git` node) must not embed credentials: `https://token@host/...` is refused like `user:password@`, and a URL with a scheme may only carry the ssh user `git` (`ssh://git@host/...`); scp-like `git@host:path` is accepted. Sources stored before this rule are shown without their userinfo; replace them with a credential-free URL. Use an SSH key without passphrase (git runs with `BatchMode`, and children get a short environment allowlist, so `SSH_AUTH_SOCK` is unavailable) or a credential helper.
 
@@ -66,7 +66,7 @@ curl -H "Authorization: Bearer $LCM_TOKEN" -X POST localhost:7800/api/v1/config/
 - When a new commit changes the document of a drifted resource, or defines a different document for an unowned one, the sync skips it, marks a **conflict** and notifies (a `config.conflict` timeline entry and a `resource.config.conflict` signal for resources; a warning `alert` signal for policies and modules). Documents unchanged in the repository never conflict.
 - `POST /config/ownership/{kind}/{name}/resolve` with `{"use":"git"}` writes the repository document and drops the local edits; `{"use":"current"}` keeps the current content, owns it and closes the conflict (it stays drifted, acknowledged). Drift clears by itself once the repository matches.
 - A sync or apply writes a document only if it is still at the version the sync read: when the console or API changes it in between, that write fails with a version conflict (the source's `lastError` and the apply result) and the next sync sees the edit as drift.
-- Documents that disappear from the repository mark their resource **orphaned**; it is kept, never deleted. `DELETE /config/ownership/{kind}/{name}` releases a resource to the console; deleting a source releases everything it owned.
+- Documents that disappear from the repository mark their resource **orphaned**; it is kept, never deleted. `lcm source release <resource|policy|module> <name>` (`DELETE /config/ownership/{kind}/{name}`) releases a document to the console; deleting a source releases everything it owned.
 
 **Manual apply and export.** `lcm apply -f` works for unowned resources. For an owned resource it refuses (`skipped`, exit status 3) unless the document equals the current content or `--force` is given; a forced apply leaves the resource owned and drifted, so the repository stays the source of truth. `--dry-run` only validates and diffs. `lcm export` prints canonical YAML in apply order, sorted by name, ready to commit; applying the export back changes nothing. A policy undeployed in the console is not redeployed by a sync unless its document changes.
 
