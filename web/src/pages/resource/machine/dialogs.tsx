@@ -39,7 +39,7 @@ export function WorkloadPreview({ preview }: { preview: MachineMaintenancePrevie
   );
 }
 
-function ReasonField({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+export function ReasonField({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   return (
     <div className="field">
       <label htmlFor={id}>{s.machine.reason}</label>
@@ -197,6 +197,65 @@ export function MaintenanceDialog({ machine, exit, onClose }: { machine: Pick<Re
           </>
         )}
         <ReasonField id="maintenance-reason" value={reason} onChange={setReason} />
+        <ErrorBox error={mutation.error} />
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * Accepting the device identity the machine reports now. The operator
+ * types the machine's name and a reason; the version is the one the dialog
+ * was opened at.
+ */
+export function IdentityRebindDialog({ machine, onClose }: { machine: Pick<ResourceDetail, "name" | "id" | "version">; onClose: () => void }) {
+  const [baseVersion] = useState(machine.version);
+  const [reason, setReason] = useState("");
+  const [typed, setTyped] = useState("");
+  const qc = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: () =>
+      unwrap(
+        client.POST("/resources/{resource}/identity/rebind", {
+          params: { path: { resource: machine.name }, header: { "If-Match": String(baseVersion) } },
+          body: { reason: reason.trim(), confirm: typed },
+        }),
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.resourceAll(machine.name) });
+      onClose();
+    },
+  });
+  return (
+    <Dialog
+      title={actionLabel("rebind-identity")}
+      onClose={() => !mutation.isPending && onClose()}
+      footer={
+        <>
+          <button type="button" className="btn" disabled={mutation.isPending} onClick={onClose}>
+            {s.common.cancel}
+          </button>
+          <button
+            type="button"
+            className="btn danger solid"
+            disabled={mutation.isPending || !reason.trim() || typed !== machine.name}
+            onClick={() => mutation.mutate()}
+          >
+            {s.common.confirm}
+          </button>
+        </>
+      }
+    >
+      <div className="stack">
+        <p>
+          {s.operation.target}: <strong>{machine.name}</strong> / <code>{machine.id}</code> / {s.config.version(baseVersion)}
+        </p>
+        <div className="banner warn">{s.machine.identityEffects}</div>
+        <ReasonField id="identity-reason" value={reason} onChange={setReason} />
+        <div className="field">
+          <label htmlFor="identity-confirm">{s.machine.confirmName(machine.name)}</label>
+          <input id="identity-confirm" autoComplete="off" spellCheck={false} value={typed} onChange={(e) => setTyped(e.target.value)} />
+        </div>
         <ErrorBox error={mutation.error} />
       </div>
     </Dialog>

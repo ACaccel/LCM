@@ -369,6 +369,7 @@ export const s = {
     observe: "立即觀測",
     "maintenance-enter": "進入維護",
     "maintenance-exit": "退出維護",
+    "rebind-identity": "接受目前設備身分",
     reboot: "重新開機",
     "graceful-shutdown": "正常關機",
     "power-on": "開機",
@@ -926,6 +927,13 @@ export const s = {
     powerDisclosure: "此操作會讓同機 LCM 與控制台離線。請求被接受不代表 OS 已完成；無獨立證據時，正常關機保留結果不明。取消等待或關閉視窗不會撤銷 OS 動作。",
     firstCpu: "CPU 首樣本或來源無效時顯示未知。歷史樣本不代表目前健康。",
     refreshNote: "每 15 秒從 API 更新；重連後重新查詢。",
+    identityChanged: "設備身分與 LCM 記錄的不同",
+    identityNote:
+      "這台機器回報的設備身分與 LCM 預期的不同，電源控制因此被擋下。資料庫還原到新硬體、重灌 OS 之後會出現這種情況。確認這就是要管理的機器後，可以接受目前身分：資源 ID、歷史與維護都會保留。",
+    identityEffects:
+      "接受後會在稽核紀錄寫下新舊身分雜湊。結果未明、且已無法再執行的操作會以「未驗證」結案；仍可能執行的請求會使這個動作被拒絕。這台主機的電源 helper 必須已針對這個資源 ID 佈建，LCM 不讀取也不修改它的 receipt。",
+    identityAction: "接受目前身分",
+    identityTitle: "設備身分",
   },
   router: {
     status: "目前狀態",
@@ -1132,6 +1140,7 @@ export const s = {
       unmanaged: "解除納管",
       "maintenance.enter": "進入維護",
       "maintenance.exit": "退出維護",
+      "identity.rebind": "接受新的設備身分",
       "operation.submit": "送出操作",
       "operation.resolve": "人工結案",
       "operation.changed": "操作狀態變更",
@@ -1278,6 +1287,7 @@ export const msg: Record<string, (p: Params) => string> = {
   "action.noObserver": () => "尚未設定觀測器",
   "action.maintenanceActive": () => "已在維護中",
   "action.maintenanceInactive": () => "目前不在維護中",
+  "action.identityNotChanged": () => "設備身分未變更，或觀測已過期",
   "capability.noHelper": () => "尚未設定受限的電源 helper",
   "capability.machineRetired": () => "機器已退役",
   "capability.needsSystemd": () => "電源控制需要已驗證的 Linux/systemd 主機",

@@ -779,6 +779,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/resources/{resource}/identity/rebind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept the current device identity of the local machine
+         * @description For a machine whose `status.identity` reads `changed`, typically after its database
+         *     was restored on new hardware: records the identity the machine reports now as the
+         *     expected one. The resource keeps its ID, history and maintenance. `confirm` must be
+         *     the machine's exact name. Operations still unresolved are closed first, without
+         *     verification, when they can no longer act. The request is refused with 409
+         *     `precondition_failed` when one still can, when the identity does not read `changed`
+         *     or when the observation is not fresh. The audit entry carries the previous and the
+         *     accepted identity hashes. Direct administrator requests only; policies are refused.
+         *     The power helper's receipts are not read or changed.
+         */
+        post: operations["rebindResourceIdentity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/resources/{resource}/operations": {
         parameters: {
             query?: never;
@@ -5523,6 +5551,45 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    rebindResourceIdentity: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": string;
+            };
+            path: {
+                /** @description Name of an active resource, or `@<id>` for any incarnation including archives. */
+                resource: components["parameters"]["Resource"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                    confirm: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The machine after the rebind. */
+            200: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceDetail"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             503: components["responses"]["Unavailable"];
         };
     };

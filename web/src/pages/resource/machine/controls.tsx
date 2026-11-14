@@ -5,14 +5,14 @@ import { capabilitiesQuery, maintenanceQuery } from "../../../api/observations";
 import type { MachineMaintenance, ResourceCapability, ResourceDetail } from "../../../api/types";
 import { ErrorBox, Spinner } from "../../../components/ui";
 import { useTick } from "../../../hooks";
-import { actionLabel } from "../../../lib/actions";
+import { actionLabel, unavailableReason } from "../../../lib/actions";
 import { formatDateTime } from "../../../lib/format";
 import { machineFresh, powerUnavailable } from "../../../lib/machine";
 import { s } from "../../../strings";
 import { AttemptPanel, OperationsList } from "../operations";
 import { usePowerRequest } from "../power";
 import type { PowerControl } from "../power";
-import { MaintenanceDialog, PowerMaintenance } from "./dialogs";
+import { IdentityRebindDialog, MaintenanceDialog, PowerMaintenance } from "./dialogs";
 
 const POWER = ["reboot", "graceful-shutdown"] as const;
 
@@ -97,6 +97,31 @@ export function MachineControls({ resource, power }: { resource: ResourceDetail;
   );
 }
 
+/**
+ * Offered while the machine reports another device identity than the one
+ * LCM expects: accepting it keeps the resource, its history and its
+ * helper binding. Nothing is shown while the identity is not changed.
+ */
+export function IdentityPanel({ resource }: { resource: ResourceDetail }) {
+  const [open, setOpen] = useState(false);
+  if (resource.machine?.status?.identity !== "changed") return null;
+  const blocked = unavailableReason(resource, "rebind-identity");
+  return (
+    <section className="panel stack">
+      <h2>{s.machine.identityTitle}</h2>
+      <div className="banner warn">{s.machine.identityChanged}</div>
+      <p className="meta">{s.machine.identityNote}</p>
+      <div>
+        <button type="button" className="btn danger" disabled={!!blocked} onClick={() => setOpen(true)}>
+          {s.machine.identityAction}
+        </button>
+      </div>
+      {blocked && <p className="meta">{blocked}</p>}
+      {open && <IdentityRebindDialog machine={resource} onClose={() => setOpen(false)} />}
+    </section>
+  );
+}
+
 /** The machine's maintenance and operations tab. */
 export function MachineOperationsTab({ resource, selector, power }: { resource: ResourceDetail; selector: string; power: PowerControl }) {
   const caps = useQuery(capabilitiesQuery(selector));
@@ -106,6 +131,7 @@ export function MachineOperationsTab({ resource, selector, power }: { resource: 
   return (
     <div className="stack">
       <p className="meta">{s.machine.refreshNote}</p>
+      <IdentityPanel resource={resource} />
       <section className="panel stack">
         <h2>{s.machine.maintenance}</h2>
         <p className="meta">{s.machine.maintenanceNote}</p>
