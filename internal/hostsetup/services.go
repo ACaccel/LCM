@@ -874,8 +874,11 @@ func (a *applier) serviceEnvFile(s *step, name, p string, gid int) error {
 }
 
 // removedGrants reports services that were granted before: they keep their
-// account, directories, releases and unit.
-func (a *applier) removedGrants(_ context.Context, s *step) error {
+// account, directories, releases and unit. Only a service whose account host
+// setup created counts (it carries LCM's comment, which grant also requires
+// before it uses an account): other deploy tools may use /opt/<name>/releases
+// as well.
+func (a *applier) removedGrants(ctx context.Context, s *step) error {
 	names, err := a.h.FS.ReadDir("/opt")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -887,9 +890,32 @@ func (a *applier) removedGrants(_ context.Context, s *step) error {
 		if _, granted := a.cfg.Services[n]; granted || ValidServiceName(n) != nil {
 			continue
 		}
-		if info, err := a.h.FS.Lstat(ServiceReleases(n)); err == nil && info.IsDir() && info.UID == 0 {
+		info, err := a.h.FS.Lstat(ServiceReleases(n))
+		if err != nil || !info.IsDir() || info.UID != 0 {
+			continue
+		}
+		made, err := a.madeByGrant(ctx, n)
+		if err != nil {
+			return err
+		}
+		if made {
 			s.note(fmt.Sprintf("%s is no longer in services; its account, directories, releases and unit are kept", n))
 		}
 	}
 	return nil
+}
+
+// madeByGrant reports whether host setup created the service account or the
+// build account of a service for a grant.
+func (a *applier) madeByGrant(ctx context.Context, name string) (bool, error) {
+	for _, c := range []struct{ account, comment string }{{name, ServiceComment(name)}, {BuildAccount(name), BuildComment(name)}} {
+		acc, ok, err := lookupAccount(ctx, a.h.Runner, c.account)
+		if err != nil {
+			return false, err
+		}
+		if ok && acc.GECOS == c.comment {
+			return true, nil
+		}
+	}
+	return false, nil
 }

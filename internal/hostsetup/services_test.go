@@ -182,6 +182,18 @@ func TestDeployComponentAndGrants(t *testing.T) {
 		t.Fatal("a removed grant's files were removed")
 	}
 
+	// A directory of another deploy tool, or of an account LCM did not
+	// create, is not a removed grant.
+	th.fs.dir("/opt/other", 0o755, 0, 0)
+	th.fs.dir("/opt/other/releases", 0o755, 0, 0)
+	th.fs.dir("/opt/foreign", 0o755, 0, 0)
+	th.fs.dir("/opt/foreign/releases", 0o755, 0, 0)
+	th.r.accounts["foreign"] = Account{Name: "foreign", UID: 130, GID: 130, Home: "/var/lib/foreign", Shell: "/usr/sbin/nologin", GECOS: "someone else"}
+	if out := th.converge(); strings.Contains(out, "other is no longer") || strings.Contains(out, "foreign is no longer") ||
+		!strings.Contains(out, "web is no longer in services") {
+		t.Fatalf("foreign release directories:\n%s", out)
+	}
+
 	// Turning the component off keeps it.
 	th.cfg.Components.Deploy = false
 	th.writeConfig(th.cfg)
