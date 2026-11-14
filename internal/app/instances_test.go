@@ -125,6 +125,13 @@ func TestManagedInstancesThroughTheApp(t *testing.T) {
 		return execx.Result{Output: "1111111111111111111111111111111111111111\n"}, nil
 	})
 	h := newHarness(t, func(o *testOpts) { o.deployHelper, o.runner = helper, runner })
+	// Let each real HTTP probe finish before virtual time can reach its
+	// timeout; a single ten-second jump races the asynchronous probe.
+	advanceCheck := func() {
+		for range int(checkInterval / time.Second) {
+			h.advance(time.Second)
+		}
+	}
 	bots := map[string]*switchable{"a": newSwitchable(t), "b": newSwitchable(t), "c": newSwitchable(t)}
 	h.putService(fmt.Sprintf(`
 apiVersion: lcm/v2
@@ -170,7 +177,7 @@ spec:
 	if err := h.app.SyncMonitor(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(checkInterval)
+	advanceCheck()
 	if st, _ := h.app.Monitor.Resource("fleet"); st.Health != monitor.HealthHealthy {
 		t.Fatalf("health = %+v", st)
 	}
@@ -201,7 +208,7 @@ spec:
 	if err := h.app.SyncMonitor(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(checkInterval)
+	advanceCheck()
 	st, _ := h.app.Monitor.Resource("fleet")
 	if st.Health != monitor.HealthHealthy {
 		t.Fatalf("health with b stopped = %+v", st)
