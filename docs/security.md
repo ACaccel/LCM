@@ -10,7 +10,7 @@ installs the collector, audit watches, integrity checks and that helper.
 
 ## Configuration
 
-Set these variables in the existing LCM environment file and restart LCM:
+Set these variables ([README](../README.md#configuration)) in the existing LCM environment file and restart LCM:
 
 ```ini
 LCM_SECURITY_ENABLED=true
@@ -150,9 +150,9 @@ The event store retains at most 10,000 envelopes and thirty days of history;
 incidents/condition keys are capped at 2,000. Finished incidents without pending
 delivery make room first. Fully active capacity refuses new conditions with 503
 instead of silently deleting an ongoing episode. Resolved history expires after
-thirty days. Finished notification test episodes are also deleted after
-`LCM_OPERATION_RETENTION` (default 90 days), even while security is disabled, and
-finished host operations likewise. Queue overflow and expiry are counted and recorded on incidents;
+thirty days. Finished notification test episodes are also pruned by
+`LCM_OPERATION_RETENTION` ([configuration](../README.md#configuration)), even while
+security is disabled, and finished host operations likewise. Queue overflow and expiry are counted and recorded on incidents;
 they are not treated as successful notifications. Collectors need their own
 bounded retry queue for LCM outages and should expose rejected intake.
 
@@ -170,14 +170,11 @@ Operational state changes are audited without secret values or raw summaries.
 
 The console groups the module into four tabs: *資安事件* (monitoring status and incidents), *流量*, *主機控制* (the helper's summary, rules, schedule and scans, or the setup guide when no helper is configured) and *通知* (notification settings). The earlier `/security/overview`, `/security/rules` and `/security/checks` addresses redirect to the incident and host tabs.
 
-Schema migration 0011 is additive; follow the existing
-[upgrade and database recovery procedure](operations.md) before deployment.
-
 A Konata relay (and its database) on the same workstation shares LCM's failure domain. This system
 cannot send while the host or network is down. Discord summaries are not complete
 off-host forensic logs, and editing a message does not guarantee a new phone push.
 
-Native Machine reconciliation uses the manager's `@<immutable-id>` selector; an unprefixed selector is a Machine name. Live readiness requires a successful poll timestamp, not only a healthy Machine API response.
+Live readiness requires a successful poll timestamp, not only a healthy Machine API response.
 
 ## Security console and operator controls
 
@@ -199,10 +196,10 @@ Persisted notification preferences provide enablement, a 60–86400 second coold
 and minimum severity. Immutable root enablement and relay configuration take
 precedence. Disabling delivery cancels the queue; enabling it does not replay that
 cancelled history. Recovery updates remain eligible for previously delivered
-incidents even below the minimum firing severity. Schema-11 episodes with queued
-notification history conservatively retain recovery eligibility during migration.
+incidents even below the minimum firing severity.
 The test endpoint creates one labelled server-trusted episode per stable request ID;
-it queues recovery only after firing delivery succeeds. Tests are limited to one per
+it queues recovery only after firing delivery succeeds, so accept a test only once
+both revisions appear on the same message. Tests are limited to one per
 five minutes, cannot crowd a full queue, and terminal failures release active capacity.
 Collector-supplied fingerprints cannot bypass severity filtering. Destinations and
 credentials cannot be edited or read through this console.
@@ -223,8 +220,8 @@ indeterminate result is never blindly replayed. Without `LCM_SECURITY_MACHINE_ID
 `GET /security/host` answers 200 with `configured: false` and every capability
 disabled; the console shows setup guidance and stops polling. Missing/incompatible helpers remain
 read-only with unknown measurements. Required audit coverage cannot be disabled,
-optional profiles require local root approval, and the helper has no R11 enabling
-operation. Baseline requests and AIDE profile choices require local sudo review;
+optional profiles require local root approval, and the helper has no operation that enables
+them. Baseline requests and AIDE profile choices require local sudo review;
 the web application cannot replace or accept an integrity baseline. Complete raw
 reports remain local; the UI receives bounded status, configured targets and counts.
 The `actor` stored in the helper's protected journal is declared by its caller and
@@ -236,10 +233,6 @@ authoritative record of who requested a change.
 The [host helper contract](../deploy/security/README.md) owns the helper's privileged
 paths, limits, protected receipts and recovery procedures; the
 [host component](#host-component) installs it.
-
-Migrations 0012/0013 add operator state and host operation records. Deploy with a
-matched database/binary recovery point; an older schema-11 binary cannot open the
-upgraded database. Keep self-deploy paused until its source includes this release.
 
 ## Host component
 
@@ -332,7 +325,8 @@ observation is off.
 in a root-only temporary directory, runs `python3 -I install.py plan`, then `apply` with
 the wanted state on stdin, and installs the sudoers rule last. `--check` runs only
 `plan`, which changes nothing. Upgrading is the same: `make build && sudo bin/lcm host apply`
-from the reviewed checkout. What `apply` changes outside the component's own files:
+from the reviewed checkout. Afterwards verify the component through the LCM account's
+`GET /api/v1/security/host` rather than a root-only status probe. What `apply` changes outside the component's own files:
 
 - installs `auditd` and `aide` with `apt-get` when missing, and the system account `workstation-security` (no login shell);
 - sets `max_log_file`, `num_logs`, the rotate and `SYSLOG` actions and `log_group` in `/etc/audit/auditd.conf` and `CRON_DAILY_RUN=no` in `/etc/default/aide`, keeping every other line;
@@ -415,10 +409,7 @@ baseline, reports, collector state and transactions in `/var/lib/workstation-sec
 (with a copy of the policy), the helper journal, the packages, the account and the
 `auditd` settings. Revoke the token in LCM afterwards.
 
-`sudo bin/lcm host security cleanup --check|--apply` removes the leftovers of the
-installers the component replaced: the units `workstation-security-ssh-auth-rollback.{service,timer}`
-and the directories `/var/lib/workstation-security-{20261101,deploy-20261029,nginx-20261101,lcm-20261101,lcm-repair-20261101,repair-20261101,completion-20261102,ssh-auth-20261029}`
-and `/var/lib/lcm-security-{console-20261102,console-release-20261102}`.
-A directory a unit, logrotate or cron file still names is refused (run `apply` first).
-Other `/var/lib/workstation-security-*` and `/var/lib/lcm-security-*` directories are
-only reported.
+`sudo bin/lcm host security cleanup --check|--apply` removes the known leftovers of the
+installers the component replaced (`--check` lists what it would remove). A directory a unit,
+logrotate or cron file still names is refused (run `apply` first). Other
+`/var/lib/workstation-security-*` and `/var/lib/lcm-security-*` directories are only reported.

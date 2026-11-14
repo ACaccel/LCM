@@ -95,11 +95,6 @@ Choose a quiet window and lower the DNS TTL of the domain in advance.
 
 ## Known limits
 
-- No schema change during a move: both builds must report the same `lcm storage-schema`, because a restored database migrates forward only. Upgrade before or after, never inside it ([upgrade](operations.md#upgrade)).
-- The deploy helper is a pinned copy of the build that ran `host apply`; `host allow` refuses `instances`, `groups`, `after`, `wants` and `backup.tools` until `sudo bin/lcm host apply` has pinned the current one ([upgrade to service instances](operations.md#upgrade-to-service-instances)).
-- Typed backups cover declared sources only; a `command` source is kept but never restored, and online MongoDB backups are not point-in-time across databases (stop the service, as above).
-- MongoDB: the user of `MONGODB_URI` must exist in the new `mongod` before a users restore and be in the set; a users restore replaces every account of that `mongod`. Create the backup user before the first backup that must survive.
-- Secrets are never in documents, backup sets or `host.json`: service env files, `backup.env`, the connections file and its password secrets move by hand.
-- A restored machine resource reads a changed device identity until it is accepted with `rebind-identity` (step 8); the security baseline, helper ledgers and power receipts start new on the new host.
 - Router connections need the new host to reach the router and the connections file in place before LCM starts ([router connections](operations.md#router-connections)).
 - LCM does not automate the move itself; every step above is an explicit command.
+- MongoDB: the user of `MONGODB_URI` must exist in the new `mongod`, with the same password, before a users restore, and must be in the set, because a users restore replaces every account. Online backups are not point-in-time across databases, which is why step 3 stops the services first.

@@ -2,7 +2,7 @@
 
 LCM manages self-hosted software services, the Linux workstation running the controller and network routers as one kind of object, the `lcm/v2` [Resource](docs/resources.md). It checks resources and performs deployments, rollbacks, restarts, backups and jobs from the console, CLI or policies. The local machine adds OS observations, bounded event history, maintenance and durable manual power requests; routers add observation and controlled reboots. Relations between resources drive impact previews, acknowledgement of disruptive actions and ordered group actions. LCM ships as one Go binary with SQLite; Kubernetes is outside its scope.
 
-**Status.** Services and the local machine are complete and accepted (operator-confirmed on 2026-11-03; see the [validation record](docs/machine-validation.md), which predates the resource model). The unified Resource model and Xiaomi routers were delivered on 2026-11-05 with automated checks; router acceptance on real hardware is pending the operator's confirmation. Upgrading replaces `lcm/v1` documents, API paths and CLI commands without aliases; see the [upgrade notes](docs/operations.md#upgrade-to-lcmv2-resources). The host platform (`lcm host`: host setup and upgrade, the restricted deploy helper with `managed` services and static publishing, typed backups, the nginx ingress and the optional security component) is delivered and has run the operator's services since 2026-11-11; moving the services that keep their own helper is in the [roadmap](docs/roadmap.md). Power is disabled by default and requires a separately installed restricted helper. SSH machines, cloud VMs and other resource types remain in the [roadmap](docs/roadmap.md). The previous implementation is preserved at commit `18a24f6`.
+**Status.** Services and the local machine are complete and accepted (operator-confirmed on 2026-11-03). The unified Resource model and Xiaomi routers were delivered on 2026-11-05 with automated checks; router acceptance on real hardware is pending the operator's confirmation. The host platform (`lcm host`: host setup and upgrade, the restricted deploy helper with `managed` services and static publishing, typed backups, the nginx ingress and the optional security component) is delivered and has run the operator's services since 2026-11-11; moving the services that keep their own helper is in the [roadmap](docs/roadmap.md). Power is disabled by default and requires a separately installed restricted helper. SSH machines, cloud VMs and other resource types remain in the [roadmap](docs/roadmap.md).
 
 ## Documentation
 
@@ -15,7 +15,7 @@ LCM manages self-hosted software services, the Linux workstation running the con
 | [docs/security.md](docs/security.md) | Security console, incidents, traffic, notifications and restricted host controls |
 | [docs/policies.md](docs/policies.md) | Policies, built-in templates, policy-as-code (git config sources, ownership, drift) |
 | [docs/architecture.md](docs/architecture.md) | Components, data flow, engine semantics, security model (authentication, tokens, privileges, secrets) |
-| [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), router connections, backup, upgrade (including `lcm/v2` and service source URLs), remote access |
+| [docs/operations.md](docs/operations.md) | Installing on a host with `deploy/` (including self-deploy), router connections, backup, upgrade (including notes for older releases), remote access |
 | [docs/migration.md](docs/migration.md) | Installing a fresh machine with the host platform components and moving a host with its managed services to another machine |
 | [`internal/api/openapi.yaml`](internal/api/openapi.yaml) | The API v1 reference, also served at `GET /api/v1/openapi.yaml` |
 
@@ -96,6 +96,7 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_SYSTEMCTL` / `LCM_DOCKER` / `LCM_GIT` | `--systemctl` / `--docker` / `--git` | `systemctl` / `docker` / `git` | Program paths; a missing program only logs a warning at startup |
 | `LCM_JOURNALCTL` | `--journalctl` | `journalctl` | Program used for bounded local Machine journal reads; unavailable access is shown as source coverage |
 | `LCM_MACHINE_POWER` | `--machine-power` | `false` | Permit new Machine power submissions only after the separately installed helper and recovery prerequisites pass; receipt queries remain available when disabled |
+| `LCM_SECURITY_ENABLED`, `LCM_SECURITY_MACHINE_ID`, `LCM_SECURITY_KONATA_URL`, `LCM_SECURITY_TOKEN_SECRET` | environment only | `false`, empty, empty, empty | Optional [security module](docs/security.md#configuration): `LCM_SECURITY_ENABLED=true` with the immutable ID of the registered machine turns on incident intake; the Konata relay URL and the name (not value) of the secret holding its bearer key together turn on delivery, and leaving both out means observation without messages |
 | `LCM_SYSTEMCTL_PRIVILEGE` | `--systemctl-privilege` | `sudo -n` | Prefix for system-scope `systemctl` start, stop and restart; `none` (or an empty flag value) runs it directly |
 | `LCM_RUNTIME_STATUS_TIMEOUT` | `--runtime-status-timeout` | `15s` | Timeout of runtime status queries |
 | `LCM_RUNTIME_ACTION_TIMEOUT` | `--runtime-action-timeout` | `5m` | Timeout of runtime start, stop and restart |
@@ -103,7 +104,7 @@ Environment variables configure the server; each can be overridden by the `serve
 | `LCM_MONITOR_CONCURRENCY` | `--monitor-concurrency` | `8` | Health probes running at the same time |
 | `LCM_MONITOR_RAW_RETENTION` | `--monitor-raw-retention` | `168h` | How long raw check results and machine/router snapshots are kept |
 | `LCM_MONITOR_ROLLUP_RETENTION` | `--monitor-rollup-retention` | `2160h` | How long check rollups and machine/router minute points are kept; must not be shorter than raw retention |
-| `LCM_ALERT_RESOURCE_LABELS` | `--alert-resource-labels` | `lcm_resource,resource,lcm_service,service` | Comma-separated alert labels that name the affected resource; the first present wins |
+| `LCM_ALERT_RESOURCE_LABELS` | `--alert-resource-labels` | `lcm_resource,resource,lcm_service,service` | Comma-separated alert labels that name the affected resource; the first present wins; the former `LCM_ALERT_SERVICE_LABELS` stops startup with an error naming this variable |
 | `LCM_CONNECTIONS_FILE` | `--connections-file` | empty | Host [connections file](docs/resources.md#connections) for network-reached resources such as routers; read once at startup; it must be owned by root in root-owned directories, and an invalid file or unresolvable password secret stops startup; empty means no connections |
 | `LCM_TIMELINE_RETENTION` | `--timeline-retention` | `2160h` | How long timeline entries and machine/router events are kept; unresolved evidence has retention exceptions |
 | `LCM_RUN_RETENTION_KEEP` | `--run-retention-keep` | `200` | Finished runs kept per policy regardless of age |

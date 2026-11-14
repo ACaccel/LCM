@@ -1,6 +1,6 @@
 # Resources
 
-Everything LCM manages is a `Resource`: a software service, the local machine or a network router. Identity, labels, versioned documents, management phase, checks, health, relations, Git ownership, audit and history work the same for every type; type-specific behavior is in [services.md](services.md), [machines.md](machines.md) and [Routers](#routers) below. Upgrading from `lcm/v1` documents is described in [operations.md](operations.md#upgrade-to-lcmv2-resources).
+Everything LCM manages is a `Resource`: a software service, the local machine or a network router. Identity, labels, versioned documents, management phase, checks, health, relations, Git ownership, audit and history work the same for every type; type-specific behavior is in [services.md](services.md), [machines.md](machines.md) and [Routers](#routers) below.
 
 ## Document
 
@@ -30,7 +30,7 @@ spec:
 - `GET /api/v1/resource-types` lists types, adapters, `needsConnection` and each type's actions; the console builds its forms from it. Validation is the server's (`lcm validate`, `POST /api/v1/validate`).
 - `type` and `adapter` never change. Unmanage the resource and create a new one instead.
 - Policies and Modules are also `lcm/v2`. `lcm/v1` documents are refused with a pointer to `lcm convert`.
-- Documents are versioned like other documents: `PUT` needs `If-Match`, restoring creates a new version, apply/validate/export and Git ownership follow [policy-as-code](policies.md#policy-as-code). The console shows the diff against the stored version before it saves, and asks before leaving an unsaved draft. The newest `LCM_VERSION_RETENTION_KEEP` versions (default 50) of each incarnation are kept, plus the current one and the one config sync last applied; older versions are deleted and can no longer be read or restored.
+- Documents are versioned like other documents: `PUT` needs `If-Match`, restoring creates a new version, apply/validate/export and Git ownership follow [policy-as-code](policies.md#policy-as-code). The console shows the diff against the stored version before it saves, and asks before leaving an unsaved draft. Old versions are pruned per incarnation by `LCM_VERSION_RETENTION_KEEP` ([configuration](../README.md#configuration)), never the current one or the one config sync last applied; a pruned version can no longer be read or restored.
 
 ## Identity, phases and archives
 
@@ -73,7 +73,7 @@ Every resource lists `actions`: name, `available` with a `reason`, `risk` (`read
 
 - Unavailable actions say why; every type reports `release Git ownership first` (code `action.releaseOwnershipFirst`) on `unmanage` while a config source owns the resource.
 - Service actions run in the background with idempotent results ([services](services.md#lifecycle-states-and-actions)); only they have `policy: true`.
-- Machine and router operations are durable: the intent is stored before anything is sent, then submitted once and observed until `succeeded`, `failed` or `indeterminate`. A request carries a `reason`, `confirm` (the resource's exact name), an idempotency key chosen by the client and `If-Match`; the console and CLI fill in the key and the current version. The same key, action and version return the stored operation instead of sending again. An interrupted operation is closed as `failed` only when it was certainly never sent (still `pending`, and for a machine confirmed by the helper's receipt); one interrupted while `submitting`, which may have reached the device or helper, becomes `indeterminate`; neither is sent again ([machine specifics](machines.md#maintenance-and-power-requests)). An unknown outcome stays open until an administrator resolves it. Only direct administrator requests may submit or resolve them; policies are refused.
+- Machine and router operations are durable: the intent is stored before anything is sent, then submitted once and observed until `succeeded`, `failed` or `indeterminate`. A request carries a `reason`, `confirm` (the resource's exact name), an idempotency key chosen by the client and `If-Match`; the console and CLI fill in the key and the current version. The same key, action and version return the stored operation instead of sending again. An interrupted operation is closed as `failed` only when it was certainly never sent; one that may have reached the device or helper becomes `indeterminate`, never `failed`; neither is sent again ([machine specifics](machines.md#maintenance-and-power-requests)). An unknown outcome stays open until an administrator resolves it. Only direct administrator requests may submit or resolve them; policies are refused.
 - A route the resource's type does not support answers 409 `unsupported`.
 
 ## Relations
