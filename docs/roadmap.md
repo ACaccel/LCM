@@ -1,6 +1,6 @@
 # 發展路線圖
 
-更新日期：2026-11-11。本文是長期發展方向、優先順序與需求範圍的唯一來源；已完成項目另標示，後續項目仍屬規劃或評估，不是交期承諾。目前行為與限制以 [README](../README.md)、[資源](resources.md)、[機器](machines.md)、[服務](services.md)、[Policy](policies.md)、[架構](architecture.md)與[操作文件](operations.md)為準。
+更新日期：2026-11-14。本文是長期發展方向、優先順序與需求範圍的唯一來源；已完成項目另標示，後續項目仍屬規劃或評估，不是交期承諾。目前行為與限制以 [README](../README.md)、[資源](resources.md)、[機器](machines.md)、[服務](services.md)、[Policy](policies.md)、[架構](architecture.md)與[操作文件](operations.md)為準。
 
 既有服務管理、部署、備份、記憶體與歷史保留工作及其原定驗收已完成。已結案工作的行為、契約與驗收紀錄保存在正式文件，暫存計畫已清除；新增能力仍須獨立驗收。
 
@@ -55,31 +55,29 @@ SSH 遠端機器、雲端 VM、硬體健康擴充與深入監控依下列項目�
 
 留下的技術債（不影響行為，視需要處理）：資源詳情 DTO 仍依型別帶 `machine`／`router`／`service` 欄位；資源列表的服務仍逐筆讀取部署版本，總覽仍逐筆讀取狀態；機器與路由器的動作可用性仍直接查詢 Git 擁有權。
 
-## 進行中：主機平台（安裝、部署、備份統一由 LCM 處理）
+## 已完成：主機平台（安裝、部署、備份統一由 LCM 處理）
 
-目標：新機器只需少量手動準備，其餘用可重跑的指令完成；一般 web 服務的 repo 不含部署或備份程式；root 只執行 root 擁有的固定 helper。行為與操作見[操作文件](operations.md)與[服務文件](services.md)。
+目標：新機器只需少量手動準備，其餘用可重跑的指令完成；一般 web 服務的 repo 不含部署或備份程式；root 只執行 root 擁有的固定 helper。行為與操作見[操作文件](operations.md)、[服務文件](services.md)與[遷移文件](migration.md)。
 
-已完成（2026-11-11，自動化檢查與容器端對端驗證通過，正式環境已切換）：
+2026-11-14 結案，自動化檢查與容器端對端驗證通過，正式環境已切換：
 
 - `lcm host init`／`apply`／`upgrade`／`status`：可重跑的主機安裝與收斂，所有元件可選；schema 變更由 `host upgrade` 先備份再升級。
 - deploy helper 與 `managed` 執行方式：依 `host.json` 的服務授權（`host allow`）建置、安裝、啟動與回復；建置在各服務的 `lcmb-<服務>` 沙箱帳號內；具名 runtime；靜態發布（`publish`，最後才替換入口檔並保留舊資產）；unit 記憶體與停止逾時上限。
-- 通用備份與還原（`sqlite`、`files`、`postgres`、`mongodb`、`command`）；`auto-deploy` 範本可在部署前先備份。
+- 多實例 managed 服務（`instances`）：一個 release 跑多個 `<服務>@<實例>.service`，各自的連接埠、補充群組與啟動檔；以名稱停止的實例在部署後維持停止，其檢查暫停。主機授權另有 `groups`、`after`、`wants` 與 `backup.tools`。
+- 通用備份與還原（`sqlite`、`files`、`postgres`、`mongodb`、`command`）；MongoDB 全資料庫備份（`all`）與僅限 CLI／API 的帳號還原（`restoreUsers`），停止服務前先檢查連線字串；`auto-deploy` 範本可在部署前先備份。
 - ingress：由 `host.json` 產生整份 nginx 站台、route 呈現選項、憑證續期設定與 `tls` 檢查；static root 拒絕外部 symlink 與隱藏檔。
 - security 元件併入 LCM，由 `host apply` 安裝。
-- 正式環境：ingress、security 元件與前兩個服務（含一個純靜態網站）於 2026-11-11 改由 LCM 管理，並完成部署與備份。
+- 新機器與搬家：[遷移文件](migration.md)，以及搬家需要的 CLI（`policy pause|resume`、`get backups`、`source`、`host init` 旗標、`resource rebind-identity`）。
+- 正式環境：ingress、security 元件與三個服務（含一個純靜態網站與一個多實例服務）於 2026-11-11～13 改由 LCM 部署與備份；舊部署、舊備份與舊帳號於 2026-11-14 清除，清除前以正式備份在容器演練含 MongoDB 帳號的還原。
 
-已實作並通過容器端對端驗證，待正式切換（2026-11-11）：
+驗證範圍：2026-11-14 以兩個容器照遷移文件完成新機器安裝、搬家（LCM 狀態、機器身分、服務資料）與搬家前後兩種回退，並依結果修正文件；DNS、HTTPS 憑證、security 元件與實體硬體身分無法在容器驗證。
 
-- 多實例 managed 服務（`instances`）：一個 release 跑多個 `<服務>@<實例>.service`，各自的連接埠、補充群組與啟動檔；以名稱停止的實例在部署後維持停止，其檢查暫停。
-- 主機授權新增 `groups`、`after`、`wants` 與 `backup.tools`；MongoDB 全資料庫備份（`all`）與僅限 CLI／API 的帳號還原（`restoreUsers`）。
+後續（未排程）：
 
-待辦：
-
-- 第一個多實例服務的正式切換。
-- 多實例後續：`lcm get` 的實例欄、主控台檢查分頁的實例與暫停標示、plan 列出維持停止的實例；只有 MongoDB 來源的備份 worker 改用服務以外的帳號執行（目前服務帳號在工具執行期間可讀到 `backup.env` 的連線字串）；`all` 來源的 URI 帶資料庫路徑時，在停止服務前就拒絕還原。
+- 搬家的實機驗收：有第二台機器時照遷移文件做一次，補上容器未涵蓋的部分。
+- 多實例：`lcm get` 的實例欄、主控台檢查分頁的實例與暫停標示、plan 列出維持停止的實例。
+- 只有 MongoDB 來源的備份 worker 改用服務以外的帳號執行（目前服務帳號在工具執行期間可讀到 `backup.env` 的連線字串）。
 - 自帶 root helper 的服務：先設計並確認「服務自有 helper」的 adapter 與統一操作協定，再切換。
-- 新機器安裝與搬家：步驟已寫入[遷移文件](migration.md)，待在第二台機器上實測並依結果修正。
-- 各 repo 的 GitHub 說明更新。
 
 ## 近程：安全自動化與可重現決策
 
